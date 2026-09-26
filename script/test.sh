@@ -3171,6 +3171,8 @@ test_analyze_ai_inventory
 test_system_preview_protocol
 test_signing_policy_contract
 test_local_signing_identity
+bash "$ROOT_DIR/script/test_release_identity.sh" || fail "fixed release identity provisioning"
+bash "$ROOT_DIR/script/test_release_packaging.sh" || fail "fixed release packaging policy"
 test_signing_identity_classification
 test_screenshot_presets
 test_theme_contract

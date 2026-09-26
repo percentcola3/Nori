@@ -3,3 +3,13 @@ dist/
 .reference/
 .DS_Store
 *.xcodeproj
+
+# Release identity backups must never enter Git or release artifacts.
+*.p12
+*.pfx
+*.key
+*.keychain-db
+signing-certificate.base64
+signing-password
+identity-password
+keychain-password

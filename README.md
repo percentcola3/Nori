@@ -45,76 +45,67 @@ ForgeSweep 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、�
 
 ## 构建与 GitHub Release
 
-需要 Xcode Command Line Tools（`swiftc`）。特色桥接所需的 Mole 源码已内置，无需另行安装或检出；核心清理、卸载、分析、优化和状态采集均由 Swift 实现：
+需要 macOS 和提供 `swiftc` 的 Xcode 工具链，建议使用完整、稳定的 Xcode 26。特色桥接所需的 Mole 源码已内置，无需另行安装或检出。
+
+### 无 Apple 开发者账号的公开发布
+
+GitHub Release 使用项目固定的自签名证书，不要求购买 Apple Developer 计划。公开证书和身份记录位于 `signing/release.cer`、`signing/release.plist`；只有维护者保存私钥。每个版本复用同一份证书和 Bundle ID，发布入口会严格校验身份，不会降级为 ad-hoc：
 
 ```bash
+bash script/release_identity.sh ensure
+bash script/package_release.sh
+```
+
+输出为 `dist/ForgeSweep-arm64.dmg`（Apple 芯片）和 `dist/ForgeSweep-x86_64.dmg`（Intel），每个 DMG 包含对应架构的 `ForgeSweep.app` 与 `/Applications` 快捷方式。可通过 `SM_BUILD_ARCHS=arm64` 或 `SM_BUILD_ARCHS=x86_64` 只生成一个架构。
+
+`release_identity.sh init` 只用于维护者首次建立发布身份；仓库已有公开证书但本机缺少私钥时，它会拒绝生成替代身份。新维护者或新 Mac 必须通过 `import` 导入原来的加密 PKCS#12 备份。私钥、密码、钥匙串不得提交到 Git。初始化、恢复、备份和安装验证见 [发布签名指南](docs/release-signing.md)。
+
+安装并登录 GitHub CLI 后，可安全配置仓库的两个 Actions secrets：
+
+```bash
+bash script/configure_release_secrets.sh
+```
+
+脚本从 `origin` 推断仓库，也接受 `owner/repository` 参数；秘密通过标准输入上传，临时导出随后删除。如果任一同名 secret 已存在，脚本会拒绝覆盖。Actions 的 **Signed macOS release** 支持默认分支手动构建；推送 `v*` 标签会运行回归检查，生成两个 DMG、校验和及 **draft Release**，由维护者检查后公开。
+
+固定签名有助于跨版本保持同一应用身份，但不能保证所有 macOS 版本保留全部隐私权限。从 ad-hoc 或其他证书签署的版本迁移时，可能需要重新授权。自签名也不等同于 Apple 公证：用户首次打开下载的 App 时可能需要前往“系统设置 → 隐私与安全性”允许打开，再按功能需求授予完全磁盘访问和屏幕录制权限。用户无需安装发布证书。
+
+### 本机开发和测试
+
+不持有发布私钥的贡献者，可以创建自己的本地开发身份：
+
+```bash
+bash script/dev_identity.sh --ensure
 bash script/build_and_run.sh
 ```
 
-构建使用 `-O` 与 Swift 跨文件优化，签名前移除本地符号；本地默认只构建当前机器的
-架构，输出到 `dist/arm64/ForgeSweep.app` 或 `dist/x86_64/ForgeSweep.app`，并自动选择钥匙串中的
-`Apple Development` 身份。也可以显式指定身份：
+`build.sh` 优先选择钥匙串中的 `Apple Development` 身份，其次选择本机自签名身份；也可通过 `SM_CODESIGN_IDENTITY` 指定。构建使用 `-O` 与 Swift 跨文件优化，签名前移除本地符号；默认只构建当前架构，输出到 `dist/arm64/ForgeSweep.app` 或 `dist/x86_64/ForgeSweep.app`。设置 `SM_BUILD_ARCHS="arm64 x86_64"` 可生成两个独立 App。本地开发证书与项目的公开发布证书是不同身份。
+
+如果本机 CLT 27 报缺少 `SwiftUIMacros`，且已经安装 macOS 26.5 SDK，可显式选择该 SDK：
 
 ```bash
-SM_CODESIGN_IDENTITY="Apple Development: ..." bash script/build_and_run.sh
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk bash script/build_and_run.sh
 ```
 
-没有开发证书时，本机运行也可以显式使用 ad-hoc 签名：
+通用 DMG 入口 `bash script/package_dmg.sh` 沿用本机构建的签名选择。桌面脚本默认只构建当前架构，依次尝试 Apple Development、本地自签名身份；若本地身份创建失败且未禁止降级，才会退回 ad-hoc。完成上述本地身份配置后，可以明确禁止该降级：
+
+```bash
+SM_ALLOW_ADHOC=0 bash script/package_dmg_to_desktop.sh cleanup-parity
+```
+
+结果位于 `~/Desktop/ForgeSweep-<arch>-cleanup-parity.dmg`，并在 Finder 中定位；不传 label 时使用时间戳。公开发行应使用 `package_release.sh`，确保使用仓库固定的发布身份。
+
+仅用于临时测试的 ad-hoc 构建需显式开启：
 
 ```bash
 SM_CODESIGN_IDENTITY=- SM_ALLOW_ADHOC=1 bash script/build_and_run.sh
 ```
 
-稳定签名用于让 macOS 在重启和版本更新后仍能识别同一个 App；它不会绕过用户的隐私授权。
-可用 `SM_BUILD_ARCHS=arm64`（或 `x86_64`）指定架构；`build.sh` 接受
-`SM_BUILD_ARCHS="arm64 x86_64"`，会生成两个独立 App。没有开发证书时，
-本机调试和 GitHub 开源 DMG 可以显式使用
-`SM_CODESIGN_IDENTITY=- SM_ALLOW_ADHOC=1`；不要用 ad-hoc GUI 包验证权限持久性。
+这种签名可能在重编译或更新后要求重新授权，不能用它验证跨版本权限保留。若旧授权已失效，先退出 App，在系统设置中移除旧条目，重新添加实际安装的新版 App 并开启权限。
 
-DMG 打包默认沿用 `build.sh` 的稳定签名选择，自动使用钥匙串中的 Apple Development
-证书；没有可用证书时会停止，不会自动降级为 ad-hoc：
+### 可选的 Apple 公证发布
 
-```bash
-bash script/package_dmg.sh
-```
-
-本项目采用开源方式通过 GitHub Release 分发，不要求维护者购买 Apple Developer 计划。
-没有证书时，仍可显式生成用于开源分发或测试的 ad-hoc App / DMG：
-
-```bash
-SM_CODESIGN_IDENTITY=- SM_ALLOW_ADHOC=1 bash script/build.sh
-SM_CODESIGN_IDENTITY=- SM_ALLOW_ADHOC=1 bash script/package_dmg.sh
-```
-
-本机安装验证可以直接用桌面打包脚本：只构建当前架构，打包完成后把 DMG 移到
-`~/Desktop/ForgeSweep-<arch>-<label>.dmg`（label 默认为时间戳，可作为第一个参数传入）
-并在 Finder 中定位。没有 Apple Development 证书时它会自动改用 ad-hoc 签名并给出提示；
-`SM_ALLOW_ADHOC=0` 可禁止这一降级：
-
-```bash
-bash script/package_dmg_to_desktop.sh cleanup-parity
-```
-
-`package_dmg.sh` 默认分别生成 `dist/ForgeSweep-arm64.dmg`（M 系列 Mac）和
-`dist/ForgeSweep-x86_64.dmg`（Intel Mac）。每个包仅包含对应架构的 `ForgeSweep.app`
-和 `/Applications` 快捷方式，签名方式由上述构建参数决定。只生成一个包时设置
-`SM_BUILD_ARCHS=arm64` 或 `SM_BUILD_ARCHS=x86_64`；自定义 `SM_DMG_PATH` 也只接受单架构。
-用户首次从互联网下载后，如果 Finder 的“右键打开”仍被 Gatekeeper
-拦截，可以在终端执行（将路径替换为实际安装位置）：
-
-```bash
-xattr -dr com.apple.quarantine /Applications/ForgeSweep.app
-open /Applications/ForgeSweep.app
-```
-
-这只是绕过下载隔离检查，不会自动授予“完全磁盘访问”或“屏幕录制”等隐私权限。
-ad-hoc 签名没有稳定的开发者身份，不保证权限持久性。重编译或更新 App 后可能需要重新
-授权“完全磁盘访问”和“屏幕录制”，旧授权开关即使仍开启也可能无法匹配新 App。
-此时先完全退出 App，在系统设置中移除旧条目，再添加实际安装的新版 App、开启权限并重新打开。
-日常使用需要稳定的权限识别时，应持续使用同一开发者身份和 Bundle ID 签名；
-系统升级后仍以 macOS 实际检测到的授权为准。
-
-如果要生成可被 Gatekeeper 直接接受的签名发布包，才需要使用 Developer ID 签名并完成 Apple 公证：
+持有 Developer ID 的维护者仍可使用独立的签名公证流程：
 
 ```bash
 SM_CODESIGN_IDENTITY="Developer ID Application: ..." \
@@ -122,14 +113,7 @@ SM_NOTARY_PROFILE="forgesweep" \
 bash script/release.sh
 ```
 
-`SM_NOTARY_PROFILE` 是预先通过 `xcrun notarytool store-credentials` 保存的钥匙串配置名。
-`release.sh` 默认校验并使用 `vendor/mole/UPSTREAM_COMMIT`。升级 Mole 时应整体更新
-`vendor/mole/`、重新审计并运行完整测试；开发者仍可通过 `MOLE_SRC=/path/to/Mole`
-临时验证新的上游检出。
-`release.sh` 是可选的签名公证发布流程；默认分别公证两个架构，生成
-`dist/ForgeSweep-arm64.zip` 和 `dist/ForgeSweep-x86_64.zip`（其中 App 已 stapled）。
-也可用 `SM_BUILD_ARCHS` 只发布指定架构。GitHub 的开源发布不强制执行该流程；
-选择 ad-hoc DMG 时，应向用户说明 Gatekeeper 和更新后重新授权的限制。
+`SM_NOTARY_PROFILE` 是通过 `xcrun notarytool store-credentials` 保存的钥匙串配置名。此流程默认校验并使用 `vendor/mole/UPSTREAM_COMMIT`，分别公证两个架构，生成 `dist/ForgeSweep-arm64.zip` 和 `dist/ForgeSweep-x86_64.zip`，其中 App 已 stapled。升级 Mole 时应整体更新 `vendor/mole/`、重新审计并运行完整测试；也可通过 `MOLE_SRC=/path/to/Mole` 临时验证上游检出。
 
 ## App 图标
 
@@ -144,10 +128,9 @@ bash script/make_icon.sh
 `dist/<架构>/ForgeSweep.app` 内嵌 Swift 主程序、`bridge/` 脚本，以及 `lib/core/`、
 `lib/clean/project.sh` 和 `lib/clean/purge_shared.sh`。构建与桥接回归共用
 `script/stage_bridge_resources.sh`，避免未被调用的 Mole 模块进入成品；
-不再打包 Mole CLI、旧卸载入口或 Go 辅助程序。有 Apple Development
-证书时使用稳定签名，没有证书时使用上面的显式 ad-hoc 选项。签名公证
-发布流程会强制校验 Developer ID、TeamIdentifier、公证和 stapling；开源 GitHub Release
-可使用 `package_dmg.sh` 生成 DMG；ad-hoc 包必须显式开启上述测试选项。
+不再打包 Mole CLI、旧卸载入口或 Go 辅助程序。开源 GitHub Release 使用
+`package_release.sh` 校验固定自签名身份并生成 DMG；可选的 `release.sh`
+流程则校验 Developer ID、TeamIdentifier、公证和 stapling。
 
 ## 目录
 
@@ -156,6 +139,8 @@ SimpleMole/   Swift 源码（AppKit 骨架 + SwiftUI 视图 + 服务层）
 bridge/       app_*.sh 桥接脚本（删除边界复用引擎函数）
 vendor/mole/  固定版本的 Mole 桥接支持源码与 GPLv3 许可证
 script/       构建、运行、发布、测试与图标脚本
+signing/      固定发布身份的公开证书与指纹记录（无私钥）
+docs/         发布签名与维护说明
 Support/      Info.plist 与应用图标
 dist/         构建产物（gitignored）
 ```

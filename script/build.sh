@@ -3,6 +3,7 @@
 # vendored shell libraries still used by optional bridge features.  The five
 # core operations are implemented by Swift and do not ship or invoke Mole's
 # command router or Go helpers.
+set +x
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -12,7 +13,8 @@ REQUESTED_SIGN_IDENTITY="${SM_CODESIGN_IDENTITY:-}"
 ALLOW_ADHOC="${SM_ALLOW_ADHOC:-0}"
 # Local self-signed development identity created by script/dev_identity.sh.
 # It is not an Apple identity, but its designated requirement is stable, so
-# macOS privacy grants survive rebuilds (unlike ad-hoc cdhash requirements).
+# its code identity is stable across rebuilds (unlike ad-hoc cdhash requirements).
+# Actual privacy-grant retention still requires cross-version macOS validation.
 LOCAL_SIGN_LABEL="${SM_LOCAL_SIGN_LABEL:-ForgeSweep Local Signing}"
 SIGN_IDENTITY=""
 SIGN_IDENTITY_LABEL=""
@@ -260,7 +262,7 @@ for arch in $BUILD_ARCHS; do
                 echo "error: local signature did not pin the certificate in its designated requirement" >&2
                 exit 2
             }
-            echo "==> Signed identity: $SIGN_IDENTITY_LABEL (local self-signed; privacy grants persist across rebuilds)"
+            echo "==> Signed identity: $SIGN_IDENTITY_LABEL (self-signed; stable code identity, privacy retention requires validation)"
         else
             TEAM_IDENTIFIER=$(printf '%s\n' "$SIGN_DETAILS" | /usr/bin/sed -n 's/^TeamIdentifier=//p' | /usr/bin/head -n 1)
             [[ -n "$TEAM_IDENTIFIER" && "$TEAM_IDENTIFIER" != "not set" ]] || {

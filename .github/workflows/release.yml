@@ -1,0 +1,136 @@
+name: Signed macOS release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# Build jobs cannot publish or modify repository content.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Manual runs are limited to the default branch. Tags and that branch must
+    # contain reviewed code: this workflow intentionally never runs on PRs.
+    if: >-
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      (github.event_name == 'workflow_dispatch' &&
+       github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      # Use a complete stable Xcode toolchain, including its Swift macro plugins.
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+      SM_BUILD_ARCHS: arm64 x86_64
+      SM_ALLOW_ADHOC: '0'
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate toolchain and public identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+          test -s signing/release.cer
+          plutil -lint signing/release.plist
+
+      - name: Run regression checks
+        env:
+          SM_TEST_SKIP_SWIFT: '0'
+          SM_TEST_BUILD: '0'
+        run: bash script/test.sh
+
+      - name: Import the existing release identity
+        # Secrets exist only in this step's environment, never as arguments,
+        # workflow outputs, artifact paths, or a generated certificate.
+        env:
+          SM_RELEASE_SIGNING_DIR: ${{ runner.temp }}/forgesweep-release-signing
+          FORGESWEEP_SIGNING_P12_BASE64: ${{ secrets.FORGESWEEP_SIGNING_P12_BASE64 }}
+          FORGESWEEP_SIGNING_P12_PASSWORD: ${{ secrets.FORGESWEEP_SIGNING_P12_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$FORGESWEEP_SIGNING_P12_BASE64" || -z "$FORGESWEEP_SIGNING_P12_PASSWORD" ]]; then
+            echo '::error::Configure FORGESWEEP_SIGNING_P12_BASE64 and FORGESWEEP_SIGNING_P12_PASSWORD in repository Actions secrets.'
+            exit 1
+          fi
+          bash script/release_identity.sh import
+
+      - name: Build and verify both distribution packages
+        env:
+          SM_RELEASE_SIGNING_DIR: ${{ runner.temp }}/forgesweep-release-signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash script/package_release.sh
+          bash script/verify_release.sh dist/arm64/ForgeSweep.app
+          bash script/verify_release.sh dist/x86_64/ForgeSweep.app
+          cd dist
+          shasum -a 256 ForgeSweep-arm64.dmg ForgeSweep-x86_64.dmg > SHA256SUMS
+
+      - name: Remove the temporary signing keychain
+        if: always()
+        env:
+          SM_RELEASE_SIGNING_DIR: ${{ runner.temp }}/forgesweep-release-signing
+        run: bash script/release_identity.sh cleanup
+
+      - name: Upload distribution files
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForgeSweep-macos
+          # Explicit allowlist: never upload the workspace, runner temp, p12,
+          # private keys, keychains, or secret backup files.
+          path: |
+            dist/ForgeSweep-arm64.dmg
+            dist/ForgeSweep-x86_64.dmg
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  draft-release:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified distribution files
+        uses: actions/download-artifact@v4
+        with:
+          name: ForgeSweep-macos
+          path: release-assets
+
+      - name: Create a draft for maintainer review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum --check SHA256SUMS
+          cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
+          下载与你的 Mac 对应的 DMG：Apple 芯片使用 arm64，Intel 使用 x86_64。
+
+          本版本使用项目固定的自签名证书，未经 Apple 公证。安装时将 App 拖入“应用程序”，首次打开若被系统拦截，请在“系统设置 → 隐私与安全性”允许打开。
+
+          截图和清理功能仍需首次授权。固定签名有助于后续版本保持同一应用身份，但从此前 ad-hoc 或其他证书签名版本升级时可能需要重新授权，权限保留还取决于 macOS。请先完成旧版授权后覆盖安装新版的实际验证，再公开此草稿。
+          NOTES
+          # Do not silently replace assets on an existing or published release.
+          gh release create "$RELEASE_TAG" \
+            --verify-tag --draft --title "ForgeSweep $RELEASE_TAG" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            ForgeSweep-arm64.dmg ForgeSweep-x86_64.dmg SHA256SUMS
