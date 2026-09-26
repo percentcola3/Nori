@@ -378,8 +378,14 @@ struct ScreenshotEditorView: View {
                     .foregroundStyle(feedbackKey == "shot.failed" ? Color.orange : Color.moleAccentText)
             }
             Spacer()
-            Button(l10n.t("common.done"), action: onClose)
-                .buttonStyle(PrimaryButtonStyle())
+            Button(l10n.t("common.done")) {
+                guard copyToPasteboard() else {
+                    showFeedback("shot.failed")
+                    return
+                }
+                onClose()
+            }
+            .buttonStyle(PrimaryButtonStyle())
         }
     }
 

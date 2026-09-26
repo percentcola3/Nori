@@ -695,6 +695,9 @@ final class AppState: ObservableObject {
                     guard let self, self.selectedTab == tab else { return }
                     let pages = self.visiblePages
                     guard tab < pages.count else { return }
+                    // A full-disk traversal must not keep every cleanup action
+                    // disabled after the user leaves the analysis page.
+                    if pages[tab] != .analyze { self.cancelAnalyze() }
                     switch pages[tab] {
                     case .cleanup:
                         // Keep the existing result/selection. Scanning starts
@@ -2818,7 +2821,9 @@ final class AppState: ObservableObject {
                 })
             analyzeScanControl = nil
             isAnalyzing = false
-            analyzeCache.store(report)
+            // Keep the partial result visible, but do not reuse an interrupted
+            // traversal as the cached inventory for later navigation.
+            if !control.isCancelled { analyzeCache.store(report) }
             showAnalyzeReport(report)
         }
     }
