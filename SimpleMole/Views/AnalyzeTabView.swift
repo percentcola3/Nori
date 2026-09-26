@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// 全盘空间分析：默认从整机概览开始，把可直接清理、用户目录、应用数据、
-/// 应用和系统目录分层展示。只有通过客户端安全策略的条目可勾选清理。
+/// 从当前目录逐层浏览实际磁盘占用。
 struct AnalyzeTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var savedLocations: SavedScanLocationStore
@@ -15,7 +14,7 @@ struct AnalyzeTabView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 10) {
-                if !state.analyzeIsOverview {
+                if state.analyzePath != "/" {
                     Button { state.analyzeGoUp() } label: {
                         Label(l10n.t("analyze.up"), systemImage: "chevron.left")
                     }
@@ -27,13 +26,18 @@ struct AnalyzeTabView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(scopeTitle)
                         .font(.system(size: 13, weight: .semibold))
-                    Text(state.analyzeIsOverview ? l10n.t("analyze.overview.hint") : state.analyzePath)
+                    Text(state.analyzePath)
                         .font(.system(size: 10))
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 Spacer()
+                Button { state.chooseAnalyzeFolder() } label: {
+                    Label(l10n.t("analyze.pick"), systemImage: "folder")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(state.isBusy)
                 Menu {
                     Button { state.scanDiskOverview(force: true) } label: {
                         Label(l10n.t("analyze.scope.full"), systemImage: "macbook.and.iphone")
@@ -63,12 +67,14 @@ struct AnalyzeTabView: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .disabled(state.isBusy)
-                Button { refreshCurrentScope() } label: {
-                    Label(state.isAnalyzing ? l10n.t("common.scanning") : l10n.t("analyze.scan"),
+                Button {
+                    if state.isAnalyzing { state.cancelAnalyze() } else { refreshCurrentScope() }
+                } label: {
+                    Label(state.isAnalyzing ? l10n.t("common.cancel") : l10n.t("analyze.scan"),
                           systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                .disabled(state.isBusy)
+                .disabled(state.isBusy && !state.isAnalyzing)
             }
             .padding(.horizontal, 16)
             .padding(.top, 14)
@@ -109,7 +115,7 @@ struct AnalyzeTabView: View {
                     .help(l10n.t("analyze.dupScan"))
                     .controlSize(.small)
                 }
-                Text(l10n.t("analyze.top10Hint"))
+                Text(l10n.t("analyze.directory.hint"))
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
             }
@@ -132,41 +138,17 @@ struct AnalyzeTabView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        if !state.analyzeAIItems.isEmpty {
-                            aiInventorySection
-                        }
-                        ForEach(analysisGroups) { group in
-                            VStack(alignment: .leading, spacing: 5) {
-                                HStack(alignment: .center, spacing: 8) {
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(l10n.t(group.titleKey))
-                                            .font(.system(size: 11, weight: .semibold))
-                                        Text(l10n.t(group.subtitleKey))
-                                            .font(.system(size: 9))
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                    Spacer()
-                                    Text(ByteFormat.format(group.totalBytes))
-                                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                ForEach(group.entries) { entry in
-                                    AnalyzeRowView(
-                                        entry: entry,
-                                        isSelected: state.analyzeSelection.contains(entry.path),
-                                        canSelect: entry.canCleanDirectly
-                                    ) {
-                                        state.toggleAnalyzeSelection(entry)
-                                    } onOpen: {
-                                        if entry.canCleanDirectly {
-                                            state.toggleAnalyzeSelection(entry)
-                                        } else {
-                                            state.openAnalyzeEntry(entry)
-                                        }
-                                    }
-                                }
+                        ForEach(state.analyzeEntries) { entry in
+                            AnalyzeRowView(
+                                entry: entry,
+                                isSelected: state.analyzeSelection.contains(entry.path),
+                                canSelect: entry.canCleanDirectly
+                            ) {
+                                state.toggleAnalyzeSelection(entry)
+                            } onOpen: {
+                                state.openAnalyzeEntry(entry)
                             }
+                            .disabled(state.isBusy)
                         }
                         if !state.dupGroups.isEmpty {
                             duplicatesSection
@@ -211,92 +193,16 @@ struct AnalyzeTabView: View {
     }
 
     private var scopeTitle: String {
-        if state.analyzeIsOverview { return l10n.t("analyze.scope.full") }
+        if state.analyzePath == "/" { return "/" }
         let name = URL(fileURLWithPath: state.analyzePath).lastPathComponent
         return name.isEmpty ? state.analyzePath : name
-    }
-
-    private var analysisGroups: [AnalyzeGroup] {
-        let definitions: [(AnalyzePresentationKind, String, String)] = [
-            (.developer, "analyze.group.developer", "analyze.group.developer.subtitle"),
-            (.ai, "analyze.group.ai", "analyze.group.ai.subtitle"),
-            (.user, "analyze.group.user", "analyze.group.user.subtitle"),
-            (.appData, "analyze.group.appData", "analyze.group.appData.subtitle"),
-            (.application, "analyze.group.apps", "analyze.group.apps.subtitle"),
-            (.system, "analyze.group.system", "analyze.group.system.subtitle"),
-        ]
-        return definitions.compactMap { definition in
-            let entries = state.analyzeEntries.filter {
-                presentationKind(for: $0) == definition.0
-            }.sorted { $0.size > $1.size }
-            guard !entries.isEmpty else { return nil }
-            return AnalyzeGroup(id: definition.0.rawValue, titleKey: definition.1,
-                                subtitleKey: definition.2, entries: entries)
-        }.sorted {
-            if $0.totalBytes != $1.totalBytes { return $0.totalBytes > $1.totalBytes }
-            return $0.id < $1.id
-        }
-    }
-
-    private func presentationKind(for entry: AnalyzeEntry) -> AnalyzePresentationKind {
-        let path = entry.path.lowercased()
-        let developerFragments = [
-            "/node_modules", "/.nvm/", "/.npm", "/.pnpm", "/pnpm/",
-            "/.yarn", "/.gradle/", "/.cargo/", "/.rustup/", "/.m2/",
-            "/.nuget/", "/go/pkg/", "/library/developer/", "/deriveddata/",
-            "/coresimulator/", "/android/sdk/"
-        ]
-        if entry.hintKind == "hint.artifact"
-            || developerFragments.contains(where: { path.contains($0) }) {
-            return .developer
-        }
-
-        let aiFragments = [
-            "/.ollama/", "/.cache/huggingface", "/.cache/lm-studio/",
-            "/.cache/torch", "/.codex/", "/.claude/", "/.gemini/",
-            "/library/application support/codex"
-        ]
-        if aiFragments.contains(where: { path.contains($0) }) { return .ai }
-
-        switch entry.handling {
-        case .directCleanup, .browse: return .user
-        case .appData: return .appData
-        case .application: return .application
-        case .systemReadOnly: return .system
-        }
     }
 
     private func refreshCurrentScope() {
         if state.analyzeIsOverview {
             state.scanDiskOverview(force: true)
         } else {
-            state.scanAnalyze()
-        }
-    }
-
-    private var aiInventorySection: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .center, spacing: 8) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(l10n.t("analyze.aiInventory.title"))
-                        .font(.system(size: 11, weight: .semibold))
-                    Text(l10n.t("analyze.aiInventory.subtitle"))
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                }
-                Spacer()
-                Text(ByteFormat.format(state.analyzeAIItems.reduce(0) { $0 &+ $1.bytes }))
-                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(state.analyzeAIItems) { item in
-                AnalyzeAIItemRow(
-                    item: item,
-                    isSelected: state.analyzeAISelection.contains(item.path)
-                ) {
-                    state.toggleAnalyzeAISelection(item)
-                }
-            }
+            state.scanAnalyze(force: true)
         }
     }
 
@@ -327,7 +233,7 @@ struct AnalyzeTabView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.055)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
     }
 
     private var footerText: String {
@@ -386,88 +292,12 @@ struct AnalyzeTabView: View {
                     }
                 }
                 .padding(10)
-                .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.055)))
+                .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
                 .overlay(RoundedRectangle(cornerRadius: 9)
                     .strokeBorder(.separator.opacity(0.4), lineWidth: 1))
             }
         }
     }
-}
-
-private struct AnalyzeAIItemRow: View {
-    let item: AnalyzeAIItem
-    let isSelected: Bool
-    let onToggle: () -> Void
-    @ObservedObject private var l10n = L10n.shared
-
-    var body: some View {
-        Button(action: onToggle) {
-            HStack(spacing: 8) {
-                Image(systemName: iconName)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.moleAccentText)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 6) {
-                        Text(item.name)
-                            .font(.system(size: 12, weight: .medium))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Text(l10n.t(kindKey))
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(Color.moleAccentText)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.moleAccent.opacity(0.2)))
-                    }
-                    Text(item.path)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer()
-                Text(ByteFormat.format(item.bytes))
-                    .font(.system(size: 11).monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                    .font(.system(size: 13))
-                    .foregroundStyle(isSelected
-                        ? AnyShapeStyle(Color.moleAccentText) : AnyShapeStyle(.tertiary))
-                    .frame(width: 18)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(MoleSelectableRowButtonStyle(isSelected: isSelected))
-    }
-
-    private var iconName: String {
-        switch item.kind {
-        case .skill: return "puzzlepiece.extension.fill"
-        case .linkedSkill: return "link"
-        case .mcpCache: return "server.rack"
-        }
-    }
-
-    private var kindKey: String {
-        switch item.kind {
-        case .skill: return "analyze.aiInventory.skill"
-        case .linkedSkill: return "analyze.aiInventory.linkedSkill"
-        case .mcpCache: return "analyze.aiInventory.mcpCache"
-        }
-    }
-}
-
-private struct AnalyzeGroup: Identifiable {
-    let id: String
-    let titleKey: String
-    let subtitleKey: String
-    let entries: [AnalyzeEntry]
-    var totalBytes: UInt64 { entries.reduce(0) { $0 &+ $1.size } }
-}
-
-private enum AnalyzePresentationKind: String {
-    case developer, ai, user, appData, application, system
 }
 
 private struct AnalyzeRowView: View {
@@ -486,43 +316,20 @@ private struct AnalyzeRowView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(iconStyle)
                         .frame(width: 18)
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 6) {
-                            Text(entry.name)
-                                .font(.system(size: 12, weight: entry.isDir ? .medium : .regular))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            if let hint = entry.hintKind {
-                                Text(l10n.t(hint))
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundStyle(.orange)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 1)
-                                    .background(Capsule().fill(Color.orange.opacity(0.12)))
-                            }
-                            if let badgeKey {
-                                Text(l10n.t(badgeKey))
-                                    .font(.system(size: 9, weight: .semibold))
-                                    .foregroundStyle(badgeColor)
-                                    .padding(.horizontal, 5)
-                                    .padding(.vertical, 1)
-                                    .background(Capsule().fill(badgeColor.opacity(0.12)))
-                            }
-                        }
-                        if !entry.isDir, let lastAccess = entry.lastAccess, let date = isoDate(lastAccess) {
-                            Text(date, style: .date)
-                                .font(.system(size: 9))
-                                .foregroundStyle(.tertiary)
-                        }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entry.name)
+                            .font(.system(size: 12, weight: entry.isDir ? .medium : .regular))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text((entry.isPartial == true ? "≥ " : "") + ByteFormat.format(entry.size))
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text(ByteFormat.format(entry.size))
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(.secondary)
                     if canSelect {
                         Color.clear.frame(width: 24, height: 24)
                     } else {
-                        Image(systemName: entry.handling == .systemReadOnly ? "lock.fill" : "chevron.right")
+                        Image(systemName: entry.isDir ? "chevron.right" : "arrow.up.right")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(.tertiary)
                             .frame(width: 18)
@@ -545,45 +352,6 @@ private struct AnalyzeRowView: View {
         }
     }
 
-    private var rowIcon: String {
-        switch entry.handling {
-        case .directCleanup: return entry.isDir ? "sparkles" : "doc.fill"
-        case .browse: return entry.isDir ? "folder.fill" : "doc.fill"
-        case .appData: return "shippingbox.fill"
-        case .application: return "app.fill"
-        case .systemReadOnly: return "internaldrive.fill"
-        }
-    }
-
-    private var iconStyle: AnyShapeStyle {
-        switch entry.handling {
-        case .directCleanup: return AnyShapeStyle(Color.moleAccentText)
-        case .application: return AnyShapeStyle(Color.orange)
-        case .systemReadOnly: return AnyShapeStyle(.tertiary)
-        default: return AnyShapeStyle(.secondary)
-        }
-    }
-
-    private var badgeKey: String? {
-        switch entry.handling {
-        case .directCleanup: return "analyze.cleanable"
-        case .browse: return entry.isDir ? "analyze.route.browse" : nil
-        case .appData: return "analyze.route.appData"
-        case .application: return "analyze.route.app"
-        case .systemReadOnly: return "analyze.route.system"
-        }
-    }
-
-    private var badgeColor: Color {
-        switch entry.handling {
-        case .directCleanup: return Color.moleAccentText
-        case .application: return .orange
-        case .systemReadOnly: return .secondary
-        default: return .secondary
-        }
-    }
-
-    private func isoDate(_ string: String) -> Date? {
-        ISO8601DateFormatter().date(from: string)
-    }
+    private var rowIcon: String { entry.isDir ? "folder" : "doc" }
+    private var iconStyle: AnyShapeStyle { AnyShapeStyle(Color.moleAccentText) }
 }

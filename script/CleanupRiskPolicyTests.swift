@@ -27,6 +27,133 @@ struct CleanupRiskPolicyTests {
         try testSystemDataParsing()
         try testNetmonParsing()
         try testCacheMapPolicy(home: policyHome)
+        try testMoleParity(home: policyHome)
+    }
+
+    /// Cleanup-policy parity with Mole's clean/dev catalog: dependency stores
+    /// are review-only, Gradle admits only build-cache-*, firmware and
+    /// Messages caches are rebuildable, sandboxed tmp children are admitted per
+    /// owner, and Xcode offers XCTestDevices plus superseded DeviceSupport.
+    private static func testMoleParity(home: String) throws {
+        for store in [home + "/.m2/repository", home + "/.m2/repository/org/example",
+                      home + "/.gradle/caches", home + "/.gradle/caches/modules-2",
+                      home + "/.nuget/packages", home + "/.pub-cache",
+                      home + "/.cargo/git", home + "/.cargo/git/db",
+                      home + "/.ivy2/cache", home + "/.sbt/boot"] {
+            let descriptor = CleanupRiskPolicy.developerCache(path: store, homeDirectory: home)
+            try expect(descriptor.risk == .warning && descriptor.disposal == .trash &&
+                       descriptor.applyRoute == .developerCacheTrash &&
+                       descriptor.reasonKey == "cleanup.risk.dependencyStore",
+                       "dependency store was not review-only Warning: \(store)")
+            try expect(CleanupRiskPolicy.core(section: "Developer", path: store,
+                                              homeDirectory: home).risk != .safe,
+                       "core route admitted a dependency store: \(store)")
+        }
+        for rebuildable in [home + "/.gradle/caches/build-cache-1",
+                            home + "/.gradle/caches/build-cache-1/0123abcd",
+                            home + "/.gradle/daemon", home + "/.gradle/workers",
+                            home + "/.gradle/notifications",
+                            home + "/go/pkg/mod/cache", home + "/go/pkg/mod/cache/download",
+                            home + "/.cargo/registry/cache", home + "/Library/Caches/NuGet"] {
+            let descriptor = CleanupRiskPolicy.developerCache(path: rebuildable, homeDirectory: home)
+            try expect(descriptor.risk == .safe && descriptor.applyRoute == .developerCacheTrash &&
+                       descriptor.activityGuard == .openFile,
+                       "rebuildable developer cache was not Safe: \(rebuildable)")
+            try expect(CleanupRiskPolicy.core(section: "Developer", path: rebuildable,
+                                              homeDirectory: home).risk == .safe,
+                       "core route did not dispatch a developer cache: \(rebuildable)")
+        }
+        try expect(CleanupRiskPolicy.developerCache(path: home + "/go/pkg/mod",
+                                                    homeDirectory: home).risk == .warning,
+                   "extracted Go module tree was blanket-cleanable")
+        try expect(CleanupRiskPolicy.developerCache(path: home + "/.gradle/caches/build-cache",
+                                                    homeDirectory: home).risk == .warning,
+                   "Gradle build-cache lookalike without a suffix was admitted")
+
+        for (path, reason) in [
+            (home + "/Library/iTunes/iPhone Software Updates", "cleanup.risk.firmwareCache"),
+            (home + "/Library/iTunes/iPhone Software Updates/iPhone16,1_18.0_Restore.ipsw",
+             "cleanup.risk.firmwareCache"),
+            (home + "/Library/Messages/StickerCache", "cleanup.risk.rebuildableCache"),
+            (home + "/Library/Messages/Caches/Previews/Attachments", "cleanup.risk.rebuildableCache")
+        ] {
+            let descriptor = CleanupRiskPolicy.core(section: "Device Firmware", path: path,
+                                                    homeDirectory: home)
+            try expect(descriptor.risk == .safe && descriptor.applyRoute == .genericTrash &&
+                       descriptor.reasonKey == reason,
+                       "user rebuildable root was not Safe: \(path)")
+        }
+        for durable in [home + "/Library/Messages", home + "/Library/Messages/chat.db",
+                        home + "/Library/Messages/Attachments/ab", home + "/Library/iTunes"] {
+            try expect(CleanupRiskPolicy.core(section: "Messages", path: durable,
+                                              homeDirectory: home).risk != .safe,
+                       "Messages/iTunes user data was admitted: \(durable)")
+        }
+
+        let containerTemp = home + "/Library/Containers/com.apple.mediaanalysisd/Data/tmp"
+        let tempChild = CleanupRiskPolicy.core(section: "com.apple.mediaanalysisd tmp",
+                                               path: containerTemp + "/scratch.bin", homeDirectory: home)
+        try expect(tempChild.risk == .safe && tempChild.activityGuard == .reverseDNSCache,
+                   "sandboxed tmp child was not Safe with an owner guard")
+        try expect(CleanupRiskPolicy.core(section: "tmp", path: containerTemp,
+                                          homeDirectory: home).risk != .safe,
+                   "sandboxed tmp root was blanket-cleanable")
+        try expect(CleanupRiskPolicy.core(section: "tmp",
+                                          path: home + "/Library/Containers/com.apple.mediaanalysisd/Data/Documents/x",
+                                          homeDirectory: home).risk != .safe,
+                   "container Documents was admitted through the tmp rule")
+
+        let appSupport = home + "/Library/Application Support"
+        for leaf in [appSupport + "/Google/Chrome/component_crx_cache",
+                     appSupport + "/Google/Chrome/extensions_crx_cache",
+                     appSupport + "/Google/Chrome/Crashpad/completed",
+                     appSupport + "/Google/Chrome/Default/Service Worker/ScriptCache",
+                     appSupport + "/Google/Chrome/Default/DawnGraphiteCache",
+                     appSupport + "/Vivaldi/Default/Cache",
+                     appSupport + "/Dia/User Data/Default/Code Cache"] {
+            let descriptor = CleanupRiskPolicy.core(section: "Browser", path: leaf, homeDirectory: home)
+            try expect(descriptor.risk == .safe && descriptor.activityGuard == .browser,
+                       "browser cache leaf was not Safe with a browser guard: \(leaf)")
+        }
+        for durable in [appSupport + "/Google/Chrome/Default/Login Data",
+                        appSupport + "/Google/Chrome/Crashpad/pending",
+                        appSupport + "/Vivaldi/Default/Cookies"] {
+            try expect(CleanupRiskPolicy.core(section: "Browser", path: durable,
+                                              homeDirectory: home).risk != .safe,
+                       "durable browser profile data was admitted: \(durable)")
+        }
+
+        let xctest = home + "/Library/Developer/XCTestDevices"
+        for path in [xctest, xctest + "/0A1B2C3D-0000-4000-8000-000000000000"] {
+            let descriptor = CleanupRiskPolicy.xcode(kind: "clean", path: path, homeDirectory: home)
+            try expect(descriptor.risk == .safe && descriptor.activityGuard == .xcode &&
+                       descriptor.applyRoute == .xcodeTrash,
+                       "XCTestDevices was not guarded Safe: \(path)")
+            try expect(CleanupRiskPolicy.core(section: "Xcode Test Devices", path: path,
+                                              homeDirectory: home).risk == .safe,
+                       "core route did not dispatch XCTestDevices: \(path)")
+        }
+        let deviceSupport = home + "/Library/Developer/Xcode/iOS DeviceSupport"
+        let staleVersion = CleanupRiskPolicy.xcode(kind: "clean",
+                                                   path: deviceSupport + "/16.0 (20A362) arm64e",
+                                                   homeDirectory: home)
+        try expect(staleVersion.risk == .safe && staleVersion.activityGuard == .xcode &&
+                   staleVersion.reasonKey == "cleanup.risk.staleDeviceSupport",
+                   "superseded DeviceSupport version offered as clean was not Safe")
+        try expect(CleanupRiskPolicy.xcode(kind: "clean", path: deviceSupport,
+                                           homeDirectory: home).risk == .warning,
+                   "DeviceSupport root was blanket-cleanable")
+        try expect(CleanupRiskPolicy.xcode(kind: "clean",
+                                           path: deviceSupport + "/16.0 (20A362) arm64e/Symbols",
+                                           homeDirectory: home).risk == .warning,
+                   "DeviceSupport symbol subtree was admitted")
+        try expect(CleanupRiskPolicy.xcode(kind: "keep", path: deviceSupport + "/16.0 (20A362) arm64e",
+                                           homeDirectory: home).risk == .protected,
+                   "keep-kind DeviceSupport row was not protected")
+        try expect(CleanupRiskPolicy.core(section: "iOS DeviceSupport",
+                                          path: deviceSupport + "/16.0 (20A362) arm64e",
+                                          homeDirectory: home).risk != .safe,
+                   "native core route admitted DeviceSupport without the bridge's keep-newest rule")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool,

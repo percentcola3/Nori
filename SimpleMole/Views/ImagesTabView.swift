@@ -135,7 +135,7 @@ private struct ImageCardView: View {
                     Image(systemName: "folder")
                         .font(.system(size: 11, weight: .semibold))
                         .frame(width: 26, height: 26)
-                        .background(Color.white.opacity(0.07), in: Circle())
+                        .background(Color.surface2, in: Circle())
                 }
                 .buttonStyle(.plain)
                 .help(L10n.shared.t("common.reveal"))
@@ -145,7 +145,7 @@ private struct ImageCardView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 11)
-                .fill(Color.white.opacity(isHovering ? 0.10 : 0.06))
+                .fill(isHovering ? Color.surface3 : Color.surface2)
         )
         .clipShape(RoundedRectangle(cornerRadius: 11))
         .shadow(color: .black.opacity(isHovering ? 0.16 : 0.10), radius: isHovering ? 8 : 5, y: 2)

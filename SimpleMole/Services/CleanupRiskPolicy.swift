@@ -118,6 +118,12 @@ enum CleanupRiskPolicy {
                          reasonKey: "cleanup.risk.rebuildableCache")
         }
 
+        if let reasonKey = userRebuildableReason(normalized, home: home) {
+            return .init(source: .core, risk: .safe, disposal: .trash,
+                         applyRoute: .genericTrash, activityGuard: .openFile,
+                         reasonKey: reasonKey)
+        }
+
         if let owner = containerCacheOwner(normalized, home: home) {
             return .init(source: .core, risk: .safe, disposal: .trash,
                          applyRoute: .genericTrash,
@@ -245,8 +251,21 @@ enum CleanupRiskPolicy {
         }
 
         let home = normalize(homeDirectory)
+        // Dependency stores that builds resolve from directly (Maven local
+        // repository, NuGet global packages, Dart pub cache, Cargo git
+        // checkouts, Gradle module cache) are review-only, matching Mole's
+        // recovery-contract rule: emptying them is not a cache refresh but a
+        // forced full re-download, and ~/.m2 may hold locally installed
+        // SNAPSHOT artifacts that exist on no remote at all.
+        if dependencyStoreRoots(home: home).contains(where: {
+            normalized == $0 || isStrictDescendant(normalized, of: $0)
+        }) && !isGradleBuildCachePath(normalized, home: home) {
+            return warningDescriptor(source: .developerCache, route: .developerCacheTrash,
+                                     reasonKey: "cleanup.risk.dependencyStore")
+        }
         let explicitSafeRoots = developerCacheRoots(home: home)
-        if explicitSafeRoots.contains(where: { normalized == $0 || isStrictDescendant(normalized, of: $0) }) {
+        if explicitSafeRoots.contains(where: { normalized == $0 || isStrictDescendant(normalized, of: $0) })
+            || isGradleBuildCachePath(normalized, home: home) {
             return .init(source: .developerCache, risk: .safe, disposal: .trash,
                          // Shared package caches can be touched by arbitrary
                          // build processes.  A process-name guard would hide
@@ -410,12 +429,7 @@ enum CleanupRiskPolicy {
                                        reasonKey: "cleanup.risk.protectedContent")
         }
         let simulatorCacheRoot = home + "/Library/Developer/CoreSimulator/Caches"
-        let safeRoots = [
-            home + "/Library/Developer/Xcode/DerivedData",
-            home + "/Library/Developer/Xcode/SourcePackages",
-            home + "/Library/Caches/com.apple.dt.Xcode",
-            simulatorCacheRoot
-        ]
+        let safeRoots = xcodeCacheRoots(home: home)
         if safeRoots.contains(where: {
             normalized == $0 || isStrictDescendant(normalized, of: $0)
         }) {
@@ -426,8 +440,45 @@ enum CleanupRiskPolicy {
                          applyRoute: .xcodeTrash, activityGuard: guardKind,
                          reasonKey: "cleanup.risk.rebuildableDeveloperCache")
         }
+        // DeviceSupport keeps one symbol tree per connected OS build. The
+        // scanner offers only versions beyond the newest two as `clean`
+        // (Mole's MOLE_XCODE_DEVICE_SUPPORT_KEEP); Xcode copies symbols again
+        // from a device the next time it is attached, so the version
+        // directories themselves are rebuildable. The root and anything
+        // deeper stay review-only.
+        if normalizedKind == "clean", isStaleDeviceSupportVersion(normalized, home: home) {
+            return .init(source: .xcodeCache, risk: .safe, disposal: .trash,
+                         applyRoute: .xcodeTrash, activityGuard: .xcode,
+                         reasonKey: "cleanup.risk.staleDeviceSupport")
+        }
         return warningDescriptor(source: .xcodeCache, route: .xcodeTrash,
                                  reasonKey: "cleanup.risk.deviceSupport")
+    }
+
+    /// Rebuildable Xcode roots shared by the native scanner, the Xcode bridge
+    /// and the policy. XCTestDevices holds per-run simulator clones that Xcode
+    /// recreates inside the root on the next test run.
+    static func xcodeCacheRoots(home: String) -> [String] {
+        [
+            home + "/Library/Developer/Xcode/DerivedData",
+            home + "/Library/Developer/Xcode/SourcePackages",
+            home + "/Library/Caches/com.apple.dt.Xcode",
+            home + "/Library/Developer/CoreSimulator/Caches",
+            home + "/Library/Developer/XCTestDevices"
+        ]
+    }
+
+    static func deviceSupportRoots(home: String) -> [String] {
+        [
+            home + "/Library/Developer/Xcode/iOS DeviceSupport",
+            home + "/Library/Developer/Xcode/watchOS DeviceSupport",
+            home + "/Library/Developer/Xcode/tvOS DeviceSupport",
+            home + "/Library/Developer/Xcode/visionOS DeviceSupport"
+        ]
+    }
+
+    private static func isStaleDeviceSupportVersion(_ path: String, home: String) -> Bool {
+        deviceSupportRoots(home: home).contains { isDirectChild(path, of: $0) }
     }
 
     // MARK: - 缓存地图（macOS 应用缓存知识库）
@@ -439,10 +490,19 @@ enum CleanupRiskPolicy {
     /// ChromeDebug 是自动化调试用独立 user-data-dir，整个目录可重建。
     private static let browserProfileRelativeRoots = [
         "Google/Chrome",
+        "Google/Chrome Beta",
+        "Google/Chrome Canary",
         "Google/ChromeDebug",
+        "Chromium",
         "Microsoft Edge",
         "BraveSoftware/Brave-Browser",
-        "Arc/User Data"
+        "Arc/User Data",
+        "Dia/User Data",
+        "Vivaldi",
+        "com.operasoftware.Opera",
+        "Yandex/YandexBrowser",
+        "QQBrowser3",
+        "net.imput.helium"
     ]
 
     /// 浏览器 profile 内的持久用户数据：登录态、站点数据库、偏好、书签。
@@ -691,11 +751,20 @@ enum CleanupRiskPolicy {
             }
         case .browser:
             return snapshotMatches(snapshot,
-                                   bundles: ["com.google.Chrome", "org.mozilla.firefox",
-                                             "com.microsoft.edgemac", "company.thebrowser.Browser",
-                                             "com.brave.Browser"],
-                                   processes: ["Google Chrome", "Firefox", "Microsoft Edge",
-                                               "Arc", "Brave Browser"])
+                                   bundles: ["com.google.Chrome", "com.google.Chrome.beta",
+                                             "com.google.Chrome.canary", "org.chromium.Chromium",
+                                             "org.mozilla.firefox", "com.microsoft.edgemac",
+                                             "company.thebrowser.Browser", "company.thebrowser.dia",
+                                             "com.brave.Browser", "com.vivaldi.Vivaldi",
+                                             "com.operasoftware.Opera",
+                                             "ru.yandex.desktop.yandex-browser",
+                                             "com.tencent.QQBrowser", "net.imput.helium",
+                                             "app.zen-browser.zen"],
+                                   processes: ["Google Chrome", "Google Chrome Beta",
+                                               "Google Chrome Canary", "Chromium", "Firefox",
+                                               "Microsoft Edge", "Arc", "Dia", "Brave Browser",
+                                               "Vivaldi", "Opera", "Yandex", "QQBrowser",
+                                               "Helium", "zen"])
         case .messenger:
             // Telegram / 飞书 / 微信运行期间，其媒体与文档缓存一律保护：
             // 边写边删既损坏缓存，也可能干扰消息库。
@@ -785,14 +854,18 @@ enum CleanupRiskPolicy {
             home + "/Library/Caches/pnpm",
             home + "/.yarn/cache",
             home + "/Library/Caches/Yarn",
-            home + "/.m2/repository",
-            home + "/.gradle/caches",
+            // Gradle: only the build cache, daemon logs, worker scratch and
+            // notification state are rebuildable. The module cache under
+            // ~/.gradle/caches is a dependency store (see dependencyStoreRoots)
+            // and its build-cache-* children are admitted separately.
             home + "/.gradle/daemon",
+            home + "/.gradle/workers",
+            home + "/.gradle/notifications",
             home + "/Library/Caches/go-build",
-            home + "/go/pkg/mod",
+            // Only the download cache (zips + VCS mirrors) is offered here; the
+            // extracted module tree is reset through `go clean -modcache`.
+            home + "/go/pkg/mod/cache",
             home + "/.cargo/registry/cache",
-            home + "/.cargo/git/db",
-            home + "/.nuget/packages",
             home + "/Library/Caches/NuGet",
             home + "/Library/Caches/pip",
             home + "/.cache/pip",
@@ -800,7 +873,6 @@ enum CleanupRiskPolicy {
             home + "/.cache/uv",
             home + "/.composer/cache",
             home + "/Library/Caches/composer",
-            home + "/.pub-cache",
             home + "/.cache/bazel",
             home + "/.cache/zig",
             home + "/Library/Caches/org.swift.swiftpm",
@@ -848,20 +920,66 @@ enum CleanupRiskPolicy {
         ]
     }
 
+    /// Stores that builds consume directly. They are inventoried for review
+    /// but never enter the one-click cleanup; Mole keeps the same list off its
+    /// blanket delete path and resets them only through owner commands.
+    static func dependencyStoreRoots(home: String) -> [String] {
+        [
+            home + "/.m2/repository",
+            home + "/.ivy2/cache",
+            home + "/.gradle/caches",
+            home + "/.nuget/packages",
+            home + "/.pub-cache",
+            home + "/.cargo/git",
+            home + "/.cargo/registry/src",
+            home + "/.cabal/packages",
+            home + "/.cpan/sources",
+            home + "/.sbt/boot",
+            home + "/.sbt/launchers"
+        ]
+    }
+
+    /// `~/.gradle/caches/build-cache-*` holds task outputs keyed by input hash
+    /// and is rebuilt on the next build; the sibling module cache is not.
+    static func isGradleBuildCachePath(_ path: String, home: String) -> Bool {
+        let cachesRoot = home + "/.gradle/caches/"
+        guard path.hasPrefix(cachesRoot) else { return false }
+        let child = String(path.dropFirst(cachesRoot.count))
+            .split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
+        return child.hasPrefix("build-cache-")
+    }
+
     private static func isExplicitDeveloperCachePath(_ path: String, home: String) -> Bool {
-        developerCacheRoots(home: home).contains {
+        isGradleBuildCachePath(path, home: home) || developerCacheRoots(home: home).contains {
             path == $0 || isStrictDescendant(path, of: $0)
         }
     }
 
-    private static func isExplicitXcodeCachePath(_ path: String, home: String) -> Bool {
-        let roots = [
-            home + "/Library/Developer/Xcode/DerivedData",
-            home + "/Library/Developer/Xcode/SourcePackages",
-            home + "/Library/Caches/com.apple.dt.Xcode",
-            home + "/Library/Developer/CoreSimulator/Caches"
+    /// Explicit user-level roots outside Library/Caches whose contents macOS
+    /// re-downloads or regenerates on demand. Firmware images are fetched
+    /// again by Finder/iTunes for the next restore; Messages preview/sticker
+    /// caches are rebuilt from the attachments they were derived from.
+    static func userRebuildableRoots(home: String) -> [(path: String, reasonKey: String)] {
+        [
+            (home + "/Library/iTunes/iPhone Software Updates", "cleanup.risk.firmwareCache"),
+            (home + "/Library/iTunes/iPad Software Updates", "cleanup.risk.firmwareCache"),
+            (home + "/Library/iTunes/iPod Software Updates", "cleanup.risk.firmwareCache"),
+            (home + "/Library/iTunes/Apple TV Software Updates", "cleanup.risk.firmwareCache"),
+            (home + "/Library/iTunes/Apple Watch Software Updates", "cleanup.risk.firmwareCache"),
+            (home + "/Library/Messages/StickerCache", "cleanup.risk.rebuildableCache"),
+            (home + "/Library/Messages/Caches/Previews/Attachments", "cleanup.risk.rebuildableCache"),
+            (home + "/Library/Messages/Caches/Previews/StickerCache", "cleanup.risk.rebuildableCache")
         ]
-        return roots.contains { path == $0 || isStrictDescendant(path, of: $0) }
+    }
+
+    private static func userRebuildableReason(_ path: String, home: String) -> String? {
+        userRebuildableRoots(home: home).first {
+            path == $0.path || isStrictDescendant(path, of: $0.path)
+        }?.reasonKey
+    }
+
+    private static func isExplicitXcodeCachePath(_ path: String, home: String) -> Bool {
+        xcodeCacheRoots(home: home).contains { path == $0 || isStrictDescendant(path, of: $0) }
     }
 
     private static func cacheOwner(for path: String, home: String) -> String? {
@@ -880,10 +998,18 @@ enum CleanupRiskPolicy {
         let remainder = String(path.dropFirst(prefix.count))
         let components = remainder.split(separator: "/", omittingEmptySubsequences: true)
             .map(String.init)
-        guard components.count >= 5,
-              components[1] == "Data", components[2] == "Library",
-              components[3] == "Caches" || components[3] == "Logs" else { return nil }
-        return components[0]
+        guard components.count >= 2, components[1] == "Data" else { return nil }
+        // <id>/Data/Library/{Caches,Logs}/<child>: the sandbox cache contract.
+        if components.count >= 5, components[2] == "Library",
+           components[3] == "Caches" || components[3] == "Logs" {
+            return components[0]
+        }
+        // <id>/Data/tmp/<child>: the sandboxed app's NSTemporaryDirectory. Only
+        // entries below tmp qualify, never the tmp directory itself.
+        if components.count >= 4, components[2] == "tmp" {
+            return components[0]
+        }
+        return nil
     }
 
     private static func isApplicationSupportCachePath(_ path: String, home: String) -> Bool {
@@ -893,14 +1019,19 @@ enum CleanupRiskPolicy {
             .split(separator: "/", omittingEmptySubsequences: true)
             .map { $0.lowercased() }
         guard components.count >= 2 else { return false }
+        // Chromium/Electron cache leaves audited in Mole's browser catalog:
+        // GPU shader caches (Dawn/Graphite/GrShader), component and extension
+        // CRX download caches, and the legacy HTML5 "Application Cache".
         let cacheComponents: Set<String> = [
             "cache", "caches", "code cache", "gpucache", "dawncache",
+            "dawngraphitecache", "dawnwebgpucache", "gpupersistentcache",
             "graphitedawncache", "grshadercache", "shadercache", "cacheddata",
-            "cachedextensionvsixs", "blob_storage", "logs"
+            "cachedextensionvsixs", "blob_storage", "logs",
+            "component_crx_cache", "extensions_crx_cache", "application cache"
         ]
         if components.dropFirst().contains(where: cacheComponents.contains) { return true }
         for index in 1 ..< components.count {
-            if components[index] == "cachestorage",
+            if components[index] == "cachestorage" || components[index] == "scriptcache",
                components[index - 1] == "service worker" { return true }
             if components[index] == "completed",
                components[index - 1] == "crashpad" { return true }
@@ -911,12 +1042,15 @@ enum CleanupRiskPolicy {
     private static func isBrowserPath(_ path: String, section: String) -> Bool {
         if section.lowercased().contains("browser") { return true }
         let lower = path.lowercased()
-        return lower.contains("/google/chrome/") || lower.contains("/mozilla/firefox/")
-            || lower.contains("/microsoft edge/") || lower.contains("/arc/")
+        if lower.contains("/google/chrome/") || lower.contains("/mozilla/firefox/")
+            || lower.contains("/microsoft edge/") || lower.contains("/arc/") { return true }
+        // Every Chromium profile root in the cache map shares the browser guard.
+        return browserProfileRelativeRoots.contains { lower.contains("/" + $0.lowercased() + "/") }
     }
 
     private static func isBrowserCacheOwner(_ owner: String) -> Bool {
-        ["Google", "Mozilla", "Firefox", "Chrome", "Microsoft Edge", "Arc"]
+        ["Google", "Mozilla", "Firefox", "Chrome", "Chromium", "Microsoft Edge", "Arc", "Dia",
+         "BraveSoftware", "Vivaldi", "Yandex", "QQBrowser3", "Opera"]
             .contains { owner.caseInsensitiveCompare($0) == .orderedSame }
     }
 

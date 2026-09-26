@@ -505,7 +505,7 @@ struct CategoryRowView: View {
         if category.selected {
             return Color.moleAccent.opacity(hovered ? 0.12 : 0.085)
         }
-        return Color.white.opacity(hovered ? 0.09 : 0.06)
+        return hovered ? Color.surface3 : Color.surface2
     }
 
     private func toggleExpanded() {

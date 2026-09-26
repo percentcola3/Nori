@@ -17,7 +17,7 @@ struct QuickPanelView: View {
                               progress: state.metrics.cpuPercent / 100)
 
                 Rectangle()
-                    .fill(Color.white.opacity(0.08))
+                    .fill(Color.surface2)
                     .frame(width: 1, height: 72)
 
                 QuickRingCard(title: memoryTitle,
@@ -39,7 +39,7 @@ struct QuickPanelView: View {
                     ForEach(Array(state.topMemoryApps.enumerated()), id: \.element.id) { index, row in
                         if index > 0 {
                             Rectangle()
-                                .fill(Color.white.opacity(0.055))
+                                .fill(Color.surface2)
                                 .frame(height: 1)
                                 .padding(.leading, 37)
                         }
@@ -96,9 +96,8 @@ struct QuickPanelView: View {
         .padding(14)
         .frame(width: 284)
         .background {
-            DarkGlassSurface(cornerRadius: 18, usesSystemGlass: true)
+            GlassSurface(cornerRadius: 18)
         }
-        .preferredColorScheme(.dark)
         .background(
             GeometryReader { geo in
                 Color.clear.preference(key: QuickPanelHeightKey.self, value: geo.size.height)
@@ -138,7 +137,7 @@ private struct QuickPanelSectionSurface: View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .fill(
                 LinearGradient(
-                    colors: [Color.white.opacity(0.075), Color.white.opacity(0.032)],
+                    colors: [Color.surface2, Color.surface1],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
@@ -147,7 +146,7 @@ private struct QuickPanelSectionSurface: View {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(
                         LinearGradient(
-                            colors: [Color.white.opacity(0.13), Color.white.opacity(0.035)],
+                            colors: [Color.surface3, Color.surface1],
                             startPoint: .top,
                             endPoint: .bottom
                         ),
@@ -168,7 +167,7 @@ private struct QuickRingCard: View {
         VStack(spacing: 7) {
             ZStack {
                 Circle()
-                    .stroke(Color.white.opacity(0.09), lineWidth: 5)
+                    .stroke(Color.hairline, lineWidth: 5)
                 Circle()
                     .trim(from: 0, to: CGFloat(max(0, min(1, progress))))
                     .stroke(Color.moleAccent, style: StrokeStyle(lineWidth: 5, lineCap: .round))

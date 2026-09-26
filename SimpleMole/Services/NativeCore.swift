@@ -137,9 +137,7 @@ final class NativeCore: @unchecked Sendable {
                     let path = entry.standardizedFileURL.path
                     guard self.isAllowedCleanupPath(entry, home: home),
                           self.cleanupPathIsPhysical(entry, home: home),
-                          !whitelist.contains(where: {
-                              path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/")
-                          }) else { continue }
+                          !self.matchesWhitelist(path, entries: whitelist) else { continue }
                     // A precise leaf replaces an overlapping broad parent before
                     // traversal. Never size or offer that parent for deletion.
                     if broadRoots.contains(root.path), roots.contains(where: {
@@ -342,6 +340,15 @@ final class NativeCore: @unchecked Sendable {
             "Xcode Cache", .xcodeCache, .xcode)
         add(home.appendingPathComponent("Library/Developer/CoreSimulator/Caches", isDirectory: true),
             "Simulator Caches", .developerCache, .simulator)
+        // XCTestDevices accumulates one simulator clone per test run. Offer
+        // each clone separately and leave the root for Xcode to reuse.
+        let xctestDevices = home.appendingPathComponent("Library/Developer/XCTestDevices",
+                                                        isDirectory: true)
+        if cleanupPathIsPhysical(xctestDevices, home: home) {
+            for clone in directChildren(of: xctestDevices) where !isSymlink(clone) {
+                add(clone, "Xcode Test Devices", .xcodeCache, .xcode)
+            }
+        }
         add(home.appendingPathComponent(".cache", isDirectory: true),
             "User Cache", .core, .openFile)
         add(home.appendingPathComponent(".npm/_cacache", isDirectory: true),
@@ -350,10 +357,23 @@ final class NativeCore: @unchecked Sendable {
             "Yarn Cache", .developerCache, .packageManager)
         add(home.appendingPathComponent(".bun/install/cache", isDirectory: true),
             "Bun Cache", .developerCache, .packageManager)
-        add(home.appendingPathComponent(".gradle/caches", isDirectory: true),
-            "Gradle Cache", .developerCache, .packageManager)
-        add(home.appendingPathComponent(".m2/repository", isDirectory: true),
-            "Maven Cache", .developerCache, .packageManager)
+        // Gradle: the module cache under ~/.gradle/caches and the Maven local
+        // repository are dependency stores (review-only, see
+        // CleanupRiskPolicy.dependencyStoreRoots). Only the hash-keyed build
+        // cache, daemon logs, worker scratch and notifications are offered.
+        let gradleCaches = home.appendingPathComponent(".gradle/caches", isDirectory: true)
+        if cleanupPathIsPhysical(gradleCaches, home: home) {
+            for entry in directChildren(of: gradleCaches)
+                where entry.lastPathComponent.hasPrefix("build-cache-") && !isSymlink(entry) {
+                add(entry, "Gradle Build Cache", .developerCache, .packageManager)
+            }
+        }
+        for (relative, label) in [(".gradle/daemon", "Gradle Daemon Logs"),
+                                  (".gradle/workers", "Gradle Worker Cache"),
+                                  (".gradle/notifications", "Gradle Notifications")] {
+            add(home.appendingPathComponent(relative, isDirectory: true),
+                label, .developerCache, .packageManager)
+        }
         add(home.appendingPathComponent(".cargo/registry/cache", isDirectory: true),
             "Cargo Cache", .developerCache, .packageManager)
         add(home.appendingPathComponent(".swiftpm/cache", isDirectory: true),
@@ -372,6 +392,36 @@ final class NativeCore: @unchecked Sendable {
             "Go Module Cache", .developerCache, .packageManager)
         add(home.appendingPathComponent(".Trash", isDirectory: true),
             "Trash", .core, .openFile)
+
+        // Device firmware downloaded for restores (several GB per .ipsw) and
+        // Messages preview/sticker caches. Both are re-fetched or regenerated
+        // by macOS on demand; Messages attachments themselves are never listed.
+        for entry in CleanupRiskPolicy.userRebuildableRoots(home: home.path) {
+            let label = entry.reasonKey == "cleanup.risk.firmwareCache"
+                ? "Device Firmware" : "Messages Cache"
+            add(URL(fileURLWithPath: entry.path, isDirectory: true), label, .core, .openFile)
+        }
+
+        // Sandboxed apps keep their NSTemporaryDirectory in Data/tmp. Mole's
+        // audited list: media analysis, geo, wallpaper, Configurator and
+        // Apple Media Services agents, Office, and UTM. Only children are
+        // offered; the policy never admits the tmp directory itself.
+        let containerTempOwners = [
+            "com.apple.mediaanalysisd", "com.apple.geod",
+            "com.apple.wallpaper.extension.aerials",
+            "com.apple.configurator.xpc.InternetService",
+            "com.apple.AppleMediaServicesUI.UtilityExtension",
+            "com.microsoft.Word", "com.microsoft.Excel", "com.microsoft.Powerpoint",
+            "com.utmapp.UTM"
+        ]
+        for owner in containerTempOwners {
+            let temp = home.appendingPathComponent("Library/Containers/\(owner)/Data/tmp",
+                                                   isDirectory: true)
+            guard !control.shouldStop, cleanupPathIsPhysical(temp, home: home) else { continue }
+            for child in directChildren(of: temp) where !isSymlink(child) {
+                add(child, owner + " tmp", .core, .openFile)
+            }
+        }
 
         // Additional fixed developer cache locations. These are all
         // rebuildable package/build caches; project sources and installed
@@ -450,8 +500,10 @@ final class NativeCore: @unchecked Sendable {
             }
         }
 
-        // Common IM clients keep disposable thumbnails and web caches in
-        // sandbox containers rather than ~/Library/Caches.
+        // Common IM clients, Office suites and virtualization apps keep
+        // disposable thumbnails and web caches in sandbox containers rather
+        // than ~/Library/Caches. The policy guards each container by its
+        // reverse-DNS owner, so a running app keeps its own cache untouched.
         let imContainerCaches: [(String, String)] = [
             ("com.tencent.xinWeChat", "WeChat Cache"),
             ("com.tencent.qq", "QQ Cache"),
@@ -463,12 +515,32 @@ final class NativeCore: @unchecked Sendable {
             ("org.telegram.desktop", "Telegram Cache"),
             ("org.signal.Signal", "Signal Cache"),
             ("com.microsoft.teams2", "Microsoft Teams Cache"),
-            ("com.skype.skype", "Skype Cache")
+            ("com.skype.skype", "Skype Cache"),
+            ("com.microsoft.Word", "Microsoft Word Cache"),
+            ("com.microsoft.Excel", "Microsoft Excel Cache"),
+            ("com.microsoft.Powerpoint", "Microsoft PowerPoint Cache"),
+            ("com.microsoft.Outlook", "Microsoft Outlook Cache"),
+            ("com.microsoft.onenote.mac", "Microsoft OneNote Cache"),
+            ("com.apple.iWork.Pages", "Pages Cache"),
+            ("com.apple.iWork.Numbers", "Numbers Cache"),
+            ("com.apple.iWork.Keynote", "Keynote Cache"),
+            ("com.utmapp.UTM", "UTM Cache"),
+            ("com.apple.AppStore", "App Store Cache"),
+            ("com.apple.stocks", "Stocks Cache"),
+            ("com.apple.mediaanalysisd", "Media Analysis Cache"),
+            ("com.apple.AMPArtworkAgent", "Music Artwork Cache")
         ]
+        // The policy admits entries *below* a container's Caches directory
+        // (`<id>/Data/Library/Caches/<child>`), never the directory itself, so
+        // enumerate children here; adding the root would classify as Warning
+        // and silently drop the whole container from the quick inventory.
         for (identifier, label) in imContainerCaches {
-            add(home.appendingPathComponent(
-                "Library/Containers/\(identifier)/Data/Library/Caches", isDirectory: true),
-                label, .core, .browser)
+            let cachesRoot = home.appendingPathComponent(
+                "Library/Containers/\(identifier)/Data/Library/Caches", isDirectory: true)
+            guard !control.shouldStop, cleanupPathIsPhysical(cachesRoot, home: home) else { continue }
+            for child in directChildren(of: cachesRoot) where !isSymlink(child) {
+                add(child, label, .core, .reverseDNSCache)
+            }
         }
         let imSupportCaches: [(String, String)] = [
             ("WeChat", "WeChat Cache"), ("Tencent/QQ", "QQ Cache"),
@@ -486,9 +558,13 @@ final class NativeCore: @unchecked Sendable {
             add(home.appendingPathComponent("Library/Application Support/\(relative)/Cache",
                                            isDirectory: true), label, .core, .browser)
         }
-        add(home.appendingPathComponent(
-            "Library/Containers/com.apple.Safari/Data/Library/Caches", isDirectory: true),
-            "Safari Cache", .core, .browser)
+        let safariCaches = home.appendingPathComponent(
+            "Library/Containers/com.apple.Safari/Data/Library/Caches", isDirectory: true)
+        if cleanupPathIsPhysical(safariCaches, home: home) {
+            for child in directChildren(of: safariCaches) where !isSymlink(child) {
+                add(child, "Safari Cache", .core, .reverseDNSCache)
+            }
+        }
 
         // Chromium-family profiles all use the same rebuildable cache leaves.
         // Discover profiles instead of assuming that only Default exists.
@@ -500,13 +576,24 @@ final class NativeCore: @unchecked Sendable {
             ("Microsoft Edge", "Edge"),
             ("BraveSoftware/Brave-Browser", "Brave"),
             ("Arc/User Data", "Arc"),
+            ("Dia/User Data", "Dia"),
             ("Vivaldi", "Vivaldi"),
             ("com.operasoftware.Opera", "Opera"),
+            ("Yandex/YandexBrowser", "Yandex Browser"),
+            ("QQBrowser3", "QQBrowser"),
+            ("net.imput.helium", "Helium"),
             ("Firefox/Profiles", "Firefox")
         ]
-        let cacheLeaves = ["Cache", "Code Cache", "GPUCache", "GrShaderCache",
-                           "GraphiteDawn", "Service Worker/CacheStorage",
-                           "Service Worker/ScriptCache", "cache2", "startupCache"]
+        // Chromium leaves from Mole's browser catalog: web/code caches, the
+        // GPU shader caches (GPUCache, GrShader, Dawn/Graphite variants),
+        // Service Worker script/storage caches, CRX download caches and
+        // completed crash reports. Firefox uses cache2 and startupCache.
+        let cacheLeaves = ["Cache", "Code Cache", "GPUCache", "GrShaderCache", "ShaderCache",
+                           "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache",
+                           "GraphiteDawnCache", "GPUPersistentCache", "Application Cache",
+                           "Service Worker/CacheStorage", "Service Worker/ScriptCache",
+                           "component_crx_cache", "extensions_crx_cache",
+                           "Crashpad/completed", "cache2", "startupCache"]
         for (relative, label) in browsers {
             let browserRoot = home.appendingPathComponent("Library/Application Support/\(relative)",
                                                          isDirectory: true)
@@ -554,8 +641,12 @@ final class NativeCore: @unchecked Sendable {
             if cleanupPathIsPhysical(containers, home: home) {
                 for container in directChildren(of: containers) {
                     guard !control.shouldStop else { break }
-                    for leaf in ["Caches", "Logs"] {
-                        let root = container.appendingPathComponent("Data/Library/" + leaf)
+                    // Data/tmp is the sandboxed NSTemporaryDirectory; like the
+                    // cache/log leaves it is admitted per child by owner.
+                    for (relative, leaf) in [("Data/Library/Caches", "Caches"),
+                                             ("Data/Library/Logs", "Logs"),
+                                             ("Data/tmp", "tmp")] {
+                        let root = container.appendingPathComponent(relative)
                         guard cleanupPathIsPhysical(root, home: home) else { continue }
                         for child in directChildren(of: root) {
                             add(child, container.lastPathComponent + " " + leaf, .core, .openFile)
@@ -665,13 +756,11 @@ final class NativeCore: @unchecked Sendable {
 
     // MARK: Analyze
 
-    func scanAnalyze(path: String, overview: Bool) async -> AnalyzeReport {
-        await Task.detached(priority: .utility) { [self] in
-            let target = URL(fileURLWithPath: path).standardizedFileURL
-            if overview {
-                return self.scanOverview(home: target.path == "/" ? NSHomeDirectory() : target.path)
-            }
-            return self.scanDirectory(target)
+    func scanAnalyze(path: String, overview: Bool,
+                     control: CleanupScanControl = CleanupScanControl(mode: .deep),
+                     progress: ((AnalyzeReport) -> Void)? = nil) async -> AnalyzeReport {
+        await Task.detached(priority: .utility) {
+            DiskAnalysisWorker.scan(path, control: control, progress: progress)
         }.value
     }
 
@@ -961,7 +1050,7 @@ final class NativeCore: @unchecked Sendable {
             OptimizeTask(id: "iconservices", title: "Icon services", detail: "Refresh Finder icon cache."),
             OptimizeTask(id: "launchservices", title: "LaunchServices", detail: "Rebuild app and document associations."),
             OptimizeTask(id: "saved-state", title: "Saved application state", detail: "Remove saved states older than 30 days."),
-            OptimizeTask(id: "broken-configs", title: "Broken preferences", detail: "Check preference files without touching user data."),
+            OptimizeTask(id: "broken-configs", title: "Broken preferences", detail: "Move corrupt third-party preference files to Trash; Apple and login settings are never touched."),
             OptimizeTask(id: "network-stack", title: "Network stack", detail: "Refresh routing and ARP state when administrator access is available."),
             OptimizeTask(id: "finder-dsstore", title: "Network .DS_Store", detail: "Prevent Finder metadata files on network volumes."),
             OptimizeTask(id: "legacy-overrides", title: "Legacy overrides", detail: "Remove old App Nap and disk-image verification overrides."),
@@ -973,8 +1062,8 @@ final class NativeCore: @unchecked Sendable {
             OptimizeTask(id: "shared-file-list", title: "Shared file lists", detail: "Refresh Finder recent items and favorites services."),
             OptimizeTask(id: "disk-verify", title: "Disk health", detail: "Verify the filesystem only after explicit administrator approval."),
             OptimizeTask(id: "login-items", title: "Login items", detail: "Audit login items for broken references."),
-            OptimizeTask(id: "quarantine", title: "Quarantine database", detail: "Review old download metadata; no automatic removal."),
-            OptimizeTask(id: "launch-agents", title: "Launch agents", detail: "Find broken user launch agents for review."),
+            OptimizeTask(id: "quarantine", title: "Quarantine database", detail: "Clear the download quarantine history; files and Gatekeeper checks are unaffected."),
+            OptimizeTask(id: "launch-agents", title: "Launch agents", detail: "Unload and trash user launch agents whose program no longer exists."),
             OptimizeTask(id: "notifications", title: "Notifications", detail: "Inspect notification database size without deleting messages."),
             OptimizeTask(id: "coreduet", title: "Usage data", detail: "Inspect usage databases without removing history.")
         ]
@@ -992,10 +1081,22 @@ final class NativeCore: @unchecked Sendable {
                 }
                 switch task.id {
                 case "dns":
-                    let first = self.runCommand("/usr/bin/dscacheutil", ["-flushcache"])
-                    let second = self.runCommand("/usr/bin/killall", ["-HUP", "mDNSResponder"])
-                    output[index].state = first && second ? .applied : .failed
-                    output[index].message = first && second ? "DNS cache flushed." : "Could not flush DNS cache."
+                    // mDNSResponder runs as root, so the HUP only succeeds in an
+                    // administrator session. Report that honestly instead of
+                    // marking the whole task failed when the cache itself was
+                    // flushed.
+                    let flushed = self.runCommand("/usr/bin/dscacheutil", ["-flushcache"])
+                    let restarted = flushed && self.runCommand("/usr/bin/killall", ["-HUP", "mDNSResponder"])
+                    if restarted {
+                        output[index].state = .applied
+                        output[index].message = "DNS cache flushed."
+                    } else if flushed {
+                        output[index].state = .unavailable
+                        output[index].message = "Directory Service cache flushed; restarting mDNSResponder needs administrator access (sudo killall -HUP mDNSResponder)."
+                    } else {
+                        output[index].state = .failed
+                        output[index].message = "Could not flush DNS cache."
+                    }
                 case "quicklook":
                     let ok = self.runCommand("/usr/bin/qlmanage", ["-r", "cache"])
                     output[index].state = ok ? .applied : .failed
@@ -1013,24 +1114,44 @@ final class NativeCore: @unchecked Sendable {
                         output[index].message = "lsregister is unavailable on this macOS version."
                         continue
                     }
-                    let ok = self.runCommand(executable,
-                                             ["-kill", "-r", "-domain", "local", "-domain", "system", "-domain", "user"])
-                    output[index].state = ok ? .applied : .failed
-                    output[index].message = ok ? "LaunchServices rebuilt." : "LaunchServices rebuild failed."
+                    // Same sequence as Mole: garbage-collect stale entries, then
+                    // re-register without `-kill`, which would drop every app the
+                    // user registered by hand. Falls back to user + local domains
+                    // when the system domain refuses without administrator access.
+                    _ = self.runCommand(executable, ["-gc"])
+                    let full = self.runCommand(executable,
+                                               ["-r", "-f", "-domain", "local", "-domain", "user", "-domain", "system"])
+                    let partial = full || self.runCommand(executable,
+                                                          ["-r", "-f", "-domain", "local", "-domain", "user"])
+                    output[index].state = partial ? .applied : .failed
+                    output[index].message = full
+                        ? "LaunchServices database rebuilt."
+                        : partial ? "LaunchServices rebuilt for user and local domains."
+                        : "LaunchServices rebuild failed."
                 case "saved-state":
                     let root = URL(fileURLWithPath: NSHomeDirectory())
                         .appendingPathComponent("Library/Saved Application State", isDirectory: true)
                     let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60)
-                    var changed = false
+                    let whitelist = self.loadWhitelist(homeDirectory: NSHomeDirectory())
+                    var removed = 0
+                    var failed = 0
                     for item in self.directChildren(of: root) {
                         guard !self.isSymlink(item),
+                              !self.matchesWhitelist(item.path, entries: whitelist),
                               let values = try? item.resourceValues(forKeys: [.contentModificationDateKey]),
                               let date = values.contentModificationDate, date < cutoff else { continue }
-                        do { try self.fileManager.trashItem(at: item, resultingItemURL: nil); changed = true }
-                        catch { }
+                        do { try self.fileManager.trashItem(at: item, resultingItemURL: nil); removed += 1 }
+                        catch { failed += 1 }
                     }
-                    output[index].state = changed ? .applied : .unchanged
-                    output[index].message = changed ? "Old saved states moved to Trash." : "No old saved states found."
+                    if failed > 0 {
+                        output[index].state = removed > 0 ? .applied : .failed
+                        output[index].message = "Moved \(removed) saved state(s) to Trash; \(failed) could not be moved."
+                    } else {
+                        output[index].state = removed > 0 ? .applied : .unchanged
+                        output[index].message = removed > 0
+                            ? "Moved \(removed) saved state(s) older than 30 days to Trash."
+                            : "No old saved states found."
+                    }
                 case "finder-dsstore":
                     let first = self.runCommand("/usr/bin/defaults", ["write", "com.apple.desktopservices", "DSDontWriteNetworkStores", "-bool", "TRUE"])
                     let second = self.runCommand("/usr/bin/defaults", ["write", "com.apple.desktopservices", "DSDontWriteUSBStores", "-bool", "TRUE"])
@@ -1066,7 +1187,7 @@ final class NativeCore: @unchecked Sendable {
                         output[index].message = "Some legacy overrides could not be removed."
                     } else if removed > 0 {
                         output[index].state = .applied
-                        output[index].message = "Removed (removed) legacy override(s)."
+                        output[index].message = "Removed \(removed) legacy override(s)."
                     } else {
                         output[index].state = .unchanged
                         output[index].message = "No legacy overrides found."
@@ -1084,8 +1205,21 @@ final class NativeCore: @unchecked Sendable {
                         "Index status checked: \($0.trimmingCharacters(in: .whitespacesAndNewlines))"
                     } ?? "Spotlight status is unavailable on this macOS version."
                 case "broken-configs":
-                    output[index].state = .unchanged
-                    output[index].message = "Preference validation is read-only; no broken file was changed."
+                    let result = self.repairBrokenPreferences(homeDirectory: NSHomeDirectory())
+                    if result.failed > 0 {
+                        output[index].state = result.repaired > 0 ? .applied : .failed
+                        output[index].message = "Moved \(result.repaired) corrupt preference file(s) to Trash; \(result.failed) could not be moved."
+                    } else if result.repaired > 0 {
+                        output[index].state = .applied
+                        output[index].message = result.partial
+                            ? "Moved \(result.repaired) corrupt preference file(s) to Trash; the check stopped early, run again to finish."
+                            : "Moved \(result.repaired) corrupt preference file(s) to Trash."
+                    } else {
+                        output[index].state = .unchanged
+                        output[index].message = result.partial
+                            ? "No corrupt preference file found before the time limit."
+                            : "All third-party preference files are valid."
+                    }
                 case "spotlight-orphans":
                     output[index].state = .unchanged
                     output[index].message = "Orphan rules are review-only in the native optimizer."
@@ -1108,11 +1242,23 @@ final class NativeCore: @unchecked Sendable {
                     output[index].state = .unchanged
                     output[index].message = "Login items are available for review in System Settings."
                 case "quarantine":
-                    output[index].state = .unchanged
-                    output[index].message = "Quarantine metadata is left untouched."
+                    let result = self.clearQuarantineEvents(homeDirectory: NSHomeDirectory())
+                    output[index].state = result.state
+                    output[index].message = result.message
                 case "launch-agents":
-                    output[index].state = .unchanged
-                    output[index].message = "Broken launch agents are review-only."
+                    let result = self.removeBrokenLaunchAgents(homeDirectory: NSHomeDirectory())
+                    if result.failed > 0 {
+                        output[index].state = result.removed > 0 ? .applied : .failed
+                        output[index].message = "Removed \(result.removed) broken launch agent(s); \(result.failed) could not be moved to Trash."
+                    } else if result.removed > 0 {
+                        output[index].state = .applied
+                        output[index].message = "Unloaded and moved \(result.removed) broken launch agent(s) to Trash."
+                    } else {
+                        output[index].state = .unchanged
+                        output[index].message = result.scanned == 0
+                            ? "No user launch agents installed."
+                            : "All \(result.scanned) user launch agent(s) point to existing programs."
+                    }
                 case "notifications":
                     output[index].state = .unchanged
                     output[index].message = "Notification history is left untouched."
@@ -1126,6 +1272,163 @@ final class NativeCore: @unchecked Sendable {
             }
             return OptimizeReport(tasks: output, finishedAt: Date())
         }.value
+    }
+
+    // MARK: Optimize helpers
+
+    private struct PreferenceRepairResult {
+        var repaired = 0
+        var failed = 0
+        var partial = false
+    }
+
+    /// Native port of Mole's `repair_broken_preferences`: lint third-party
+    /// plists in `~/Library/Preferences` (and recursively in `ByHost`) and move
+    /// the ones plutil rejects to Trash. Apple domains, `.GlobalPreferences`
+    /// and `loginwindow.plist` are never candidates, whitelisted paths are
+    /// skipped, and the pass stops after 15 seconds so a huge preference
+    /// folder cannot stall the optimizer.
+    private func repairBrokenPreferences(homeDirectory: String) -> PreferenceRepairResult {
+        var result = PreferenceRepairResult()
+        let preferences = URL(fileURLWithPath: homeDirectory)
+            .appendingPathComponent("Library/Preferences", isDirectory: true)
+        guard isDirectory(preferences), fileManager.isExecutableFile(atPath: "/usr/bin/plutil") else {
+            return result
+        }
+        let whitelist = loadWhitelist(homeDirectory: homeDirectory)
+        let deadline = Date().addingTimeInterval(15)
+
+        func isCandidate(_ url: URL, protectLoginWindow: Bool) -> Bool {
+            guard url.pathExtension == "plist", !isSymlink(url) else { return false }
+            let name = url.lastPathComponent
+            if name.hasPrefix("com.apple.") || name.hasPrefix(".GlobalPreferences") { return false }
+            if protectLoginWindow, name == "loginwindow.plist" { return false }
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                return false
+            }
+            return !matchesWhitelist(url.path, entries: whitelist)
+        }
+
+        var candidates = directChildren(of: preferences).filter { isCandidate($0, protectLoginWindow: true) }
+        let byHost = preferences.appendingPathComponent("ByHost", isDirectory: true)
+        if isDirectory(byHost),
+           let enumerator = fileManager.enumerator(at: byHost,
+                                                   includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+                                                   options: [.skipsPackageDescendants]) {
+            for case let url as URL in enumerator where isCandidate(url, protectLoginWindow: false) {
+                candidates.append(url)
+            }
+        }
+
+        let batchSize = 256
+        var start = 0
+        while start < candidates.count {
+            guard Date() < deadline else { result.partial = true; break }
+            let end = min(start + batchSize, candidates.count)
+            let batch = Array(candidates[start..<end])
+            start = end
+            // One lint per batch; only a failing batch is re-checked file by file.
+            if runCommand("/usr/bin/plutil", ["-lint", "-s"] + batch.map(\.path)) { continue }
+            for url in batch {
+                guard Date() < deadline else { result.partial = true; break }
+                guard fileManager.isReadableFile(atPath: url.path),
+                      !runCommand("/usr/bin/plutil", ["-lint", "-s", url.path]) else { continue }
+                do {
+                    try fileManager.trashItem(at: url, resultingItemURL: nil)
+                    result.repaired += 1
+                } catch {
+                    result.failed += 1
+                }
+            }
+        }
+        return result
+    }
+
+    private struct LaunchAgentResult {
+        var scanned = 0
+        var removed = 0
+        var failed = 0
+    }
+
+    /// Native port of Mole's `clean_broken_launch_agents`: a user launch agent
+    /// is broken when its `Program` / `ProgramArguments[0]` is an absolute path
+    /// that no longer exists on a mounted volume. Broken agents are unloaded
+    /// with launchctl and moved to Trash. Corrupt plists and relative program
+    /// paths are left alone because their state cannot be proven.
+    private func removeBrokenLaunchAgents(homeDirectory: String) -> LaunchAgentResult {
+        var result = LaunchAgentResult()
+        let agents = URL(fileURLWithPath: homeDirectory)
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+        guard isDirectory(agents) else { return result }
+        let whitelist = loadWhitelist(homeDirectory: homeDirectory)
+        for plist in directChildren(of: agents) {
+            guard plist.pathExtension == "plist", !isSymlink(plist),
+                  (try? plist.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                continue
+            }
+            result.scanned += 1
+            guard !matchesWhitelist(plist.path, entries: whitelist),
+                  let program = launchAgentProgram(plist), program.hasPrefix("/"),
+                  !fileManager.fileExists(atPath: program),
+                  launchAgentVolumeIsMounted(program) else { continue }
+            _ = runCommand("/bin/launchctl", ["unload", plist.path])
+            do {
+                try fileManager.trashItem(at: plist, resultingItemURL: nil)
+                result.removed += 1
+            } catch {
+                result.failed += 1
+            }
+        }
+        return result
+    }
+
+    private func launchAgentProgram(_ plist: URL) -> String? {
+        guard let data = try? Data(contentsOf: plist),
+              let object = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let dictionary = object as? [String: Any] else { return nil }
+        if let arguments = dictionary["ProgramArguments"] as? [String],
+           let first = arguments.first, !first.isEmpty {
+            return first
+        }
+        if let program = dictionary["Program"] as? String, !program.isEmpty { return program }
+        return nil
+    }
+
+    /// An agent whose program lives on an unmounted external volume is not
+    /// broken, only offline; skip it like Mole does.
+    private func launchAgentVolumeIsMounted(_ path: String) -> Bool {
+        guard path.hasPrefix("/Volumes/") else { return true }
+        let components = path.split(separator: "/", omittingEmptySubsequences: true)
+        guard components.count >= 2 else { return true }
+        return fileManager.fileExists(atPath: "/Volumes/" + components[1])
+    }
+
+    /// Native port of Mole's `clear_quarantine_events`: empty the
+    /// `LSQuarantineEvent` table so LaunchServices stops tracking every
+    /// download ever opened. Files and their quarantine xattrs are untouched,
+    /// so Gatekeeper behaviour does not change.
+    private func clearQuarantineEvents(homeDirectory: String) -> (state: OptimizeTask.State, message: String) {
+        let database = URL(fileURLWithPath: homeDirectory)
+            .appendingPathComponent("Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2")
+        guard fileManager.fileExists(atPath: database.path) else {
+            return (.unchanged, "No quarantine database found.")
+        }
+        guard !matchesWhitelist(database.path, entries: loadWhitelist(homeDirectory: homeDirectory)) else {
+            return (.unchanged, "Skipped by whitelist.")
+        }
+        let sqlite = "/usr/bin/sqlite3"
+        guard fileManager.isExecutableFile(atPath: sqlite) else {
+            return (.unavailable, "sqlite3 is unavailable on this macOS version.")
+        }
+        guard let raw = runCommandOutput(sqlite, [database.path, "SELECT COUNT(*) FROM LSQuarantineEvent;"]),
+              let count = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return (.failed, "Could not read the quarantine database.")
+        }
+        guard count > 0 else { return (.unchanged, "Quarantine history is already empty.") }
+        guard runCommand(sqlite, [database.path, "DELETE FROM LSQuarantineEvent; VACUUM;"]) else {
+            return (.failed, "Could not clear the quarantine database.")
+        }
+        return (.applied, "Cleared \(count) quarantine event record(s).")
     }
 
     // MARK: Filesystem helpers
@@ -1173,19 +1476,98 @@ final class NativeCore: @unchecked Sendable {
                 "models", "model", "auth.json", "history.jsonl"].contains(lower)
     }
 
+    /// Read `~/.config/mole/whitelist` with the same grammar Mole's
+    /// `load_mole_whitelist` accepts: `~`, `$HOME` and `${HOME}` prefixes,
+    /// shell globs (`*`, `?`, `[...]`), comments, and no `..` traversal. A file
+    /// written by `mo clean --whitelist` therefore protects the native route
+    /// exactly like it protects the CLI and the bridge scripts.
     private func loadWhitelist(homeDirectory: String) -> [String] {
+        let home = URL(fileURLWithPath: homeDirectory).standardizedFileURL.path
         let url = URL(fileURLWithPath: homeDirectory)
             .appendingPathComponent(".config/mole/whitelist")
-        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        return content.split(whereSeparator: { $0.isNewline }).compactMap { raw in
-            let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !value.isEmpty, !value.hasPrefix("#") else { return nil }
-            return URL(fileURLWithPath: value).standardizedFileURL.path
+        var entries: [String] = []
+        if let content = try? String(contentsOf: url, encoding: .utf8) {
+            // An existing file replaces the convenience defaults, even when it
+            // is empty; that is Mole's replacement semantics since 1.7.5.
+            for raw in content.split(whereSeparator: { $0.isNewline }) {
+                var value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !value.isEmpty, !value.hasPrefix("#") else { continue }
+                if value.hasPrefix("~") { value = home + value.dropFirst() }
+                value = value.replacingOccurrences(of: "${HOME}", with: home)
+                    .replacingOccurrences(of: "$HOME", with: home)
+                guard value.hasPrefix("/"), !value.contains(".."),
+                      value.rangeOfCharacter(from: .controlCharacters) == nil else { continue }
+                while value.contains("//") { value = value.replacingOccurrences(of: "//", with: "/") }
+                if value.count > 1, value.hasSuffix("/") { value.removeLast() }
+                if !entries.contains(value) { entries.append(value) }
+            }
+        } else {
+            entries = Self.defaultWhitelistPatterns(home: home)
         }
+        // Hard safety entries merge unconditionally, exactly like Mole's
+        // ensure_safety_whitelist_patterns.
+        for safety in Self.safetyWhitelistPatterns(home: home) where !entries.contains(safety) {
+            entries.append(safety)
+        }
+        return entries
     }
 
+    /// Mole's DEFAULT_WHITELIST_PATTERNS (lib/core/base.sh): convenience
+    /// protections that apply only while the user has no whitelist file.
+    /// Playwright browsers and JetBrains indexes are slow to rebuild, Ollama
+    /// models and iCloud Drive are user data, Surge holds licences.
+    static func defaultWhitelistPatterns(home: String) -> [String] {
+        [
+            home + "/Library/Caches/ms-playwright*",
+            home + "/.gradle/caches/*",
+            home + "/.gradle/daemon/*",
+            home + "/.ollama/models/*",
+            home + "/Library/Caches/com.nssurge.surge-mac/*",
+            home + "/Library/Application Support/com.nssurge.surge-mac/*",
+            home + "/Library/Caches/org.R-project.R/R/renv/*",
+            home + "/Library/Caches/JetBrains*",
+            home + "/Library/Caches/com.jetbrains.toolbox*",
+            home + "/Library/Caches/tealdeer/tldr-pages",
+            home + "/Library/Application Support/JetBrains*",
+            home + "/Library/Caches/com.apple.finder",
+            home + "/Library/Mobile Documents*"
+        ]
+    }
+
+    /// Mole's SAFETY_WHITELIST_PATTERNS: removing these breaks macOS search,
+    /// font rendering or iCloud sync rather than costing a rebuild, and
+    /// pypoetry/virtualenvs holds live interpreters, not downloads.
+    static func safetyWhitelistPatterns(home: String) -> [String] {
+        [
+            home + "/Library/Caches/com.apple.FontRegistry*",
+            home + "/Library/Caches/com.apple.spotlight*",
+            home + "/Library/Caches/com.apple.Spotlight*",
+            home + "/Library/Caches/CloudKit*",
+            home + "/Library/Caches/pypoetry/virtualenvs*"
+        ]
+    }
+
+    private static func whitelistEntryHasGlob(_ entry: String) -> Bool {
+        entry.contains { $0 == "*" || $0 == "?" || $0 == "[" }
+    }
+
+    /// Mirror of Mole's `is_path_whitelisted`: exact or glob match, a target
+    /// that is an ancestor of a whitelisted path (so the protected child is
+    /// never removed with its parent), and descendants of a literal entry.
     private func matchesWhitelist(_ path: String, entries: [String]) -> Bool {
-        entries.contains { path == $0 || path.hasPrefix($0 + "/") }
+        var target = path
+        while target.contains("//") { target = target.replacingOccurrences(of: "//", with: "/") }
+        if target.count > 1, target.hasSuffix("/") { target.removeLast() }
+        for entry in entries {
+            if target == entry { return true }
+            let hasGlob = Self.whitelistEntryHasGlob(entry)
+            // Bash `[[ $path == $pattern ]]` lets `*` span `/`, so fnmatch runs
+            // without FNM_PATHNAME to keep the two implementations aligned.
+            if hasGlob, fnmatch(entry, target, 0) == 0 { return true }
+            if entry.hasPrefix(target + "/") { return true }
+            if !hasGlob, target.hasPrefix(entry + "/") { return true }
+        }
+        return false
     }
 
     private func isOwnedByRunningApplication(path: String) -> Bool {
@@ -1228,117 +1610,6 @@ final class NativeCore: @unchecked Sendable {
     }
 
     // MARK: Native analysis implementation
-
-    private func scanOverview(home: String) -> AnalyzeReport {
-        let homeURL = URL(fileURLWithPath: home, isDirectory: true).standardizedFileURL
-        let library = homeURL.appendingPathComponent("Library", isDirectory: true)
-        let applicationsURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
-        let systemLibraryURL = URL(fileURLWithPath: "/Library", isDirectory: true)
-        let measured = measureOverviewRoots([
-            (homeURL, ["Library"]), (library, []), (applicationsURL, []), (systemLibraryURL, [])
-        ])
-        let homeMeasure = measured[0]
-        let libraryMeasure = measured[1]
-        let applicationsMeasure = measured[2]
-        let systemLibraryMeasure = measured[3]
-        let roots: [(String, URL, UInt64)] = [
-            ("Home", homeURL, homeMeasure.bytes),
-            ("User Library", library, libraryMeasure.bytes),
-            ("Applications", applicationsURL, applicationsMeasure.bytes),
-            ("System Library", systemLibraryURL, systemLibraryMeasure.bytes)
-        ]
-        let entries = roots.filter { $0.2 > 0 }.map {
-            AnalyzeEntry(name: $0.0, path: $0.1.path, size: $0.2, isDir: true,
-                         insight: nil, cleanable: false, lastAccess: nil)
-        }
-        let total = roots.reduce(UInt64(0)) { $0 &+ $1.2 }
-        return AnalyzeReport(path: "/", overview: true, entries: entries,
-                             largeFiles: homeMeasure.largeFiles,
-                             totalSize: total,
-                             totalFiles: homeMeasure.files + libraryMeasure.files
-                                + applicationsMeasure.files + systemLibraryMeasure.files)
-    }
-
-    private func scanDirectory(_ directory: URL) -> AnalyzeReport {
-        let children = directChildren(of: directory)
-        let childMeasures = measureChildrenConcurrently(children)
-        var totalMeasure = childMeasures.reduce(into: TreeMeasure()) { total, pair in
-            total.bytes &+= pair.measure.bytes
-            total.files += pair.measure.files
-            total.largeFiles.append(contentsOf: pair.measure.largeFiles)
-            total.truncated = total.truncated || pair.measure.truncated
-        }
-        totalMeasure.largeFiles.sort {
-            if $0.size != $1.size { return $0.size > $1.size }
-            return $0.path.localizedStandardCompare($1.path) == .orderedAscending
-        }
-        if totalMeasure.largeFiles.count > 100 {
-            totalMeasure.largeFiles.removeLast(totalMeasure.largeFiles.count - 100)
-        }
-        let entries = childMeasures.compactMap { pair -> AnalyzeEntry? in
-            let child = pair.child
-            let measured = pair.measure
-            guard !isSymlink(child) else { return nil }
-            let bytes = measured.bytes
-            guard bytes > 0 else { return nil }
-            let isDir = isDirectory(child)
-            let cleanable = isDir && isKnownRegenerableDirectory(child.lastPathComponent)
-            let modified = (try? child.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
-            let lastAccess = modified.map { ISO8601DateFormatter().string(from: $0) }
-            return AnalyzeEntry(name: child.lastPathComponent, path: child.path, size: bytes,
-                                isDir: isDir, insight: cleanable, cleanable: cleanable,
-                                lastAccess: lastAccess)
-        }.sorted { $0.size > $1.size }
-        return AnalyzeReport(path: directory.path, overview: false, entries: entries,
-                             largeFiles: totalMeasure.largeFiles,
-                             totalSize: totalMeasure.bytes,
-                             totalFiles: totalMeasure.files)
-    }
-
-    /// Bound parallel directory walks so a large directory does not create one
-    /// worker per child. The per-tree budget still applies inside each walk.
-    private func measureChildrenConcurrently(_ children: [URL])
-        -> [(child: URL, measure: TreeMeasure)] {
-        guard !children.isEmpty else { return [] }
-        var output = Array(repeating: (child: URL(fileURLWithPath: "/"), measure: TreeMeasure()),
-                           count: children.count)
-        let lock = NSLock()
-        let semaphore = DispatchSemaphore(value: min(4, max(1, children.count)))
-        DispatchQueue.concurrentPerform(iterations: children.count) { index in
-            semaphore.wait()
-            let result = (children[index], self.measureTree(children[index]))
-            lock.lock()
-            output[index] = result
-            lock.unlock()
-            semaphore.signal()
-        }
-        return output
-    }
-
-    private func measureOverviewRoots(_ roots: [(URL, Set<String>)]) -> [TreeMeasure] {
-        var output = Array(repeating: TreeMeasure(), count: roots.count)
-        let lock = NSLock()
-        let semaphore = DispatchSemaphore(value: min(4, max(1, roots.count)))
-        DispatchQueue.concurrentPerform(iterations: roots.count) { index in
-            semaphore.wait()
-            let result = self.measureTree(roots[index].0,
-                                          excludingDirectNames: roots[index].1)
-            lock.lock()
-            output[index] = result
-            lock.unlock()
-            semaphore.signal()
-        }
-        return output
-    }
-
-    private func isKnownRegenerableDirectory(_ name: String) -> Bool {
-        [".cache", "Caches", "DerivedData", "build", "dist", "target", "node_modules",
-         ".next", ".nuxt", "__pycache__", ".pytest_cache", ".dart_tool"].contains(name)
-    }
-
-    private func largeFiles(in root: URL) -> [AnalyzeReport.LargeFile] {
-        measureTree(root).largeFiles
-    }
 
     /// Measure a tree once with hard-link de-duplication and a bounded budget.
     /// This mirrors the useful part of Mole's scanner without invoking `du`,
@@ -1428,12 +1699,15 @@ final class NativeCore: @unchecked Sendable {
         process.standardError = FileHandle.nullDevice
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             return nil
         }
-        guard process.terminationStatus == 0,
-              let data = try? pipe.fileHandleForReading.readToEnd(),
+        // Drain stdout before waiting: a child that fills the 64 KB pipe
+        // buffer (e.g. `brew list` with many casks) would otherwise block
+        // forever while we block on waitUntilExit.
+        let data = try? pipe.fileHandleForReading.readToEnd()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0, let data,
               let text = String(data: data, encoding: .utf8) else { return nil }
         return text
     }

@@ -3,6 +3,9 @@ import Foundation
 /// 风险模型与扩展管理器的独立语言表；未翻译语言自动回退英文。
 enum L10nRoadmapTables {
     static let en: [String: String] = [
+        "analyze.directory.hint": "Allocated space · largest first · refresh to update",
+        "analyze.directory.partial": "%d items · at least %@ · some content is unreadable, cancelled or on another volume",
+
         "quick.panel.permission": "Open More to grant disk access, then retry.",
         "quick.panel.memory": "Requested app-owned memory reclamation",
         "cleanup.queued": "Waiting for uninstall to finish",
@@ -28,6 +31,9 @@ enum L10nRoadmapTables {
         "cleanup.risk.model": "Model assets are protected.",
         "cleanup.risk.archive": "Archives are protected.",
         "cleanup.risk.deviceSupport": "Device support data may still be needed by active projects.",
+        "cleanup.risk.staleDeviceSupport": "Superseded device support symbols; the two newest OS versions are kept.",
+        "cleanup.risk.dependencyStore": "Downloaded dependency store; safe to rebuild but re-downloading takes time.",
+        "cleanup.risk.firmwareCache": "Downloaded device firmware; re-fetched on the next update.",
         "cleanup.risk.system": "System-owned content requires explicit administrator approval.",
         "cleanup.risk.ownerCommand": "Runs the tool owner's command; never automated.",
         "cleanup.risk.transform": "Transforms files rather than moving them to Trash.",
@@ -145,6 +151,9 @@ enum L10nRoadmapTables {
     ]
 
     static let zhHans: [String: String] = [
+        "analyze.directory.hint": "实际占用空间 · 从大到小 · 刷新更新数据",
+        "analyze.directory.partial": "共 %d 项 · 至少 %@ · 部分内容无权读取、已取消或位于其他磁盘",
+
         "quick.panel.permission": "请点“更多”授予磁盘权限后重试。",
         "quick.panel.memory": "已尝试回收本应用闲置内存",
         "cleanup.queued": "等待卸载完成后清理",
@@ -170,6 +179,9 @@ enum L10nRoadmapTables {
         "cleanup.risk.model": "模型资源已受保护。",
         "cleanup.risk.archive": "归档内容已受保护。",
         "cleanup.risk.deviceSupport": "设备支持数据可能仍被当前项目使用。",
+        "cleanup.risk.staleDeviceSupport": "已被取代的设备支持符号；保留最新的两个系统版本。",
+        "cleanup.risk.dependencyStore": "已下载的依赖仓库；可以重建，但重新下载需要时间。",
+        "cleanup.risk.firmwareCache": "已下载的设备固件；下次更新时会重新获取。",
         "cleanup.risk.system": "系统内容需要单独确认并授权。",
         "cleanup.risk.ownerCommand": "将运行工具自身命令，禁止自动化执行。",
         "cleanup.risk.transform": "这是文件转换，不是移入废纸篓。",
@@ -287,6 +299,9 @@ enum L10nRoadmapTables {
     ]
 
     static let zhHant: [String: String] = [
+        "analyze.directory.hint": "實際佔用空間 · 由大到小 · 重新整理更新資料",
+        "analyze.directory.partial": "共 %d 項 · 至少 %@ · 部分內容無權讀取、已取消或位於其他磁碟",
+
         "quick.panel.permission": "請點「更多」授予磁碟權限後重試。",
         "quick.panel.memory": "已嘗試回收本應用閒置記憶體",
         "cleanup.queued": "等待解除安裝完成後清理",
@@ -312,6 +327,9 @@ enum L10nRoadmapTables {
         "cleanup.risk.model": "模型資源已受保護。",
         "cleanup.risk.archive": "封存內容已受保護。",
         "cleanup.risk.deviceSupport": "裝置支援資料可能仍被目前專案使用。",
+        "cleanup.risk.staleDeviceSupport": "已被取代的裝置支援符號；保留最新的兩個系統版本。",
+        "cleanup.risk.dependencyStore": "已下載的相依套件庫；可以重建，但重新下載需要時間。",
+        "cleanup.risk.firmwareCache": "已下載的裝置韌體；下次更新時會重新取得。",
         "cleanup.risk.system": "系統內容需要單獨確認並授權。",
         "cleanup.risk.ownerCommand": "將執行工具自身命令，禁止自動化執行。",
         "cleanup.risk.transform": "這是檔案轉換，不是移到垃圾桶。",

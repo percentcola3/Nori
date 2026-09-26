@@ -304,7 +304,7 @@ private struct SystemDataRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.045)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface1))
         .opacity(selectionEnabled ? 1 : 0.6)
     }
 

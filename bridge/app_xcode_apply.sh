@@ -10,9 +10,16 @@ allowed=(
     "$HOME_DIR/Library/Developer/Xcode/DerivedData"
     "$HOME_DIR/Library/Caches/com.apple.dt.Xcode"
     "$HOME_DIR/Library/Developer/CoreSimulator/Caches"
+    "$HOME_DIR/Library/Developer/XCTestDevices"
+)
+# DeviceSupport: only a version directory (direct child) may be removed. The
+# root would take the symbols of currently attached devices with it, and the
+# policy keeps the root and deeper paths review-only for the same reason.
+device_support_roots=(
     "$HOME_DIR/Library/Developer/Xcode/iOS DeviceSupport"
     "$HOME_DIR/Library/Developer/Xcode/watchOS DeviceSupport"
     "$HOME_DIR/Library/Developer/Xcode/tvOS DeviceSupport"
+    "$HOME_DIR/Library/Developer/Xcode/visionOS DeviceSupport"
 )
 
 # Recheck the physical ancestor chain immediately before deletion.  The
@@ -39,9 +46,16 @@ simplemole_xcode_path_is_physical() {
 }
 
 is_allowed() {
-    local candidate="$1" root
+    local candidate="$1" root rest
     for root in "${allowed[@]}"; do
         [[ "$candidate" == "$root" || "$candidate" == "$root"/* ]] && return 0
+    done
+    for root in "${device_support_roots[@]}"; do
+        if [[ "$candidate" == "$root"/* ]]; then
+            rest="${candidate#"$root"/}"
+            [[ -n "$rest" && "$rest" != */* ]] && return 0
+            return 1
+        fi
     done
     return 1
 }

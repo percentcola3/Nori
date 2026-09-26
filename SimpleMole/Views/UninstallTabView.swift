@@ -78,7 +78,7 @@ struct UninstallTabView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.07)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
         .overlay(RoundedRectangle(cornerRadius: 8)
             .strokeBorder(.separator.opacity(0.4), lineWidth: 1))
         .padding(.horizontal, 16)
@@ -150,7 +150,7 @@ struct UninstallTabView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Color.white.opacity(0.045)))
+                .fill(Color.surface1))
             .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .strokeBorder(.separator.opacity(0.35), lineWidth: 1))
             .padding(.horizontal, 16)
@@ -295,7 +295,7 @@ private struct UninstallAppRow: View {
                     .transition(.molePanelReveal)
             }
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
         .overlay(RoundedRectangle(cornerRadius: 10)
             .strokeBorder(.separator.opacity(0.35), lineWidth: 1))
     }
@@ -461,11 +461,11 @@ private struct UninstallQueueRow: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(Color.white.opacity(job.state == .failed ? 0.065 : 0.035)))
+            .fill(job.state == .failed ? Color.surface2 : Color.surface1))
         .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
             .strokeBorder(job.state == .failed
                           ? Color.orange.opacity(0.20)
-                          : Color.white.opacity(0.045), lineWidth: 1))
+                          : Color.hairline, lineWidth: 1))
         .help(job.message ?? "")
     }
 }
@@ -556,7 +556,7 @@ private struct UninstallFileDrawer: View {
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 7)
-                    .fill(Color.white.opacity(file.informational ? 0.025 : 0.045)))
+                    .fill(Color.surface1.opacity(file.informational ? 0.6 : 1)))
                 .opacity(file.informational ? 0.7 : 1)
             }
         }

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import CoreImage
+import UniformTypeIdentifiers
 
 // MARK: - 数据模型
 
@@ -15,22 +16,6 @@ enum EditorTool: String, CaseIterable, Identifiable {
         case .pen: return "pencil.tip"
         case .text: return "textformat"
         case .mosaic: return "squareshape.split.2x2"
-        }
-    }
-}
-
-enum BeautifyTemplate: String, CaseIterable, Identifiable {
-    case none, sunset, violet, ocean, mint, graphite, rose
-    var id: String { rawValue }
-    var colors: [Color] {
-        switch self {
-        case .none: return [.clear, .clear]
-        case .sunset: return [Color(red: 1.0, green: 0.55, blue: 0.35), Color(red: 1.0, green: 0.82, blue: 0.30)]
-        case .violet: return [Color(red: 0.62, green: 0.40, blue: 0.95), Color(red: 0.90, green: 0.50, blue: 0.85)]
-        case .ocean: return [Color(red: 0.15, green: 0.45, blue: 0.90), Color(red: 0.35, green: 0.80, blue: 0.95)]
-        case .mint: return [Color(red: 0.10, green: 0.70, blue: 0.55), Color(red: 0.55, green: 0.92, blue: 0.70)]
-        case .graphite: return [Color(red: 0.16, green: 0.17, blue: 0.20), Color(red: 0.36, green: 0.38, blue: 0.44)]
-        case .rose: return [Color(red: 0.95, green: 0.45, blue: 0.60), Color(red: 1.0, green: 0.72, blue: 0.72)]
         }
     }
 }
@@ -60,18 +45,47 @@ struct ScreenshotEditorView: View {
     @State private var draft: Stroke?
     @State private var tool: EditorTool = .rect
     @State private var colorIndex = 0
-    @State private var template: BeautifyTemplate = .none
+    @State private var composition: ScreenshotComposition
+    @State private var exportOptions: ScreenshotExportOptions
+    @State private var showCompositionOptions = false
     @State private var pendingTextAt: CGPoint?
     @State private var pendingTextInput = ""
     @State private var feedbackKey: String?
     @ObservedObject private var l10n = L10n.shared
 
+    private let preferences: ScreenshotPreferences
+
+    init(image: NSImage, preferences: ScreenshotPreferences = ScreenshotPreferences(),
+         onClose: @escaping () -> Void) {
+        self.image = image
+        self.onClose = onClose
+        self.preferences = preferences
+        _composition = State(initialValue: preferences.loadComposition())
+        _exportOptions = State(initialValue: preferences.loadExportOptions())
+    }
+
+    private static let previewMax = CGSize(width: 1100, height: 620)
+
+    /// 截图在预览里的尺寸：连同预设的留白、标题栏和画幅一起放进预览区，
+    /// 比例越"高"的画幅，截图本身缩得越小。
     private var displaySize: CGSize {
-        let maxW: CGFloat = 1100
-        let maxH: CGFloat = 620
+        let maxW = Self.previewMax.width
+        let maxH = Self.previewMax.height
         let size = image.size
-        let scale = min(1, maxW / size.width, maxH / size.height)
+        var scale = min(1, maxW / size.width, maxH / size.height)
+        // 两轮迭代足够：布局尺寸对内容尺寸近似线性。
+        for _ in 0..<2 {
+            let content = CGSize(width: size.width * scale, height: size.height * scale)
+            let canvas = PresetLayout.compute(contentSize: content, composition: composition).canvasSize
+            let fit = min(1, maxW / canvas.width, maxH / canvas.height)
+            if fit >= 0.999 { break }
+            scale *= fit
+        }
         return CGSize(width: floor(size.width * scale), height: floor(size.height * scale))
+    }
+
+    private var previewLayout: PresetLayout {
+        PresetLayout.compute(contentSize: displaySize, composition: composition)
     }
 
     private var exportSize: CGSize {
@@ -86,13 +100,15 @@ struct ScreenshotEditorView: View {
         VStack(spacing: 8) {
             toolBar
             canvasArea
-            templateBar
+            presetBar
             actionBar
         }
         .padding(12)
-        .frame(minWidth: displaySize.width + 24, idealWidth: displaySize.width + 24,
-               minHeight: displaySize.height + 170)
-        .preferredColorScheme(.dark)
+        .frame(minWidth: max(640, previewLayout.canvasSize.width + 24),
+               idealWidth: max(640, previewLayout.canvasSize.width + 24),
+               minHeight: previewLayout.canvasSize.height + 190)
+        .onChange(of: composition) { value in preferences.save(value) }
+        .onChange(of: exportOptions) { value in preferences.save(value) }
     }
 
     // MARK: 工具条
@@ -108,7 +124,7 @@ struct ScreenshotEditorView: View {
                         .frame(width: 28, height: 24)
                         .background(RoundedRectangle(cornerRadius: 6)
                             .fill(tool == t ? AnyShapeStyle(Color.moleAccent.opacity(0.35))
-                                            : AnyShapeStyle(Color.white.opacity(0.06))))
+                                            : AnyShapeStyle(Color.surface2)))
                 }
                 .buttonStyle(.plain)
                 .help(l10n.t("tool.\(t.rawValue)"))
@@ -131,7 +147,7 @@ struct ScreenshotEditorView: View {
                 Image(systemName: "arrow.uturn.backward")
                     .font(.system(size: 12, weight: .medium))
                     .frame(width: 28, height: 24)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.06)))
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.surface2))
             }
             .buttonStyle(.plain)
             .disabled(strokes.isEmpty)
@@ -160,14 +176,15 @@ struct ScreenshotEditorView: View {
 
     private var canvasArea: some View {
         Group {
-            if template == .none {
+            if composition.isPlain {
                 editorCanvas
             } else {
-                BeautifyFrame(template: template, contentSize: displaySize) {
+                PresetFrameView(composition: composition, contentSize: displaySize) {
                     editorCanvas
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var dragGesture: some Gesture {
@@ -244,38 +261,74 @@ struct ScreenshotEditorView: View {
         }
     }
 
-    // MARK: 模板选择条
+    // MARK: 预设条
 
-    private var templateBar: some View {
+    private var presetBar: some View {
         HStack(spacing: 8) {
-            Text(l10n.t("shot.template"))
+            Text(l10n.t("shot.preset"))
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
-            ForEach(BeautifyTemplate.allCases) { t in
-                Button {
-                    template = t
-                } label: {
-                    Group {
-                        if t == .none {
-                            Text(l10n.t("common.cancel"))
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 34, height: 22)
-                        } else {
-                            LinearGradient(colors: t.colors,
-                                           startPoint: .topLeading, endPoint: .bottomTrailing)
-                                .frame(width: 34, height: 22)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(ScreenshotPreset.builtIn) { preset in
+                        Button {
+                            composition.select(preset)
+                        } label: {
+                            VStack(spacing: 3) {
+                                PresetThumbnail(preset: preset,
+                                                selected: composition.preset.id == preset.id)
+                                Text(l10n.t(preset.l10nKey))
+                                    .font(.system(size: 8.5, weight: composition.preset.id == preset.id ? .semibold : .regular))
+                                    .foregroundStyle(composition.preset.id == preset.id
+                                                     ? Color.moleAccentText : Color.secondary)
+                                    .lineLimit(1)
+                            }
+                            .frame(width: 60)
                         }
+                        .buttonStyle(.plain)
+                        .help(l10n.t(preset.l10nKey))
                     }
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(
-                        template == t ? Color.moleAccentText : Color.white.opacity(0.2),
-                        lineWidth: template == t ? 2 : 1))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
                 }
-                .buttonStyle(.plain)
+                .padding(.vertical, 2)
             }
-            Spacer()
+            Button {
+                showCompositionOptions.toggle()
+            } label: {
+                Label(l10n.t("shot.options"), systemImage: "slider.horizontal.3")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .popover(isPresented: $showCompositionOptions, arrowEdge: .bottom) {
+                compositionOptions
+            }
         }
+    }
+
+    /// 相框与画幅覆盖：对当前预设临时生效，切换预设后恢复预设默认值。
+    private var compositionOptions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(l10n.t("shot.frame"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Picker("", selection: $composition.frame) {
+                ForEach(PresetFrameStyle.allCases, id: \.self) { style in
+                    Label(l10n.t(style.l10nKey), systemImage: style.icon).tag(style)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            Text(l10n.t("shot.aspect"))
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Picker("", selection: $composition.aspect) {
+                ForEach(PresetAspect.allCases, id: \.self) { aspect in
+                    Text(l10n.t(aspect.l10nKey)).tag(aspect)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+        .padding(14)
+        .frame(width: 320)
     }
 
     // MARK: 操作条
@@ -294,6 +347,31 @@ struct ScreenshotEditorView: View {
                 Label(l10n.t("shot.save"), systemImage: "square.and.arrow.down")
             }
             .buttonStyle(SecondaryButtonStyle())
+            Button {
+                saveAs()
+            } label: {
+                Label(l10n.t("shot.saveAs"), systemImage: "folder")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            Divider().frame(height: 18)
+            Picker("", selection: $exportOptions.scale) {
+                ForEach(ScreenshotExportScale.allCases, id: \.self) { scale in
+                    Text(l10n.t(scale.l10nKey)).tag(scale)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 96)
+            .help(l10n.t("shot.export.scale"))
+            Picker("", selection: $exportOptions.format) {
+                ForEach(ScreenshotExportFormat.allCases, id: \.self) { format in
+                    Text(l10n.t(format.l10nKey)).tag(format)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(width: 80)
+            .help(l10n.t("shot.export.format"))
             if let feedbackKey {
                 Text(l10n.t(feedbackKey))
                     .font(.system(size: 10))
@@ -307,28 +385,22 @@ struct ScreenshotEditorView: View {
 
     // MARK: 导出
 
-    /// 导出视图 = 与画布一致的渲染（模板化或原图）+ 标注层。
+    /// 导出视图 = 与画布一致的渲染（预设或原图）+ 标注层，按原始像素尺寸布局。
     private var exportView: some View {
-        Group {
-            if template == .none {
-                ZStack {
-                    Image(nsImage: image)
-                        .resizable()
-                        .frame(width: exportSize.width, height: exportSize.height)
-                    AnnotationCanvas(strokes: strokes, baseImage: image, size: displaySize)
-                        .frame(width: exportSize.width, height: exportSize.height)
-                }
+        let annotated = ZStack {
+            Image(nsImage: image)
+                .resizable()
                 .frame(width: exportSize.width, height: exportSize.height)
+            AnnotationCanvas(strokes: strokes, baseImage: image, size: displaySize)
+                .frame(width: exportSize.width, height: exportSize.height)
+        }
+        .frame(width: exportSize.width, height: exportSize.height)
+        return Group {
+            if composition.isPlain {
+                annotated
             } else {
-                BeautifyFrame(template: template, contentSize: exportSize) {
-                    ZStack {
-                        Image(nsImage: image)
-                            .resizable()
-                            .frame(width: exportSize.width, height: exportSize.height)
-                        AnnotationCanvas(strokes: strokes, baseImage: image, size: displaySize)
-                            .frame(width: exportSize.width, height: exportSize.height)
-                    }
-                    .frame(width: exportSize.width, height: exportSize.height)
+                PresetFrameView(composition: composition, contentSize: exportSize) {
+                    annotated
                 }
             }
         }
@@ -336,8 +408,10 @@ struct ScreenshotEditorView: View {
 
     private func renderExportImage() -> NSImage? {
         let renderer = ImageRenderer(content: exportView)
-        // exportView 已按原始像素尺寸布局，scale=1 避免预览尺寸导致降采样。
-        renderer.scale = 1
+        // exportView 已按原始像素尺寸布局；scale=1 即原始分辨率，2 用于需要
+        // 更锐利相框细节的放大导出。透明背景的预设保留 alpha。
+        renderer.scale = CGFloat(exportOptions.scale.rawValue)
+        renderer.isOpaque = false
         return renderer.nsImage
     }
 
@@ -346,23 +420,48 @@ struct ScreenshotEditorView: View {
               let tiff = rendered.tiffRepresentation else { return false }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        return pasteboard.setData(tiff, forType: .tiff)
+        var ok = pasteboard.setData(tiff, forType: .tiff)
+        // 同时放一份 PNG：多数聊天工具与浏览器优先读取 PNG，透明背景才不会变黑。
+        if let png = ScreenshotExporter.encode(rendered, options: ScreenshotExportOptions(format: .png)) {
+            ok = pasteboard.setData(png, forType: .png) || ok
+        }
+        return ok
+    }
+
+    private func encodedExport() -> Data? {
+        guard let rendered = renderExportImage() else { return nil }
+        return ScreenshotExporter.encode(rendered, options: exportOptions)
     }
 
     private func saveToDownloads() -> Bool {
-        guard let rendered = renderExportImage(),
-              let tiff = rendered.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else { return false }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        guard let data = encodedExport() else { return false }
         let url = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Screenshot-\(formatter.string(from: Date())).png")
+            .appendingPathComponent(ScreenshotExporter.defaultFileName(format: exportOptions.format))
         do {
-            try png.write(to: url, options: .atomic)
+            try data.write(to: url, options: .atomic)
             return true
         } catch {
             return false
+        }
+    }
+
+    private func saveAs() {
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = exportOptions.format == .png ? [.png] : [.jpeg]
+        panel.nameFieldStringValue = ScreenshotExporter.defaultFileName(format: exportOptions.format)
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let data = encodedExport() else {
+            showFeedback("shot.failed")
+            return
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+            showFeedback("shot.saved")
+        } catch {
+            showFeedback("shot.failed")
         }
     }
 
@@ -508,38 +607,168 @@ final class MosaicCache {
 
 
 
-/// 美化相框：渐变背景 + 圆角窗口卡（红黄绿三点）+ 内容。预览与导出共用。
-struct BeautifyFrame<Content: View>: View {
-    let template: BeautifyTemplate
+// MARK: - 预设渲染（预览与导出共用）
+
+/// 预设背景：透明 / 纯色 / 线性渐变 / 网格渐变（macOS 15+，否则线性回退）。
+struct PresetBackgroundView: View {
+    let background: PresetBackground
+
+    var body: some View {
+        switch background {
+        case .transparent:
+            Color.clear
+        case .solid(let color):
+            Color(nsColor: color.nsColor)
+        case .linear(let colors, let angle):
+            let (start, end) = Self.gradientPoints(angle: angle)
+            LinearGradient(colors: colors.map { Color(nsColor: $0.nsColor) },
+                           startPoint: start, endPoint: end)
+        case .mesh(let colors):
+            meshOrFallback(colors)
+        }
+    }
+
+    @ViewBuilder
+    private func meshOrFallback(_ colors: [PresetColor]) -> some View {
+        if #available(macOS 15, *), colors.count == 9 {
+            MeshGradient(width: 3, height: 3, points: [
+                [0.0, 0.0], [0.5, 0.0], [1.0, 0.0],
+                [0.0, 0.5], [0.42, 0.58], [1.0, 0.5],
+                [0.0, 1.0], [0.5, 1.0], [1.0, 1.0],
+            ], colors: colors.map { Color(nsColor: $0.nsColor) })
+        } else {
+            let (start, end) = Self.gradientPoints(angle: 45)
+            LinearGradient(colors: background.linearFallbackColors.map { Color(nsColor: $0.nsColor) },
+                           startPoint: start, endPoint: end)
+        }
+    }
+
+    /// 0° = 左→右，90° = 上→下，45° = 左上→右下。
+    static func gradientPoints(angle: Double) -> (UnitPoint, UnitPoint) {
+        let radians = angle * .pi / 180
+        let dx = cos(radians) / 2
+        let dy = sin(radians) / 2
+        return (UnitPoint(x: 0.5 - dx, y: 0.5 - dy), UnitPoint(x: 0.5 + dx, y: 0.5 + dy))
+    }
+}
+
+/// 预设相框：背景 + 窗口卡片（标题栏三点）/ 圆角卡片 / 无框 + 内容。
+struct PresetFrameView<Content: View>: View {
+    let composition: ScreenshotComposition
     let contentSize: CGSize
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        let padding = contentSize.width * 0.05
-        let frameWidth = contentSize.width + padding * 2
-        let frameHeight = contentSize.height + padding * 2 + 30
-        let colors = template.colors
-        ZStack {
-            LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
-            VStack(spacing: 0) {
-                HStack(spacing: 6) {
-                    Circle().fill(Color.red.opacity(0.9)).frame(width: 10, height: 10)
-                    Circle().fill(Color.yellow.opacity(0.9)).frame(width: 10, height: 10)
-                    Circle().fill(Color.green.opacity(0.9)).frame(width: 10, height: 10)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                content()
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black.opacity(0.85)))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.15), lineWidth: 1))
-            .shadow(color: .black.opacity(0.45), radius: 24, y: 10)
-            .padding(padding)
+        let layout = PresetLayout.compute(contentSize: contentSize, composition: composition)
+        ZStack(alignment: .topLeading) {
+            PresetBackgroundView(background: composition.preset.background)
+                .frame(width: layout.canvasSize.width, height: layout.canvasSize.height)
+            card(layout)
+                .frame(width: layout.cardRect.width, height: layout.cardRect.height)
+                .offset(x: layout.cardRect.minX, y: layout.cardRect.minY)
         }
-        .frame(width: frameWidth, height: frameHeight)
+        .frame(width: layout.canvasSize.width, height: layout.canvasSize.height)
+    }
+
+    private var isLight: Bool { composition.preset.frameAppearance == .light }
+
+    private func card(_ layout: PresetLayout) -> some View {
+        let shape = RoundedRectangle(cornerRadius: layout.cornerRadius, style: .continuous)
+        return VStack(spacing: 0) {
+            if composition.frame == .macWindow {
+                titleBar(layout)
+            }
+            content()
+                .frame(width: layout.contentRect.width, height: layout.contentRect.height)
+        }
+        .background(shape.fill(isLight ? Color(white: 0.97) : Color(white: 0.12)))
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(
+            composition.frame == .none ? Color.clear
+                : (isLight ? Color.black.opacity(0.10) : Color.white.opacity(0.14)),
+            lineWidth: max(1, layout.chromeScale)))
+        .shadow(color: .black.opacity(composition.preset.showsShadow ? 0.38 : 0),
+                radius: 24 * layout.chromeScale, y: 12 * layout.chromeScale)
+    }
+
+    private func titleBar(_ layout: PresetLayout) -> some View {
+        let dot = 11 * layout.chromeScale
+        return HStack(spacing: 7 * layout.chromeScale) {
+            Circle().fill(Color(red: 1.0, green: 0.37, blue: 0.34)).frame(width: dot, height: dot)
+            Circle().fill(Color(red: 1.0, green: 0.74, blue: 0.18)).frame(width: dot, height: dot)
+            Circle().fill(Color(red: 0.16, green: 0.79, blue: 0.26)).frame(width: dot, height: dot)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12 * layout.chromeScale)
+        .frame(width: layout.cardRect.width, height: layout.titleBarHeight)
+        .background(isLight ? Color(white: 0.93) : Color(white: 0.16))
+    }
+}
+
+/// 预设条缩略图：56×36 的背景 + 迷你窗口，直观看出配色与相框。
+struct PresetThumbnail: View {
+    let preset: ScreenshotPreset
+    let selected: Bool
+
+    var body: some View {
+        ZStack {
+            if preset.background.isTransparent {
+                CheckerboardView()
+            } else {
+                PresetBackgroundView(background: preset.background)
+            }
+            if preset.frame != .none {
+                VStack(spacing: 0) {
+                    if preset.frame == .macWindow {
+                        HStack(spacing: 2) {
+                            Circle().fill(Color(red: 1.0, green: 0.37, blue: 0.34)).frame(width: 3, height: 3)
+                            Circle().fill(Color(red: 1.0, green: 0.74, blue: 0.18)).frame(width: 3, height: 3)
+                            Circle().fill(Color(red: 0.16, green: 0.79, blue: 0.26)).frame(width: 3, height: 3)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 3)
+                        .frame(height: 6)
+                        .background(preset.frameAppearance == .light ? Color(white: 0.93) : Color(white: 0.16))
+                    }
+                    Rectangle().fill(preset.frameAppearance == .light ? Color(white: 0.99) : Color(white: 0.24))
+                }
+                .frame(width: 36, height: 22)
+                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
+            } else if preset.background.isTransparent {
+                Image(systemName: "photo")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 56, height: 36)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(
+            selected ? Color.moleAccentText : Color.white.opacity(0.18),
+            lineWidth: selected ? 2 : 1))
+    }
+}
+
+/// 透明背景的棋盘格提示。
+struct CheckerboardView: View {
+    var body: some View {
+        Canvas { context, size in
+            let cell: CGFloat = 6
+            var y: CGFloat = 0
+            var row = 0
+            while y < size.height {
+                var x: CGFloat = 0
+                var column = 0
+                while x < size.width {
+                    let dark = (row + column) % 2 == 0
+                    context.fill(Path(CGRect(x: x, y: y, width: cell, height: cell)),
+                                 with: .color(Color(white: dark ? 0.30 : 0.42)))
+                    x += cell
+                    column += 1
+                }
+                y += cell
+                row += 1
+            }
+        }
     }
 }

@@ -271,7 +271,7 @@ struct TrafficTabView: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+                        .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
                         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
                         .contentShape(RoundedRectangle(cornerRadius: 9))
                     }
@@ -329,7 +329,7 @@ struct TrafficTabView: View {
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
-                            .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+                            .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
                             .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
                         }
                     }
@@ -425,7 +425,7 @@ private struct TrafficSummaryCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
     }
 }
@@ -608,7 +608,7 @@ private struct TrafficEndpointHistoryRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
     }
 }

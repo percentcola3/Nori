@@ -118,7 +118,7 @@ struct DevEnvTabView: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 7)
-                                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.045)))
+                                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
                                 }
                                 Text(l10n.t("devenv.tools.hint"))
                                     .font(.system(size: 10))
@@ -156,7 +156,7 @@ struct DevEnvTabView: View {
                                     }
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 7)
-                                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.045)))
+                                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
                                 }
                             }
                         }
@@ -199,7 +199,7 @@ struct DevEnvTabView: View {
                                         }
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 6)
-                                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.045)))
+                                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
                                     }
                                 }
                                 Text(l10n.t("audit.shell.hint"))
@@ -241,7 +241,7 @@ struct DevEnvTabView: View {
                                         }
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 6)
-                                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.045)))
+                                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
                                     }
                                     ForEach(state.netHosts, id: \.self) { line in
                                         HStack(spacing: 8) {
@@ -269,7 +269,7 @@ struct DevEnvTabView: View {
                                         }
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 6)
-                                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.045)))
+                                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
                                     }
                                 }
                                 Text(l10n.t("audit.net.hint"))
@@ -367,7 +367,7 @@ struct DevEnvTabView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.035)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
     }
 
     private func sectionHeader(title: String, count: Int, bytes: UInt64) -> some View {
@@ -425,7 +425,7 @@ private struct GcActionRowView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.045)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
     }
 }
 
@@ -565,7 +565,7 @@ struct WhitelistSheet: View {
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.055)))
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
                     }
                 }
                 .padding(.horizontal, 16)

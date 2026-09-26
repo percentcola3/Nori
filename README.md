@@ -71,17 +71,33 @@ SM_CODESIGN_IDENTITY=- SM_ALLOW_ADHOC=1 bash script/build_and_run.sh
 本机调试和 GitHub 开源 DMG 可以显式使用
 `SM_CODESIGN_IDENTITY=- SM_ALLOW_ADHOC=1`；不要用 ad-hoc GUI 包验证权限持久性。
 
+DMG 打包默认沿用 `build.sh` 的稳定签名选择，自动使用钥匙串中的 Apple Development
+证书；没有可用证书时会停止，不会自动降级为 ad-hoc：
+
+```bash
+bash script/package_dmg.sh
+```
+
 本项目采用开源方式通过 GitHub Release 分发，不要求维护者购买 Apple Developer 计划。
-没有 Apple Development 证书时，可以直接生成本机 App 或 GitHub 用 DMG：
+没有证书时，仍可显式生成用于开源分发或测试的 ad-hoc App / DMG：
 
 ```bash
 SM_CODESIGN_IDENTITY=- SM_ALLOW_ADHOC=1 bash script/build.sh
-bash script/package_dmg.sh
+SM_CODESIGN_IDENTITY=- SM_ALLOW_ADHOC=1 bash script/package_dmg.sh
+```
+
+本机安装验证可以直接用桌面打包脚本：只构建当前架构，打包完成后把 DMG 移到
+`~/Desktop/ForgeSweep-<arch>-<label>.dmg`（label 默认为时间戳，可作为第一个参数传入）
+并在 Finder 中定位。没有 Apple Development 证书时它会自动改用 ad-hoc 签名并给出提示；
+`SM_ALLOW_ADHOC=0` 可禁止这一降级：
+
+```bash
+bash script/package_dmg_to_desktop.sh cleanup-parity
 ```
 
 `package_dmg.sh` 默认分别生成 `dist/ForgeSweep-arm64.dmg`（M 系列 Mac）和
 `dist/ForgeSweep-x86_64.dmg`（Intel Mac）。每个包仅包含对应架构的 `ForgeSweep.app`
-和 `/Applications` 快捷方式，使用 ad-hoc 签名。只生成一个包时设置
+和 `/Applications` 快捷方式，签名方式由上述构建参数决定。只生成一个包时设置
 `SM_BUILD_ARCHS=arm64` 或 `SM_BUILD_ARCHS=x86_64`；自定义 `SM_DMG_PATH` 也只接受单架构。
 用户首次从互联网下载后，如果 Finder 的“右键打开”仍被 Gatekeeper
 拦截，可以在终端执行（将路径替换为实际安装位置）：
@@ -92,8 +108,11 @@ open /Applications/ForgeSweep.app
 ```
 
 这只是绕过下载隔离检查，不会自动授予“完全磁盘访问”或“屏幕录制”等隐私权限。
-ad-hoc 签名没有稳定的开发者身份，重编译或替换 App 后 macOS 可能要求重新授权；需要稳定
-权限识别时再使用 Apple Development 签名。
+ad-hoc 签名没有稳定的开发者身份，不保证权限持久性。重编译或更新 App 后可能需要重新
+授权“完全磁盘访问”和“屏幕录制”，旧授权开关即使仍开启也可能无法匹配新 App。
+此时先完全退出 App，在系统设置中移除旧条目，再添加实际安装的新版 App、开启权限并重新打开。
+日常使用需要稳定的权限识别时，应持续使用同一开发者身份和 Bundle ID 签名；
+系统升级后仍以 macOS 实际检测到的授权为准。
 
 如果要生成可被 Gatekeeper 直接接受的签名发布包，才需要使用 Developer ID 签名并完成 Apple 公证：
 
@@ -109,7 +128,8 @@ bash script/release.sh
 临时验证新的上游检出。
 `release.sh` 是可选的签名公证发布流程；默认分别公证两个架构，生成
 `dist/ForgeSweep-arm64.zip` 和 `dist/ForgeSweep-x86_64.zip`（其中 App 已 stapled）。
-也可用 `SM_BUILD_ARCHS` 只发布指定架构。GitHub 的开源发布不需要执行该流程，使用上面的 ad-hoc DMG 即可。
+也可用 `SM_BUILD_ARCHS` 只发布指定架构。GitHub 的开源发布不强制执行该流程；
+选择 ad-hoc DMG 时，应向用户说明 Gatekeeper 和更新后重新授权的限制。
 
 ## App 图标
 
@@ -127,7 +147,7 @@ bash script/make_icon.sh
 不再打包 Mole CLI、旧卸载入口或 Go 辅助程序。有 Apple Development
 证书时使用稳定签名，没有证书时使用上面的显式 ad-hoc 选项。签名公证
 发布流程会强制校验 Developer ID、TeamIdentifier、公证和 stapling；开源 GitHub Release
-使用 `package_dmg.sh` 生成的 ad-hoc DMG。
+可使用 `package_dmg.sh` 生成 DMG；ad-hoc 包必须显式开启上述测试选项。
 
 ## 目录
 

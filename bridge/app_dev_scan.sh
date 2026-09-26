@@ -18,11 +18,18 @@ declare -a candidates=(
     "$HOME_DIR/Library/Caches/pnpm|pnpm 缓存"
     "$HOME_DIR/.yarn/cache|Yarn 缓存"
     "$HOME_DIR/Library/Caches/Yarn|Yarn v1 缓存"
+    # Dependency stores (Maven local repository, NuGet global packages, Dart
+    # pub cache, Cargo git checkouts) stay in the inventory for review. The
+    # policy classifies them Warning, matching Mole, which reports them via
+    # clean_large_files instead of deleting them.
     "$HOME_DIR/.m2/repository|Maven 本地仓库"
-    "$HOME_DIR/.gradle/caches|Gradle 缓存"
     "$HOME_DIR/.gradle/daemon|Gradle Daemon 缓存"
+    "$HOME_DIR/.gradle/workers|Gradle Worker 缓存"
+    "$HOME_DIR/.gradle/notifications|Gradle 通知缓存"
     "$HOME_DIR/Library/Caches/go-build|Go 编译缓存"
-    "$HOME_DIR/go/pkg/mod|Go 模块缓存"
+    # Only the download cache is offered as a path; the extracted module tree
+    # is reset through the owner command (`go clean -modcache`, GC runner).
+    "$HOME_DIR/go/pkg/mod/cache|Go 模块下载缓存"
     "$HOME_DIR/.cargo/registry/cache|Rust Cargo 注册表缓存"
     "$HOME_DIR/.cargo/git/db|Rust Cargo Git 缓存"
     "$HOME_DIR/.nuget/packages|.NET NuGet 全局包缓存"
@@ -116,6 +123,17 @@ for entry in "${candidates[@]}"; do
     path="${entry%%|*}"; name="${entry#*|}"
     emit_candidate "$path" "$name"
 done
+
+# Gradle keeps the dependency module cache and the rebuildable build cache
+# side by side under ~/.gradle/caches. Mirror Mole's clean_dev_jvm: offer only
+# the build-cache-* children, never the caches root or modules-2.
+gradle_caches="$HOME_DIR/.gradle/caches"
+if [[ -d "$gradle_caches" && ! -L "$gradle_caches" ]]; then
+    for gradle_entry in "$gradle_caches"/build-cache-*; do
+        [[ -d "$gradle_entry" && ! -L "$gradle_entry" ]] || continue
+        emit_candidate "$gradle_entry" "Gradle 构建缓存"
+    done
+fi
 
 # Respect user-configured cache locations without deleting arbitrary toolchains.
 if command -v go >/dev/null 2>&1; then

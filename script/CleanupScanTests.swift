@@ -42,8 +42,29 @@ struct CleanupScanTests {
         try write("Library/Application Support/Example/Cache/entry")
         try write("Library/Containers/com.example.other/Data/Library/Caches/entry")
         try write("Library/Caches/whitelisted/entry")
+        try write("Library/Caches/tilde-whitelisted/entry")
+        try write("Library/Caches/glob-whitelisted/entry")
+        try write("Library/Caches/keep-parent/child/entry")
+        // Mole parity fixtures: sandboxed tmp, IM container cache children,
+        // Gradle build cache vs. module cache, firmware, Chrome CRX cache.
+        try write("Library/Containers/com.apple.mediaanalysisd/Data/tmp/scratch.bin")
+        try write("Library/Containers/com.tencent.xinWeChat/Data/Library/Caches/blob")
+        try write(".gradle/caches/build-cache-1/entry")
+        try write(".gradle/caches/modules-2/entry.jar")
+        try write(".m2/repository/org/artifact.jar")
+        try write("Library/iTunes/iPhone Software Updates/iPhone.ipsw")
+        try write("Library/Application Support/Google/Chrome/component_crx_cache/entry")
+        try write("Library/Application Support/Google/Chrome/Default/Login Data")
+        // Hard-safety pattern: merged even though a user whitelist exists.
+        try write("Library/Caches/CloudKit/entry")
         try write(".config/mole/whitelist", bytes: 0)
-        try Data((home.path + "/Library/Caches/whitelisted\n").utf8)
+        // Same grammar Mole accepts: literal, ~, $HOME, glob, comment, and a
+        // whitelisted child that must protect its parent from being offered.
+        try Data(("# managed by mo clean --whitelist\n"
+                  + home.path + "/Library/Caches/whitelisted\n"
+                  + "~/Library/Caches/tilde-whitelisted\n"
+                  + "$HOME/Library/Caches/glob-*\n"
+                  + "~/Library/Caches/keep-parent/child\n").utf8)
             .write(to: home.appendingPathComponent(".config/mole/whitelist"))
         let outside = fixture.appendingPathComponent("outside")
         try fm.createDirectory(at: outside, withIntermediateDirectories: true)
@@ -74,6 +95,43 @@ struct CleanupScanTests {
         expect(quickPaths.contains(home.path + "/.Trash/old.log"), "Trash missing")
         expect(!quickPaths.contains(where: { $0.contains("huggingface") || $0.contains("sessions")
             || $0.contains("linked") || $0.contains("whitelisted") }), "protected path admitted")
+        expect(!quickPaths.contains(where: { $0.contains("tilde-whitelisted") || $0.contains("glob-whitelisted")
+            || $0.contains("keep-parent") }), "Mole whitelist grammar (~, $HOME, glob, child) was not honoured")
+        expect(quickPaths.contains(home.path + "/Library/Containers/com.apple.mediaanalysisd/Data/tmp/scratch.bin"),
+               "sandboxed tmp child missing")
+        expect(quickPaths.contains(home.path + "/Library/Containers/com.tencent.xinWeChat/Data/Library/Caches/blob")
+            && !quickPaths.contains(home.path + "/Library/Containers/com.tencent.xinWeChat/Data/Library/Caches"),
+               "IM container cache must be offered per child, not as the Caches root")
+        expect(quickPaths.contains(home.path + "/.gradle/caches/build-cache-1"), "Gradle build cache missing")
+        expect(!quickPaths.contains(where: { $0.contains("modules-2") || $0.contains("/.m2/") }),
+               "dependency store offered by the native scan")
+        expect(quickPaths.contains(home.path + "/Library/iTunes/iPhone Software Updates"), "device firmware missing")
+        expect(quickPaths.contains(home.path + "/Library/Application Support/Google/Chrome/component_crx_cache"),
+               "Chrome CRX cache missing")
+        expect(!quickPaths.contains(where: { $0.contains("Login Data") }), "durable browser data offered")
+        expect(!quickPaths.contains(where: { $0.contains("/CloudKit") }),
+               "Mole safety whitelist (CloudKit) was not merged into a user whitelist")
+
+        // No whitelist file: Mole's convenience defaults apply (Gradle,
+        // JetBrains, Playwright), and the safety patterns still merge.
+        let defaultsHome = fixture.appendingPathComponent("defaults-home")
+        func writeDefaults(_ path: String) throws {
+            let url = defaultsHome.appendingPathComponent(path)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: 99, count: 4096).write(to: url)
+        }
+        try writeDefaults("Library/Caches/com.example.ok/entry")
+        try writeDefaults("Library/Caches/JetBrains/IntelliJIdea2024.1/index")
+        try writeDefaults("Library/Caches/com.apple.FontRegistry/fontd/annex")
+        try writeDefaults(".gradle/caches/build-cache-1/entry")
+        try writeDefaults("Library/Caches/ms-playwright/chromium-1234/chrome")
+        let defaults = await NativeCore.shared.scanCleanup(homeDirectory: defaultsHome.path)
+        let defaultPaths = defaults.categories.flatMap(\.paths)
+        expect(defaultPaths.contains(defaultsHome.path + "/Library/Caches/com.example.ok"),
+               "ordinary cache lost when defaults apply")
+        expect(!defaultPaths.contains(where: { $0.contains("JetBrains") || $0.contains("FontRegistry")
+            || $0.contains("build-cache-1") || $0.contains("ms-playwright") }),
+               "Mole default whitelist was not applied without a user whitelist file")
         for a in quickPaths {
             expect(!quickPaths.contains { $0 != a && $0.hasPrefix(a + "/") }, "overlapping scan work")
         }

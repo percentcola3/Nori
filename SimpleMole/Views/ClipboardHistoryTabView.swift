@@ -116,7 +116,7 @@ private struct ClipboardFilterButtonStyle: ButtonStyle {
             .background(
                 Capsule().fill(isSelected
                     ? Color.moleAccent.opacity(configuration.isPressed ? 0.24 : 0.17)
-                    : Color.white.opacity(configuration.isPressed ? 0.09 : 0.055))
+                    : (configuration.isPressed ? Color.surface3 : Color.surface2))
             )
             .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.98)
             .animation(reduceMotion ? nil : MoleMotion.press,
@@ -133,7 +133,7 @@ private struct ClipboardIconButtonStyle: ButtonStyle {
             .font(.system(size: 10, weight: .semibold))
             .foregroundStyle(tint)
             .frame(width: 26, height: 26)
-            .background(Circle().fill(Color.white.opacity(configuration.isPressed ? 0.10 : 0.055)))
+            .background(Circle().fill(configuration.isPressed ? Color.surface3 : Color.surface2))
             .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.92)
             .animation(reduceMotion ? nil : MoleMotion.press,
                        value: configuration.isPressed)
@@ -198,9 +198,9 @@ private struct ClipboardHistoryCard: View {
         .frame(height: 182, alignment: .topLeading)
         .clipped()
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(entry.isPinned ? Color.moleAccent.opacity(0.075) : Color.white.opacity(0.045)))
+            .fill(entry.isPinned ? Color.moleAccent.opacity(0.075) : Color.surface1))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+            .strokeBorder(Color.hairline, lineWidth: 1))
         .animation(reduceMotion ? nil : MoleMotion.selection, value: entry.isPinned)
         .animation(reduceMotion ? nil : MoleMotion.press, value: copied)
     }

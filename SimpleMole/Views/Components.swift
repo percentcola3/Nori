@@ -1,19 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: - 设计基调
-// 深色玻璃基底 + 工程黄点缀。
-
-extension Color {
-    /// 主强调色：明亮黄（玻璃暗底上的高亮点缀）。
-    static let moleAccent = Color(red: 1.0, green: 0.86, blue: 0.18)
-    /// 强调色文字变体：亮金（深色玻璃上高对比）。
-    static let moleAccentText = Color(red: 1.0, green: 0.80, blue: 0.14)
-    /// 主按钮文字色：黄底上用深炭黑（图标底色），深浅色模式都可读。
-    static let moleOnAccent = Color(red: 0.16, green: 0.14, blue: 0.11)
-    /// 稳定玻璃底色：避免透明窗口过度吸收后方浅色内容而整体发灰、发黄。
-    static let moleGlassBase = Color(red: 0.045, green: 0.055, blue: 0.072)
-}
+// 设计 token 与玻璃背景见 Views/Theme.swift。
 
 struct HeaderBrandIconView: View {
     var size: CGFloat
@@ -424,18 +412,18 @@ struct MoleSwitchToggleStyle: ToggleStyle {
         let thumb = size.height - 4
         let travel = size.width - size.height
         return Capsule()
-            .fill(isOn ? Color.moleAccent.opacity(0.82) : Color.white.opacity(0.13))
+            .fill(isOn ? Color.moleAccent.opacity(0.82) : Color.trackOff)
             .frame(width: size.width, height: size.height)
             .overlay(alignment: .leading) {
                 Circle()
-                    .fill(isOn ? Color.moleOnAccent : Color.white.opacity(0.82))
+                    .fill(isOn ? Color.moleOnAccent : Color.thumbOff)
                     .frame(width: thumb, height: thumb)
                     .shadow(color: isOn ? Color.moleAccent.opacity(0.30) : .black.opacity(0.24),
                             radius: isOn ? 4 : 2, y: 1)
                     .padding(2)
                     .offset(x: isOn ? travel : 0)
             }
-            .overlay(Capsule().strokeBorder(Color.white.opacity(isOn ? 0.16 : 0.10), lineWidth: 1))
+            .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1))
             .animation(reduceMotion ? nil : MoleMotion.control, value: isOn)
     }
 
@@ -461,7 +449,7 @@ struct PrimaryButtonStyle: ButtonStyle {
                 Capsule()
                     .fill(isEnabled
                           ? Color.moleAccent.opacity(configuration.isPressed ? 0.55 : 0.72)
-                          : Color.white.opacity(0.055))
+                          : Color.surface2)
                     .shadow(color: isEnabled
                             ? Color.moleAccent.opacity(configuration.isPressed ? 0.10 : 0.18)
                             : .clear,
@@ -469,7 +457,7 @@ struct PrimaryButtonStyle: ButtonStyle {
             )
             .overlay(Capsule().strokeBorder(isEnabled
                                            ? Color.moleAccentText.opacity(0.22)
-                                           : Color.white.opacity(0.06), lineWidth: 1))
+                                           : Color.hairline, lineWidth: 1))
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
     }
 }
@@ -585,7 +573,7 @@ struct MoleIconButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .strokeBorder(isActive
                                   ? Color.moleAccentText.opacity(0.24)
-                                  : Color.white.opacity(0.06),
+                                  : Color.surface2,
                                   lineWidth: 1)
             }
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
@@ -597,7 +585,7 @@ struct MoleIconButtonStyle: ButtonStyle {
         if isActive {
             return Color.moleAccent.opacity(isPressed ? 0.22 : 0.15)
         }
-        return Color.white.opacity(isPressed ? 0.11 : 0.055)
+        return isPressed ? Color.surface3 : Color.surface2
     }
 }
 
@@ -638,7 +626,7 @@ struct MoleSelectableRowButtonStyle: ButtonStyle {
         if isSelected {
             return Color.moleAccent.opacity(isPressed ? 0.24 : 0.16)
         }
-        return Color.white.opacity(isPressed ? 0.095 : 0.055)
+        return isPressed ? Color.surface3 : Color.surface2
     }
 }
 
@@ -704,15 +692,26 @@ struct PillPicker: View {
 
     @ViewBuilder
     var body: some View {
-        // 页签过多时（默认窗口宽度放不下）允许横向滚动，而不是压缩或截断。
-        ScrollView(.horizontal, showsIndicators: false) {
-            if #available(macOS 26.0, *), !reduceTransparency {
-                nativeGlassPicker
-            } else {
-                fallbackGooeyPicker
+        // 内容比窗口窄时居中；超出窗口时保留完整宽度，允许横向滚动。
+        GeometryReader { geometry in
+            ScrollView(.horizontal, showsIndicators: false) {
+                Group {
+                    if #available(macOS 26.0, *), !reduceTransparency {
+                        nativeGlassPicker
+                    } else {
+                        fallbackGooeyPicker
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(minWidth: geometry.size.width, minHeight: geometry.size.height)
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(height: pickerHeight)
+    }
+
+    private var pickerHeight: CGFloat {
+        if #available(macOS 26.0, *), !reduceTransparency { return 36 }
+        return 34
     }
 
     @available(macOS 26.0, *)
@@ -729,8 +728,9 @@ struct PillPicker: View {
                                 .padding(.horizontal, itemHorizontalPadding)
                                 .frame(height: 28)
                                 .background {
+                                    // 只保留几何锚点，不再叠色块：玻璃自己就是选中态。
                                     Capsule()
-                                        .fill(Color.moleAccent.opacity(0.06))
+                                        .fill(Color.clear)
                                         .matchedGeometryEffect(id: "pill-selection",
                                                                in: selectionNamespace)
                                 }
@@ -738,14 +738,12 @@ struct PillPicker: View {
                                 // 放在文字后方会被 AppKit 的玻璃合成层反向遮挡。
                                 .glassEffect(
                                     Glass.regular
-                                        .tint(Color.moleAccent.opacity(0.28))
+                                        .tint(Color.accent.opacity(0.22))
                                         .interactive(!reduceMotion),
                                     in: Capsule()
                                 )
                                 .glassEffectID(index, in: selectionNamespace)
                                 .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-                                .shadow(color: Color.moleAccent.opacity(0.18),
-                                        radius: 8, y: 1)
                                 .contentShape(Capsule())
                         } else {
                             Text(items[index])
@@ -762,7 +760,7 @@ struct PillPicker: View {
             }
         }
         .padding(4)
-        .background(Capsule().fill(Color.white.opacity(0.045)))
+        .background(Capsule().fill(Color.surface1))
         .overlay(Capsule().strokeBorder(.separator.opacity(0.45), lineWidth: 1))
         // Keep this value animation as a fallback for programmatic navigation.
         // Pointer clicks use an explicit transaction in select(_:), which is
@@ -1015,7 +1013,7 @@ struct MetricBar: View {
         }
         .padding(.horizontal, 12)
         .frame(height: 56)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.07)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
     }
 }
@@ -1113,94 +1111,6 @@ struct EmptyStateView: View {
     }
 }
 
-// MARK: - 玻璃背景（macOS 26 Liquid Glass，13–25 回退 NSVisualEffectView）
-
-/// 在系统材质之上加入稳定的深色基底，保留模糊与折射，但不让窗口后方的
-/// 浅色内容主导应用配色。减少透明度开启时直接使用不透明深色背景。
-struct DarkGlassSurface: View {
-    var cornerRadius: CGFloat = 0
-    var usesSystemGlass = false
-
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-
-    var body: some View {
-        ZStack {
-            if !reduceTransparency {
-                if usesSystemGlass {
-                    GlassBackground(
-                        cornerRadius: cornerRadius,
-                        tintColor: NSColor(srgbRed: 0.045, green: 0.055, blue: 0.072, alpha: 0.72)
-                    )
-                } else {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(.ultraThinMaterial)
-                }
-            }
-
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(Color.moleGlassBase.opacity(reduceTransparency ? 1 : (usesSystemGlass ? 0.66 : 0.78)))
-
-            if !reduceTransparency {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.055),
-                                Color.moleAccent.opacity(0.012),
-                                Color.black.opacity(0.20),
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-            }
-        }
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay {
-            if cornerRadius > 0 {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.white.opacity(reduceTransparency ? 0.10 : 0.16), lineWidth: 1)
-            }
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
-struct GlassBackground: NSViewRepresentable {
-    var cornerRadius: CGFloat = 16
-    var tintColor: NSColor?
-
-    func makeNSView(context: Context) -> NSView {
-        if #available(macOS 26.0, *) {
-            let glass = NSGlassEffectView(frame: .zero)
-            glass.cornerRadius = cornerRadius
-            glass.style = .regular
-            glass.tintColor = tintColor
-            let container = NSView(frame: .zero)
-            glass.contentView = container
-            return glass
-        }
-        let visual = NSVisualEffectView(frame: .zero)
-        visual.material = .popover
-        visual.blendingMode = .behindWindow
-        visual.state = .active
-        visual.wantsLayer = true
-        visual.layer?.cornerRadius = cornerRadius
-        visual.layer?.masksToBounds = true
-        visual.layer?.borderWidth = 1
-        visual.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
-        return visual
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        if #available(macOS 26.0, *), let glass = nsView as? NSGlassEffectView {
-            glass.cornerRadius = cornerRadius
-            glass.tintColor = tintColor
-        }
-    }
-}
-
 // MARK: - 设置面板（语言 + 功能页显隐）
 
 struct SettingsSheet: View {
@@ -1272,7 +1182,7 @@ struct SettingsSheet: View {
                                     .frame(height: 25)
                                     .background(RoundedRectangle(cornerRadius: 7)
                                         .fill(L10n.shared.language == language
-                                              ? Color.moleAccent.opacity(0.15) : Color.white.opacity(0.045)))
+                                              ? Color.moleAccent.opacity(0.15) : Color.surface1))
                                     .contentShape(RoundedRectangle(cornerRadius: 7))
                                 }
                                 .buttonStyle(.plain)
@@ -1356,7 +1266,7 @@ struct SettingsSheet: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 4)
-                                .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.045)))
+                                .background(RoundedRectangle(cornerRadius: 7).fill(Color.surface1))
                         }
                     }
                     Text(l10n.t("settings.pages.hint"))
@@ -1368,7 +1278,6 @@ struct SettingsSheet: View {
             }
         }
         .frame(width: 380, height: 520)
-        .preferredColorScheme(.dark)
     }
 
     private func pageBinding(_ key: AppState.PageKey) -> Binding<Bool> {
@@ -1396,11 +1305,11 @@ struct TitleBarButtonStyle: ButtonStyle {
             .background(
                 RoundedRectangle(cornerRadius: 7)
                     .fill(configuration.isPressed || isActive
-                          ? AnyShapeStyle(Color.white.opacity(0.14))
-                          : AnyShapeStyle(Color.white.opacity(0.07))))
+                          ? AnyShapeStyle(Color.surface3)
+                          : AnyShapeStyle(Color.surface2)))
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(Color.white.opacity(0.06), lineWidth: 1))
+                    .strokeBorder(Color.hairline, lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 7))
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
     }

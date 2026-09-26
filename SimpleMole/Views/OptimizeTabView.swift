@@ -76,7 +76,7 @@ struct OptimizeTabView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.white.opacity(0.045)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface1))
     }
 
     private func localizedTitle(_ task: NativeCore.OptimizeTask) -> String {

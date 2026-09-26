@@ -7,17 +7,22 @@ HOME_DIR="${HOME%/}"
     echo "error: invalid HOME for developer cleanup" >&2
     exit 2
 }
+# Dependency stores (~/.m2/repository, ~/.nuget/packages, ~/.pub-cache,
+# ~/.cargo/git/db, the Gradle module cache, the extracted Go module tree) are
+# deliberately absent: the policy keeps them review-only and this bridge must
+# refuse them even if a stale plan still names one.
 allowed=(
     "$HOME_DIR/.npm" "$HOME_DIR/.bun/install/cache" "$HOME_DIR/Library/pnpm/store"
     "$HOME_DIR/Library/Caches/pnpm" "$HOME_DIR/.yarn/cache"
-    "$HOME_DIR/Library/Caches/Yarn" "$HOME_DIR/.m2/repository" "$HOME_DIR/.gradle/caches"
-    "$HOME_DIR/.gradle/daemon" "$HOME_DIR/Library/Caches/com.openai.chat"
+    "$HOME_DIR/Library/Caches/Yarn"
+    "$HOME_DIR/.gradle/daemon" "$HOME_DIR/.gradle/workers" "$HOME_DIR/.gradle/notifications"
+    "$HOME_DIR/Library/Caches/com.openai.chat"
     "$HOME_DIR/Library/Caches/com.anthropic.claudefordesktop" "$HOME_DIR/Library/Logs/Claude"
-    "$HOME_DIR/Library/Caches/go-build" "$HOME_DIR/go/pkg/mod/cache" "$HOME_DIR/go/pkg/mod"
-    "$HOME_DIR/.cargo/registry/cache" "$HOME_DIR/.cargo/git/db"
-    "$HOME_DIR/.nuget/packages" "$HOME_DIR/Library/Caches/NuGet"
+    "$HOME_DIR/Library/Caches/go-build" "$HOME_DIR/go/pkg/mod/cache"
+    "$HOME_DIR/.cargo/registry/cache"
+    "$HOME_DIR/Library/Caches/NuGet"
     "$HOME_DIR/Library/Caches/pip" "$HOME_DIR/.cache/pip" "$HOME_DIR/Library/Caches/pypoetry" "$HOME_DIR/.cache/uv"
-    "$HOME_DIR/.composer/cache" "$HOME_DIR/Library/Caches/composer" "$HOME_DIR/.pub-cache"
+    "$HOME_DIR/.composer/cache" "$HOME_DIR/Library/Caches/composer"
     "$HOME_DIR/.cache/bazel" "$HOME_DIR/.cache/zig" "$HOME_DIR/Library/Caches/org.swift.swiftpm"
     "$HOME_DIR/Library/Caches/Homebrew/downloads" "$HOME_DIR/.hex/cache"
     "$HOME_DIR/.tnpm/_cacache" "$HOME_DIR/.tnpm/_logs"
@@ -57,6 +62,11 @@ is_allowed() {
         # a failed cleanup even though the root itself was allowlisted.
         [[ "$candidate" == "$item" || "$candidate" == "$item"/* ]] && return 0
     done
+    # Gradle: a build-cache-* directory (or anything inside one) is
+    # rebuildable; the caches root and the modules-2 dependency store are not.
+    case "$candidate" in
+        "$HOME_DIR/.gradle/caches/build-cache-"?*) return 0 ;;
+    esac
     return 1
 }
 

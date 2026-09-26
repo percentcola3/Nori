@@ -1,5 +1,18 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
+
+/// 一项权限当前所处的阶段。视图只根据阶段渲染一条引导，避免多条提示叠在一起。
+private enum PermissionPhase: Equatable {
+    /// 本进程已能使用。
+    case granted
+    /// 系统已授予，本进程仍按旧结果缓存：重启即可。
+    case needsRelaunch
+    /// 系统不会再弹窗；若设置里开关是开的，记录属于旧签名。
+    case stale
+    /// 尚未授权。
+    case missing
+}
 
 struct PermissionCenterView: View {
     @ObservedObject var state: AppState
@@ -16,144 +29,97 @@ struct PermissionCenterView: View {
             header
             Divider()
             ScrollView {
-                VStack(spacing: 10) {
-                    if let errorKey = permissions.diskAuthorizationErrorKey {
-                        Label(l10n.t(errorKey), systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.orange)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
-                            .background(RoundedRectangle(cornerRadius: 9)
-                                .fill(Color.orange.opacity(0.08)))
+                VStack(spacing: 12) {
+                    if permissions.signingWarningNeeded {
+                        signingBanner
+                    }
+                    if let repairKey = permissions.repairMessageKey {
+                        notice(l10n.t(repairKey),
+                               icon: repairKey.hasSuffix("failed")
+                                   ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
+                               tint: repairKey.hasSuffix("failed") ? .warning : .success)
+                    } else if let errorKey = permissions.diskAuthorizationErrorKey,
+                              diskPhase == .missing {
+                        notice(l10n.t(errorKey), icon: "exclamationmark.triangle.fill", tint: .warning)
                     }
 
-                    diskAccessRow
-                    screenRecordingRow
+                    diskAccessCard
+                    screenRecordingCard
 
-                    Label(l10n.t("permissions.noAccessibility"),
-                          systemImage: "checkmark.shield")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
+                    Label(l10n.t("permissions.noAccessibility"), systemImage: "checkmark.shield")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 2)
+                        .padding(.horizontal, 4)
                 }
-                .padding(16)
+                .padding(18)
             }
             Divider()
             footer
         }
-        .frame(width: 560, height: 470)
-        .background(DarkGlassSurface())
-        .animation(.easeInOut(duration: 0.22),
-                   value: permissions.fullDiskAccessGranted)
+        .frame(width: 580, height: 500)
+        .background(GlassSurface())
+        .animation(.easeInOut(duration: 0.22), value: diskPhase)
+        .animation(.easeInOut(duration: 0.22), value: screenPhase)
+        .task { await pollWhileVisible() }
+        .onDisappear { permissions.clearRepairMessage() }
     }
+
+    // MARK: - 阶段
+
+    private var diskPhase: PermissionPhase {
+        if permissions.fullDiskAccessGranted { return .granted }
+        if permissions.fullDiskNeedsRelaunch { return .needsRelaunch }
+        return .missing
+    }
+
+    private var screenPhase: PermissionPhase {
+        if permissions.screenRecordingGranted { return .granted }
+        if permissions.screenRecordingNeedsRelaunch { return .needsRelaunch }
+        if permissions.screenRecordingDecisionStale { return .stale }
+        return .missing
+    }
+
+    /// 权限中心可见期间每 3 秒复检一次：用户在系统设置里打开开关后回来，
+    /// 不必再手动点"重新检测"；两项权限都用子进程绕开进程内缓存。
+    private func pollWhileVisible() async {
+        while !Task.isCancelled {
+            if !permissions.fullDiskAccessGranted || !permissions.screenRecordingGranted {
+                state.refreshAuthorizationAndResume()
+                permissions.scheduleLiveCheck(force: true)
+            }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+    }
+
+    // MARK: - 头尾
 
     private var header: some View {
         HStack(spacing: 12) {
             Image(systemName: "lock.shield.fill")
-                .font(.system(size: 24))
-                .foregroundStyle(Color.moleAccentText)
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(Color.accentText)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(Color.accent.opacity(0.14)))
             VStack(alignment: .leading, spacing: 3) {
                 Text(l10n.t("permissions.title"))
                     .font(.system(size: 17, weight: .semibold))
                 Text(l10n.t("permissions.subtitle"))
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Button { state.cancelPermissionCenter() } label: {
                 Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
                     .frame(width: 26, height: 26)
             }
             .buttonStyle(.plain)
-            .background(Circle().fill(.quinary))
+            .background(Circle().fill(Color.surface2))
             .help(l10n.t("common.close"))
         }
-        .padding(16)
-    }
-
-    private var diskAccessRow: some View {
-        PermissionRow(
-            icon: "externaldrive.badge.checkmark",
-            title: l10n.t("permissions.fullDisk.title"),
-            detail: l10n.t("permissions.fullDisk.detail"),
-            status: permissions.fullDiskAccessGranted
-                ? l10n.t("permissions.status.granted")
-                : l10n.t("permissions.status.required"),
-            statusColor: permissions.fullDiskAccessGranted ? .green : .orange,
-            primaryTitle: permissions.fullDiskAccessGranted
-                ? l10n.t("permissions.openSettings")
-                : l10n.t("permissions.openFullDiskSettings"),
-            primaryIcon: "gearshape",
-            primaryProminent: !permissions.fullDiskAccessGranted,
-            primaryAction: { permissions.openSystemSettings(.fullDisk) },
-            secondaryTitle: permissions.fullDiskAccessGranted
-                ? nil : l10n.t("permissions.recheck"),
-            secondaryAction: { state.recheckFullDiskAccess() },
-            dragProvider: permissions.fullDiskAccessGranted ? nil : applicationDragProvider,
-            dragHint: permissions.fullDiskAccessGranted
-                ? nil : l10n.t("permissions.drag.hint.disk"))
-    }
-
-    private func applicationDragProvider() -> NSItemProvider {
-        let provider = NSItemProvider(object: Bundle.main.bundleURL as NSURL)
-        provider.suggestedName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
-        return provider
-    }
-
-    private var screenRecordingRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            PermissionRow(
-                icon: "rectangle.inset.filled.and.person.filled",
-                title: l10n.t("permissions.screen.title"),
-                detail: l10n.t("permissions.screen.detail"),
-                status: permissions.screenRecordingGranted
-                    ? l10n.t("permissions.status.granted")
-                    : l10n.t("permissions.status.optional"),
-                statusColor: permissions.screenRecordingGranted ? .green : .secondary,
-                primaryTitle: permissions.screenRecordingGranted
-                    ? l10n.t("permissions.openSettings") : l10n.t("permissions.screen.action"),
-                primaryIcon: permissions.screenRecordingGranted ? "gearshape" : "record.circle",
-                primaryProminent: false,
-                primaryAction: {
-                    if permissions.screenRecordingGranted {
-                        permissions.openSystemSettings(.screenRecording)
-                    } else {
-                        state.requestScreenRecordingAccess()
-                    }
-                },
-                secondaryTitle: permissions.screenRecordingGranted
-                    ? nil : l10n.t("permissions.openSettings"),
-                secondaryAction: { permissions.openSystemSettings(.screenRecording) },
-                dragProvider: permissions.screenRecordingGranted
-                    ? nil : applicationDragProvider,
-                dragHint: permissions.screenRecordingGranted
-                    ? nil : l10n.t("permissions.drag.hint.screen"))
-
-            // 屏幕录制授权只在新进程生效；授权后必须退出重开，否则快捷键
-            // 一直被 preflight 拦下，看起来像"授权了也没用"。
-            if !permissions.screenRecordingGranted {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.orange)
-                        .padding(.top, 1)
-                    Text(l10n.t("permissions.screen.restartHint"))
-                        .font(.system(size: 9.5))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 8)
-                    Button {
-                        state.relaunchApplication()
-                    } label: {
-                        Label(l10n.t("permissions.screen.restart"),
-                              systemImage: "arrow.triangle.2.circlepath")
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                }
-                .padding(.horizontal, 12)
-            }
-        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
     }
 
     private var footer: some View {
@@ -165,8 +131,9 @@ struct PermissionCenterView: View {
             Text(l10n.t(hasPendingAction
                         ? "permissions.footer.pendingScan"
                         : "permissions.footer"))
-                .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
             Button(l10n.t("common.cancel")) { state.cancelPermissionCenter() }
                 .buttonStyle(SecondaryButtonStyle())
@@ -182,23 +149,248 @@ struct PermissionCenterView: View {
                   ? l10n.t("permissions.continue.requiresDiskAccess")
                   : "")
         }
-        .padding(16)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
         .animation(.easeInOut(duration: 0.18), value: isWaitingForDiskAccess)
+    }
+
+    // MARK: - 提示条
+
+    private var signingBanner: some View {
+        let key = permissions.signing.kind == .adhoc
+            ? "permissions.signing.adhoc" : "permissions.signing.unknown"
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.shield.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.warning)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(l10n.t(key))
+                    .font(.system(size: 11, weight: .medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(l10n.t("permissions.signing.fix"))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(Color.warning.opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(Color.warning.opacity(0.30), lineWidth: 1))
+    }
+
+    private func notice(_ text: String, icon: String, tint: Color) -> some View {
+        Label {
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: icon)
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(tint)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(tint.opacity(0.10)))
+    }
+
+    // MARK: - 完全磁盘访问
+
+    private var diskAccessCard: some View {
+        let phase = diskPhase
+        return PermissionCard(
+            icon: "externaldrive.badge.checkmark",
+            title: l10n.t("permissions.fullDisk.title"),
+            detail: l10n.t("permissions.fullDisk.detail"),
+            chip: chip(for: phase, optional: false),
+            primary: phase == .granted
+                ? CardAction(title: l10n.t("permissions.openSettings"), icon: "gearshape",
+                             prominent: false) { permissions.openSystemSettings(.fullDisk) }
+                : CardAction(title: l10n.t("permissions.openFullDiskSettings"), icon: "gearshape",
+                             prominent: phase == .missing) { permissions.openSystemSettings(.fullDisk) },
+            guidance: diskGuidance(phase),
+            dragProvider: permissions.fullDiskAccessGranted ? nil : applicationDragProvider,
+            dragHint: permissions.fullDiskAccessGranted ? nil : l10n.t("permissions.drag.hint.disk"))
+    }
+
+    private func diskGuidance(_ phase: PermissionPhase) -> CardGuidance? {
+        switch phase {
+        case .granted:
+            return nil
+        case .needsRelaunch:
+            return CardGuidance(
+                tone: .success, icon: "checkmark.circle.fill",
+                text: l10n.t("permissions.disk.needsRelaunch"),
+                action: CardAction(title: l10n.t("permissions.screen.relaunchNow"),
+                                   icon: "arrow.triangle.2.circlepath", prominent: true) {
+                    state.relaunchApplication()
+                })
+        case .stale, .missing:
+            return CardGuidance(
+                tone: .neutral, icon: "hand.draw.fill",
+                text: l10n.t("permissions.guide.disk"),
+                action: CardAction(title: l10n.t("permissions.recheck"),
+                                   icon: "arrow.clockwise", prominent: false) {
+                    state.recheckFullDiskAccess()
+                    permissions.scheduleLiveCheck(force: true)
+                },
+                link: CardAction(title: l10n.t("permissions.disk.resetLink"),
+                                 icon: "arrow.counterclockwise", prominent: false,
+                                 disabled: permissions.repairInFlight) {
+                    state.repairFullDiskAuthorization()
+                })
+        }
+    }
+
+    // MARK: - 屏幕录制
+
+    private var screenRecordingCard: some View {
+        let phase = screenPhase
+        return PermissionCard(
+            icon: "rectangle.inset.filled.and.person.filled",
+            title: l10n.t("permissions.screen.title"),
+            detail: l10n.t("permissions.screen.detail"),
+            chip: chip(for: phase, optional: true),
+            primary: phase == .granted
+                ? CardAction(title: l10n.t("permissions.openSettings"), icon: "gearshape",
+                             prominent: false) { permissions.openSystemSettings(.screenRecording) }
+                : CardAction(title: l10n.t("permissions.screen.action"), icon: "record.circle",
+                             prominent: false) { state.requestScreenRecordingAccess() },
+            guidance: screenGuidance(phase),
+            dragProvider: permissions.screenRecordingGranted ? nil : applicationDragProvider,
+            dragHint: permissions.screenRecordingGranted ? nil : l10n.t("permissions.drag.hint.screen"))
+    }
+
+    private func screenGuidance(_ phase: PermissionPhase) -> CardGuidance? {
+        switch phase {
+        case .granted:
+            return nil
+        case .needsRelaunch:
+            return CardGuidance(
+                tone: .success, icon: "checkmark.circle.fill",
+                text: l10n.t("permissions.screen.needsRelaunch"),
+                action: CardAction(title: l10n.t("permissions.screen.relaunchNow"),
+                                   icon: "arrow.triangle.2.circlepath", prominent: true) {
+                    state.relaunchApplication()
+                })
+        case .stale:
+            return CardGuidance(
+                tone: .warning, icon: "arrow.counterclockwise.circle.fill",
+                text: l10n.t("permissions.screen.stale"),
+                action: CardAction(title: l10n.t("permissions.screen.repair"),
+                                   icon: "arrow.counterclockwise", prominent: false,
+                                   disabled: permissions.repairInFlight) {
+                    state.repairScreenRecordingAuthorization()
+                })
+        case .missing:
+            return CardGuidance(
+                tone: .neutral, icon: "hand.draw.fill",
+                text: l10n.t("permissions.guide.screen"),
+                action: CardAction(title: l10n.t("permissions.openSettings"),
+                                   icon: "gearshape", prominent: false) {
+                    permissions.openSystemSettings(.screenRecording)
+                },
+                link: CardAction(title: l10n.t("permissions.screen.restartLink"),
+                                 icon: "arrow.triangle.2.circlepath", prominent: false) {
+                    state.relaunchApplication()
+                })
+        }
+    }
+
+    // MARK: - 状态胶囊
+
+    private func chip(for phase: PermissionPhase, optional: Bool) -> CardChip {
+        switch phase {
+        case .granted:
+            return CardChip(text: l10n.t("permissions.status.granted"), tint: .success)
+        case .needsRelaunch:
+            return CardChip(text: l10n.t("permissions.status.pendingRelaunch"), tint: .success)
+        case .stale:
+            return CardChip(text: l10n.t("permissions.status.stale"), tint: .warning)
+        case .missing:
+            if permissions.liveCheckInFlight {
+                return CardChip(text: l10n.t("permissions.status.checking"), tint: .secondary,
+                                showsProgress: true)
+            }
+            return optional
+                ? CardChip(text: l10n.t("permissions.status.optional"), tint: .secondary)
+                : CardChip(text: l10n.t("permissions.status.required"), tint: .warning)
+        }
+    }
+
+    private func applicationDragProvider() -> NSItemProvider {
+        // Export only the original file URL. NSURL's file representations can
+        // materialize a temporary .app copy under com.apple.SwiftUI.Drag-*;
+        // privacy settings must authorize the bundle that is actually running.
+        let provider = NSItemProvider()
+        let data = Data(Bundle.main.bundleURL.absoluteString.utf8)
+        provider.registerDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier,
+                                            visibility: .all) { completion in
+            completion(data, nil)
+            return nil
+        }
+        provider.suggestedName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+        return provider
     }
 }
 
-private struct PermissionRow: View {
+// MARK: - 卡片构件
+
+private struct CardAction {
+    let title: String
+    let icon: String
+    let prominent: Bool
+    var disabled = false
+    let perform: () -> Void
+
+    init(title: String, icon: String, prominent: Bool, disabled: Bool = false,
+         perform: @escaping () -> Void) {
+        self.title = title
+        self.icon = icon
+        self.prominent = prominent
+        self.disabled = disabled
+        self.perform = perform
+    }
+}
+
+private struct CardChip {
+    let text: String
+    let tint: Color
+    var showsProgress = false
+}
+
+private struct CardGuidance {
+    enum Tone { case neutral, success, warning }
+
+    let tone: Tone
+    let icon: String
+    let text: String
+    var action: CardAction?
+    /// 次级出路：小号文字按钮，不与主动作抢视线。
+    var link: CardAction?
+
+    var tint: Color {
+        switch tone {
+        case .neutral: .accentText
+        case .success: .success
+        case .warning: .warning
+        }
+    }
+}
+
+/// 单张权限卡：标题行（图标 / 标题 / 状态胶囊 / 主按钮）、说明，以及最多一条
+/// 由阶段决定的引导。整张卡在未授权时可以拖进系统设置的列表。
+private struct PermissionCard: View {
     let icon: String
     let title: String
     let detail: String
-    let status: String
-    let statusColor: Color
-    let primaryTitle: String
-    let primaryIcon: String
-    let primaryProminent: Bool
-    let primaryAction: () -> Void
-    var secondaryTitle: String?
-    var secondaryAction: (() -> Void)?
+    let chip: CardChip
+    let primary: CardAction
+    let guidance: CardGuidance?
     var dragProvider: (() -> NSItemProvider)? = nil
     /// 拖拽目标提示：授权哪个权限，卡片就指向哪个系统设置列表。
     var dragHint: String? = nil
@@ -210,79 +402,112 @@ private struct PermissionRow: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 12) {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
                 Image(systemName: icon)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Color.moleAccentText)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(Color.moleAccent.opacity(0.10)))
-                VStack(alignment: .leading, spacing: 3) {
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(Color.accentText)
+                    .frame(width: 38, height: 38)
+                    .background(Circle().fill(Color.accent.opacity(0.12)))
+                VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
                         Text(title)
-                            .font(.system(size: 12, weight: .semibold))
-                        Text(status)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(statusColor)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(statusColor.opacity(0.10)))
+                            .font(.system(size: 13, weight: .semibold))
+                        chipView
                     }
                     Text(detail)
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 8)
-                VStack(alignment: .trailing, spacing: 6) {
-                    if primaryProminent {
-                        Button(action: primaryAction) {
-                            Label(primaryTitle, systemImage: primaryIcon)
-                        }
-                        .buttonStyle(PrimaryButtonStyle())
-                    } else {
-                        Button(action: primaryAction) {
-                            Label(primaryTitle, systemImage: primaryIcon)
-                        }
-                        .buttonStyle(SecondaryButtonStyle())
-                    }
-                    if let secondaryTitle, let secondaryAction {
-                        Button(secondaryTitle, action: secondaryAction)
-                            .buttonStyle(.plain)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(Color.moleAccentText)
-                    }
-                }
+                Spacer(minLength: 12)
+                actionButton(primary)
             }
-            if dragProvider != nil, let dragHint {
-                // 拖拽能力必须一眼可见：橙色虚线提示条本身就是拖拽目标的一部分。
-                HStack(spacing: 8) {
-                    Image(systemName: "hand.draw.fill")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.orange)
-                    Text(dragHint)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    Image(systemName: "plus.square.dashed")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.orange.opacity(0.7))
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.orange.opacity(0.06)))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.orange.opacity(0.45),
-                                  style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+            if let guidance {
+                guidanceStrip(guidance)
             }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color.white.opacity(0.045)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(Color.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(Color.hairline, lineWidth: 1))
+    }
+
+    private var chipView: some View {
+        HStack(spacing: 4) {
+            if chip.showsProgress {
+                ProgressView().controlSize(.mini)
+            }
+            Text(chip.text)
+        }
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(chip.tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(chip.tint.opacity(0.12)))
+    }
+
+    @ViewBuilder
+    private func actionButton(_ action: CardAction) -> some View {
+        if action.prominent {
+            Button(action: action.perform) {
+                Label(action.title, systemImage: action.icon)
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(action.disabled)
+            .opacity(action.disabled ? 0.5 : 1)
+        } else {
+            Button(action: action.perform) {
+                Label(action.title, systemImage: action.icon)
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .disabled(action.disabled)
+            .opacity(action.disabled ? 0.5 : 1)
+        }
+    }
+
+    private func guidanceStrip(_ guidance: CardGuidance) -> some View {
+        let isDrop = guidance.tone == .neutral && dragProvider != nil
+        return HStack(alignment: .center, spacing: 10) {
+            Image(systemName: guidance.icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(guidance.tint)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(guidance.text)
+                    .font(.system(size: 11))
+                    .foregroundStyle(guidance.tone == .neutral ? Color.secondary : Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let link = guidance.link {
+                    Button(action: link.perform) {
+                        Label(link.title, systemImage: link.icon)
+                            .font(.system(size: 10.5, weight: .medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentText)
+                    .disabled(link.disabled)
+                    .opacity(link.disabled ? 0.5 : 1)
+                }
+            }
+            Spacer(minLength: 8)
+            if let action = guidance.action {
+                actionButton(action)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(guidance.tone == .neutral ? Color.surface2 : guidance.tint.opacity(0.10)))
+        .overlay {
+            if isDrop {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.accent.opacity(0.45),
+                                  style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+            } else {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(guidance.tint.opacity(0.28), lineWidth: 1)
+            }
+        }
     }
 }
 
@@ -294,7 +519,7 @@ private struct ConditionalDragModifier: ViewModifier {
     func body(content: Content) -> some View {
         if let provider {
             content
-                .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .onDrag(provider)
                 .help(help ?? "")
         } else {

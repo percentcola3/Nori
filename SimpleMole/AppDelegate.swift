@@ -212,7 +212,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.hidesOnDeactivate = true
             panel.isOpaque = false
             panel.backgroundColor = .clear
-            panel.appearance = NSAppearance(named: .darkAqua)
             panel.hasShadow = true
             panel.collectionBehavior = [.canJoinAllSpaces]
             let content = QuickPanelView(state: appState,
@@ -276,7 +275,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.backgroundColor = .clear
             window.titlebarAppearsTransparent = true
             window.styleMask.insert(.fullSizeContentView)
-            window.appearance = NSAppearance(named: .darkAqua)
             // 系统标题文字由 SwiftUI 头部替代。
             window.title = ""
             window.contentView = NSHostingView(rootView: MainWindowView(state: appState))

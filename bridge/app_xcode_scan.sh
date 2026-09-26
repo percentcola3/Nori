@@ -78,10 +78,46 @@ emit() {
     emitted_paths+=("$path")
 }
 
+# DeviceSupport holds one debug-symbol tree per OS build that was ever
+# attached. Like Mole's clean_xcode_device_support, keep the newest N versions
+# (by modification time, MOLE_XCODE_DEVICE_SUPPORT_KEEP, default 2) and offer
+# the rest as clean. The root itself is never emitted: the policy keeps it
+# review-only so a single row can never wipe the symbols of a current device.
+emit_stale_device_support() {
+    local root="$1" label="$2" keep="${MOLE_XCODE_DEVICE_SUPPORT_KEEP:-2}"
+    local mtime entry rank=0 listing=""
+    [[ "$keep" =~ ^[0-9]+$ ]] || keep=2
+    [[ -d "$root" && ! -L "$root" ]] || return 0
+    xcode_scan_path_is_physical "$root" || return 0
+    # A version directory is one per OS build, so a plain glob is enough; the
+    # mtime rank decides which ones are superseded. Names contain spaces and
+    # parentheses ("17.5 (21F79) arm64e"), never tabs or newlines.
+    for entry in "$root"/*/; do
+        entry="${entry%/}"
+        [[ -d "$entry" && ! -L "$entry" ]] || continue
+        [[ "$entry" != *$'\t'* && "$entry" != *$'\n'* ]] || continue
+        mtime=$(stat -f %m "$entry" 2>/dev/null) || continue
+        [[ "$mtime" =~ ^[0-9]+$ ]] || continue
+        listing+="$mtime"$'\t'"$entry"$'\n'
+    done
+    [[ -n "$listing" ]] || return 0
+    while IFS=$'\t' read -r mtime entry; do
+        [[ -n "$entry" ]] || continue
+        if (( rank < keep )); then
+            rank=$((rank + 1))
+            continue
+        fi
+        emit clean "$label (superseded)" "$entry"
+    done < <(printf '%s' "$listing" | sort -t $'\t' -k1,1nr)
+}
+
 emit clean "Xcode DerivedData"     "$HOME_DIR/Library/Developer/Xcode/DerivedData"
 emit clean "Xcode module caches"   "$HOME_DIR/Library/Caches/com.apple.dt.Xcode"
 emit clean "Simulator caches"      "$HOME_DIR/Library/Developer/CoreSimulator/Caches"
-emit clean "iOS DeviceSupport"     "$HOME_DIR/Library/Developer/Xcode/iOS DeviceSupport"
-emit clean "watchOS DeviceSupport" "$HOME_DIR/Library/Developer/Xcode/watchOS DeviceSupport"
-emit clean "tvOS DeviceSupport"    "$HOME_DIR/Library/Developer/Xcode/tvOS DeviceSupport"
+# One simulator clone per test run; Xcode recreates them on the next run.
+emit clean "Xcode test devices"    "$HOME_DIR/Library/Developer/XCTestDevices"
+emit_stale_device_support "$HOME_DIR/Library/Developer/Xcode/iOS DeviceSupport"      "iOS DeviceSupport"
+emit_stale_device_support "$HOME_DIR/Library/Developer/Xcode/watchOS DeviceSupport"  "watchOS DeviceSupport"
+emit_stale_device_support "$HOME_DIR/Library/Developer/Xcode/tvOS DeviceSupport"     "tvOS DeviceSupport"
+emit_stale_device_support "$HOME_DIR/Library/Developer/Xcode/visionOS DeviceSupport" "visionOS DeviceSupport"
 emit keep  "Xcode Archives"        "$HOME_DIR/Library/Developer/Xcode/Archives"

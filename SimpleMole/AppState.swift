@@ -151,6 +151,14 @@ final class AppState: ObservableObject {
             refreshProcesses()
         }
     }
+    /// 应用级视图：按 .app 聚合的进程组（libproc 采样，2 秒刷新）。
+    @Published var processGroups: [ProcessGroup] = []
+    @Published var processSearch = ""
+    @Published var processSort: ProcessSort = .memory
+    @Published var processAlerts: [HighUsageTracker.Alert] = []
+    private var processHistory = ProcessHistory(capacity: 30)
+    private var highUsageTracker = HighUsageTracker()
+    private var processSampleInFlight = false
     @Published var portRows: [PortRow] = []
     @Published var portStatus: String
     @Published var runtimeInFlight = false
@@ -314,7 +322,7 @@ final class AppState: ObservableObject {
 
     // MARK: 磁盘分析
 
-    @Published var analyzePath: String = NSHomeDirectory()
+    @Published var analyzePath: String = "/"
     @Published var analyzeEntries: [AnalyzeEntry] = []
     @Published var analyzeSelection: Set<String> = []
     @Published var analyzeAIItems: [AnalyzeAIItem] = []
@@ -324,6 +332,9 @@ final class AppState: ObservableObject {
     @Published var isAnalyzing = false
     @Published var analyzeIsOverview = false
     @Published var analyzeStatus: String
+    private var analyzeCache = DiskAnalysisCache()
+    private var analyzeHasScanned = false
+    private var analyzeScanControl: CleanupScanControl?
 
     // APFS 快照（本地 Time Machine 快照与可清除空间）
     @Published var purgeableBytes: UInt64 = 0
@@ -816,6 +827,24 @@ final class AppState: ObservableObject {
         log(l10n.t("permissions.screen.restartHint"))
     }
 
+    /// 系统设置里开关是开的、应用却拿不到权限：记录绑定的是旧签名。
+    /// 清掉旧记录后系统会重新弹窗，再把设置面板打开到位。
+    func repairScreenRecordingAuthorization() {
+        Task { @MainActor in
+            let ok = await permissionCenter.resetScreenRecordingDecision()
+            if ok { permissionCenter.openSystemSettings(.screenRecording) }
+            log(l10n.t(ok ? "permissions.repair.done" : "permissions.repair.failed"))
+        }
+    }
+
+    func repairFullDiskAuthorization() {
+        Task { @MainActor in
+            let ok = await permissionCenter.resetFullDiskDecision()
+            if ok { permissionCenter.openSystemSettings(.fullDisk) }
+            log(l10n.t(ok ? "permissions.repair.done" : "permissions.repair.failed"))
+        }
+    }
+
     /// 屏幕录制授权只对"重启后的进程"生效。重启必须是严格的两段式：
     /// 先等本进程完全退出，再拉起同一 bundle。三个工程要点：
     /// 1. helper 按本进程 PID 等待（kill -0），不依赖进程名匹配；
@@ -832,8 +861,13 @@ final class AppState: ObservableObject {
 
         let pid = ProcessInfo.processInfo.processIdentifier
         let bundlePath = Bundle.main.bundlePath
+        // 日志放在用户自己的 Logs 目录（0700），不再落到所有用户可写的 /tmp。
+        let logDirectory = NSHomeDirectory() + "/Library/Logs/ForgeSweep"
+        try? FileManager.default.createDirectory(
+            atPath: logDirectory, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
         let script = """
-        exec >>/tmp/forgesweep-relaunch.log 2>&1
+        exec >>\(shellQuoted(logDirectory + "/relaunch.log")) 2>&1
         date '+relaunch helper started %H:%M:%S'
         while kill -0 \(pid) 2>/dev/null; do sleep 0.1; done
         date '+old instance exited %H:%M:%S'
@@ -846,12 +880,13 @@ final class AppState: ObservableObject {
         do {
             try process.run()
         } catch {
+            relaunchInFlight = false
+            statusText = l10n.t("status.relaunchFailed")
             log("relaunch helper failed: \(error.localizedDescription)")
+            return
         }
         // 先收起所有 sheet，避免 AppKit 在 sheet 期间否决 terminate。
-        showPermissionCenter = false
-        showSettingsSheet = false
-        showAutoCleanupSheet = false
+        dismissAllSheetsForTermination()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             NSApp.terminate(nil)
         }
@@ -913,9 +948,21 @@ final class AppState: ObservableObject {
         alert.addButton(withTitle: l10n.t("common.cancel"))
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         Task {
-            let result = await MoleEngine.shared.runRuntime("kill-group", row.signalToken)
-            if !result.succeeded {
-                log(l10n.t("status.signalFailed"))
+            if row.isNativeApp, let application = runningApplication(for: row) {
+                // 应用行走原生强制退出，并把结果反馈到面板自己的状态行。
+                let requested = application.forceTerminate()
+                quickPanelStatus = requested
+                    ? l10n.t("status.quitRequested") : l10n.t("status.quitRefused")
+                for _ in 0..<20 where !application.isTerminated {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                quickPanelStatus = application.isTerminated
+                    ? l10n.t("proc.force.done") : l10n.t("status.quitRefused")
+            } else {
+                let result = await MoleEngine.shared.runRuntime("kill-group", row.signalToken)
+                quickPanelStatus = result.succeeded
+                    ? l10n.t("status.signalSent") : l10n.t("status.signalFailed")
+                if !result.succeeded { log(l10n.t("status.signalFailed")) }
             }
             refreshTopMemoryApps(force: true)
         }
@@ -1483,27 +1530,38 @@ final class AppState: ObservableObject {
             if !cleanupScanComplete { statusText = l10n.t("log.scanPartial") }
             return
         }
-        let selectedSubsets = categories.compactMap(\.selectedSubset)
-        let selectedCategories = family == .clean
-            ? CleanupCategory.safeCleanupCandidates(from: selectedSubsets)
-            : selectedSubsets
-        guard !selectedCategories.isEmpty else {
-            statusText = l10n.t("cleanup.selectNone")
-            return
-        }
-        if family == .slim {
-            slimRequest = { [weak self] mode in
-                guard let self else { return }
-                self.confirmApply(categories: selectedCategories, imageMode: mode)
+        // Task {} inherits MainActor. Snapshot the selection and move the
+        // potentially large filtering/sorting pass off the UI executor.
+        let source = categories
+        let applyFamily = family
+        let previousStatus = statusText
+        isApplying = true
+        statusText = l10n.tf("status.processing", selectedCount)
+        Task {
+            let selectedCategories = await Task.detached(priority: .utility) {
+                let subsets = source.compactMap(\.selectedSubset)
+                return applyFamily == .clean
+                    ? CleanupCategory.safeCleanupCandidates(from: subsets) : subsets
+            }.value
+            isApplying = false
+            statusText = previousStatus
+            guard !selectedCategories.isEmpty else {
+                statusText = l10n.t("cleanup.selectNone")
+                return
             }
-            return
+            if applyFamily == .slim {
+                slimRequest = { [weak self] mode in
+                    self?.confirmApply(categories: selectedCategories, imageMode: mode,
+                                       family: applyFamily)
+                }
+                return
+            }
+            confirmApply(categories: selectedCategories, imageMode: nil, family: applyFamily)
         }
-        confirmApply(categories: selectedCategories, imageMode: nil)
     }
 
     private func confirmApply(categories selectedCategories: [CleanupCategory],
-                              imageMode: String?) {
-        let applyFamily = family
+                              imageMode: String?, family applyFamily: CleanupFamily) {
         let selectedCount = selectedCategories.reduce(0) { $0 + $1.paths.count }
         let actionTitle: String
         var message: String
@@ -1570,18 +1628,25 @@ final class AppState: ObservableObject {
         statusText = l10n.tf("status.processing", requestedCount)
         Task {
             let snapshot = await captureRunningApplicationSnapshot()
-            var eligible: [CleanupCategory] = []
-            for category in requested {
-                let assessment = CleanupRiskPolicy.reassess(category, running: snapshot)
-                let runtimeSubset = CleanupRiskPolicy.runtimeEligibleSubset(
-                    category, running: snapshot)
-                if let runtimeSubset,
-                   CleanupRiskPolicy.isEligible(runtimeSubset, mode: mode, running: snapshot) {
-                    eligible.append(runtimeSubset)
-                } else if assessment.risk == .protected,
-                          let index = categories.firstIndex(where: { $0.id == category.id }) {
+            let prepared = await Task.detached(priority: .utility) {
+                var eligible: [CleanupCategory] = []
+                var protectedReasons: [UUID: String] = [:]
+                for category in requested {
+                    let assessment = CleanupRiskPolicy.reassess(category, running: snapshot)
+                    let subset = CleanupRiskPolicy.runtimeEligibleSubset(category, running: snapshot)
+                    if let subset, CleanupRiskPolicy.isEligible(subset, mode: mode, running: snapshot) {
+                        eligible.append(subset)
+                    } else if assessment.risk == .protected {
+                        protectedReasons[category.id] = assessment.reasonKey
+                    }
+                }
+                return (eligible, protectedReasons)
+            }.value
+            let eligible = prepared.0
+            for index in categories.indices {
+                if let reason = prepared.1[categories[index].id] {
                     categories[index].risk = .protected
-                    categories[index].reasonKey = assessment.reasonKey
+                    categories[index].reasonKey = reason
                     categories[index].selected = false
                 }
             }
@@ -1610,17 +1675,22 @@ final class AppState: ObservableObject {
                 executionResult.merge(routeResult)
             }
 
+            let completedResult = executionResult
+            let displayedCategories = categories
+            let remainingCategories = await Task.detached(priority: .utility) {
+                CleanupCache.invalidate()
+                return displayedCategories.compactMap { category in
+                    category.retainingPaths(completedResult.remainingPaths(in: category.paths))
+                }.sorted(by: CleanupCategory.sizeDescending)
+            }.value
             isApplying = false
             reportCleanupResult(executionResult)
-            CleanupCache.invalidate()
             switch applyFamily {
             case .clean:
                 // A skip/failure does not invalidate the completed scan. Remove
                 // confirmed successes and allow the remaining selection to retry;
                 // its original identities and runtime guards still apply.
-                categories = categories.compactMap { category in
-                    category.retainingPaths(executionResult.remainingPaths(in: category.paths))
-                }.sorted(by: CleanupCategory.sizeDescending)
+                categories = remainingCategories
             case .slim: scanSlim()
             case .tools: scanDeveloperTools()
             case .ai: scanAI()
@@ -1631,6 +1701,7 @@ final class AppState: ObservableObject {
     }
 
     private func reportCleanupResult(_ result: CleanupExecutionResult) {
+        analyzeCache.clear()
         let summary = l10n.tf(
             "cleanup.execution.summary", result.removed, result.skipped, result.failed)
         statusText = summary
@@ -1647,16 +1718,18 @@ final class AppState: ObservableObject {
                                      mode: CleanupExecutionMode,
                                      permanently: Bool = false) async
         -> CleanupExecutionResult {
-        let rawRecords = routeCategories.flatMap(\.paths)
-        let records: [String]
-        switch route {
-        case .genericTrash, .installerTrash, .projectArtifactTrash,
-             .developerCacheTrash, .aiTrash, .xcodeTrash:
-            records = DeletionPlan.nonOverlappingPaths(rawRecords)
-        default:
-            records = rawRecords
-        }
-        let coalescedCount = max(0, rawRecords.count - records.count)
+        let preparedRecords = await Task.detached(priority: .utility) {
+            let raw = routeCategories.flatMap(\.paths)
+            switch route {
+            case .genericTrash, .installerTrash, .projectArtifactTrash,
+                 .developerCacheTrash, .aiTrash, .xcodeTrash:
+                return (raw.count, DeletionPlan.nonOverlappingPaths(raw))
+            default:
+                return (raw.count, raw)
+            }
+        }.value
+        let records = preparedRecords.1
+        let coalescedCount = max(0, preparedRecords.0 - records.count)
         guard !records.isEmpty, let bridgeName = bridgeName(for: route) else {
             return CleanupExecutionResult(
                 skipped: coalescedCount,
@@ -1668,17 +1741,18 @@ final class AppState: ObservableObject {
         // operations) continue through their dedicated bridges.
         switch route {
         case .genericTrash, .developerCacheTrash, .aiTrash, .xcodeTrash:
-            let items = routeCategories.flatMap { category in
-                category.paths.compactMap { path -> DeletionPlan.Item? in
-                    guard let identity = category.pathIdentities[path], !identity.isEmpty else { return nil }
-                    return DeletionPlan.Item(record: path, identity: identity)
+            let applied = await Task.detached(priority: .utility) {
+                let items = routeCategories.flatMap { category in
+                    category.paths.compactMap { path -> DeletionPlan.Item? in
+                        guard let identity = category.pathIdentities[path], !identity.isEmpty else { return nil }
+                        return DeletionPlan.Item(record: path, identity: identity)
+                    }
                 }
-            }
-            let summary = await Task.detached(priority: .utility) {
-                NativeCore.shared.applyCleanup(items: items, permanent: permanently)
+                return (NativeCore.shared.applyCleanup(items: items, permanent: permanently), items.count)
             }.value
+            let summary = applied.0
             if !summary.messages.isEmpty { log(summary.messages.joined(separator: "\n")) }
-            let missing = records.count - items.count
+            let missing = records.count - applied.1
             return CleanupExecutionResult(
                 removed: summary.removed,
                 skipped: summary.skipped + coalescedCount + max(0, missing),
@@ -1688,34 +1762,36 @@ final class AppState: ObservableObject {
             break
         }
 
-        let stdinData: Data
-        switch route {
-        case .toolCommand:
-            var data = Data()
-            for record in records {
-                data.append(contentsOf: record.utf8)
-                data.append(0)
-            }
-            stdinData = data
-        case .imageTransform:
-            stdinData = DeletionPlan(records: records) { record in
-                guard let separator = record.firstIndex(of: "|") else { return nil }
-                let path = String(record[record.index(after: separator)...])
-                return path.hasPrefix("/") ? path : nil
-            }.stdinData
-        case .genericTrash, .installerTrash, .projectArtifactTrash,
-             .developerCacheTrash, .aiTrash, .xcodeTrash:
-            let items = routeCategories.flatMap { category in
-                category.paths.compactMap { path -> DeletionPlan.Item? in
-                    guard let identity = category.pathIdentities[path] else { return nil }
-                    return DeletionPlan.Item(record: path, identity: identity)
+        let stdinData: Data? = await Task.detached(priority: .utility) {
+            switch route {
+            case .toolCommand:
+                var data = Data()
+                for record in records {
+                    data.append(contentsOf: record.utf8)
+                    data.append(0)
                 }
+                return data
+            case .imageTransform:
+                return DeletionPlan(records: records) { record in
+                    guard let separator = record.firstIndex(of: "|") else { return nil }
+                    let path = String(record[record.index(after: separator)...])
+                    return path.hasPrefix("/") ? path : nil
+                }.stdinData
+            case .genericTrash, .installerTrash, .projectArtifactTrash,
+                 .developerCacheTrash, .aiTrash, .xcodeTrash:
+                let items = routeCategories.flatMap { category in
+                    category.paths.compactMap { path -> DeletionPlan.Item? in
+                        guard let identity = category.pathIdentities[path] else { return nil }
+                        return DeletionPlan.Item(record: path, identity: identity)
+                    }
+                }
+                return DeletionPlan(items: items).stdinData
+            case .systemPrivileged, .none:
+                return nil
             }
-            stdinData = DeletionPlan(items: items).stdinData
-        case .systemPrivileged, .none:
-            return CleanupExecutionResult(
-                skipped: coalescedCount,
-                failed: records.count)
+        }.value
+        guard let stdinData else {
+            return CleanupExecutionResult(skipped: coalescedCount, failed: records.count)
         }
 
         log(l10n.tf("log.pipeline", records.count,
@@ -1768,12 +1844,18 @@ final class AppState: ObservableObject {
     func refreshRuntimeIfNeeded() {
         guard mainWindowVisible, !runtimeInFlight, !isBusy else { return }
         guard visiblePages.indices.contains(selectedTab) else { return }
-        if visiblePages[selectedTab] == .processes { refreshProcesses() }
-        else if visiblePages[selectedTab] == .ports { refreshPorts() }
+        if visiblePages[selectedTab] == .processes {
+            if advancedProcesses { refreshProcesses() } else { refreshNativeProcesses() }
+        } else if visiblePages[selectedTab] == .ports { refreshPorts() }
         // Traffic uses its own timer while the page is visible or monitoring is enabled.
     }
 
     func refreshProcesses(allowAutomaticCleanup: Bool = true) {
+        guard advancedProcesses else {
+            resetAutomaticProcessCleanup()
+            refreshNativeProcesses()
+            return
+        }
         guard !runtimeInFlight else { return }
         let requestedAdvancedMode = advancedProcesses
         runtimeInFlight = true
@@ -1817,6 +1899,161 @@ final class AppState: ObservableObject {
                 processStatus = l10n.tf("proc.status.apps", native.total)
                 runtimeInFlight = false
             }
+        }
+    }
+
+    // MARK: 应用级进程视图（libproc）
+
+    /// 当前可见的进程组：搜索过滤 + 排序。
+    var visibleProcessGroups: [ProcessGroup] {
+        ProcessAggregator.sorted(ProcessAggregator.filter(processGroups, query: processSearch),
+                                 by: processSort)
+    }
+
+    func processCPUHistory(_ pid: Int32) -> [Double] { processHistory.series(for: pid) }
+
+    /// 用 libproc 采样并按应用聚合。不占用 runtimeInFlight，采样在后台线程，
+    /// 只有 NSWorkspace 的应用列表在主线程读取。
+    func refreshNativeProcesses() {
+        guard !processSampleInFlight else { return }
+        processSampleInFlight = true
+        if processGroups.isEmpty { processStatus = l10n.t("proc.status.reading") }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let ownName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "ForgeSweep"
+        let applications: [(pid: Int32, name: String, startIdentity: String)] =
+            NSWorkspace.shared.runningApplications.compactMap { application in
+                guard !application.isTerminated,
+                      application.processIdentifier > 1,
+                      application.processIdentifier != ownPID,
+                      application.activationPolicy != .prohibited,
+                      let identity = RuntimeStore.nativeStartIdentity(for: application) else { return nil }
+                let name = application.localizedName ?? application.bundleIdentifier ?? ""
+                guard !name.isEmpty, name != ownName, name != "Mole" else { return nil }
+                return (application.processIdentifier, name, identity)
+            }
+        Task {
+            let sampled: (groups: [ProcessGroup], total: Int) = await Task.detached(priority: .utility) {
+                let samples = ProcessSampler.shared.sample()
+                let groups = ProcessAggregator.groups(
+                    samples: samples, applications: applications, ownPID: ownPID,
+                    detail: { L10n.shared.tf("proc.detail.app", $0) },
+                    childDetail: { L10n.shared.tf("proc.detail.pid", $0.pid) })
+                return (groups, samples.count)
+            }.value
+            processSampleInFlight = false
+            guard !advancedProcesses else { return }
+            processGroups = sampled.groups
+            processRows = sampled.groups.map(\.app)
+            processHistory.record(sampled.groups)
+            processAlerts = highUsageTracker.update(sampled.groups)
+            processStatus = l10n.tf("proc.status.sampled", sampled.groups.count, sampled.total)
+        }
+    }
+
+    private func runningApplication(for row: ProcessRow) -> NSRunningApplication? {
+        guard let application = NSRunningApplication(processIdentifier: row.pid),
+              !application.isTerminated,
+              RuntimeStore.nativeStartIdentity(for: application) == row.startIdentity else { return nil }
+        return application
+    }
+
+    /// 温和退出（等同 ⌘Q）：应用可以弹出保存提示；5 秒后仍在运行则提示可强制退出。
+    func quitApplication(_ row: ProcessRow) {
+        guard let application = runningApplication(for: row) else {
+            processActionStatus = l10n.t("status.quitRefused")
+            return
+        }
+        processActionStatus = l10n.tf("proc.status.quitRequested", row.name)
+        guard application.terminate() else {
+            processActionStatus = l10n.t("status.quitRefused")
+            return
+        }
+        Task {
+            for _ in 0..<50 {
+                if application.isTerminated { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            processActionStatus = application.isTerminated
+                ? l10n.tf("proc.status.quitDone", row.name)
+                : l10n.tf("proc.status.stillRunning", row.name)
+            refreshNativeProcesses()
+        }
+    }
+
+    /// 结束整组：主进程 terminate → 5 秒 → forceTerminate；子进程 SIGTERM → 3 秒 → SIGKILL。
+    /// 每个子进程结束前都重新核对启动身份、用户与路径。
+    func endProcessGroup(_ group: ProcessGroup) {
+        confirmation = Confirmation(
+            title: l10n.tf("proc.confirm.endGroup.title", group.app.name),
+            message: l10n.tf("proc.confirm.endGroup.msg", group.children.count),
+            confirmLabel: l10n.t("proc.endGroup")) { [weak self] in
+                guard let self else { return }
+                Task { await self.performEndGroup(group) }
+            }
+    }
+
+    private func performEndGroup(_ group: ProcessGroup) async {
+        processActionStatus = l10n.tf("proc.status.quitRequested", group.app.name)
+        let application = runningApplication(for: group.app)
+        var mainEnded = application == nil
+        if let application {
+            if !application.terminate() { _ = application.forceTerminate() }
+            for _ in 0..<50 {
+                if application.isTerminated { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if !application.isTerminated { _ = application.forceTerminate() }
+            for _ in 0..<10 where !application.isTerminated {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            mainEnded = application.isTerminated
+        }
+        var endedChildren = 0
+        for child in group.children {
+            guard let identity = Self.childIdentity(child) else { continue }
+            if await ProcessTerminator.terminateThenKill(identity, grace: 3) { endedChildren += 1 }
+        }
+        processActionStatus = mainEnded
+            ? l10n.tf("proc.status.groupEnded", group.app.name, endedChildren)
+            : l10n.tf("proc.status.stillRunning", group.app.name)
+        refreshNativeProcesses()
+    }
+
+    /// 结束单个子进程（非应用主进程）。
+    func terminateChildProcess(_ row: ProcessRow) {
+        guard let identity = Self.childIdentity(row) else { return }
+        confirmation = Confirmation(
+            title: l10n.tf("proc.confirm.child.title", row.name),
+            message: l10n.tf("proc.confirm.kill.msg", row.pid),
+            confirmLabel: l10n.t("proc.kill")) { [weak self] in
+                guard let self else { return }
+                Task {
+                    switch ProcessTerminator.validate(identity) {
+                    case .failure(let refusal):
+                        self.processActionStatus = self.l10n.t(Self.refusalKey(refusal))
+                        return
+                    case .success:
+                        break
+                    }
+                    let ended = await ProcessTerminator.terminateThenKill(identity, grace: 3)
+                    self.processActionStatus = ended
+                        ? self.l10n.t("status.signalSent") : self.l10n.t("status.signalFailed")
+                    self.refreshNativeProcesses()
+                }
+            }
+    }
+
+    private static func childIdentity(_ row: ProcessRow) -> ProcessIdentity? {
+        guard let startTime = UInt64(row.startIdentity, radix: 16) else { return nil }
+        return ProcessIdentity(pid: row.pid, startTime: startTime, ppid: row.ppid, uid: row.uid)
+    }
+
+    private static func refusalKey(_ refusal: ProcessTerminator.Refusal) -> String {
+        switch refusal {
+        case .identityChanged: return "proc.refusal.identity"
+        case .otherUser: return "proc.refusal.otherUser"
+        case .protectedPath: return "proc.refusal.protected"
+        case .ownProcessTree: return "proc.refusal.own"
         }
     }
 
@@ -1922,6 +2159,12 @@ final class AppState: ObservableObject {
         Task {
             let result = await MoleEngine.shared.runRuntime("ports")
             runtimeInFlight = false
+            // 读取失败时保留上一轮列表，不把"读不到"显示成"没有端口"。
+            guard result.succeeded else {
+                portStatus = l10n.t("ports.status.readFailed")
+                logFailure(result)
+                return
+            }
             portRows = RuntimeStore.portRows(fromText: result.output)
             portStatus = portRows.isEmpty
                 ? l10n.t("ports.status.none")
@@ -2517,82 +2760,87 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 原生概览会并发分析 Home、用户 Library、Applications 与系统 Library。
-    /// 客户端再按可操作性排序，系统与应用结果始终靠后。
+    /// The default scope is the filesystem root, using the same directory
+    /// traversal and navigation as every user-selected folder.
     func scanDiskOverview(force: Bool = false) {
         guard authorize(.diskOverview(force: force),
-                        presentingPermissionCenter: true) else { return }
-        guard !isBusy else { return }
-        if !force, analyzeIsOverview, !analyzeEntries.isEmpty { return }
+                        presentingPermissionCenter: true), !isBusy else { return }
+        if !force, analyzeHasScanned { return }
+        if force { analyzeCache.invalidate("/") }
         startAnalyze(displayPath: "/", overview: true)
     }
 
-    /// 分析指定目录（nil = 当前 analyzePath）。引擎并发扫描 + 大小排序。
-    func scanAnalyze(_ path: String? = nil) {
-        guard authorize(.diskAnalyze(path: path),
-                        presentingPermissionCenter: true) else { return }
+    func scanAnalyze(_ path: String? = nil, force: Bool = false) {
         guard !isBusy else { return }
-        if path == nil, analyzeIsOverview {
-            scanDiskOverview(force: true)
+        let target = URL(fileURLWithPath: path ?? analyzePath, isDirectory: true).standardizedFileURL.path
+        if force { analyzeCache.invalidate(target) }
+        if let cached = analyzeCache.report(for: target) {
+            showAnalyzeReport(cached)
             return
         }
-        if let path { analyzePath = path }
-        let target = analyzePath
-        startAnalyze(displayPath: target, overview: false)
+        guard authorize(.diskAnalyze(path: target),
+                        presentingPermissionCenter: true) else { return }
+        startAnalyze(displayPath: target, overview: target == "/")
     }
 
+    func cancelAnalyze() { analyzeScanControl?.cancel() }
+
     private func startAnalyze(displayPath: String, overview: Bool) {
-        let scanEnvironment = fullDiskScanEnvironment
-        guard scanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
+        guard fullDiskScanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
+        analyzeHasScanned = true
         analyzePath = displayPath
         analyzeIsOverview = overview
+        if let cached = analyzeCache.report(for: displayPath) {
+            showAnalyzeReport(cached)
+            return
+        }
         isAnalyzing = true
+        analyzeEntries = []
+        analyzeTotalSize = 0
+        analyzeLargeFiles = []
         analyzeSelection.removeAll()
         analyzeAISelection.removeAll()
-        if !overview { analyzeAIItems = [] }
+        analyzeAIItems = []
         dupGroups = []
         dupSelection.removeAll()
         analyzeStatus = l10n.t("analyze.scanning")
-        log(l10n.tf("log.analyzeScan", overview ? l10n.t("analyze.scope.full") : displayPath))
+        let control = CleanupScanControl(mode: .deep)
+        analyzeScanControl = control
         Task {
-            let analysisResult = await NativeCore.shared.scanAnalyze(
-                path: displayPath, overview: overview)
-            async let aiInventoryResult = scanAnalyzeAIInventory(
-                enabled: overview, environment: scanEnvironment)
-            let inventoryResult = await aiInventoryResult
+            let report = await NativeCore.shared.scanAnalyze(
+                path: displayPath, overview: overview, control: control,
+                progress: { [weak self] report in
+                    Task { @MainActor in
+                        guard let self, self.analyzeScanControl === control else { return }
+                        self.analyzeEntries = report.entries
+                        self.analyzeTotalSize = report.totalSize
+                    }
+                })
+            analyzeScanControl = nil
             isAnalyzing = false
-            analyzeAIItems = overview && inventoryResult.succeeded
-                ? Parsers.analyzeAIItems(inventoryResult.output) : []
-            if overview && !inventoryResult.succeeded { logFailure(inventoryResult) }
-            let report = analysisResult
-            analyzeIsOverview = report.overview
-            analyzePath = report.path
-            analyzeEntries = Array(report.entries
-                .filter { $0.size > 0 }
-                .sorted(by: AnalyzeEntry.analysisOrder)
-                .prefix(10))
-            analyzeTotalSize = report.totalSize
-            analyzeLargeFiles = Array((report.largeFiles ?? [])
-                .filter { $0.size > 0 }
-                .sorted {
-                    if $0.size != $1.size { return $0.size > $1.size }
-                    return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-                }
-                .prefix(10))
-            analyzeStatus = l10n.tf("analyze.status.summary",
-                                    analyzeEntries.count + analyzeAIItems.count,
-                                    ByteFormat.format(analyzeTotalSize))
+            analyzeCache.store(report)
+            showAnalyzeReport(report)
         }
     }
 
-    private func scanAnalyzeAIInventory(enabled: Bool,
-                                        environment: [String: String]) async -> RunResult {
-        guard enabled else {
-            return RunResult(output: "", exitCode: 0, timedOut: false)
+    private func showAnalyzeReport(_ report: AnalyzeReport) {
+        analyzeSelection.removeAll()
+        analyzeAISelection.removeAll()
+        analyzeAIItems = []
+        dupGroups = []
+        dupSelection.removeAll()
+        analyzeIsOverview = report.overview
+        analyzePath = report.path
+        analyzeEntries = report.entries.sorted(by: AnalyzeEntry.analysisOrder)
+        analyzeTotalSize = report.totalSize
+        analyzeLargeFiles = report.largeFiles ?? []
+        if let error = report.error {
+            analyzeStatus = error
+        } else {
+            analyzeStatus = l10n.tf(report.isPartial == true
+                ? "analyze.directory.partial" : "analyze.status.summary",
+                analyzeEntries.count, ByteFormat.format(analyzeTotalSize))
         }
-        return await MoleEngine.shared.runBridge(
-            "bin/app_analyze_ai_inventory.sh",
-            extraEnvironment: environment, timeout: 180)
     }
 
     // MARK: APFS 快照
@@ -2731,21 +2979,8 @@ final class AppState: ObservableObject {
 
     /// 返回上级目录（根目录不再上跳）。
     func analyzeGoUp() {
-        guard !isAnalyzing else { return }
-        if analyzeIsOverview { return }
-        if [NSHomeDirectory(), "/Applications", "/Library"].contains(analyzePath) {
-            scanDiskOverview(force: true)
-            return
-        }
-        var components = (analyzePath as NSString).pathComponents
-        guard components.count > 1 else { return }
-        components.removeLast()
-        let parent = NSString.path(withComponents: components) 
-        if parent == "" || parent == "/" {
-            scanDiskOverview(force: true)
-        } else {
-            scanAnalyze(parent)
-        }
+        guard !isAnalyzing, analyzePath != "/" else { return }
+        scanAnalyze(URL(fileURLWithPath: analyzePath).deletingLastPathComponent().path)
     }
 
     /// NSOpenPanel 选择任意目录分析。
@@ -2782,15 +3017,8 @@ final class AppState: ObservableObject {
     }
 
     func openAnalyzeEntry(_ entry: AnalyzeEntry) {
-        if entry.isApplicationBundle {
-            uninstallSearch = URL(fileURLWithPath: entry.path).deletingPathExtension().lastPathComponent
-            jump(to: .uninstall)
-            if installedApps.isEmpty { scanInstalledApps() }
-        } else if entry.isDir {
-            scanAnalyze(entry.path)
-        } else {
-            revealAnalyzeEntry(entry)
-        }
+        if entry.isDir { scanAnalyze(entry.path) }
+        else { revealAnalyzeEntry(entry) }
     }
 
     func applyAnalyzeCleanup() {
@@ -2857,7 +3085,7 @@ final class AppState: ObservableObject {
                     if self.analyzeIsOverview {
                         self.scanDiskOverview(force: true)
                     } else {
-                        self.scanAnalyze()
+                        self.scanAnalyze(force: true)
                     }
                 }
             }

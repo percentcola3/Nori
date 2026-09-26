@@ -74,10 +74,10 @@ struct MainWindowView: View {
                     .zIndex(3)
 
                 SettingsSheet(state: state)
-                    .background(DarkGlassSurface(cornerRadius: 18, usesSystemGlass: true))
+                    .background(GlassSurface(cornerRadius: 18))
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+                        .strokeBorder(Color.hairline, lineWidth: 1))
                     .shadow(color: .black.opacity(0.38), radius: 34, y: 14)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
                     .transition(.moleFloatingPanel)
@@ -86,12 +86,11 @@ struct MainWindowView: View {
         }
         .frame(minWidth: 680, idealWidth: 720, minHeight: 620, idealHeight: 720)
         .background {
-            DarkGlassSurface()
+            GlassSurface()
                 .ignoresSafeArea()
         }
         // 内容上移进标题栏区域：交通灯与标题/按钮同排（titleBarRow 左侧已留交通灯空位）。
         .ignoresSafeArea(.container, edges: .top)
-        .preferredColorScheme(.dark)
         .animation(reduceMotion ? nil : MoleMotion.panel, value: headerPanel)
         .animation(reduceMotion ? nil : MoleMotion.panel, value: state.showSettingsSheet)
         .onExitCommand {
@@ -209,9 +208,9 @@ struct MainWindowView: View {
             }
             .padding(6)
             .frame(width: 176)
-            .background(DarkGlassSurface(cornerRadius: 12, usesSystemGlass: true))
+            .background(GlassSurface(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+                .strokeBorder(Color.hairline, lineWidth: 1))
             .shadow(color: .black.opacity(0.34), radius: 18, y: 8)
 
         case .automation:
@@ -227,9 +226,9 @@ struct MainWindowView: View {
             }
             .padding(6)
             .frame(width: 210)
-            .background(DarkGlassSurface(cornerRadius: 12, usesSystemGlass: true))
+            .background(GlassSurface(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+                .strokeBorder(Color.hairline, lineWidth: 1))
             .shadow(color: .black.opacity(0.34), radius: 18, y: 8)
         }
     }
@@ -242,7 +241,7 @@ struct MainWindowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 10)
                 .frame(height: 29)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Color.white.opacity(0.055)))
+                .background(RoundedRectangle(cornerRadius: 7).fill(Color.surface2))
                 .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)

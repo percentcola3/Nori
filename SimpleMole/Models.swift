@@ -285,8 +285,9 @@ struct CleanupCategory: Identifiable, Equatable {
 
         var candidate = self
         candidate.paths = keptPaths
-        candidate.pathBytes = pathBytes.filter { keptPaths.contains($0.key) }
-        candidate.pathIdentities = pathIdentities.filter { keptPaths.contains($0.key) }
+        let kept = Set(keptPaths)
+        candidate.pathBytes = pathBytes.filter { kept.contains($0.key) }
+        candidate.pathIdentities = pathIdentities.filter { kept.contains($0.key) }
         candidate.bytes = keptPaths.reduce(0) { $0 &+ (candidate.pathBytes[$1] ?? 0) }
         guard candidate.bytes > 0 else { return nil }
         candidate.selectedPaths = Set(keptPaths)
@@ -820,6 +821,7 @@ struct AnalyzeEntry: Identifiable, Codable, Equatable {
     var insight: Bool?
     var cleanable: Bool?
     var lastAccess: String?
+    var isPartial: Bool? = nil
 
     var id: String { path }
 
@@ -834,7 +836,7 @@ struct AnalyzeEntry: Identifiable, Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case name, path, size
         case isDir = "is_dir"
-        case insight, cleanable
+        case insight, cleanable, isPartial
         case lastAccess = "last_access"
     }
 
@@ -880,7 +882,7 @@ struct AnalyzeEntry: Identifiable, Codable, Equatable {
     /// ordinary directories are drill-down containers, while files and Mole-
     /// verified regenerable directories can be selected.
     var canCleanDirectly: Bool {
-        guard !isSystemManaged, !isApplicationBundle, !isProtectedContainer else { return false }
+        guard isPartial != true, !isSystemManaged, !isApplicationBundle, !isProtectedContainer else { return false }
         if isManagedAppData { return isDir && cleanable == true }
         return isDir ? cleanable == true : true
     }
@@ -933,6 +935,10 @@ struct AnalyzeReport: Codable {
     let largeFiles: [LargeFile]?
     let totalSize: UInt64
     let totalFiles: Int?
+    var isPartial: Bool? = nil
+    var error: String? = nil
+    /// In-memory directory index from the same traversal; not serialized.
+    var directoryReports: [String: AnalyzeReport]? = nil
 
     struct LargeFile: Codable {
         let name: String
@@ -941,7 +947,7 @@ struct AnalyzeReport: Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case path, overview, entries
+        case path, overview, entries, isPartial, error
         case largeFiles = "large_files"
         case totalSize = "total_size"
         case totalFiles = "total_files"

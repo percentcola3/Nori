@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Build an open-source distributable DMG. By default the app is ad-hoc signed,
-# which needs no Apple Developer certificate and is suitable for GitHub Releases.
+# Build a DMG using build.sh's stable signing policy. Ad-hoc test packages
+# require an explicit opt-in because privacy grants may not survive updates.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,10 +15,9 @@ if [[ -n "$REQUESTED_DMG_PATH" ]]; then
         *) echo "error: SM_DMG_PATH requires a single SM_BUILD_ARCHS architecture" >&2; exit 2 ;;
     esac
 fi
-# Ad-hoc signing is intentional for the open-source distribution path. A
-# stable Apple Development or Developer ID identity can still be supplied.
-SIGN_IDENTITY="${SM_CODESIGN_IDENTITY:--}"
-ALLOW_ADHOC="${SM_ALLOW_ADHOC:-1}"
+# Leave identity selection to build.sh unless the caller supplies one.
+SIGN_IDENTITY="${SM_CODESIGN_IDENTITY:-}"
+ALLOW_ADHOC="${SM_ALLOW_ADHOC:-0}"
 STAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-dmg.XXXXXX")"
 trap 'rm -rf "$STAGE_ROOT"' EXIT
 
@@ -31,7 +30,7 @@ command -v hdiutil >/dev/null 2>&1 || {
     exit 1
 }
 
-SIGNING_LABEL="$SIGN_IDENTITY"
+SIGNING_LABEL="${SIGN_IDENTITY:-build.sh default}"
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
     SIGNING_LABEL="ad-hoc"
 fi
@@ -69,4 +68,5 @@ for arch in $BUILD_ARCHS; do
 done
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
     echo "warning: this DMG contains an ad-hoc signed App; macOS may require manual Gatekeeper approval" >&2
+    echo "warning: ad-hoc updates may require granting Full Disk Access and Screen Recording again; permission persistence is not guaranteed" >&2
 fi

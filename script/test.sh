@@ -295,7 +295,7 @@ test_productivity_feature_contract() {
     /usr/bin/grep -Fq 'ForEach(category.pathsByDescendingSize, id: \.self)' \
         "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" || \
         fail "expanded cleanup children are not selectable and sorted by size"
-    /usr/bin/grep -Fq 'categories.compactMap(\.selectedSubset)' "$app_state" || \
+    /usr/bin/grep -Fq 'source.compactMap(\.selectedSubset)' "$app_state" || \
         fail "cleanup apply still submits whole categories instead of selected children"
     /usr/bin/grep -Fq '.sorted(by: CleanupCategory.sizeDescending)' "$app_state" || \
         fail "cleanup categories are not sorted by descending size"
@@ -387,8 +387,13 @@ test_productivity_feature_contract() {
     fi
     /usr/bin/grep -Fq 'com.apple.settings.PrivacySecurity.extension' "$permission_center" || \
         fail "permission settings still use only the legacy pre-macOS 13 deep link"
-    /usr/bin/grep -Fq 'NSItemProvider(object: Bundle.main.bundleURL as NSURL)' "$permission_view" || \
-        fail "the app cannot be dragged into a macOS permission list"
+    /usr/bin/grep -Fq 'registerDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier' \
+        "$permission_view" || fail "permission drag does not provide the original file URL as data"
+    /usr/bin/grep -Fq 'Bundle.main.bundleURL.absoluteString' "$permission_view" || \
+        fail "permission drag does not target the running App bundle"
+    if /usr/bin/grep -Eq 'registerFileRepresentation|NSItemProvider\(object:' "$permission_view"; then
+        fail "permission drag may export a temporary App copy instead of the original URL"
+    fi
     /usr/bin/grep -Fq 'dragProvider: permissions.fullDiskAccessGranted ? nil : applicationDragProvider' \
         "$permission_view" || fail "Full Disk Access does not own its conditional drag source"
     /usr/bin/grep -Fq 'ConditionalDragModifier(provider: dragProvider' "$permission_view" || \
@@ -452,12 +457,13 @@ test_productivity_feature_contract() {
     fi
     /usr/bin/grep -Fq 'startAnalyze(displayPath: "/", overview: true)' "$app_state" || \
         fail "disk analysis does not start from the native machine-wide overview"
-    /usr/bin/grep -Fq '.filter { $0.size > 0 }' "$app_state" || \
-        fail "disk cleanup/analysis still displays zero-byte results"
     /usr/bin/grep -Fq '.sorted(by: AnalyzeEntry.analysisOrder)' "$app_state" || \
         fail "disk analysis results are not size ordered"
-    /usr/bin/grep -Fq '.prefix(10)' "$app_state" || \
-        fail "disk analysis is not limited to Top 10 results"
+    if sed -n '/private func startAnalyze(/,/MARK: APFS/p' "$app_state" | grep -Fq '.prefix(10)'; then
+        fail "disk analysis still hides children beyond Top 10"
+    fi
+    /usr/bin/grep -Fq 'ForEach(state.analyzeEntries)' "$analyze_view" || \
+        fail "disk analysis does not render the current directory directly"
     /usr/bin/grep -Fq 'CleanupCategory.safeCleanupCandidates(from:' "$app_state" || \
         fail "disk cleanup does not centrally exclude Warning and Protected results"
     /usr/bin/grep -Fq 'environment["SIMPLEMOLE_DELETE_MODE"] = "permanent"' "$app_state" || \
@@ -638,6 +644,51 @@ test_xcode_scan_boundary() {
     [[ "$output" != *"$module_cache"* ]] || \
         fail "Xcode scan emitted an empty module-cache row"
 
+    # DeviceSupport parity with Mole (MOLE_XCODE_DEVICE_SUPPORT_KEEP=2): the
+    # two newest versions by mtime stay, older ones are offered one row each,
+    # and the root itself never becomes a row. XCTestDevices is rebuildable.
+    local device_support="$home/Library/Developer/Xcode/iOS DeviceSupport"
+    local xctest="$home/Library/Developer/XCTestDevices"
+    local stale="$device_support/16.0 (20A362) arm64e"
+    local kept_old="$device_support/17.0 (21A329) arm64e"
+    local kept_new="$device_support/18.0 (22A3354) arm64e"
+    mkdir -p "$stale/Symbols" "$kept_old/Symbols" "$kept_new/Symbols" "$xctest/clone"
+    printf 'symbols\n' > "$stale/Symbols/libsystem.dylib"
+    printf 'symbols\n' > "$kept_old/Symbols/libsystem.dylib"
+    printf 'symbols\n' > "$kept_new/Symbols/libsystem.dylib"
+    printf 'clone\n' > "$xctest/clone/device.plist"
+    touch -t 202301010000 "$stale"
+    touch -t 202401010000 "$kept_old"
+    touch -t 202501010000 "$kept_new"
+    output=$(env HOME="$home" USER="$(id -un)" LOGNAME="$(id -un)" \
+        TMPDIR="$TEST_ROOT" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
+        bash "$RUNTIME_DIR/bin/app_xcode_scan.sh") || \
+        fail "Xcode cache scan failed with DeviceSupport versions present"
+    printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$stale" '$NF == p { f = 1 } END { exit !f }' || \
+        fail "Xcode scan did not offer the superseded DeviceSupport version: $output"
+    [[ "$output" != *"$kept_old"* && "$output" != *"$kept_new"* ]] || \
+        fail "Xcode scan offered one of the two newest DeviceSupport versions: $output"
+    if printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$device_support" '$NF == p { f = 1 } END { exit !f }'; then
+        fail "Xcode scan emitted the DeviceSupport root as a removable row"
+    fi
+    printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$xctest" '$NF == p && $2 == "clean" { f = 1 } END { exit !f }' || \
+        fail "Xcode scan did not offer XCTestDevices: $output"
+
+    # The apply bridge must refuse the DeviceSupport root even if a stale plan
+    # still names it; only version directories are removable.
+    identity=$(/usr/bin/stat -f '%d:%i:%m' "$device_support") || \
+        fail "DeviceSupport fixture has no filesystem identity"
+    printf '%s\0%s\0' "$device_support" "$identity" > "$plan"
+    set +e
+    output=$(env HOME="$home" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
+        MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$TEST_ROOT/xcode-trash" \
+        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
+        bash "$RUNTIME_DIR/bin/app_xcode_apply.sh" < "$plan" 2>&1)
+    rc=$?
+    set -e
+    [[ "$rc" -eq 0 && -d "$kept_new/Symbols" && "$output" == *"skipped=1"* ]] || \
+        fail "Xcode apply accepted the DeviceSupport root: $output"
+
     # A symlinked root must be omitted before du can follow it. This protects
     # both the inventory and the later identity-bound delete plan.
     rm -rf -- "$derived"
@@ -692,9 +743,26 @@ test_developer_scan_boundary() {
         "$ROOT_DIR/bridge/app_dev_apply.sh" || \
         fail "developer-cache apply lacks the physical-path guard"
 
-    mkdir -p "$home/.npm" "$home/.cache/pip" "$home/.config/mole" "$outside"
+    mkdir -p "$home/.npm" "$home/.cache/pip" "$home/.config/mole" "$outside" \
+        "$home/.gradle/caches/build-cache-1" "$home/.gradle/caches/modules-2" \
+        "$home/.m2/repository/org" "$home/go/pkg/mod/cache/download" \
+        "$home/go/pkg/mod/github.com"
     printf 'npm-cache\n' > "$home/.npm/index"
     printf 'pip-cache\n' > "$home/.cache/pip/index"
+    printf 'build-cache\n' > "$home/.gradle/caches/build-cache-1/entry.bin"
+    printf 'module\n' > "$home/.gradle/caches/modules-2/entry.jar"
+    printf 'artifact\n' > "$home/.m2/repository/org/artifact.jar"
+    printf 'zip\n' > "$home/go/pkg/mod/cache/download/mod.zip"
+    printf 'source\n' > "$home/go/pkg/mod/github.com/source.go"
+    # Without a user whitelist Mole's convenience defaults protect
+    # ~/.gradle/caches/*; a saved (even comment-only) file replaces them.
+    output=$(env HOME="$home" XDG_CONFIG_HOME="$home/.config" \
+        XDG_CACHE_HOME="$home/.cache" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+        bash "$RUNTIME_DIR/bin/app_dev_scan.sh") || \
+        fail "developer-cache scan failed with Mole's default whitelist"
+    [[ "$output" != *"build-cache-1"* ]] || \
+        fail "developer-cache scan ignored Mole's default Gradle whitelist: $output"
+    printf '# saved by the user\n' > "$home/.config/mole/whitelist"
     output=$(env HOME="$home" XDG_CONFIG_HOME="$home/.config" \
         XDG_CACHE_HOME="$home/.cache" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
         bash "$RUNTIME_DIR/bin/app_dev_scan.sh") || \
@@ -703,6 +771,58 @@ test_developer_scan_boundary() {
         fail "developer-cache scan dropped an ordinary npm cache: $output"
     [[ "$output" == *$'\t'$home/.cache/pip* ]] || \
         fail "developer-cache scan dropped an ordinary pip cache: $output"
+    # Mole parity: Gradle offers only build-cache-* children, never the caches
+    # root or the modules-2 dependency store; Go offers the download cache
+    # while the extracted module tree is left to `go clean -modcache`; the
+    # Maven repository stays visible for review (the policy keeps it Warning).
+    printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$home/.gradle/caches/build-cache-1" \
+        '$NF == p { f = 1 } END { exit !f }' || \
+        fail "developer-cache scan did not offer the Gradle build cache: $output"
+    [[ "$output" != *"modules-2"* ]] || \
+        fail "developer-cache scan offered the Gradle module cache: $output"
+    if printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$home/.gradle/caches" \
+        '$NF == p { f = 1 } END { exit !f }'; then
+        fail "developer-cache scan offered the whole Gradle caches root: $output"
+    fi
+    printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$home/go/pkg/mod/cache" \
+        '$NF == p { f = 1 } END { exit !f }' || \
+        fail "developer-cache scan did not offer the Go download cache: $output"
+    if printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$home/go/pkg/mod" \
+        '$NF == p { f = 1 } END { exit !f }'; then
+        fail "developer-cache scan offered the extracted Go module tree: $output"
+    fi
+    printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$home/.m2/repository" \
+        '$NF == p { f = 1 } END { exit !f }' || \
+        fail "developer-cache scan hid the Maven repository from review: $output"
+
+    # The apply bridge refuses dependency stores and the Gradle caches root
+    # even when a plan names them, while a build-cache-* child is accepted.
+    local plan="$TEST_ROOT/developer-scan-plan" identity="" rc=0 target=""
+    for target in "$home/.m2/repository" "$home/.gradle/caches" "$home/go/pkg/mod"; do
+        identity=$(/usr/bin/stat -f '%d:%i:%m' "$target") || \
+            fail "developer fixture has no filesystem identity: $target"
+        printf '%s\0%s\0' "$target" "$identity" > "$plan"
+        set +e
+        output=$(env HOME="$home" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
+            MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$TEST_ROOT/developer-trash" \
+            MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
+            bash "$RUNTIME_DIR/bin/app_dev_apply.sh" < "$plan" 2>&1)
+        rc=$?
+        set -e
+        [[ "$rc" -ne 0 && -d "$target" && "$output" == *"failed=1"* ]] || \
+            fail "developer-cache apply accepted a dependency store ($target): $output"
+    done
+    target="$home/.gradle/caches/build-cache-1"
+    identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
+    printf '%s\0%s\0' "$target" "$identity" > "$plan"
+    output=$(env HOME="$home" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
+        MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$TEST_ROOT/developer-trash" \
+        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
+        bash "$RUNTIME_DIR/bin/app_dev_apply.sh" < "$plan" 2>&1) || \
+        fail "developer-cache apply rejected the Gradle build cache: $output"
+    [[ ! -e "$target" && -e "$home/.gradle/caches/modules-2/entry.jar" && \
+        "$output" == *"removed=1"* ]] || \
+        fail "developer-cache apply did not remove only the Gradle build cache: $output"
 
     # A configured cache root redirected through a symlink must be omitted;
     # neither the link nor its outside target may reach the size inventory.
@@ -873,13 +993,233 @@ test_signing_policy_contract() {
         "$ROOT_DIR/script/build_and_run.sh" || \
         fail "build_and_run does not preserve the explicit signing policy"
     [[ -f "$package_script" ]] || fail "open-source DMG packaging script is missing"
-    /usr/bin/grep -Fq 'SIGN_IDENTITY="${SM_CODESIGN_IDENTITY:--}"' \
-        "$package_script" || fail "DMG packaging does not default to ad-hoc signing"
-    /usr/bin/grep -Fq 'ALLOW_ADHOC="${SM_ALLOW_ADHOC:-1}"' \
-        "$package_script" || fail "DMG packaging does not explicitly allow ad-hoc signing"
+    /usr/bin/grep -Fq 'SIGN_IDENTITY="${SM_CODESIGN_IDENTITY:-}"' \
+        "$package_script" || fail "DMG packaging overrides stable signing identity selection"
+    /usr/bin/grep -Fq 'ALLOW_ADHOC="${SM_ALLOW_ADHOC:-0}"' \
+        "$package_script" || fail "DMG packaging enables ad-hoc signing without explicit opt-in"
+    /usr/bin/grep -Fq 'SM_CODESIGN_IDENTITY="$SIGN_IDENTITY"' \
+        "$package_script" || fail "DMG packaging does not forward the requested signing identity"
+    /usr/bin/grep -Fq 'SM_ALLOW_ADHOC="$ALLOW_ADHOC"' \
+        "$package_script" || fail "DMG packaging does not preserve the ad-hoc opt-in"
     /usr/bin/grep -Fq '/usr/bin/hdiutil create' "$package_script" || \
         fail "DMG packaging does not create a disk image"
     pass "stable development signing and Developer ID release contracts"
+}
+
+# 本地自签名身份：授权绑定签名的指定要求，ad-hoc 每次构建都变；
+# 没有 Apple 证书时必须能落到稳定的本地身份，而不是静默退回 ad-hoc。
+test_local_signing_identity() {
+    local build_script="$ROOT_DIR/script/build.sh"
+    local identity_script="$ROOT_DIR/script/dev_identity.sh"
+    local desktop_script="$ROOT_DIR/script/package_dmg_to_desktop.sh"
+    local resolved status
+
+    [[ -x "$identity_script" ]] || fail "dev_identity.sh is missing or not executable"
+    /usr/bin/grep -Fq 'extendedKeyUsage = critical, codeSigning' "$identity_script" || \
+        fail "dev_identity.sh does not mark the certificate for code signing"
+    /usr/bin/grep -Fq -- '-T /usr/bin/codesign' "$identity_script" || \
+        fail "dev_identity.sh does not grant codesign access to the private key"
+    /usr/bin/grep -Fq 'add-trusted-cert -r trustRoot -p codeSign' "$identity_script" || \
+        fail "dev_identity.sh does not trust the certificate for code signing"
+    /usr/bin/grep -Fq 'set-key-partition-list -S apple-tool:,apple:,codesign:' "$identity_script" || \
+        fail "dev_identity.sh does not let codesign use the key without a prompt"
+    /usr/bin/grep -Fq 'chmod 600 "$PASSWORD_FILE"' "$identity_script" || \
+        fail "dev_identity.sh does not protect the keychain password file"
+    /usr/bin/grep -Fq -- '--keychain "$LOCAL_SIGN_KEYCHAIN"' "$build_script" || \
+        fail "build.sh does not sign through the dedicated local keychain"
+    /usr/bin/grep -Fq 'mktemp -d' "$identity_script" || \
+        fail "dev_identity.sh does not keep key material in a private temp dir"
+    /usr/bin/grep -Fq 'rm -rf "$WORK"' "$identity_script" || \
+        fail "dev_identity.sh does not clean up key material"
+
+    # dry-run never touches the keychain and reports the missing identity.
+    resolved=$(SM_DEV_IDENTITY_DRY_RUN=1 SM_LOCAL_SIGN_LABEL="ForgeSweep Test Missing $$" \
+        bash "$identity_script" --ensure) || fail "dev_identity.sh --ensure dry-run failed"
+    [[ "$resolved" == *"dry-run: would create"* ]] || fail "dev_identity.sh dry-run did not describe creation"
+    status=0
+    SM_LOCAL_SIGN_LABEL="ForgeSweep Test Missing $$" bash "$identity_script" --print >/dev/null 2>&1 || status=$?
+    assert_status 3 "$status" "dev_identity.sh --print must fail when the identity is absent"
+
+    # build.sh identity selection, driven by a canned find-identity listing.
+    resolved=$(SM_BUILD_RESOLVE_ONLY=1 SM_TEST_SIGNING_IDENTITIES=$'  1) AAAA "ForgeSweep Local Signing"\n     1 valid identities found' \
+        bash "$build_script" 2>/dev/null) || fail "build.sh rejected the local signing identity"
+    [[ "$resolved" == *"kind=local"* ]] || fail "build.sh did not classify the local identity (got: $resolved)"
+    [[ "$resolved" == *"identity=AAAA"* ]] || fail "build.sh must sign the local identity by hash (got: $resolved)"
+
+    resolved=$(SM_BUILD_RESOLVE_ONLY=1 SM_TEST_SIGNING_IDENTITIES=$'  1) AAAA "ForgeSweep Local Signing"\n  2) BBBB "Apple Development: Dev (TEAM1)"\n     2 valid identities found' \
+        bash "$build_script" 2>/dev/null) || fail "build.sh failed with Apple + local identities"
+    [[ "$resolved" == *"kind=development"* ]] || fail "build.sh must prefer Apple Development over the local identity"
+
+    status=0
+    SM_BUILD_RESOLVE_ONLY=1 SM_TEST_SIGNING_IDENTITIES='     0 valid identities found' \
+        bash "$build_script" >/dev/null 2>&1 || status=$?
+    assert_status 2 "$status" "build.sh must refuse ad-hoc without SM_ALLOW_ADHOC=1"
+
+    resolved=$(SM_BUILD_RESOLVE_ONLY=1 SM_ALLOW_ADHOC=1 SM_TEST_SIGNING_IDENTITIES='     0 valid identities found' \
+        bash "$build_script" 2>/dev/null) || fail "build.sh ad-hoc opt-in failed"
+    [[ "$resolved" == *"kind=adhoc"* ]] || fail "build.sh did not fall back to ad-hoc when allowed"
+
+    /usr/bin/grep -Fq 'certificate (leaf|root) = H"' "$build_script" || \
+        fail "build.sh does not verify the local identity pins its certificate"
+    /usr/bin/grep -Fq 'dev_identity.sh" --ensure' "$desktop_script" || \
+        fail "desktop packaging does not create the local identity before falling back to ad-hoc"
+
+    # App side: signing diagnosis and the child-process preflight helper.
+    /usr/bin/grep -Fq 'SecCodeCopyDesignatedRequirement' "$ROOT_DIR/SimpleMole/Services/SigningIdentityInspector.swift" || \
+        fail "app does not read its designated requirement"
+    /usr/bin/grep -Fq 'PermissionCenter.preflightArgument' "$ROOT_DIR/SimpleMole/main.swift" || \
+        fail "main.swift does not handle the preflight helper mode"
+    /usr/bin/grep -Fq 'NSApplication.shared' "$ROOT_DIR/SimpleMole/main.swift" || fail "main.swift lost NSApplication"
+    local helper_line app_line
+    helper_line=$(/usr/bin/grep -n 'PermissionCenter.preflightArgument' "$ROOT_DIR/SimpleMole/main.swift" | /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)
+    app_line=$(/usr/bin/grep -n 'NSApplication.shared' "$ROOT_DIR/SimpleMole/main.swift" | /usr/bin/head -n 1 | /usr/bin/cut -d: -f1)
+    [[ "$helper_line" -lt "$app_line" ]] || fail "preflight helper must exit before NSApplication is created"
+    /usr/bin/grep -Fq '/usr/bin/tccutil' "$ROOT_DIR/SimpleMole/Services/PermissionCenter.swift" || \
+        fail "permission center has no stale-grant repair"
+    /usr/bin/grep -Fq 'PermissionCenter.preflightReport()' "$ROOT_DIR/SimpleMole/main.swift" || \
+        fail "preflight helper does not report both permissions"
+    /usr/bin/grep -Fq 'fullDiskNeedsRelaunch = (probe?.fullDiskAccess == true && !diskInProcess)' \
+        "$ROOT_DIR/SimpleMole/Services/PermissionCenter.swift" || \
+        fail "full disk access has no granted-but-needs-relaunch detection"
+    /usr/bin/grep -Fq 'permissions.disk.needsRelaunch' "$ROOT_DIR/SimpleMole/Views/PermissionCenterView.swift" || \
+        fail "permission center does not offer a restart when full disk access is granted at the system level"
+    /usr/bin/grep -Fq 'Library/Logs/ForgeSweep' "$ROOT_DIR/SimpleMole/AppState.swift" || \
+        fail "relaunch helper still logs to a world-writable /tmp path"
+    if /usr/bin/grep -Fq '/tmp/forgesweep-relaunch.log' "$ROOT_DIR/SimpleMole/AppState.swift"; then
+        fail "relaunch helper still logs to /tmp"
+    fi
+    pass "local self-signed identity, build selection and permission self-healing contracts"
+}
+
+test_screenshot_presets() {
+    if [[ "${SM_TEST_SKIP_SWIFT:-0}" == "1" ]]; then
+        printf 'ok - screenshot presets skipped (SM_TEST_SKIP_SWIFT=1)\n'
+        return
+    fi
+    local editor="$ROOT_DIR/SimpleMole/Views/ScreenshotEditorView.swift"
+    /usr/bin/grep -Fq 'PresetFrameView(composition: composition, contentSize: exportSize)' "$editor" || \
+        fail "screenshot export does not render the selected preset at full resolution"
+    /usr/bin/grep -Fq 'renderer.scale = CGFloat(exportOptions.scale.rawValue)' "$editor" || \
+        fail "screenshot export ignores the 1x/2x option"
+    /usr/bin/grep -Fq 'NSSavePanel()' "$editor" || fail "screenshot editor has no Save As"
+    /usr/bin/grep -Fq 'forType: .png' "$editor" || \
+        fail "clipboard copy does not include a PNG representation (transparent presets turn black)"
+    local arch binary
+    arch="$(uname -m)"
+    binary="$TEST_ROOT/screenshot-preset-tests"
+    mkdir -p "$TEST_ROOT/screenshot-module-cache"
+    swiftc -target "$arch-apple-macos13.0" \
+        -module-cache-path "$TEST_ROOT/screenshot-module-cache" \
+        -framework AppKit \
+        "$ROOT_DIR/SimpleMole/Services/ScreenshotPreset.swift" \
+        "$ROOT_DIR/script/ScreenshotPresetTests.swift" \
+        -o "$binary" || fail "screenshot preset tests compile"
+    "$binary" || fail "screenshot preset layout, preferences and export encoding"
+    pass "screenshot presets: layout per aspect, preferences round-trip, PNG/JPEG export"
+}
+
+test_theme_contract() {
+    local theme="$ROOT_DIR/SimpleMole/Views/Theme.swift"
+    local app_delegate="$ROOT_DIR/SimpleMole/AppDelegate.swift"
+    [[ -f "$theme" ]] || fail "Views/Theme.swift is missing"
+    /usr/bin/grep -Fq 'struct GlassSurface' "$theme" || fail "single-layer GlassSurface is missing"
+    /usr/bin/grep -Fq 'NSGlassEffectView' "$theme" || fail "GlassSurface does not use Liquid Glass on macOS 26"
+    # 单层玻璃：不能再在玻璃上叠实色层或渐变层，否则模糊/折射被盖住。
+    if /usr/bin/grep -Fq 'LinearGradient' "$theme"; then
+        fail "GlassSurface stacks a gradient over the glass"
+    fi
+    if /usr/bin/grep -Fq 'moleGlassBase.opacity' "$theme"; then
+        fail "GlassSurface stacks a solid tint over the glass"
+    fi
+    if /usr/bin/grep -rFq 'DarkGlassSurface(' "$ROOT_DIR/SimpleMole" --include='*.swift'; then
+        fail "views still use the old multi-layer DarkGlassSurface"
+    fi
+    if /usr/bin/grep -rFq '.preferredColorScheme(.dark)' "$ROOT_DIR/SimpleMole" --include='*.swift'; then
+        fail "a view still forces dark mode instead of following the system appearance"
+    fi
+    if /usr/bin/grep -Fq 'NSAppearance(named: .darkAqua)' "$app_delegate"; then
+        fail "windows still force the dark appearance"
+    fi
+    /usr/bin/grep -Fq 'static let accent = adaptive(' "$theme" || fail "accent token is not appearance-adaptive"
+    /usr/bin/grep -Fq 'static let moleAccent = accent' "$theme" || fail "legacy moleAccent alias is missing"
+    # 硬编码白色透明度已收敛为 surface/hairline token（截图编辑器导出用的固定色除外）。
+    local hardcoded
+    hardcoded=$(/usr/bin/grep -rF 'Color.white.opacity(' "$ROOT_DIR/SimpleMole/Views" --include='*.swift' \
+        | /usr/bin/grep -v 'ScreenshotEditorView.swift' | /usr/bin/grep -v 'Theme.swift' | /usr/bin/wc -l | /usr/bin/tr -d ' ')
+    [[ "$hardcoded" -le 6 ]] || fail "too many hardcoded white opacities remain in views ($hardcoded)"
+
+    if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
+        local arch binary
+        arch="$(uname -m)"
+        binary="$TEST_ROOT/theme-contrast-tests"
+        mkdir -p "$TEST_ROOT/theme-module-cache"
+        swiftc -target "$arch-apple-macos13.0" \
+            -module-cache-path "$TEST_ROOT/theme-module-cache" \
+            -framework AppKit -framework SwiftUI \
+            "$theme" "$ROOT_DIR/script/ThemeContrastTests.swift" \
+            -o "$binary" || fail "theme contrast tests compile"
+        "$binary" || fail "Fjord palette contrast"
+    fi
+    pass "Fjord theme: single-layer glass, system appearance, token convergence, WCAG contrast"
+}
+
+test_process_sampler() {
+    local app_state="$ROOT_DIR/SimpleMole/AppState.swift"
+    local processes_view="$ROOT_DIR/SimpleMole/Views/ProcessesTabView.swift"
+    /usr/bin/grep -Fq 'ProcessSampler.shared.sample()' "$app_state" || \
+        fail "app-level process view still depends on ps text"
+    /usr/bin/grep -Fq 'ProcessTerminator.terminateThenKill' "$app_state" || \
+        fail "process actions do not escalate SIGTERM → SIGKILL through identity checks"
+    /usr/bin/grep -Fq 'application.terminate()' "$app_state" || \
+        fail "apps are not offered a graceful quit before force quit"
+    /usr/bin/grep -Fq 'ports.status.readFailed' "$app_state" || \
+        fail "port read failures are still shown as an empty list"
+    /usr/bin/grep -Fq 'quickPanelStatus = application.isTerminated' "$app_state" || \
+        fail "quick panel force quit does not report its result"
+    /usr/bin/grep -Fq 'state.processSearch' "$processes_view" || fail "process list has no search"
+    /usr/bin/grep -Fq 'state.processSort' "$processes_view" || fail "process list has no sort"
+    /usr/bin/grep -Fq 'ProcessSparkline(' "$processes_view" || fail "process list has no trend line"
+    /usr/bin/grep -Fq 'state.processAlerts' "$processes_view" || fail "high-usage alerts are not surfaced"
+    if [[ "${SM_TEST_SKIP_SWIFT:-0}" == "1" ]]; then
+        pass "process sampler contracts (Swift run skipped)"
+        return
+    fi
+    local arch binary
+    arch="$(uname -m)"
+    binary="$TEST_ROOT/process-sampler-tests"
+    mkdir -p "$TEST_ROOT/process-module-cache"
+    swiftc -target "$arch-apple-macos13.0" \
+        -module-cache-path "$TEST_ROOT/process-module-cache" \
+        -framework AppKit -framework IOKit \
+        "$ROOT_DIR/SimpleMole/Models.swift" \
+        "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
+        "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
+        "$ROOT_DIR/SimpleMole/Services/ProcessSampler.swift" \
+        "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
+        "$ROOT_DIR/script/ProcessSamplerTests.swift" \
+        -o "$binary" || fail "process sampler tests compile"
+    "$binary" || fail "process sampler: live CPU deltas, tree aggregation, identity-bound termination"
+    pass "process sampler: libproc sampling, grouping, alerts, identity-bound termination"
+}
+
+test_signing_identity_classification() {
+    if [[ "${SM_TEST_SKIP_SWIFT:-0}" == "1" ]]; then
+        printf 'ok - signing identity classification skipped (SM_TEST_SKIP_SWIFT=1)\n'
+        return
+    fi
+    local arch binary
+    arch="$(uname -m)"
+    binary="$TEST_ROOT/signing-identity-tests"
+    mkdir -p "$TEST_ROOT/signing-module-cache"
+    swiftc -target "$arch-apple-macos13.0" \
+        -module-cache-path "$TEST_ROOT/signing-module-cache" \
+        -framework Security -framework AppKit -framework Combine \
+        "$ROOT_DIR/SimpleMole/Services/SigningIdentityInspector.swift" \
+        "$ROOT_DIR/SimpleMole/Services/PermissionCenter.swift" \
+        "$ROOT_DIR/script/SigningIdentityTests.swift" \
+        -o "$binary" || fail "signing identity tests compile"
+    "$binary" || fail "signing identity classification / preflight protocol"
+    pass "signing identity classification and permission preflight protocol"
 }
 
 test_gc_runner() {
@@ -2812,6 +3152,7 @@ printf 'ForgeSweep local regression tests\n'
 test_shell_syntax
 if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
+    bash "$ROOT_DIR/script/test_disk_analysis.sh" || fail "directory analysis tests"
 fi
 test_native_core_ownership_contract
 test_plists
@@ -2829,6 +3170,11 @@ test_developer_scan_boundary
 test_analyze_ai_inventory
 test_system_preview_protocol
 test_signing_policy_contract
+test_local_signing_identity
+test_signing_identity_classification
+test_screenshot_presets
+test_theme_contract
+test_process_sampler
 test_gc_runner
 test_node_cache_inventory
 test_identity_bound_apply
