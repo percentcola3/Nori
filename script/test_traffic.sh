@@ -9,6 +9,7 @@ sources=(
     "$ROOT_DIR/SimpleMole/Models.swift"
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift"
+    "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift"
     "$ROOT_DIR/SimpleMole/Services/Parsers.swift"
     "$ROOT_DIR/SimpleMole/Services/TrafficLedger.swift"
     "$ROOT_DIR/SimpleMole/Services/TrafficAttribution.swift"

@@ -293,7 +293,7 @@ private struct SearchMagnifier: View {
         let bob = animated ? CGFloat(cos(time * 8.4)) : 0
         return ZStack {
             Circle()
-                .fill(Color.cyan.opacity(0.18))
+                .fill(Color.accent.opacity(0.18))
                 .overlay(Circle().strokeBorder(Color.moleAccentText,
                                                lineWidth: max(1, size * 0.065)))
                 .frame(width: size * 0.38, height: size * 0.38)
@@ -321,7 +321,7 @@ private struct ConfettiBurst: View, Animatable {
     var body: some View {
         Canvas { context, size in
             let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let colors: [Color] = [.moleAccentText, .orange, .cyan, .pink]
+            let colors: [Color] = [.moleAccentText, .warning, .success, .pink]
             let fade = max(0, sin(Double(progress) * .pi))
 
             for index in 0..<8 {
@@ -529,11 +529,11 @@ struct DangerButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(.red)
+            .foregroundStyle(Color.danger)
             .padding(.horizontal, 10)
             .frame(height: 24)
-            .background(Capsule().fill(.red.opacity(configuration.isPressed ? 0.10 : 0.06)))
-            .overlay(Capsule().strokeBorder(.red.opacity(0.35), lineWidth: 1))
+            .background(Capsule().fill(Color.danger.opacity(configuration.isPressed ? 0.10 : 0.06)))
+            .overlay(Capsule().strokeBorder(Color.danger.opacity(0.35), lineWidth: 1))
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
     }
 }
@@ -1233,7 +1233,7 @@ struct SettingsSheet: View {
                     if state.screenshotHotKeyRegistrationFailed {
                         Label(l10n.t("settings.screenshot.conflict"), systemImage: "exclamationmark.triangle.fill")
                             .font(.system(size: 10))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Color.warning)
                     }
                     HStack(spacing: 8) {
                         Button(l10n.t("settings.screenshot.capture")) {

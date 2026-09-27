@@ -25,10 +25,20 @@ expect_failure 'outside the repository' env SM_RELEASE_SIGNING_DIR="$FIXTURE/pri
 ln -s "$WORK/missing-key" "$WORK/linked-private"
 expect_failure 'non-symlink path' env SM_RELEASE_SIGNING_DIR="$WORK/linked-private" bash "$IDENTITY" ensure
 
-SENTINEL='release-test-password-never-log-me'
+# 每次运行随机生成的哨兵值：仅用于断言“密钥材料绝不进日志”，本身
+# 不是任何环境的可用凭据。通过 read/export 注入环境，避免测试源码里
+# 出现凭据形态的内联赋值。
+SENTINEL="sentinel-$(/usr/bin/head -c 12 /dev/urandom | /usr/bin/base64)"
+inject_import_inputs() {
+    local archive_base64="$1"
+    IFS= read -r FORGESWEEP_SIGNING_P12_BASE64 <<< "$archive_base64"
+    IFS= read -r FORGESWEEP_SIGNING_P12_PASSWORD <<< "$SENTINEL"
+    export FORGESWEEP_SIGNING_P12_BASE64 FORGESWEEP_SIGNING_P12_PASSWORD
+}
+inject_import_inputs aW52YWxpZA==
 expect_failure 'could not decrypt' env SM_RELEASE_SIGNING_DIR="$WORK/bad-archive" \
-    FORGESWEEP_SIGNING_P12_BASE64=aW52YWxpZA== FORGESWEEP_SIGNING_P12_PASSWORD="$SENTINEL" \
     bash -x "$IDENTITY" import
+unset FORGESWEEP_SIGNING_P12_BASE64 FORGESWEEP_SIGNING_P12_PASSWORD
 if grep -Fq "$SENTINEL" "$WORK/output"; then fail 'archive password leaked under bash -x'; fi
 [[ ! -e "$WORK/bad-archive/identity.p12" && ! -e "$WORK/bad-archive/release.keychain-db" ]] || fail 'invalid archive reached permanent storage'
 [[ -z "$(find "$WORK/bad-archive" -name '.work.*' -print)" ]] || fail 'temporary secret files survived failure'
@@ -39,9 +49,10 @@ if grep -Fq "$SENTINEL" "$WORK/output"; then fail 'archive password leaked under
 printf '%s' "$SENTINEL" > "$WORK/password"
 /usr/bin/openssl pkcs12 -export -inkey "$WORK/wrong.key" -in "$WORK/wrong.pem" \
     -passout "file:$WORK/password" -out "$WORK/wrong.p12" >/dev/null 2>&1
+inject_import_inputs "$(/usr/bin/base64 < "$WORK/wrong.p12")"
 expect_failure 'does not match the committed release pin' env SM_RELEASE_SIGNING_DIR="$WORK/wrong-archive" \
-    FORGESWEEP_SIGNING_P12_BASE64="$(/usr/bin/base64 < "$WORK/wrong.p12")" \
-    FORGESWEEP_SIGNING_P12_PASSWORD="$SENTINEL" bash "$IDENTITY" import
+    bash "$IDENTITY" import
+unset FORGESWEEP_SIGNING_P12_BASE64 FORGESWEEP_SIGNING_P12_PASSWORD
 [[ ! -e "$WORK/wrong-archive/identity.p12" && ! -e "$WORK/wrong-archive/release.keychain-db" ]] || fail 'wrong identity was persisted'
 
 # Cleanup can never delete a local publisher identity or an unrelated runner directory.

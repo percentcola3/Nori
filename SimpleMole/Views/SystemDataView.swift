@@ -58,7 +58,7 @@ struct SystemDataView: View {
                 } label: {
                     Label(l10n.t("system.selectSafe"), systemImage: "checkmark.shield")
                 }
-                .buttonStyle(SecondaryButtonStyle(tint: .green))
+                .buttonStyle(SecondaryButtonStyle(tint: Color.success))
                 .disabled(state.isBusy || state.systemEntries.isEmpty)
             }
             Button {
@@ -298,7 +298,7 @@ private struct SystemDataRow: View {
             Button(action: onDelete) {
                 Image(systemName: "trash")
             }
-            .buttonStyle(MoleIconButtonStyle(tint: .red))
+            .buttonStyle(MoleIconButtonStyle(tint: Color.danger))
             .help(L10n.shared.t("system.row.delete"))
             .disabled(!selectionEnabled)
         }
@@ -313,10 +313,10 @@ private struct SystemDataRow: View {
         let isSafe = entry.risk == .safe
         Text(l10nBadge)
             .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(isSafe ? Color.green : Color.orange)
+            .foregroundStyle(isSafe ? Color.success : Color.warning)
             .padding(.horizontal, 6)
             .padding(.vertical, 1.5)
-            .background(Capsule().fill((isSafe ? Color.green : Color.orange).opacity(0.14)))
+            .background(Capsule().fill((isSafe ? Color.success : Color.warning).opacity(0.14)))
     }
 
     private var l10nBadge: String {

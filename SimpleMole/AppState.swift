@@ -331,6 +331,8 @@ final class AppState: ObservableObject {
     @Published var analyzeLargeFiles: [AnalyzeReport.LargeFile] = []
     @Published var isAnalyzing = false
     @Published var analyzeIsOverview = false
+    /// 当前展示的是第一层“快速分析”结果（个人目录 + 既知缓存 + 保存位置）。
+    @Published var analyzeIsQuickScope = false
     @Published var analyzeStatus: String
     private var analyzeCache = DiskAnalysisCache()
     private var analyzeHasScanned = false
@@ -472,7 +474,7 @@ final class AppState: ObservableObject {
                 quickPanelStatus = l10n.t("log.scanPartial")
                 return
             }
-            let safe = finalizedCleanupCategories(scan.categories, snapshot: scan.runningSnapshot)
+            let safe = finalizedCleanupCategories(scan.categories)
                 .compactMap { category in
                     category.retainingPaths(category.paths.filter {
                         !$0.hasPrefix(NSHomeDirectory() + "/.Trash/")
@@ -1064,7 +1066,7 @@ final class AppState: ObservableObject {
             statusText = l10n.t("status.scanningCleanup")
             Task {
                 let snapshot = await captureRunningApplicationSnapshot()
-                categories = finalizedCleanupCategories(cached.categories, snapshot: snapshot)
+                categories = finalizedCleanupCategories(cached.categories)
                 cleanupScanComplete = snapshot.isComplete
                 if !cleanupScanComplete {
                     for index in categories.indices { categories[index].selected = false }
@@ -1089,8 +1091,7 @@ final class AppState: ObservableObject {
 
         Task {
             let scan = await unifiedCleanupScan(mode: mode)
-            let combined = finalizedCleanupCategories(scan.categories,
-                                                       snapshot: scan.runningSnapshot)
+            let combined = finalizedCleanupCategories(scan.categories)
             categories = combined
             cleanupDeferredPaths = scan.deferredPaths
             cleanupScanComplete = scan.allSucceeded
@@ -1266,6 +1267,8 @@ final class AppState: ObservableObject {
             fromProcessText: result.output, isComplete: result.succeeded)
     }
 
+    /// 执行侧运行态收口：自动化规则不经确认直接删除，必须先用最新进程快照
+    /// 裁剪运行中应用的缓存。普通手动清理走 performApply 的重评估即可。
     private func protectRunningApplications(in source: [CleanupCategory],
                                             snapshot: RunningApplicationSnapshot)
         -> [CleanupCategory] {
@@ -1274,14 +1277,13 @@ final class AppState: ObservableObject {
         }.sorted(by: CleanupCategory.sizeDescending)
     }
 
-    private func finalizedCleanupCategories(_ source: [CleanupCategory],
-                                            snapshot: RunningApplicationSnapshot)
-        -> [CleanupCategory] {
-        let safe = CleanupCategory.safeCleanupCandidates(from: source)
-        let runtimeChecked = protectRunningApplications(in: safe, snapshot: snapshot)
-        // Do not run safeCleanupCandidates a second time: it reselects every
-        // path and would undo the runtime guard's partial selection.
-        return runtimeChecked
+    /// 扫描结果的展示收口：只保留 Safe 垃圾并默认全部勾选（safe 即选中），
+    /// 长尾小项合并成「其他」。运行中应用的保护不在展示层做——执行前
+    /// performApply 会用最新进程快照重新评估，运行中的路径会计入「已跳过」。
+    private func finalizedCleanupCategories(_ source: [CleanupCategory]) -> [CleanupCategory] {
+        CleanupCategory.mergingLongTail(
+            CleanupCategory.safeCleanupCandidates(from: source)
+        ).sorted(by: CleanupCategory.sizeDescending)
     }
 
     /// 通用单脚本扫描（开发工具 / AI 垃圾 / 图片瘦身）。
@@ -1311,11 +1313,10 @@ final class AppState: ObservableObject {
                 timedOut: false)
             isScanning = false
             cleanupScanComplete = result.succeeded && runtime.succeeded
-            let snapshot = RuntimeStore.runningApplicationSnapshot(
-                fromProcessText: runtime.output, isComplete: runtime.succeeded)
-            categories = protectRunningApplications(
-                in: Parsers.specialCategories(result.output, family: family),
-                snapshot: snapshot)
+            // 特殊家族（开发环境 / AI / 图片）保留 Warning 项供人工判断，
+            // Safe 项默认全选；运行态保护交给执行前的重新评估。
+            categories = Parsers.specialCategories(result.output, family: family)
+                .sorted(by: CleanupCategory.sizeDescending)
             if !cleanupScanComplete {
                 for index in categories.indices { categories[index].selected = false }
             }
@@ -1510,20 +1511,21 @@ final class AppState: ObservableObject {
 
     func applyInstallers() {
         guard !isBusy, let selection = installerCandidates?.selectedSubset else { return }
+        // 安装包可能是用户唯一的副本：默认移入废纸篓（方案 §5.3）。
         confirmation = Confirmation(title: l10n.t("file.installer"),
             message: l10n.tf("cleanup.installers.confirm", selection.paths.count,
                              ByteFormat.format(selection.bytes)),
-            confirmLabel: l10n.t("confirm.cleanupPermanent.ok")) { [weak self] in
+            confirmLabel: l10n.t("confirm.apply.trash.ok")) { [weak self] in
                 guard let self, !self.isBusy else { return }
                 self.isApplying = true
                 Task {
                     let result = await self.executeCleanupRoute(.installerTrash,
                         categories: [selection], imageMode: nil, mode: .manual,
-                        permanently: true)
+                        permanently: false)
                     self.installerCandidates = self.installerCandidates?.retainingPaths(
                         self.installerCandidates?.paths.filter { FileManager.default.fileExists(atPath: $0) } ?? [])
                     self.isApplying = false
-                    self.reportCleanupResult(result)
+                    self.reportCleanupResult(result, permanently: false)
                 }
             }
     }
@@ -1569,8 +1571,8 @@ final class AppState: ObservableObject {
         let actionTitle: String
         var message: String
         switch applyFamily {
-        case .clean:
-            // 磁盘清理是永久删除：用独立的不可逆确认文案。
+        case .clean, .purge:
+            // 磁盘清理与项目产物是永久删除：用独立的不可逆确认文案。
             actionTitle = l10n.t("confirm.cleanupPermanent.ok")
             message = l10n.t("confirm.cleanupPermanent.msg")
         case .tools:
@@ -1601,15 +1603,19 @@ final class AppState: ObservableObject {
             message += "\n\n" + l10n.tf("cleanup.warningConfirmation", warningCount)
         }
         confirmation = Confirmation(
-            title: applyFamily == .clean
+            title: Self.permanentFamilies.contains(applyFamily)
                 ? l10n.tf("confirm.cleanupPermanent.title", selectedCount)
                 : l10n.tf("confirm.apply.title", selectedCount),
             message: message,
             confirmLabel: actionTitle) { [weak self] in
                 self?.performApply(categories: selectedCategories, imageMode: imageMode,
                                    family: applyFamily, mode: .manual)
-            }
+        }
     }
+
+    /// 永久删除的家族：清理页与项目产物（构建产物可本地重建）；安装包、
+    /// 卸载、分析选择项默认移入废纸篓。
+    private static let permanentFamilies: Set<CleanupFamily> = [.clean, .purge]
 
     /// 执行阶段再次读取进程表，并按每个类别自己的 route 分流。扫描来源不会再
     /// 因为 UI 合并展示而退化成通用删除入口。
@@ -1634,9 +1640,27 @@ final class AppState: ObservableObject {
             let prepared = await Task.detached(priority: .utility) {
                 var eligible: [CleanupCategory] = []
                 var protectedReasons: [UUID: String] = [:]
+                let recheckControl = CleanupScanControl(mode: .quick)
                 for category in requested {
-                    let assessment = CleanupRiskPolicy.reassess(category, running: snapshot)
-                    let subset = CleanupRiskPolicy.runtimeEligibleSubset(category, running: snapshot)
+                    // 年龄门复核：扫描后重新活跃（或时间证据失效）的条目
+                    // 不再进入本次执行，计入跳过而不是放宽门槛。
+                    var reviewed = category
+                    if category.retention > 0 {
+                        let stillStale = category.paths.filter { path in
+                            category.isPathSelected(path)
+                        }.filter { path in
+                            let recheck = CleanupScanWorker.measure(
+                                path, control: recheckControl)
+                            return recheck.complete && CleanupAgePolicy.isStale(
+                                recheck.activityEvidence, retention: category.retention)
+                        }
+                        reviewed = category.selectingPaths(stillStale)
+                    }
+                    guard reviewed.selected || reviewed.risk != .safe else {
+                        continue
+                    }
+                    let assessment = CleanupRiskPolicy.reassess(reviewed, running: snapshot)
+                    let subset = CleanupRiskPolicy.runtimeEligibleSubset(reviewed, running: snapshot)
                     if let subset, CleanupRiskPolicy.isEligible(subset, mode: mode, running: snapshot) {
                         eligible.append(subset)
                     } else if assessment.risk == .protected {
@@ -1662,7 +1686,8 @@ final class AppState: ObservableObject {
             statusText = l10n.tf("status.processing", eligibleCount)
             guard !eligible.isEmpty else {
                 isApplying = false
-                reportCleanupResult(executionResult)
+                reportCleanupResult(executionResult,
+                                    permanently: Self.permanentFamilies.contains(applyFamily))
                 return
             }
 
@@ -1673,7 +1698,7 @@ final class AppState: ObservableObject {
                 log("cleanup route=\(route.rawValue) started paths=\(routeCategories.reduce(0) { $0 + $1.paths.count })")
                 let routeResult = await executeCleanupRoute(
                     route, categories: routeCategories, imageMode: imageMode, mode: mode,
-                    permanently: applyFamily == .clean)
+                    permanently: Self.permanentFamilies.contains(applyFamily))
                 log(String(format: "cleanup route=%@ completed %.2fs", route.rawValue, Date().timeIntervalSince(started)))
                 executionResult.merge(routeResult)
             }
@@ -1687,7 +1712,8 @@ final class AppState: ObservableObject {
                 }.sorted(by: CleanupCategory.sizeDescending)
             }.value
             isApplying = false
-            reportCleanupResult(executionResult)
+            reportCleanupResult(executionResult,
+                                permanently: Self.permanentFamilies.contains(applyFamily))
             switch applyFamily {
             case .clean:
                 // A skip/failure does not invalidate the completed scan. Remove
@@ -1703,10 +1729,14 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func reportCleanupResult(_ result: CleanupExecutionResult) {
+    private func reportCleanupResult(_ result: CleanupExecutionResult,
+                                     permanently: Bool) {
         analyzeCache.clear()
-        let summary = l10n.tf(
-            "cleanup.execution.summary", result.removed, result.skipped, result.failed)
+        // 报告文案与执行器的实际动作一致：永久删除与移入废纸篓分开表述。
+        let key = permanently
+            ? "cleanup.execution.summary.permanent"
+            : "cleanup.execution.summary"
+        let summary = l10n.tf(key, result.removed, result.skipped, result.failed)
         statusText = summary
         if quickPanelCleaning {
             quickPanelStatus = summary + " · " + l10n.t("quick.panel.memory")
@@ -2773,6 +2803,51 @@ final class AppState: ObservableObject {
         startAnalyze(displayPath: "/", overview: true)
     }
 
+    /// 第一层分析（默认）：只测个人目录、既知缓存目录和保存的分析位置，
+    /// 不递归整盘。第二层“整台 Mac”由用户在范围菜单里主动启动。
+    func scanQuickAnalysis(force: Bool = false) {
+        guard authorize(.diskOverview(force: force),
+                        presentingPermissionCenter: true), !isBusy else { return }
+        if !force, analyzeHasScanned { return }
+        let savedPaths = savedScanLocations.locations
+            .filter { $0.availability == .available }
+            .map(\.path)
+        let roots = QuickAnalysisWorker.roots(home: NSHomeDirectory(),
+                                              savedLocations: savedPaths)
+        guard !roots.isEmpty else { return }
+        analyzeHasScanned = true
+        analyzeIsQuickScope = true
+        analyzeIsOverview = false
+        analyzePath = NSHomeDirectory()
+        isAnalyzing = true
+        analyzeEntries = []
+        analyzeTotalSize = 0
+        analyzeLargeFiles = []
+        analyzeSelection.removeAll()
+        analyzeAISelection.removeAll()
+        analyzeAIItems = []
+        dupGroups = []
+        dupSelection.removeAll()
+        analyzeStatus = l10n.t("analyze.quick.scanning")
+        // 快速分析使用独立预算：总 90 秒、单目录 20 秒、8 路并发。
+        let control = CleanupScanControl(mode: .quick, totalBudget: 90, directoryBudget: 20)
+        analyzeScanControl = control
+        Task {
+            let report = await Task.detached(priority: .utility) {
+                QuickAnalysisWorker.scan(roots, control: control) { snapshot in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.analyzeScanControl === control else { return }
+                        self.analyzeEntries = snapshot.entries
+                        self.analyzeTotalSize = snapshot.totalSize
+                    }
+                }
+            }.value
+            analyzeScanControl = nil
+            isAnalyzing = false
+            showAnalyzeReport(report)
+        }
+    }
+
     func scanAnalyze(_ path: String? = nil, force: Bool = false) {
         guard !isBusy else { return }
         let target = URL(fileURLWithPath: path ?? analyzePath, isDirectory: true).standardizedFileURL.path
@@ -2791,6 +2866,7 @@ final class AppState: ObservableObject {
     private func startAnalyze(displayPath: String, overview: Bool) {
         guard fullDiskScanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
         analyzeHasScanned = true
+        analyzeIsQuickScope = false
         analyzePath = displayPath
         analyzeIsOverview = overview
         if let cached = analyzeCache.report(for: displayPath) {

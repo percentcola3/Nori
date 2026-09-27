@@ -139,8 +139,12 @@ struct CleanupScanTests {
         let deepPaths = Set(deep.categories.flatMap(\.paths))
         expect(deepPaths.isSuperset(of: quickPaths), "deep scan lost quick results")
         expect(deepPaths.contains(home.path + "/Library/Application Support/Example/Cache"), "deep support cache missing")
-        expect(deepPaths.contains(home.path + "/Library/Containers/com.example.other/Data/Library/Caches/entry"),
-               "deep container cache missing")
+        // 未安装应用（含已不在废纸篓）的沙盒容器按“历史残留”整叶呈现：
+        // Caches/Logs 叶子可回收，容器根与其余数据保持复核态。
+        expect(deepPaths.contains(home.path + "/Library/Containers/com.example.other/Data/Library/Caches"),
+               "deep orphan container cache missing")
+        expect(!deepPaths.contains(home.path + "/Library/Containers/com.example.other/Data/Library/Caches/entry"),
+               "orphan container cache must not be double-listed per child")
         let cancelled = CleanupScanControl(mode: .quick)
         cancelled.cancel()
         let stopped = await NativeCore.shared.scanCleanup(homeDirectory: home.path, control: cancelled)
@@ -184,8 +188,147 @@ struct CleanupScanTests {
         let benchmark = CleanupScanControl(mode: .deep)
         let sized = CleanupScanWorker.measure(many.path, control: benchmark)
         expect(sized.complete && sized.files == 10000, "benchmark did not count all files")
-        print(String(format: "PASS: catalog, grouping, deep scan, exclusions, cancellation, partial sizes, hardlinks, pipe output; 10000 files in %.3fs", benchmark.elapsed))
+
+        // ---- 7 天活跃门（扫描级）----
+        func age(_ path: String, days: Double) throws {
+            let url = home.appendingPathComponent(path)
+            try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-days * 86400)],
+                                 ofItemAtPath: url.path)
+        }
+        try write("Library/Developer/Xcode/DerivedData/ProjStale/build")
+        try write("Library/Developer/Xcode/DerivedData/ProjActive/build")
+        try age("Library/Developer/Xcode/DerivedData/ProjStale/build", days: 8)
+        let aged = await NativeCore.shared.scanCleanup(homeDirectory: home.path)
+        func category(containing path: String) -> CleanupCategory? {
+            aged.categories.first { $0.paths.contains(home.path + "/" + path) }
+        }
+        let staleProject = category(containing: "Library/Developer/Xcode/DerivedData/ProjStale")
+        let activeProject = category(containing: "Library/Developer/Xcode/DerivedData/ProjActive")
+        expect(staleProject != nil
+               && staleProject!.isPathSelected(home.path + "/Library/Developer/Xcode/DerivedData/ProjStale"),
+               "8-day-old project build output should be recommended")
+        expect(activeProject != nil
+               && !activeProject!.isPathSelected(home.path + "/Library/Developer/Xcode/DerivedData/ProjActive"),
+               "recently active project must stay visible but unselected")
+        expect(activeProject?.reasonKey == "cleanup.risk.recentlyActive",
+               "active entries must explain the 7-day retention reason")
+        let npmCache = category(containing: ".npm/_cacache")
+        expect(npmCache != nil && !npmCache!.isPathSelected(home.path + "/.npm/_cacache"),
+               "npm cache written moments ago must not be default-selected")
+
+        // ---- 执行前复核：扫描后重新活跃的单元必须被跳过 ----
+        try fm.setAttributes([.modificationDate: Date()],
+                             ofItemAtPath: home.appendingPathComponent(
+                                "Library/Developer/Xcode/DerivedData/ProjStale/build").path)
+        let recheckControl = CleanupScanControl(mode: .deep)
+        let recheck = CleanupScanWorker.measure(
+            home.appendingPathComponent("Library/Developer/Xcode/DerivedData/ProjStale").path,
+            control: recheckControl)
+        expect(!recheck.complete || !CleanupAgePolicy.isStale(
+            recheck.activityEvidence, retention: CleanupAgePolicy.developerRetention),
+            "entry touched after the scan must fail the apply-time re-check")
+
+        // ---- 自定义缓存位置（GRADLE_USER_HOME / npmrc cache=）----
+        try write(".gradle-custom/caches/build-cache-9/entry")
+        try write(".gradle-custom/caches/modules-2/dependency.jar")
+        try age(".gradle-custom/caches/build-cache-9/entry", days: 9)
+        try Data("cache=\(home.path)/.npm-custom\n".utf8).write(
+            to: home.appendingPathComponent(".npmrc"))
+        let located = DeveloperCacheLocations.resolve(
+            home: home.path, environment: [:], readText: { path in
+                path == home.path + "/.npmrc"
+                    ? "cache=\(home.path)/.npm-custom\n" : nil
+            })
+        expect(located.gradleUserHome == nil, "gradle home must come from the environment only")
+        DeveloperCacheLocations.override = DeveloperCacheLocations(
+            npmCache: located.npmCache, yarnCache: nil, pipCache: nil,
+            gradleUserHome: home.path + "/.gradle-custom", cargoHome: nil,
+            goModCache: nil, goBuildCache: nil, xdgCacheHome: nil, poetryCache: nil)
+        defer { DeveloperCacheLocations.override = nil }
+        expect(CleanupRiskPolicy.isGradleBuildCachePath(
+            home.path + "/.gradle-custom/caches/build-cache-9", home: home.path),
+            "custom GRADLE_USER_HOME build cache must classify as rebuildable")
+        expect(CleanupRiskPolicy.dependencyStoreRoots(home: home.path)
+            .contains(home.path + "/.gradle-custom/caches"),
+            "custom gradle module cache must stay review-only")
+        let customScan = await NativeCore.shared.scanCleanup(homeDirectory: home.path)
+        let customPaths = Set(customScan.categories.flatMap(\.paths))
+        expect(customPaths.contains(home.path + "/.gradle-custom/caches/build-cache-9"),
+               "custom gradle build cache missing from discovery")
+        expect(!customPaths.contains(where: { $0.contains("gradle-custom/caches/modules-2") }),
+               "custom gradle dependency store must not be offered")
+        expect(CleanupRiskPolicy.core(section: "Cache", path: home.path + "/.npm-custom",
+                                      homeDirectory: home.path).risk == .safe,
+               "npmrc cache= location must be recognized by the policy")
+
+        // ---- 词法校验（删除漏斗第一道）----
+        expect(DeletionPlan.isLexicallySafePath(home.path + "/Library/Caches/ok")
+            && DeletionPlan.isLexicallySafePath(home.path + "/Downloads/name..files"),
+               "normal absolute paths (including `name..files`) must pass lexical checks")
+        expect(!DeletionPlan.isLexicallySafePath("relative/path"),
+               "relative paths must be rejected")
+        expect(!DeletionPlan.isLexicallySafePath(home.path + "/Caches/\(Character(unicodeScalarLiteral: "\u{07}"))bad"),
+               "control characters must be rejected")
+        expect(!DeletionPlan.isLexicallySafePath(home.path + "/Caches/../Keychains"),
+               "dot-dot path components must be rejected")
+        expect(!DeletionPlan.isLexicallySafePath(""),
+               "empty paths must be rejected")
+
+        // ---- fd 链永久删除：身份一致才删、内部符号链接只删链接本身 ----
+        let secureTree = home.appendingPathComponent("Library/Caches/secure-tree")
+        try fm.createDirectory(at: secureTree.appendingPathComponent("inner"),
+                               withIntermediateDirectories: true)
+        try Data(repeating: 5, count: 4096).write(to: secureTree.appendingPathComponent("inner/file"))
+        let outsideKeep = fixture.appendingPathComponent("outside-keep")
+        try fm.createDirectory(at: outsideKeep, withIntermediateDirectories: true)
+        try Data(repeating: 6, count: 4096).write(to: outsideKeep.appendingPathComponent("precious"))
+        try fm.createSymbolicLink(at: secureTree.appendingPathComponent("inner/link"),
+                                  withDestinationURL: outsideKeep)
+        let securePlan = DeletionPlan(paths: [secureTree.path])
+        let secureSummary = NativeCore.shared.applyCleanup(
+            items: securePlan.items, permanent: true, homeDirectory: home.path)
+        expect(secureSummary.removed == 1 && secureSummary.failed == 0,
+               "secure removal of an identity-matching tree failed")
+        expect(!fm.fileExists(atPath: secureTree.path),
+               "identity-matching tree was not removed")
+        expect(fm.fileExists(atPath: outsideKeep.appendingPathComponent("precious").path),
+               "internal symlink must be unlinked without following it")
+
+        // 身份不符（mtime 已变化）→ 跳过且目录保留。
+        let tampered = home.appendingPathComponent("Library/Caches/tampered")
+        try fm.createDirectory(at: tampered, withIntermediateDirectories: true)
+        try Data(repeating: 7, count: 4096).write(to: tampered.appendingPathComponent("file"))
+        let tamperedPlan = DeletionPlan(paths: [tampered.path])
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-60)],
+                             ofItemAtPath: tampered.path)
+        expect(DeletionPlan.identity(at: tampered.path) != tamperedPlan.items[0].identity,
+               "fixture should produce a changed identity for the tamper case")
+        let tamperedSummary = NativeCore.shared.applyCleanup(
+            items: tamperedPlan.items, permanent: true, homeDirectory: home.path)
+        expect(tamperedSummary.skipped >= 1 && tamperedSummary.removed == 0,
+               "changed identity must be skipped, not deleted")
+        expect(fm.fileExists(atPath: tampered.path), "tampered tree must survive")
+
+        // 父目录链上的符号链接：fd 链拒绝跟随，删除失败且真实目录保留。
+        let realParent = home.appendingPathComponent("Library/Caches/real-parent")
+        try fm.createDirectory(at: realParent.appendingPathComponent("target"),
+                               withIntermediateDirectories: true)
+        try Data(repeating: 8, count: 4096).write(
+            to: realParent.appendingPathComponent("target/file"))
+        try fm.createSymbolicLink(at: home.appendingPathComponent("Library/Caches/link-parent"),
+                                  withDestinationURL: realParent)
+        let throughLink = DeletionPlan(
+            paths: [home.path + "/Library/Caches/link-parent/target"])
+        let linkSummary = NativeCore.shared.applyCleanup(
+            items: throughLink.items, permanent: true, homeDirectory: home.path)
+        expect(linkSummary.removed == 0,
+               "a path through a symlinked parent must never be deleted")
+        expect(fm.fileExists(atPath: realParent.appendingPathComponent("target/file").path),
+               "the real target behind the symlinked parent must survive")
+
+        print(String(format: "PASS: catalog, grouping, deep scan, exclusions, cancellation, partial sizes, hardlinks, pipe output, 7-day gate, custom locations, lexical guards, secure fd-walk deletion; 10000 files in %.3fs", benchmark.elapsed))
         print(quick.diagnostics)
         print(deep.diagnostics)
+        print(aged.diagnostics)
     }
 }

@@ -1,8 +1,10 @@
 import AppKit
 import SwiftUI
 
-// MARK: - 设计基调「Fjord」
-// 单层液态玻璃 + 冷青蓝强调色，跟随系统浅色/深色外观。
+// MARK: - 设计基调「Ultramarine 群青」
+// 单层液态玻璃 + 群青强调色，跟随系统浅色/深色外观。
+// 浅色底是带一点暖意的纸白，深色底是石墨中性色；强调色浅色深稳、
+// 深色清透，整体只保留一个强 hue，靠明度分层，克制而精致。
 //
 // 规则：
 // - 玻璃只有一层（GlassSurface），任何不透明色块都不要叠在玻璃上，否则模糊
@@ -11,23 +13,23 @@ import SwiftUI
 //   外观下分别取值，不要再写 Color.white.opacity(x)。
 // - 强调色只用于选中态、主按钮与关键数值；状态色用 success/warning/danger。
 
-/// Fjord 配色的原始值：token 与对比度测试共用同一份数据。
-enum FjordPalette {
-    static let accentDark: UInt32 = 0x5AB0F2
-    static let accentLight: UInt32 = 0x1E88D6
-    static let accentTextDark: UInt32 = 0x8CCBFF
-    static let accentTextLight: UInt32 = 0x176AA8
-    static let onAccentDark: UInt32 = 0x0B1B2B
+/// Ultramarine 配色的原始值：token 与对比度测试共用同一份数据。
+enum UltramarinePalette {
+    static let accentDark: UInt32 = 0x8FA3F5
+    static let accentLight: UInt32 = 0x3E63DD
+    static let accentTextDark: UInt32 = 0xA9B6FF
+    static let accentTextLight: UInt32 = 0x3D5AC8
+    static let onAccentDark: UInt32 = 0x10141F
     static let onAccentLight: UInt32 = 0xFFFFFF
     /// 玻璃着色在典型后景（深色桌面 / 浅色桌面）上的等效实底，用于对比度估算。
-    static let glassDark: UInt32 = 0x14181F
-    static let glassLight: UInt32 = 0xF4F6F9
-    static let successDark: UInt32 = 0x3DCC91
-    static let successLight: UInt32 = 0x1F9D6A
-    static let warningDark: UInt32 = 0xF2B23F
-    static let warningLight: UInt32 = 0xB97A12
-    static let dangerDark: UInt32 = 0xF0616B
-    static let dangerLight: UInt32 = 0xD23F4B
+    static let glassDark: UInt32 = 0x16181D
+    static let glassLight: UInt32 = 0xF5F4F1
+    static let successDark: UInt32 = 0x53C68C
+    static let successLight: UInt32 = 0x1E8A55
+    static let warningDark: UInt32 = 0xE3A43C
+    static let warningLight: UInt32 = 0xA9700E
+    static let dangerDark: UInt32 = 0xE56672
+    static let dangerLight: UInt32 = 0xCB3D4C
 
     /// WCAG 2.x 相对亮度。
     static func relativeLuminance(_ hex: UInt32) -> Double {
@@ -65,36 +67,37 @@ extension Color {
 
     // 强调色
     /// 主强调色：选中态、主按钮底色、进度。
-    static let accent = adaptive(light: srgb(FjordPalette.accentLight), dark: srgb(FjordPalette.accentDark))
+    static let accent = adaptive(light: srgb(UltramarinePalette.accentLight), dark: srgb(UltramarinePalette.accentDark))
     /// 强调色文字：在玻璃上保持 ≥ 4.5:1 对比。
-    static let accentText = adaptive(light: srgb(FjordPalette.accentTextLight), dark: srgb(FjordPalette.accentTextDark))
+    static let accentText = adaptive(light: srgb(UltramarinePalette.accentTextLight), dark: srgb(UltramarinePalette.accentTextDark))
     /// 主按钮上的文字。
-    static let onAccent = adaptive(light: srgb(FjordPalette.onAccentLight), dark: srgb(FjordPalette.onAccentDark))
+    static let onAccent = adaptive(light: srgb(UltramarinePalette.onAccentLight), dark: srgb(UltramarinePalette.onAccentDark))
 
     // 玻璃与表面
-    /// 玻璃着色：淡到能看见后方内容的模糊与折射。
-    static let glassTint = adaptive(light: srgb(0xF4F6F9, 0.50), dark: srgb(0x0E1218, 0.40))
+    /// 玻璃着色：淡到能看见后方内容的模糊与折射，但着色要足以承托正文——
+    /// 鲜艳桌面壁纸下文字依然可读优先于通透感。
+    static let glassTint = adaptive(light: srgb(0xF5F4F1, 0.62), dark: srgb(0x16181D, 0.46))
     /// 减少透明度时的实底。
-    static let glassOpaque = adaptive(light: srgb(FjordPalette.glassLight), dark: srgb(FjordPalette.glassDark))
-    /// 卡片 / 行底色三级。
-    static let surface1 = adaptive(light: NSColor.white.withAlphaComponent(0.45),
-                                   dark: NSColor.white.withAlphaComponent(0.05))
-    static let surface2 = adaptive(light: NSColor.white.withAlphaComponent(0.62),
-                                   dark: NSColor.white.withAlphaComponent(0.08))
-    static let surface3 = adaptive(light: NSColor.white.withAlphaComponent(0.80),
-                                   dark: NSColor.white.withAlphaComponent(0.12))
+    static let glassOpaque = adaptive(light: srgb(UltramarinePalette.glassLight), dark: srgb(UltramarinePalette.glassDark))
+    /// 卡片 / 行底色三级：白罩会透出下层玻璃的暖调，与背景自然一致。
+    static let surface1 = adaptive(light: NSColor.white.withAlphaComponent(0.55),
+                                   dark: NSColor.white.withAlphaComponent(0.07))
+    static let surface2 = adaptive(light: NSColor.white.withAlphaComponent(0.72),
+                                   dark: NSColor.white.withAlphaComponent(0.105))
+    static let surface3 = adaptive(light: NSColor.white.withAlphaComponent(0.88),
+                                   dark: NSColor.white.withAlphaComponent(0.15))
     /// 开关关闭态的轨道与滑块。
-    static let trackOff = adaptive(light: NSColor.black.withAlphaComponent(0.14),
+    static let trackOff = adaptive(light: NSColor.black.withAlphaComponent(0.12),
                                    dark: NSColor.white.withAlphaComponent(0.12))
     static let thumbOff = adaptive(light: .white, dark: NSColor.white.withAlphaComponent(0.82))
-    /// 描边 / 分隔线。
-    static let hairline = adaptive(light: NSColor.black.withAlphaComponent(0.08),
-                                   dark: NSColor.white.withAlphaComponent(0.10))
+    /// 描边 / 分隔线：略清晰一点，玻璃上的卡片轮廓更有"印刷感"。
+    static let hairline = adaptive(light: NSColor.black.withAlphaComponent(0.10),
+                                   dark: NSColor.white.withAlphaComponent(0.13))
 
     // 状态色
-    static let success = adaptive(light: srgb(FjordPalette.successLight), dark: srgb(FjordPalette.successDark))
-    static let warning = adaptive(light: srgb(FjordPalette.warningLight), dark: srgb(FjordPalette.warningDark))
-    static let danger = adaptive(light: srgb(FjordPalette.dangerLight), dark: srgb(FjordPalette.dangerDark))
+    static let success = adaptive(light: srgb(UltramarinePalette.successLight), dark: srgb(UltramarinePalette.successDark))
+    static let warning = adaptive(light: srgb(UltramarinePalette.warningLight), dark: srgb(UltramarinePalette.warningDark))
+    static let danger = adaptive(light: srgb(UltramarinePalette.dangerLight), dark: srgb(UltramarinePalette.dangerDark))
 
     // 兼容别名：旧代码里的 mole* 名称直接映射到新 token，避免一次性改 100+ 处。
     static let moleAccent = accent
@@ -107,8 +110,8 @@ extension NSColor {
     /// GlassSurface 传给 NSGlassEffectView 的着色（NSColor 版本，随外观变化）。
     static let forgeGlassTint = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(srgbRed: 0x0E / 255, green: 0x12 / 255, blue: 0x18 / 255, alpha: 0.40)
-            : NSColor(srgbRed: 0xF4 / 255, green: 0xF6 / 255, blue: 0xF9 / 255, alpha: 0.50)
+            ? NSColor(srgbRed: 0x16 / 255, green: 0x18 / 255, blue: 0x1D / 255, alpha: 0.46)
+            : NSColor(srgbRed: 0xF5 / 255, green: 0xF4 / 255, blue: 0xF1 / 255, alpha: 0.62)
     }
 }
 

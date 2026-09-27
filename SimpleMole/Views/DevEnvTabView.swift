@@ -170,10 +170,10 @@ struct DevEnvTabView: View {
                                         HStack(spacing: 8) {
                                             Text(issue.kind)
                                                 .font(.system(size: 9, weight: .semibold))
-                                                .foregroundStyle(.orange)
+                                                .foregroundStyle(Color.warning)
                                                 .padding(.horizontal, 5)
                                                 .padding(.vertical, 1)
-                                                .background(Capsule().fill(Color.orange.opacity(0.12)))
+                                                .background(Capsule().fill(Color.warning.opacity(0.12)))
                                             VStack(alignment: .leading, spacing: 1) {
                                                 Text(issue.location)
                                                     .font(.system(size: 10, design: .monospaced))
@@ -217,10 +217,10 @@ struct DevEnvTabView: View {
                                         HStack(spacing: 8) {
                                             Text(proxy.kind)
                                                 .font(.system(size: 9, weight: .semibold))
-                                                .foregroundStyle(.orange)
+                                                .foregroundStyle(Color.warning)
                                                 .padding(.horizontal, 5)
                                                 .padding(.vertical, 1)
-                                                .background(Capsule().fill(Color.orange.opacity(0.12)))
+                                                .background(Capsule().fill(Color.warning.opacity(0.12)))
                                             Text(proxy.service)
                                                 .font(.system(size: 12, weight: .medium))
                                             Spacer()
@@ -247,10 +247,10 @@ struct DevEnvTabView: View {
                                         HStack(spacing: 8) {
                                             Text("hosts")
                                                 .font(.system(size: 9, weight: .semibold))
-                                                .foregroundStyle(.orange)
+                                                .foregroundStyle(Color.warning)
                                                 .padding(.horizontal, 5)
                                                 .padding(.vertical, 1)
-                                                .background(Capsule().fill(Color.orange.opacity(0.12)))
+                                                .background(Capsule().fill(Color.warning.opacity(0.12)))
                                             Text(line)
                                                 .font(.system(size: 10, design: .monospaced))
                                                 .foregroundStyle(.secondary)
@@ -442,7 +442,7 @@ private struct DevEnvRowView: View {
                     if entry.isCurrent {
                         Image(systemName: "lock.fill")
                             .font(.system(size: 10))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Color.warning)
                             .frame(width: 16)
                     } else {
                         Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -472,10 +472,10 @@ private struct DevEnvRowView: View {
                 } else if entry.isCurrent {
                     Text(l10n.t("devenv.current"))
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.warning)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.orange.opacity(0.8)))
+                        .background(Capsule().fill(Color.warning.opacity(0.14)))
                 }
                 if entry.hasVersionGlobalPackages {
                     Text(l10n.tf("devenv.globalPackages", ByteFormat.format(entry.relatedBytes)))
@@ -559,7 +559,7 @@ struct WhitelistSheet: View {
                             } label: {
                                 Image(systemName: "minus.circle.fill")
                                     .font(.system(size: 13))
-                                    .foregroundStyle(.red.opacity(0.7))
+                                    .foregroundStyle(Color.danger.opacity(0.7))
                             }
                             .buttonStyle(.plain)
                         }

@@ -99,9 +99,9 @@ struct OptimizeTabView: View {
 
     private func color(for state: NativeCore.OptimizeTask.State) -> Color {
         switch state {
-        case .applied: return .green
-        case .failed: return .red
-        case .unavailable: return .orange
+        case .applied: return Color.success
+        case .failed: return Color.danger
+        case .unavailable: return Color.warning
         case .unchanged: return .secondary
         case .pending: return .moleAccentText
         }

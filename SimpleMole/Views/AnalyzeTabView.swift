@@ -39,6 +39,9 @@ struct AnalyzeTabView: View {
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(state.isBusy)
                 Menu {
+                    Button { state.scanQuickAnalysis(force: true) } label: {
+                        Label(l10n.t("analyze.scope.quick"), systemImage: "bolt.horizontal")
+                    }
                     Button { state.scanDiskOverview(force: true) } label: {
                         Label(l10n.t("analyze.scope.full"), systemImage: "macbook.and.iphone")
                     }
@@ -92,7 +95,9 @@ struct AnalyzeTabView: View {
                 if state.permissionCenter.fullDiskAccessGranted {
                     _ = savedLocations.refreshAvailability(persist: false)
                 }
-                state.scanDiskOverview()
+                // 默认第一层：快速分析只测个人目录、既知缓存和保存位置；
+                // 全盘深度分析从范围菜单主动启动。
+                state.scanQuickAnalysis()
             }
 
             HStack(spacing: 6) {

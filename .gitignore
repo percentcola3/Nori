@@ -13,3 +13,10 @@ signing-certificate.base64
 signing-password
 identity-password
 keychain-password
+
+# Local tool/session caches (never commit)
+.codex/
+.zcode/
+.mimosa/
+.v2c/
+.video_agent/

@@ -54,7 +54,7 @@ struct TrafficTabView: View {
                 TrafficSummaryCard(title: l10n.t("netmon.card.proxyNode"),
                                    down: store.nodeDown, up: store.nodeUp, tint: .blue)
                 TrafficSummaryCard(title: l10n.t("netmon.card.proxyDirect"),
-                                   down: store.directDown, up: store.directUp, tint: .orange)
+                                   down: store.directDown, up: store.directUp, tint: Color.warning)
                 TrafficSummaryCard(title: l10n.t("netmon.card.unattributed"),
                                    down: store.unattributedDown, up: store.unattributedUp,
                                    tint: .secondary)
@@ -85,7 +85,7 @@ struct TrafficTabView: View {
             if store.historySaveFailed {
                 Text(l10n.t("netmon.history.saveFailed"))
                     .font(.system(size: 10))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.warning)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 8)
@@ -202,7 +202,7 @@ struct TrafficTabView: View {
         switch store.clashState {
         case .ok: return .blue
         case .notConfigured: return .secondary
-        case .unauthorized, .unreachable, .stale: return .orange
+        case .unauthorized, .unreachable, .stale: return Color.warning
         }
     }
 
@@ -257,7 +257,7 @@ struct TrafficTabView: View {
                                                   tint: .blue)
                                 TrafficByteMetric(title: l10n.t("netmon.card.proxyDirect"),
                                                   down: row.proxyDirectDown, up: row.proxyDirectUp,
-                                                  tint: .orange)
+                                                  tint: Color.warning)
                                 TrafficByteMetric(title: l10n.t("netmon.sort.appTotal"),
                                                   down: row.sessionDown, up: row.sessionUp,
                                                   tint: .secondary)
@@ -443,7 +443,7 @@ private struct TrafficMetric: View {
                 .lineLimit(1)
             Text(value)
                 .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                .foregroundStyle(isElevated ? Color.orange : Color.secondary)
+                .foregroundStyle(isElevated ? Color.warning : Color.secondary)
                 .lineLimit(1)
         }
         .frame(minWidth: 52, alignment: .trailing)
@@ -458,7 +458,7 @@ private struct TrafficExitBadge: View {
         switch kind {
         case .direct: return .secondary
         case .tunnel: return .indigo
-        case .proxyDirect: return .orange
+        case .proxyDirect: return Color.warning
         case .proxyNode: return .blue
         case .proxy: return .teal
         case .loopback: return .gray
@@ -509,7 +509,7 @@ private struct TrafficAppDetailSheet: View {
                     TrafficSummaryCard(title: l10n.t("netmon.detail.proxyNode"),
                                        down: row.proxyNodeDown, up: row.proxyNodeUp, tint: .blue)
                     TrafficSummaryCard(title: l10n.t("netmon.detail.proxyDirect"),
-                                       down: row.proxyDirectDown, up: row.proxyDirectUp, tint: .orange)
+                                       down: row.proxyDirectDown, up: row.proxyDirectUp, tint: Color.warning)
                     TrafficSummaryCard(title: l10n.t("netmon.detail.proxyUnknown"),
                                        down: row.proxyUnknownDown, up: row.proxyUnknownUp,
                                        tint: .secondary)
@@ -685,9 +685,9 @@ private struct TrafficClashSettingsPanel: View {
 
     private var stateTint: Color {
         switch store.clashState {
-        case .ok: return .green
+        case .ok: return Color.success
         case .notConfigured: return .secondary
-        case .unauthorized, .unreachable, .stale: return .orange
+        case .unauthorized, .unreachable, .stale: return Color.warning
         }
     }
 

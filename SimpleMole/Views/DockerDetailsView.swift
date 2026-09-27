@@ -154,15 +154,15 @@ struct DockerDetailsView: View {
             if let active = item.isActive {
                 Text(l10n.t(active ? "docker.item.active" : "docker.item.inactive"))
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(active ? Color.green : Color.secondary)
+                    .foregroundStyle(active ? Color.success : Color.secondary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Capsule().fill((active ? Color.green : Color.secondary).opacity(0.10)))
+                    .background(Capsule().fill((active ? Color.success : Color.secondary).opacity(0.10)))
             }
             if let reclaimable = item.reclaimableLabel, !reclaimable.isEmpty {
                 Text(reclaimable)
                     .font(.system(size: 9).monospacedDigit())
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.warning)
             }
             Text(item.sizeLabel ?? "--")
                 .font(.system(size: 10).monospacedDigit())
@@ -187,13 +187,13 @@ struct DockerDetailsView: View {
 
     private func diagnosticBanner(_ message: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.warning)
             Text(message)
                 .font(.system(size: 9))
                 .lineLimit(2)
             Spacer()
         }
         .padding(9)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.10)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.warning.opacity(0.10)))
     }
 }

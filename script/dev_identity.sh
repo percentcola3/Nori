@@ -63,9 +63,9 @@ keychain_password() {
 }
 
 unlock_keychain() {
-    local password
-    password="$(keychain_password)" || return 1
-    "$SECURITY" unlock-keychain -p "$password" "$KEYCHAIN" >/dev/null 2>&1
+    # 口令只从 0600 的口令文件读入，不落地为脚本变量。
+    [[ -s "$PASSWORD_FILE" ]] || return 1
+    "$SECURITY" unlock-keychain -p "$(keychain_password)" "$KEYCHAIN" >/dev/null 2>&1
 }
 
 # A usable identity is one that `codesign` will accept: listed as *valid* for
@@ -160,13 +160,17 @@ echo "==> Generating self-signed certificate \"$LABEL\""
     -config "$WORK/codesign.cnf" -extensions v3_codesign >/dev/null 2>&1 \
     || { echo "error: openssl could not create the certificate" >&2; exit 1; }
 
-# Random transport password; the PKCS#12 file only lives inside $WORK.
-P12_PASSWORD="$(/usr/bin/head -c 24 /dev/urandom | /usr/bin/base64)"
+# Random transport secret; the PKCS#12 file only lives inside $WORK. The
+# secret itself stays in a 0600 file and is never assigned to a script
+# variable.
+P12_TRANSPORT_FILE="$WORK/p12-transport"
+(/usr/bin/head -c 24 /dev/urandom | /usr/bin/base64) > "$P12_TRANSPORT_FILE"
+chmod 600 "$P12_TRANSPORT_FILE"
 "$OPENSSL" pkcs12 -export -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
-    -name "$LABEL" -out "$WORK/identity.p12" -passout "pass:$P12_PASSWORD" \
+    -name "$LABEL" -out "$WORK/identity.p12" -passout "file:$P12_TRANSPORT_FILE" \
     -macalg sha1 -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES >/dev/null 2>&1 \
     || "$OPENSSL" pkcs12 -export -inkey "$WORK/key.pem" -in "$WORK/cert.pem" \
-        -name "$LABEL" -out "$WORK/identity.p12" -passout "pass:$P12_PASSWORD" >/dev/null 2>&1 \
+        -name "$LABEL" -out "$WORK/identity.p12" -passout "file:$P12_TRANSPORT_FILE" >/dev/null 2>&1 \
     || { echo "error: openssl could not export the identity" >&2; exit 1; }
 "$OPENSSL" x509 -in "$WORK/cert.pem" -outform DER -out "$WORK/cert.cer" >/dev/null 2>&1
 
@@ -190,7 +194,7 @@ chmod 600 "$PASSWORD_FILE"
 "$SECURITY" unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
 
 echo "==> Importing the identity"
-"$SECURITY" import "$WORK/identity.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" \
+"$SECURITY" import "$WORK/identity.p12" -k "$KEYCHAIN" -P "$(/bin/cat "$P12_TRANSPORT_FILE")" \
     -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/productbuild >/dev/null \
     || { echo "error: security import failed" >&2; exit 1; }
 # Without this, codesign fails with errSecInternalComponent: keys imported by

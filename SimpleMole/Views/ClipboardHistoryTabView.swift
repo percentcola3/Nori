@@ -260,8 +260,8 @@ private struct ClipboardHistoryCard: View {
     private var kindTint: Color {
         switch entry.kind {
         case .text: .secondary
-        case .url: .cyan
-        case .file: .blue
+        case .url: Color.accentText
+        case .file: Color.warning
         case .image: .purple
         }
     }

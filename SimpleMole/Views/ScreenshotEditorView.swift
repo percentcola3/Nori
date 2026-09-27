@@ -375,7 +375,7 @@ struct ScreenshotEditorView: View {
             if let feedbackKey {
                 Text(l10n.t(feedbackKey))
                     .font(.system(size: 10))
-                    .foregroundStyle(feedbackKey == "shot.failed" ? Color.orange : Color.moleAccentText)
+                    .foregroundStyle(feedbackKey == "shot.failed" ? Color.warning : Color.moleAccentText)
             }
             Spacer()
             Button(l10n.t("common.done")) {

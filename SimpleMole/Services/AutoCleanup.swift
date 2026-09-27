@@ -118,7 +118,7 @@ struct AutoCleanupCandidate: Identifiable, Equatable, Sendable {
     let disposal: CleanupDisposal
 
     var id: String { path }
-    var automaticEligible: Bool { risk == .safe && disposal == .trash }
+    var automaticEligible: Bool { risk == .safe && disposal == .permanentDelete }
 }
 
 struct AutoCleanupPlan: Equatable, Sendable {
@@ -424,7 +424,7 @@ enum AutoCleanupPlanner {
                                         modifiedAt: modifiedAt,
                                         identity: deletionIdentity(of: rootMetadata),
                                         risk: containsProtectedContent ? .protected : .safe,
-                                        disposal: containsProtectedContent ? .none : .trash)
+                                        disposal: containsProtectedContent ? .none : .permanentDelete)
         }
 
         var failedPath: String?
@@ -465,7 +465,7 @@ enum AutoCleanupPlanner {
                                     modifiedAt: modifiedAt,
                                     identity: deletionIdentity(of: rootMetadata),
                                     risk: containsProtectedContent ? .protected : .safe,
-                                    disposal: containsProtectedContent ? .none : .trash)
+                                    disposal: containsProtectedContent ? .none : .permanentDelete)
     }
 
     private static func isProtectedAutomationContent(_ url: URL) -> Bool {

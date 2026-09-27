@@ -28,6 +28,16 @@ struct DeletionPlan {
         }
     }
 
+    /// 词法校验（删除漏斗第一道）：非空绝对路径；不含控制字符（含 NUL）；
+    /// 任何完整路径分量都不允许是 "." 或 ".."。像 `name..files` 这样的
+    /// 文件名是合法的，不受影响。
+    static func isLexicallySafePath(_ path: String) -> Bool {
+        guard !path.isEmpty, path.hasPrefix("/") else { return false }
+        if path.utf8.contains(where: { $0 < 0x20 || $0 == 0x7f }) { return false }
+        return !path.split(separator: "/", omittingEmptySubsequences: true)
+            .contains { $0 == "." || $0 == ".." }
+    }
+
     /// NUL 分隔的 `<path><identity>` 记录，避免文件名中的空格和换行改变协议。
     var stdinData: Data {
         var data = Data()

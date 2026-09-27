@@ -62,7 +62,7 @@ struct AutomationSettingsView: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "gearshape.2.fill")
                 .font(.system(size: 24, weight: .light))
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(Color.accent)
             VStack(alignment: .leading, spacing: 4) {
                 Text(l10n.t("automation.header"))
                     .font(.system(size: 16, weight: .semibold))
@@ -84,10 +84,10 @@ struct AutomationSettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
         } icon: {
             Image(systemName: "checkmark.shield.fill")
-                .foregroundStyle(.green)
+                .foregroundStyle(Color.success)
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.green.opacity(0.08)))
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.success.opacity(0.08)))
     }
 
     private var savedLocationsSection: some View {
@@ -107,7 +107,7 @@ struct AutomationSettingsView: View {
                         Image(systemName: location.availability == .available
                               ? "folder.fill" : "folder.badge.questionmark")
                             .foregroundStyle(location.availability == .available
-                                             ? Color.accentColor : Color.orange)
+                                             ? Color.accent : Color.warning)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(location.displayName)
                                 .font(.system(size: 11, weight: .medium))
@@ -121,7 +121,7 @@ struct AutomationSettingsView: View {
                         Text(availabilityTitle(location.availability))
                             .font(.system(size: 8, weight: .semibold))
                             .foregroundStyle(location.availability == .available
-                                             ? Color.green : Color.orange)
+                                             ? Color.success : Color.warning)
                         Button(role: .destructive) {
                             guard canMutate else { return }
                             _ = locations.remove(id: location.id)
@@ -173,7 +173,7 @@ struct AutomationSettingsView: View {
                             Text(triggerSummary(rule))
                                 .font(.system(size: 8, design: .monospaced))
                                 .foregroundStyle(rule.isValid && targetAvailable
-                                                 ? Color.secondary : Color.red)
+                                                 ? Color.secondary : Color.danger)
                         }
                         Spacer()
                         if !rule.isValid || !targetAvailable {
@@ -181,7 +181,7 @@ struct AutomationSettingsView: View {
                                         ? "automation.targetUnavailable"
                                         : "automation.invalidDisabled"))
                                 .font(.system(size: 8, weight: .semibold))
-                                .foregroundStyle(.red)
+                                .foregroundStyle(Color.danger)
                         }
                         Button(role: .destructive) {
                             guard canMutate else { return }
@@ -210,7 +210,7 @@ struct AutomationSettingsView: View {
             } else if let error = hibernation.lastError, !error.isEmpty {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 9))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.warning)
             }
             if let error = receipts.lastError, !error.isEmpty {
                 persistenceError(error)
@@ -223,7 +223,7 @@ struct AutomationSettingsView: View {
                         Image(systemName: receipt.recoverableArtifacts.isEmpty
                               ? "checkmark.circle" : "arrow.uturn.backward.circle.fill")
                             .foregroundStyle(receipt.recoverableArtifacts.isEmpty
-                                             ? Color.secondary : Color.accentColor)
+                                             ? Color.secondary : Color.accent)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(URL(fileURLWithPath: receipt.projectRoot).lastPathComponent)
                                 .font(.system(size: 11, weight: .medium))
@@ -296,7 +296,7 @@ struct AutomationSettingsView: View {
     private func persistenceError(_ message: String) -> some View {
         Label(message, systemImage: "exclamationmark.triangle.fill")
             .font(.system(size: 9))
-            .foregroundStyle(.orange)
+            .foregroundStyle(Color.warning)
             .fixedSize(horizontal: false, vertical: true)
     }
 

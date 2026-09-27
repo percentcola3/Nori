@@ -380,8 +380,8 @@ private struct ProcessLifecycleBadge: View {
 
     private var tint: Color {
         switch lifecycle {
-        case .zombie: return .red
-        case .exiting: return .orange
+        case .zombie: return Color.danger
+        case .exiting: return Color.warning
         case .normal: return .secondary
         }
     }
@@ -410,7 +410,7 @@ private struct ProcessMetric: View {
                 .foregroundStyle(.tertiary)
             Text(value)
                 .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                .foregroundStyle(isElevated ? Color.orange : Color.secondary)
+                .foregroundStyle(isElevated ? Color.warning : Color.secondary)
                 .lineLimit(1)
         }
         .frame(width: 62, alignment: .trailing)

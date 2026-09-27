@@ -19,6 +19,11 @@ struct CleanupRiskPolicyTests {
         try testRuntimeReassessment(home: policyHome)
         try testRecommendedTrash(fixture: fixture)
         try testPathSelection()
+        try testLongTailMerging(home: policyHome)
+        try testAgePolicyBoundaries()
+        try testQuickAnalysisRootSelection(home: policyHome)
+        try testDisposalDecoding()
+        try testMessengerOwnerScoping(home: policyHome)
         try testAnalyzeEntrySafety()
         try testAnalyzeAIItems()
         try testDevEnvRelatedPackages()
@@ -41,7 +46,7 @@ struct CleanupRiskPolicyTests {
                       home + "/.cargo/git", home + "/.cargo/git/db",
                       home + "/.ivy2/cache", home + "/.sbt/boot"] {
             let descriptor = CleanupRiskPolicy.developerCache(path: store, homeDirectory: home)
-            try expect(descriptor.risk == .warning && descriptor.disposal == .trash &&
+            try expect(descriptor.risk == .warning && descriptor.disposal == .permanentDelete &&
                        descriptor.applyRoute == .developerCacheTrash &&
                        descriptor.reasonKey == "cleanup.risk.dependencyStore",
                        "dependency store was not review-only Warning: \(store)")
@@ -241,7 +246,7 @@ struct CleanupRiskPolicyTests {
         let rawInstaller = "12\tInstaller\t\(installerPath)"
         let installer = try unwrap(Parsers.installerCategory(rawInstaller), "installer category")
         try expect(installer.source == .installer && installer.risk == .warning &&
-                   installer.disposal == .trash && installer.applyRoute == .installerTrash,
+                   installer.disposal == .permanentDelete && installer.applyRoute == .installerTrash,
                    "installer mapping is not Warning/Trash/installer route")
 
         let leftoverPath = home + "/Library/Application Support/GhostApp"
@@ -249,7 +254,7 @@ struct CleanupRiskPolicyTests {
             Parsers.orphanedAppCategories("4096\tGhostApp\tcom.example.ghost\t\(leftoverPath)").first,
             "app leftover category")
         try expect(leftover.source == .appLeftover && leftover.risk == .warning &&
-                   leftover.disposal == .trash && leftover.applyRoute == .genericTrash &&
+                   leftover.disposal == .permanentDelete && leftover.applyRoute == .genericTrash &&
                    leftover.selected == false,
                    "app leftovers were not manual-only Warning/Trash")
         let leftoverCache = CleanupRiskPolicy.appLeftover(
@@ -313,7 +318,7 @@ struct CleanupRiskPolicyTests {
         try expect(codexCache.source == .aiCache && codexCache.risk == .safe &&
                    codexCache.applyRoute == .aiTrash,
                    "Codex desktop cache did not receive the guarded Safe route")
-        try expect(codexProfile.risk == .warning && codexProfile.disposal == .trash,
+        try expect(codexProfile.risk == .warning && codexProfile.disposal == .permanentDelete,
                    "Codex profile parent was incorrectly made blanket-cleanable")
 
         // Electron AI clients expose only their rebuildable Chromium leaves to
@@ -428,7 +433,7 @@ struct CleanupRiskPolicyTests {
         let mixed = CleanupCategory(
             name: "App caches", paths: [path, idlePath], bytes: 3,
             pathBytes: [path: 1, idlePath: 2], source: .core, risk: .safe,
-            disposal: .trash, applyRoute: .genericTrash,
+            disposal: .permanentDelete, applyRoute: .genericTrash,
             activityGuard: .reverseDNSCache,
             reasonKey: "cleanup.risk.rebuildableCache")
         let mixedSubset = try unwrap(CleanupRiskPolicy.runtimeEligibleSubset(
@@ -447,7 +452,7 @@ struct CleanupRiskPolicyTests {
 
         let browser = CleanupCategory(
             name: "Browsers", paths: [home + "/Library/Caches/Google/Chrome"], bytes: 5,
-            source: .core, risk: .safe, disposal: .trash, applyRoute: .genericTrash,
+            source: .core, risk: .safe, disposal: .permanentDelete, applyRoute: .genericTrash,
             activityGuard: .browser, reasonKey: "cleanup.risk.rebuildableCache")
         let browserRunning = try unwrap(CleanupRiskPolicy.runtimeEligibleSubset(
             browser, running: RunningApplicationSnapshot(processNames: ["Google Chrome"]),
@@ -456,7 +461,7 @@ struct CleanupRiskPolicyTests {
                    "running browser cache disappeared instead of staying visible")
 
         let warning = CleanupCategory(name: "Installer", paths: [home + "/Downloads/a.dmg"], bytes: 1,
-                                      source: .installer, risk: .warning, disposal: .trash,
+                                      source: .installer, risk: .warning, disposal: .permanentDelete,
                                       applyRoute: .installerTrash, activityGuard: .unsupported,
                                       reasonKey: "cleanup.risk.installer")
         try expect(!CleanupRiskPolicy.isEligible(warning, mode: .quickClean, running: idle,
@@ -532,7 +537,7 @@ struct CleanupRiskPolicyTests {
         var category = CleanupCategory(
             name: "Caches", paths: [first, second], bytes: 5,
             pathBytes: [first: 2, second: 3], source: .core, risk: .safe,
-            disposal: .trash, applyRoute: .genericTrash, activityGuard: .none,
+            disposal: .permanentDelete, applyRoute: .genericTrash, activityGuard: .none,
             reasonKey: "cleanup.risk.rebuildableCache")
         try expect(category.allSelected && category.selectedPathCount == 2 &&
                    category.selectedPathBytes == 5,
@@ -559,12 +564,12 @@ struct CleanupRiskPolicyTests {
         let safeWithZero = CleanupCategory(
             name: "Safe", paths: [first, zero, second], bytes: 5,
             pathBytes: [first: 2, zero: 0, second: 3], source: .core, risk: .safe,
-            disposal: .trash, applyRoute: .genericTrash, activityGuard: .none,
+            disposal: .permanentDelete, applyRoute: .genericTrash, activityGuard: .none,
             reasonKey: "cleanup.risk.rebuildableCache")
         let warning = CleanupCategory(
             name: "node_modules", paths: ["/tmp/node_modules"], bytes: 999,
             pathBytes: ["/tmp/node_modules": 999], source: .projectArtifact,
-            risk: .warning, disposal: .trash, applyRoute: .projectArtifactTrash,
+            risk: .warning, disposal: .permanentDelete, applyRoute: .projectArtifactTrash,
             activityGuard: .unsupported, reasonKey: "cleanup.risk.projectArtifact")
         let candidates = CleanupCategory.safeCleanupCandidates(from: [warning, safeWithZero])
         try expect(candidates.count == 1 && candidates[0].paths == [second, first]
@@ -652,7 +657,7 @@ struct CleanupRiskPolicyTests {
                                                 withIntermediateDirectories: true)
         try Data("cache".utf8).write(to: path)
         let category = CleanupCategory(name: "Cache", paths: [path.path], bytes: 5,
-                                       source: .core, risk: .safe, disposal: .trash,
+                                       source: .core, risk: .safe, disposal: .permanentDelete,
                                        applyRoute: .genericTrash, activityGuard: .reverseDNSCache,
                                        reasonKey: "cleanup.risk.rebuildableCache")
         let cacheURL = fixture.appendingPathComponent("cleanup-cache.json")
@@ -897,12 +902,234 @@ struct CleanupRiskPolicyTests {
             name: "Brave Service Worker",
             paths: [appSupport + "/BraveSoftware/Brave-Browser/Default/Service Worker"],
             bytes: 1, selected: true,
-            source: .core, risk: .safe, disposal: .trash,
+            source: .core, risk: .safe, disposal: .permanentDelete,
             applyRoute: .genericTrash, activityGuard: .browser,
             reasonKey: "cleanup.risk.rebuildableCache")
         try expect(CleanupRiskPolicy.reassess(braveSW, running: runningBrave,
                                               homeDirectory: home).risk == .protected,
                    "running Brave did not protect its Service Worker")
+    }
+
+    /// 长尾合并：同一分桶里 <100MB 的 genericTrash 安全项凑满 3 个并成
+    /// 「其他」；特殊路线、IM 守卫和不足 3 个的尾巴保持独立行。
+    private static func testLongTailMerging(home: String) throws {
+        let cachePath = home + "/Library/Caches/"
+        func tail(_ name: String, _ suffix: String, megabytes: UInt64,
+                  guard kind: CleanupActivityGuard = .openFile,
+                  selected: Bool = true) -> CleanupCategory {
+            let path = cachePath + suffix
+            return CleanupCategory(
+                name: name, paths: [path], bytes: megabytes * 1024 * 1024,
+                pathBytes: [path: megabytes * 1024 * 1024],
+                selected: selected, source: .core, risk: .safe,
+                disposal: .permanentDelete, applyRoute: .genericTrash,
+                activityGuard: kind, reasonKey: "cleanup.risk.rebuildableCache")
+        }
+
+        let smallA = tail("Media Analysis", "com.apple.mediaanalysis", megabytes: 24)
+        let smallB = tail("helpd", "com.apple.helpd", megabytes: 8,
+                          guard: .reverseDNSCache)
+        let smallC = tail("GeoServices", "com.apple.geod", megabytes: 57,
+                          guard: .reverseDNSCache, selected: false)
+        let big = tail("Google", "Google", megabytes: 7300, guard: .browser)
+        let merged = CleanupCategory.mergingLongTail(
+            [smallA, smallB, smallC, big], homeDirectory: home)
+        try expect(merged.count == 2, "long tail did not collapse into one Other row")
+        let other = try unwrap(merged.first { $0.bytes < big.bytes }, "merged tail row")
+        try expect(other.name == "cleanup.group.other", "merged row lost its l10n key name")
+        try expect(other.paths.count == 3 && other.bytes == (24 + 8 + 57) * 1024 * 1024,
+                   "merged row does not carry every tail path and byte")
+        try expect(other.selectedPathCount == 2 && !other.isPathSelected(smallC.paths[0]),
+                   "merged row selection is not the union of member selections")
+        try expect(other.activityGuard == .reverseDNSCache,
+                   "merged guard is not the strictest member guard")
+
+        // 不足 3 个的尾巴不合并。
+        let pair = CleanupCategory.mergingLongTail([smallA, smallB, big], homeDirectory: home)
+        try expect(pair.count == 3, "tail below the minimum count was merged anyway")
+
+        // 特殊执行路线与 IM 守卫不参与合并。
+        let xcodeTail = CleanupCategory(
+            name: "Xcode", paths: [home + "/Library/Developer/Xcode/DerivedData/a"],
+            bytes: 5, source: .xcodeCache, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .xcodeTrash, activityGuard: .xcode,
+            reasonKey: "cleanup.risk.rebuildableCache")
+        let messengerTail = CleanupCategory(
+            name: "Telegram", paths: [cachePath + "ru.keepcoder.Telegram"],
+            bytes: 6, source: .core, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .messenger,
+            reasonKey: "cleanup.risk.rebuildableCache")
+        let excluded = CleanupCategory.mergingLongTail(
+            [smallA, smallB, smallC, xcodeTail, messengerTail], homeDirectory: home)
+        try expect(excluded.count == 3,
+                   "special routes or messenger guards must never be merged")
+        try expect(excluded.contains { $0.activityGuard == .messenger },
+                   "messenger tail row disappeared instead of staying standalone")
+        try expect(excluded.contains { $0.applyRoute == .xcodeTrash },
+                   "xcode tail row disappeared instead of staying standalone")
+
+        // 跨分桶不合并：废纸篓与缓存各自成桶。
+        let trashTail = CleanupCategory(
+            name: "Trash item", paths: [home + "/.Trash/old.dmg"], bytes: 3,
+            source: .core, risk: .safe, disposal: .permanentDelete, applyRoute: .genericTrash,
+            activityGuard: .openFile, reasonKey: "cleanup.risk.rebuildableCache")
+        let bucketed = CleanupCategory.mergingLongTail(
+            [smallA, smallB, smallC, trashTail], homeDirectory: home)
+        try expect(bucketed.count == 2,
+                   "trash tail must merge within its own bucket, not with caches")
+
+        // 浏览器守卫并进「其他」后，执行前评估只会更保守：任一浏览器在运行
+        // 就整组跳过，绝不放宽到逐路径删除。
+        let browserTail = tail("Edge", "com.microsoft.edgemac", megabytes: 15,
+                               guard: .browser)
+        let mixedTail = CleanupCategory.mergingLongTail(
+            [smallA, browserTail, smallB], homeDirectory: home)
+        let mixedOther = try unwrap(mixedTail.first { $0.name == "cleanup.group.other" },
+                                    "mixed tail row")
+        try expect(mixedOther.activityGuard == .browser,
+                   "browser member must promote the merged guard to browser")
+        let runningEdge = RunningApplicationSnapshot(
+            bundleIdentifiers: ["com.microsoft.edgemac"], processNames: [])
+        try expect(CleanupRiskPolicy.reassess(mixedOther, running: runningEdge,
+                                              homeDirectory: home).risk == .protected,
+                   "running browser must protect the whole merged row")
+    }
+
+    /// 7 天门槛的边界行为：恰好到期算未活跃；差一秒算活跃；时间缺失、
+    /// 未来时间都不能升级为推荐清理。
+    private static func testAgePolicyBoundaries() throws {
+        let retention = CleanupAgePolicy.developerRetention
+        try expect(retention == 7 * 24 * 3600, "developer retention must default to 7 days")
+        let now = Date()
+        try expect(CleanupAgePolicy.isStale(now.addingTimeInterval(-retention), now: now,
+                                         retention: retention),
+               "exactly 7 days old must count as stale (inclusive boundary)")
+        try expect(!CleanupAgePolicy.isStale(now.addingTimeInterval(-retention + 1), now: now,
+                                          retention: retention),
+               "one second short of 7 days must stay active")
+        try expect(!CleanupAgePolicy.isStale(nil, now: now, retention: retention),
+               "missing evidence must never be promoted to stale")
+        try expect(!CleanupAgePolicy.isStale(now.addingTimeInterval(600), now: now,
+                                          retention: retention),
+               "future timestamps must be treated as unusable evidence")
+        try expect(!CleanupAgePolicy.isStale(now.addingTimeInterval(-retention), now: now,
+                                          retention: 0),
+               "retention 0 means no age gating")
+        // 证据组合：mtime 与 atime 取最新——任何一个显示近期活动都算活跃。
+        let combined = CleanupAgePolicy.activityEvidence(
+            modified: now.addingTimeInterval(-retention * 2),
+            accessed: now.addingTimeInterval(-10))
+        try expect(combined != nil && !CleanupAgePolicy.isStale(combined, now: now, retention: retention),
+               "a fresh access inside an old tree must keep the unit active")
+        // 执行前复核：重测证据缺失 → 跳过。
+        try expect(!CleanupAgePolicy.remainsStale(previous: now.addingTimeInterval(-retention * 2),
+                                              recheck: nil, now: now, retention: retention),
+               "missing re-check evidence must skip the entry")
+    }
+
+    /// 快速分析范围：只含个人目录、既知缓存、废纸篓与保存位置；不出现
+    /// 系统目录、应用安装目录或应用包内部；嵌套根去重。
+    private static func testQuickAnalysisRootSelection(home: String) throws {
+        let roots = QuickAnalysisWorker.roots(home: home,
+                                              savedLocations: [home + "/Desktop/nested-project"])
+        let paths = roots.map(\.path)
+        try expect(paths.contains(home + "/Desktop") && paths.contains(home + "/Downloads")
+            && paths.contains(home + "/Documents"), "personal folders missing from quick scope")
+        try expect(paths.contains(home + "/.Trash"), "trash missing from quick scope")
+        try expect(!paths.contains(where: { $0.contains("/Applications") || $0.contains("/System")
+            || $0.contains("/private/var") || $0.hasSuffix(".app") }),
+            "quick scope must never include system dirs, app installs or bundle interiors")
+        try expect(paths.contains(home + "/.gradle/caches")
+            && paths.contains(home + "/Library/Developer/Xcode/DerivedData"),
+            "known developer locations missing from quick scope")
+        try expect(paths.allSatisfy { $0.hasPrefix(home + "/") },
+            "quick roots must stay inside the analyzed home")
+        try expect(!paths.contains(home + "/Desktop/nested-project"),
+            "a saved scope nested inside a personal folder must be deduplicated")
+        // 冒烟：真实夹具上计量，超预算目录标注 partial 而不是报零。
+        let fixture = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quick-analysis-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: fixture.appendingPathComponent("cache/a"), withIntermediateDirectories: true)
+        try Data(repeating: 3, count: 2048).write(to: fixture.appendingPathComponent("cache/a/entry"))
+        let quickRoots = [QuickAnalysisWorker.Root(path: fixture.appendingPathComponent("cache").path,
+                                                   label: "cache", kind: .developer)]
+        let report = QuickAnalysisWorker.scan(quickRoots,
+                                              control: CleanupScanControl(mode: .quick))
+        try expect(report.entries.count == 1 && report.entries[0].size > 0,
+               "quick scan must report a measured size")
+        try expect(report.isPartial != true, "completed quick scan must not be flagged partial")
+        let starved = QuickAnalysisWorker.scan(quickRoots,
+            control: CleanupScanControl(mode: .quick, totalBudget: 0.0, directoryBudget: 0.0))
+        try expect(starved.entries.first?.isPartial == true && starved.isPartial == true,
+               "budget-exhausted roots must be marked partial")
+
+        // 性能采样：3000 个小文件、3 个根，记录首批结果耗时、总耗时与
+        // 遍历条目数（固定规模夹具，供回归比较）。
+        let benchStart = Date()
+        for index in 0..<3 {
+            let dir = fixture.appendingPathComponent("bench-\(index)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let payload = Data(repeating: 7, count: 512)
+            for file in 0..<1000 {
+                try payload.write(to: dir.appendingPathComponent("f-\(file)"))
+            }
+        }
+        let benchRoots = (0..<3).map {
+            QuickAnalysisWorker.Root(path: fixture.appendingPathComponent("bench-\($0)").path,
+                                     label: "bench-\($0)", kind: .developer)
+        }
+        var firstResult: TimeInterval?
+        let benchBegin = Date()
+        let benchReport = QuickAnalysisWorker.scan(benchRoots,
+            control: CleanupScanControl(mode: .quick)) { _ in
+                if firstResult == nil { firstResult = Date().timeIntervalSince(benchBegin) }
+            }
+        let benchTotal = Date().timeIntervalSince(benchBegin)
+        try expect(benchReport.totalFiles == 3000 && benchReport.isPartial != true,
+               "benchmark must count every fixture file")
+        print(String(format: "PASS: quick analysis bench: 3 roots, %d files, setup=%.2fs first-result=%.3fs total=%.3fs",
+                     benchReport.totalFiles ?? 0, Date().timeIntervalSince(benchStart) - benchTotal,
+                     firstResult ?? -1, benchTotal))
+        try? FileManager.default.removeItem(at: fixture)
+    }
+
+    /// 处置枚举与执行行为一致：旧快照的 "trash" 解码为永久删除。
+    private static func testDisposalDecoding() throws {
+        let legacy = Data("\"trash\"".utf8)
+        let decoded = try JSONDecoder().decode(CleanupDisposal.self, from: legacy)
+        try expect(decoded == .permanentDelete, "legacy trash disposal must decode as permanent delete")
+        let encoded = String(data: try JSONEncoder().encode(CleanupDisposal.permanentDelete),
+                             encoding: .utf8) ?? ""
+        try expect(encoded.contains("permanentDelete"), "permanent delete must encode under its own name")
+    }
+
+    /// messenger 守卫按具体应用收窄：微信在跑不能冻结 Telegram 的缓存。
+    private static func testMessengerOwnerScoping(home: String) throws {
+        let telegramMedia = home + "/Library/Group Containers/6N38VWS5BX.ru.keepcoder.Telegram/account-0/postbox/media"
+        let telegramCategory = CleanupCategory(
+            name: "Telegram Media Cache", paths: [telegramMedia], bytes: 1,
+            source: .core, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .messenger,
+            reasonKey: "cleanup.risk.rebuildableCache")
+        let weChatRunning = RunningApplicationSnapshot(
+            bundleIdentifiers: ["com.tencent.xinWeChat"], processNames: [])
+        try expect(CleanupRiskPolicy.reassess(telegramCategory, running: weChatRunning,
+                                          homeDirectory: home).risk == .safe,
+               "WeChat running must not protect Telegram's cache")
+        let telegramRunning = RunningApplicationSnapshot(
+            bundleIdentifiers: [], processNames: ["Telegram"])
+        try expect(CleanupRiskPolicy.reassess(telegramCategory, running: telegramRunning,
+                                          homeDirectory: home).risk == .protected,
+               "Telegram running must still protect its own cache")
+        let unknownOwner = CleanupCategory(
+            name: "IM Cache", paths: [home + "/Library/Application Support/Mystery/Cache"],
+            bytes: 1, source: .core, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .messenger,
+            reasonKey: "cleanup.risk.rebuildableCache")
+        try expect(CleanupRiskPolicy.reassess(unknownOwner, running: weChatRunning,
+                                          homeDirectory: home).risk == .protected,
+               "unrecognizable messenger paths must fall back to whole-family protection")
     }
 
     private static func unwrap<T>(_ value: T?, _ name: String) throws -> T {

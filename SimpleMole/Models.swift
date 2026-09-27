@@ -83,12 +83,27 @@ enum CleanupRisk: String, Codable, CaseIterable, Hashable, Sendable {
     case protected
 }
 
+/// 候选内容的处置动作。命名与执行器的实际行为一致：清理页的删除路由执行
+/// 永久删除（`NativeCore.applyCleanup(permanent: true)`）；移入废纸篓只发生
+/// 在卸载等显式传入 non-permanent 的流程。旧快照里的 "trash" 解码为
+/// permanentDelete，行为不变。
 enum CleanupDisposal: String, Codable, CaseIterable, Hashable, Sendable {
-    case trash
+    case permanentDelete
     case command
     case privileged
     case transform
     case none
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        switch try container.decode(String.self) {
+        case "permanentDelete", "trash": self = .permanentDelete
+        case "command": self = .command
+        case "privileged": self = .privileged
+        case "transform": self = .transform
+        default: self = .none
+        }
+    }
 }
 
 enum CleanupApplyRoute: String, Codable, CaseIterable, Hashable, Sendable {
@@ -120,6 +135,45 @@ enum CleanupActivityGuard: String, Codable, CaseIterable, Hashable, Sendable {
     case unsupported
 }
 
+/// 清理页的五个展示分桶。分组头渲染与长尾合并共用这一映射，避免两处
+/// 各自维护一套 source → 分组规则。
+enum CleanupGroupBucket: String, Hashable, CaseIterable {
+    case cache, leftovers, trash, developer, ai
+
+    init(category: CleanupCategory, homeDirectory: String = NSHomeDirectory()) {
+        if Self.isTrash(category, homeDirectory: homeDirectory) {
+            self = .trash
+            return
+        }
+        switch category.source {
+        case .developerCache, .projectArtifact, .xcodeCache, .xcodeArchive, .tool:
+            self = .developer
+        case .aiSession, .aiCache, .aiModel:
+            self = .ai
+        case .appLeftover:
+            self = .leftovers
+        case .core:
+            self = .cache
+        default:
+            // Installer and legacy/unknown records are not safe cleanup
+            // candidates today, but keeping them in the cache bucket
+            // preserves a single, predictable top-level taxonomy if an
+            // older cache contains one.
+            self = .cache
+        }
+    }
+
+    private static func isTrash(_ category: CleanupCategory,
+                                homeDirectory: String) -> Bool {
+        let root = URL(fileURLWithPath: homeDirectory)
+            .appendingPathComponent(".Trash", isDirectory: true)
+            .standardizedFileURL.path + "/"
+        return !category.paths.isEmpty && category.paths.allSatisfy { path in
+            URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(root)
+        }
+    }
+}
+
 /// 清理类别：同一分组中的路径共享风险、处置方式和执行路由。
 struct CleanupCategory: Identifiable, Equatable {
     let id: UUID
@@ -139,6 +193,9 @@ struct CleanupCategory: Identifiable, Equatable {
     var disposal: CleanupDisposal
     var applyRoute: CleanupApplyRoute
     var activityGuard: CleanupActivityGuard
+    /// 年龄门（秒）。开发者缓存/构建产物默认 7 天：条目未被证明“连续
+    /// retention 未活跃”时不进入默认推荐。0 表示该类内容不按年龄过滤。
+    var retention: TimeInterval
     /// 稳定原因键，由 UI 层自行本地化。
     var reasonKey: String
 
@@ -155,6 +212,7 @@ struct CleanupCategory: Identifiable, Equatable {
          disposal: CleanupDisposal = .none,
          applyRoute: CleanupApplyRoute = .none,
          activityGuard: CleanupActivityGuard = .unsupported,
+         retention: TimeInterval = 0,
          reasonKey: String = "cleanup.risk.unknown") {
         self.id = id
         self.name = name
@@ -178,11 +236,12 @@ struct CleanupCategory: Identifiable, Equatable {
         self.disposal = disposal
         self.applyRoute = applyRoute
         self.activityGuard = activityGuard
+        self.retention = retention
         self.reasonKey = reasonKey
     }
 
     var canSelect: Bool { risk != .protected }
-    var quickCleanEligible: Bool { risk == .safe && disposal == .trash }
+    var quickCleanEligible: Bool { risk == .safe && disposal == .permanentDelete }
     var selected: Bool {
         get { !selectedPaths.isEmpty }
         set { selectedPaths = newValue && canSelect ? Set(paths) : [] }
@@ -274,7 +333,7 @@ struct CleanupCategory: Identifiable, Equatable {
     /// 磁盘清理只接受已明确为可再生垃圾的非空条目。这个收口同时用于
     /// 新扫描和旧缓存恢复，避免历史 Warning / Protected 结果重新出现。
     var safeCleanupCandidate: CleanupCategory? {
-        guard risk == .safe, disposal == .trash else { return nil }
+        guard risk == .safe, disposal == .permanentDelete else { return nil }
         let keptPaths = paths.filter { (pathBytes[$0] ?? 0) > 0 }.sorted { lhs, rhs in
             let lhsBytes = pathBytes[lhs] ?? 0
             let rhsBytes = pathBytes[rhs] ?? 0
@@ -296,6 +355,93 @@ struct CleanupCategory: Identifiable, Equatable {
 
     static func safeCleanupCandidates(from categories: [CleanupCategory]) -> [CleanupCategory] {
         categories.compactMap(\.safeCleanupCandidate).sorted(by: sizeDescending)
+    }
+
+    /// 长尾合并的字节阈值与最小项数：小于 100MB 的通用安全项凑满 3 个才合并。
+    static let longTailByteThreshold: UInt64 = 100 * 1024 * 1024
+    static let longTailMinimumCount = 3
+
+    /// 把同一分桶里小于阈值的通用删除路线安全项并成一个「其他」类目，避免
+    /// 长尾小项铺满列表。只合并 genericTrash 路线的项；特殊执行路线（Xcode、
+    /// 工具命令、安装器等）即使很小也保持独立行。messenger（IM 缓存）和
+    /// unsupported 守卫不参与合并，执行前的运行态保护必须按类别精确生效。
+    /// 合并后的守卫取成员中最严格的一档，执行前评估只会更保守，不会更宽松。
+    static func mergingLongTail(
+        _ categories: [CleanupCategory],
+        byteThreshold: UInt64 = longTailByteThreshold,
+        minimumCount: Int = longTailMinimumCount,
+        homeDirectory: String = NSHomeDirectory()
+    ) -> [CleanupCategory] {
+        var kept: [CleanupCategory] = []
+        var tails: [CleanupGroupBucket: [CleanupCategory]] = [:]
+        var tailOrder: [CleanupGroupBucket] = []
+        for category in categories {
+            let mergeable = category.bytes < byteThreshold
+                && category.disposal == .permanentDelete
+                && category.applyRoute == .genericTrash
+                && category.activityGuard != .messenger
+                && category.activityGuard != .unsupported
+            guard mergeable else {
+                kept.append(category)
+                continue
+            }
+            let bucket = CleanupGroupBucket(category: category, homeDirectory: homeDirectory)
+            if tails[bucket] == nil { tailOrder.append(bucket) }
+            tails[bucket, default: []].append(category)
+        }
+        var result = kept
+        for bucket in tailOrder {
+            guard let items = tails[bucket] else { continue }
+            if items.count >= minimumCount, let merged = mergedTailCategory(items) {
+                result.append(merged)
+            } else {
+                result.append(contentsOf: items)
+            }
+        }
+        return result
+    }
+
+    private static func mergedTailCategory(_ items: [CleanupCategory]) -> CleanupCategory? {
+        guard let first = items.first else { return nil }
+        var paths: [String] = []
+        var pathBytes: [String: UInt64] = [:]
+        var pathIdentities: [String: String] = [:]
+        var selectedPaths: Set<String> = []
+        var bytes: UInt64 = 0
+        for item in items {
+            for path in item.paths where pathBytes[path] == nil {
+                let size = item.pathBytes[path] ?? 0
+                paths.append(path)
+                pathBytes[path] = size
+                pathIdentities[path] = item.pathIdentities[path]
+                if item.isPathSelected(path) { selectedPaths.insert(path) }
+                bytes &+= size
+            }
+        }
+        guard !paths.isEmpty, bytes > 0 else { return nil }
+
+        // 类别级守卫只能有一个：取成员里最严格的一档，宁可整组跳过也不放宽。
+        let strictness: [CleanupActivityGuard] = [.browser, .xcode, .simulator, .ide,
+                                                  .messenger, .reverseDNSCache,
+                                                  .openFile, .packageManager, .none]
+        let guardKind = items.map(\.activityGuard).min {
+            (strictness.firstIndex(of: $0) ?? strictness.count)
+                < (strictness.firstIndex(of: $1) ?? strictness.count)
+        } ?? .openFile
+        return CleanupCategory(
+            name: L10n.shared.t("cleanup.group.other"),
+            paths: paths,
+            bytes: bytes,
+            pathBytes: pathBytes,
+            pathIdentities: pathIdentities,
+            expanded: false,
+            source: first.source,
+            risk: .safe,
+            disposal: .permanentDelete,
+            applyRoute: .genericTrash,
+            activityGuard: guardKind,
+            reasonKey: "cleanup.risk.rebuildableCache"
+        ).selectingPaths(selectedPaths)
     }
 
     static func sizeDescending(_ lhs: CleanupCategory, _ rhs: CleanupCategory) -> Bool {

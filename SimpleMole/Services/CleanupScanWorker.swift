@@ -33,11 +33,25 @@ final class CleanupScanControl: @unchecked Sendable {
 
 /// Size-only traversal. FTS supplies type, inode and allocated blocks together;
 /// the cleanup path does not build the analyzer's large-file report per file.
+/// The same walk also collects the newest mtime/ctime/atime so activity gating
+/// never needs a second traversal.
 enum CleanupScanWorker {
     struct Measurement: Sendable {
         var bytes: UInt64 = 0
         var files: Int = 0
         var complete = true
+        /// Newest file timestamps seen inside the tree. nil = no readable
+        /// evidence at all; directories alone (empty tree) have no say.
+        /// 只采集 mtime / atime：ctime 会被 chmod、备份等元数据操作刷新，
+        /// 不能作为“内容仍在使用”的证据；创建时间在写入时已体现在 mtime。
+        var newestModified: Date?
+        var newestAccessed: Date?
+
+        /// Combined activity evidence for the measured tree.
+        var activityEvidence: Date? {
+            CleanupAgePolicy.activityEvidence(modified: newestModified,
+                                              accessed: newestAccessed)
+        }
     }
 
     private struct Identity: Hashable {
@@ -83,7 +97,15 @@ enum CleanupScanWorker {
                     }
                 }
                 result.bytes &+= UInt64(max(0, metadata.st_blocks)) * 512
-                if Int32(entry.pointee.fts_info) == FTS_F { result.files += 1 }
+                if Int32(entry.pointee.fts_info) == FTS_F {
+                    result.files += 1
+                    func newer(_ current: Date?, _ ts: timespec) -> Date {
+                        let date = Date(timeIntervalSince1970: TimeInterval(ts.tv_sec))
+                        return max(current ?? .distantPast, date)
+                    }
+                    result.newestModified = newer(result.newestModified, metadata.st_mtimespec)
+                    result.newestAccessed = newer(result.newestAccessed, metadata.st_atimespec)
+                }
             default:
                 break // Never follow symlinks or count directory postorder twice.
             }

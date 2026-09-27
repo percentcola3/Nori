@@ -5,7 +5,27 @@ import SwiftUI
 struct CleanupTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
-    @State private var collapsedGroups: Set<CleanupPresentationGroup.Kind> = []
+    /// nil 表示用户还没折叠/展开过：此时除最大分组外全部折叠，长列表首屏
+    /// 先看到最重要的内容。一旦用户操作过就完全尊重用户的选择。
+    @State private var userCollapsed: Set<CleanupGroupBucket>?
+
+    private var collapsedGroups: Set<CleanupGroupBucket> {
+        userCollapsed ?? defaultCollapsedGroups
+    }
+
+    private var defaultCollapsedGroups: Set<CleanupGroupBucket> {
+        let groups = groupedCategories
+        guard groups.count > 1 else { return [] }
+        return Set(groups.dropFirst().map(\.kind))
+    }
+
+    private func toggleCollapsed(_ kind: CleanupGroupBucket) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            var next = collapsedGroups
+            if next.contains(kind) { next.remove(kind) } else { next.insert(kind) }
+            userCollapsed = next
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -169,7 +189,7 @@ struct CleanupTabView: View {
 
     private var groupedCategories: [CleanupPresentationGroup] {
         let buckets = Dictionary(grouping: state.categories) {
-            CleanupPresentationGroup.Kind(category: $0)
+            CleanupGroupBucket(category: $0)
         }
         return buckets.map { kind, categories in
             CleanupPresentationGroup(
@@ -190,33 +210,50 @@ struct CleanupTabView: View {
                 .toggleStyle(.checkbox)
                 .labelsHidden()
                 .disabled(!state.cleanupScanComplete || state.isApplying)
-            Label(l10n.t(group.kind.titleKey), systemImage: group.kind.symbol)
-                .font(.system(size: 12, weight: .semibold))
-            Text(groupSelectionCount(group))
-                .font(.system(size: 10).monospacedDigit())
-                .foregroundStyle(.tertiary)
-            Spacer()
-            Text(ByteFormat.format(group.bytes))
-                .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                .foregroundStyle(Color.moleAccentText)
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    if collapsedGroups.contains(group.kind) {
-                        collapsedGroups.remove(group.kind)
-                    } else {
-                        collapsedGroups.insert(group.kind)
-                    }
+            // 整个标题区可点击折叠，比小箭头按钮更容易命中。
+            Button { toggleCollapsed(group.kind) } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: group.kind.symbol)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.moleAccentText)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(Color.accent.opacity(0.14)))
+                    Text(l10n.t(group.kind.titleKey))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(groupSelectionCount(group))
+                        .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.surface3))
+                    Spacer(minLength: 8)
+                    Text(ByteFormat.format(group.bytes))
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(Color.moleAccentText)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(collapsedGroups.contains(group.kind) ? -90 : 0))
+                        .frame(width: 18, height: 18)
+                        .background(Circle().fill(Color.surface2))
                 }
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .rotationEffect(.degrees(collapsedGroups.contains(group.kind) ? -90 : 0))
+                .contentShape(Rectangle())
             }
-            .buttonStyle(MoleIconButtonStyle(size: 22))
+            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
             .help(collapsedGroups.contains(group.kind) ? l10n.t("cleanup.expand")
                   : l10n.t("cleanup.collapse"))
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(collapsedGroups.contains(group.kind) ? Color.surface1 : Color.surface2)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .strokeBorder(Color.hairline, lineWidth: 1)
+        }
     }
 
     private func groupSelection(_ group: CleanupPresentationGroup) -> Binding<Bool> {
@@ -339,69 +376,32 @@ private struct ScanPathTicker: View {
 }
 
 private struct CleanupPresentationGroup: Identifiable {
-    enum Kind: String, Identifiable, Hashable {
-        case cache, leftovers, trash, developer, ai
-
-        var id: String { rawValue }
-
-        init(category: CleanupCategory, homeDirectory: String = NSHomeDirectory()) {
-            if Self.isTrash(category, homeDirectory: homeDirectory) {
-                self = .trash
-                return
-            }
-            switch category.source {
-            case .developerCache, .projectArtifact, .xcodeCache, .xcodeArchive, .tool:
-                self = .developer
-            case .aiSession, .aiCache, .aiModel:
-                self = .ai
-            case .appLeftover:
-                self = .leftovers
-            case .core:
-                self = .cache
-            default:
-                // Installer and legacy/unknown records are not safe cleanup
-                // candidates today, but keeping them in the cache bucket
-                // preserves a single, predictable top-level taxonomy if an
-                // older cache contains one.
-                self = .cache
-            }
-        }
-
-        var titleKey: String { "cleanup.group.\(rawValue)" }
-        var symbol: String {
-            switch self {
-            case .cache: return "sparkles"
-            case .trash: return "trash.fill"
-            case .developer: return "hammer.fill"
-            case .ai: return "brain"
-            case .leftovers: return "app.badge.checkmark"
-            }
-        }
-        var sortOrder: Int {
-            switch self {
-            case .cache: return 0
-            case .leftovers: return 1
-            case .trash: return 2
-            case .developer: return 3
-            case .ai: return 4
-            }
-        }
-
-        private static func isTrash(_ category: CleanupCategory,
-                                    homeDirectory: String) -> Bool {
-            let root = URL(fileURLWithPath: homeDirectory)
-                .appendingPathComponent(".Trash", isDirectory: true)
-                .standardizedFileURL.path + "/"
-            return !category.paths.isEmpty && category.paths.allSatisfy { path in
-                URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(root)
-            }
-        }
-    }
-
-    let kind: Kind
+    let kind: CleanupGroupBucket
     let categoryIDs: [UUID]
     let bytes: UInt64
-    var id: String { kind.id }
+    var id: String { kind.rawValue }
+}
+
+extension CleanupGroupBucket {
+    var titleKey: String { "cleanup.group.\(rawValue)" }
+    var symbol: String {
+        switch self {
+        case .cache: return "sparkles"
+        case .trash: return "trash.fill"
+        case .developer: return "hammer.fill"
+        case .ai: return "brain"
+        case .leftovers: return "app.badge.checkmark"
+        }
+    }
+    var sortOrder: Int {
+        switch self {
+        case .cache: return 0
+        case .leftovers: return 1
+        case .trash: return 2
+        case .developer: return 3
+        case .ai: return 4
+        }
+    }
 }
 
 struct CategoryRowView: View {
@@ -428,7 +428,7 @@ struct CategoryRowView: View {
                             .truncationMode(.tail)
                         Text(selectionCountText)
                             .font(.system(size: 10).monospacedDigit())
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                         RiskBadge(risk: category.risk)
                     }
                     .contentShape(Rectangle())
@@ -470,7 +470,7 @@ struct CategoryRowView: View {
                             if let bytes = category.pathBytes[path], bytes > 0 {
                                 Text(ByteFormat.format(bytes))
                                     .font(.system(size: 9).monospacedDigit())
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                         .contentShape(Rectangle())
@@ -533,8 +533,8 @@ struct CategoryRowView: View {
 
     private var riskColor: Color {
         switch category.risk {
-        case .safe: return .green
-        case .warning: return .orange
+        case .safe: return Color.success
+        case .warning: return Color.warning
         case .protected: return .secondary
         }
     }
@@ -563,8 +563,8 @@ private struct RiskBadge: View {
 
     private var color: Color {
         switch risk {
-        case .safe: return .green
-        case .warning: return .orange
+        case .safe: return Color.success
+        case .warning: return Color.warning
         case .protected: return .secondary
         }
     }

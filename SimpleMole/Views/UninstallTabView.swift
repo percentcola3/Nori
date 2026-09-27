@@ -313,10 +313,10 @@ private struct UninstallAppRow: View {
                 if app.source == "Homebrew" {
                     Text("Brew")
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(Color.moleOnAccent)
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.cyan.opacity(0.7)))
+                        .background(Capsule().fill(Color.accent.opacity(0.85)))
                 }
             }
             Text(app.path)
@@ -417,8 +417,8 @@ private struct UninstallJobStateLabel: View {
         switch job.state {
         case .queued: return .secondary
         case .preparing, .running: return Color.moleAccentText
-        case .succeeded: return .green
-        case .failed: return .orange
+        case .succeeded: return Color.success
+        case .failed: return Color.warning
         }
     }
 }
@@ -464,7 +464,7 @@ private struct UninstallQueueRow: View {
             .fill(job.state == .failed ? Color.surface2 : Color.surface1))
         .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
             .strokeBorder(job.state == .failed
-                          ? Color.orange.opacity(0.20)
+                          ? Color.warning.opacity(0.20)
                           : Color.hairline, lineWidth: 1))
         .help(job.message ?? "")
     }

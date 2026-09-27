@@ -270,7 +270,7 @@ test_productivity_feature_contract() {
     if /usr/bin/grep -Fq '"bin/app_dev_scan.sh"' "$app_state"; then
         fail "unified cleanup still launches a duplicate developer-cache scan"
     fi
-    /usr/bin/grep -Fq 'cleanupOrphanNames(home: home, control: control)' \
+    /usr/bin/grep -Fq 'cleanupOrphanNames(home: home, mode: mode, control: control)' \
         "$ROOT_DIR/SimpleMole/Services/NativeCore.swift" || fail "cleanup lost orphan correlation"
     /usr/bin/grep -Fq 'state.requestQuickOptimizeFromQuickPanel()' "$quick_panel" || \
         fail "quick panel does not use the feedback-aware Quick Clean entry point"
@@ -1118,6 +1118,12 @@ test_screenshot_presets() {
     pass "screenshot presets: layout per aspect, preferences round-trip, PNG/JPEG export"
 }
 
+test_destructive_sinks() {
+    bash "$ROOT_DIR/script/audit_destructive_sinks.sh" || \
+        fail "destructive calls escaped the audited deletion sinks"
+    pass "deletion funnel: Swift sinks allowlisted, bridge identity checks enforced"
+}
+
 test_theme_contract() {
     local theme="$ROOT_DIR/SimpleMole/Views/Theme.swift"
     local app_delegate="$ROOT_DIR/SimpleMole/AppDelegate.swift"
@@ -1158,9 +1164,9 @@ test_theme_contract() {
             -framework AppKit -framework SwiftUI \
             "$theme" "$ROOT_DIR/script/ThemeContrastTests.swift" \
             -o "$binary" || fail "theme contrast tests compile"
-        "$binary" || fail "Fjord palette contrast"
+        "$binary" || fail "Ultramarine palette contrast"
     fi
-    pass "Fjord theme: single-layer glass, system appearance, token convergence, WCAG contrast"
+    pass "Ultramarine theme: single-layer glass, system appearance, token convergence, WCAG contrast"
 }
 
 test_process_sampler() {
@@ -1194,6 +1200,7 @@ test_process_sampler() {
         "$ROOT_DIR/SimpleMole/Models.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
+        "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
         "$ROOT_DIR/SimpleMole/Services/ProcessSampler.swift" \
         "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
         "$ROOT_DIR/script/ProcessSamplerTests.swift" \
@@ -1302,6 +1309,7 @@ test_runtime_store_aggregation() {
         "$ROOT_DIR/SimpleMole/Models.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
+        "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
         "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
         "$ROOT_DIR/SimpleMole/Services/RuntimeStore.swift" \
         "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
@@ -2280,6 +2288,7 @@ test_uninstall_space_breakdown() {
             "$ROOT_DIR/SimpleMole/Models.swift" \
             "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
             "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
+            "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
             "$ROOT_DIR/SimpleMole/Services/UninstallInventoryCache.swift" \
             "$ROOT_DIR/SimpleMole/Services/UninstallListProjection.swift" \
             "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
@@ -2371,6 +2380,7 @@ test_uninstall_queue() {
             "$ROOT_DIR/SimpleMole/Models.swift" \
             "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
             "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
+            "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
             "$ROOT_DIR/SimpleMole/Services/UninstallQueue.swift" \
             "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
             "$ROOT_DIR/script/UninstallQueueTests.swift" \
@@ -2997,6 +3007,7 @@ test_auto_cleanup_planner() {
         "$ROOT_DIR/SimpleMole/Models.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
+        "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
         "$ROOT_DIR/SimpleMole/Services/AutoCleanup.swift" \
         "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
         "$ROOT_DIR/script/AutoCleanupPlannerTests.swift" \
@@ -3025,8 +3036,12 @@ test_cleanup_risk_policy() {
         "$ROOT_DIR/SimpleMole/Models.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
+        "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
         "$ROOT_DIR/SimpleMole/Services/Parsers.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupCache.swift" \
+        "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
+        "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
+        "$ROOT_DIR/SimpleMole/Services/QuickAnalysisWorker.swift" \
         "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
         "$ROOT_DIR/script/CleanupRiskPolicyTests.swift" \
         -o "$binary" || fail "compile cleanup risk policy tests"
@@ -3053,6 +3068,7 @@ test_project_automation() {
             "$ROOT_DIR/SimpleMole/Models.swift" \
             "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
             "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
+            "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
             "$ROOT_DIR/SimpleMole/Services/AutomationPolicy.swift" \
             "$ROOT_DIR/SimpleMole/Services/SavedScanLocation.swift" \
             "$ROOT_DIR/SimpleMole/Services/AutomationStore.swift" \
@@ -3078,10 +3094,10 @@ test_cleanup_execution_accounting() {
     fi
     installer_source=$(sed -n '/func applyInstallers()/,/func applyCleanup()/p' \
         "$ROOT_DIR/SimpleMole/AppState.swift")
-    printf '%s\n' "$installer_source" | grep -Fq 'permanently: true' || \
-        fail "reviewed installer cleanup does not request permanent deletion"
-    printf '%s\n' "$installer_source" | grep -Fq 'cleanup.installers.confirm' || \
-        fail "installer cleanup lacks an explicit permanent-deletion confirmation"
+    printf '%s\n' "$installer_source" | grep -Fq 'permanently: false' || \
+        fail "reviewed installer cleanup must default to Trash (DR-4)"
+    printf '%s\n' "$installer_source" | grep -Fq 'confirm.apply.trash.ok' || \
+        fail "installer cleanup confirmation must say Move to Trash"
     if [[ "${SM_TEST_SKIP_SWIFT:-0}" == "1" ]]; then
         printf 'ok - Cleanup execution accounting tests skipped (SM_TEST_SKIP_SWIFT=1)\n'
         return
@@ -3176,6 +3192,7 @@ bash "$ROOT_DIR/script/test_release_packaging.sh" || fail "fixed release packagi
 test_signing_identity_classification
 test_screenshot_presets
 test_theme_contract
+test_destructive_sinks
 test_process_sampler
 test_gc_runner
 test_node_cache_inventory

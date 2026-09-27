@@ -33,6 +33,8 @@ enum CleanupCache {
             var applyRoute: CleanupApplyRoute
             var activityGuard: CleanupActivityGuard
             var reasonKey: String
+            /// 年龄门（秒）。旧缓存缺省 0 = 不按活跃时间过滤。
+            var retention: TimeInterval = 0
         }
 
         struct FileSignature: Codable {
@@ -53,7 +55,8 @@ enum CleanupCache {
                                         pathBytes: $0.pathBytes,
                                         source: $0.source, risk: $0.risk,
                                         disposal: $0.disposal, applyRoute: $0.applyRoute,
-                                        activityGuard: $0.activityGuard, reasonKey: $0.reasonKey)
+                                        activityGuard: $0.activityGuard, reasonKey: $0.reasonKey,
+                                        retention: $0.retention)
                               },
                               signatures: signatures(for: categories))
         if let data = try? JSONEncoder().encode(payload) {
@@ -91,7 +94,8 @@ enum CleanupCache {
                             pathBytes: $0.pathBytes,
                             source: $0.source, risk: $0.risk,
                             disposal: $0.disposal, applyRoute: $0.applyRoute,
-                            activityGuard: $0.activityGuard, reasonKey: $0.reasonKey)
+                            activityGuard: $0.activityGuard, retention: $0.retention,
+                            reasonKey: $0.reasonKey)
         }
         return (categories, age)
     }

@@ -175,7 +175,7 @@ struct SimulatorDevicesView: View {
             Text(localizedState(device.state))
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(device.canDeleteManually
-                    ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
+                    ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.warning))
             riskBadge(device.risk)
             Text(device.dataBytes.map(ByteFormat.format) ?? "--")
                 .font(.system(size: 10).monospacedDigit())
@@ -199,10 +199,10 @@ struct SimulatorDevicesView: View {
         let protected = risk == .protected
         return Text(l10n.t(protected ? "cleanup.risk.protected" : "cleanup.risk.warning"))
             .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(protected ? Color.red : Color.orange)
+            .foregroundStyle(protected ? Color.danger : Color.warning)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Capsule().fill((protected ? Color.red : Color.orange).opacity(0.12)))
+            .background(Capsule().fill((protected ? Color.danger : Color.warning).opacity(0.12)))
     }
 
     private func inventoryMessage(symbol: String, key: String, progress: Bool = false) -> some View {
@@ -218,13 +218,13 @@ struct SimulatorDevicesView: View {
 
     private func errorBanner(_ message: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color.warning)
             Text(message)
                 .font(.system(size: 10))
                 .lineLimit(2)
             Spacer()
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.10)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.warning.opacity(0.10)))
     }
 }

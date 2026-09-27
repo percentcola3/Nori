@@ -113,19 +113,19 @@ enum CleanupRiskPolicy {
                 // final sink still checks one shared open-file snapshot.
                 guardKind = .openFile
             }
-            return .init(source: .core, risk: .safe, disposal: .trash,
+            return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .genericTrash, activityGuard: guardKind,
                          reasonKey: "cleanup.risk.rebuildableCache")
         }
 
         if let reasonKey = userRebuildableReason(normalized, home: home) {
-            return .init(source: .core, risk: .safe, disposal: .trash,
+            return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .genericTrash, activityGuard: .openFile,
                          reasonKey: reasonKey)
         }
 
         if let owner = containerCacheOwner(normalized, home: home) {
-            return .init(source: .core, risk: .safe, disposal: .trash,
+            return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .genericTrash,
                          activityGuard: isValidReverseDNSOwner(owner)
                             ? .reverseDNSCache : .openFile,
@@ -135,21 +135,21 @@ enum CleanupRiskPolicy {
         if isApplicationSupportCachePath(normalized, home: home) {
             let guardKind: CleanupActivityGuard = isBrowserPath(normalized, section: section)
                 ? .browser : .openFile
-            return .init(source: .core, risk: .safe, disposal: .trash,
+            return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .genericTrash, activityGuard: guardKind,
                          reasonKey: "cleanup.risk.rebuildableCache")
         }
 
         let logPrefix = home + "/Library/Logs/"
         if normalized.hasPrefix(logPrefix) {
-            return .init(source: .core, risk: .safe, disposal: .trash,
+            return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .genericTrash, activityGuard: .openFile,
                          reasonKey: "cleanup.risk.rebuildableCache")
         }
 
         let diagnosticPrefix = home + "/Library/DiagnosticReports/"
         if normalized.hasPrefix(diagnosticPrefix) {
-            return .init(source: .core, risk: .safe, disposal: .trash,
+            return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .genericTrash, activityGuard: .openFile,
                          reasonKey: "cleanup.risk.diagnosticReport")
         }
@@ -168,7 +168,7 @@ enum CleanupRiskPolicy {
     }
 
     static func recommendedTrash() -> CleanupPolicyDescriptor {
-        .init(source: .core, risk: .safe, disposal: .trash,
+        .init(source: .core, risk: .safe, disposal: .permanentDelete,
               applyRoute: .genericTrash, activityGuard: .openFile,
               reasonKey: "cleanup.risk.rebuildableCache")
     }
@@ -197,12 +197,16 @@ enum CleanupRiskPolicy {
         let safeDirectoryRoots = [
             home + "/Library/Caches/" + bundleIdentifier,
             home + "/Library/Logs/" + bundleIdentifier,
-            home + "/Library/Caches/com.apple.nsurlsessiond/Downloads/" + bundleIdentifier
+            home + "/Library/Caches/com.apple.nsurlsessiond/Downloads/" + bundleIdentifier,
+            // 沙盒容器的缓存/日志叶子同样可再生：归属由容器目录名精确
+            // 指向该 Bundle ID，且应用已确认不在安装清单中。
+            home + "/Library/Containers/" + bundleIdentifier + "/Data/Library/Caches",
+            home + "/Library/Containers/" + bundleIdentifier + "/Data/Library/Logs"
         ]
         if safeDirectoryRoots.contains(where: {
             normalized == $0 || isStrictDescendant(normalized, of: $0)
         }) {
-            return .init(source: .appLeftover, risk: .safe, disposal: .trash,
+            return .init(source: .appLeftover, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .genericTrash, activityGuard: .none,
                          reasonKey: "cleanup.risk.appLeftover")
         }
@@ -211,7 +215,7 @@ enum CleanupRiskPolicy {
         // completed, etc.); only those leaves are safe, while the surrounding
         // app data remains a review-only Warning.
         if isApplicationSupportCachePath(normalized, home: home) {
-            return .init(source: .appLeftover, risk: .safe, disposal: .trash,
+            return .init(source: .appLeftover, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .genericTrash, activityGuard: .openFile,
                          reasonKey: "cleanup.risk.appLeftover")
         }
@@ -227,7 +231,7 @@ enum CleanupRiskPolicy {
         }
         switch risk {
         case .safe:
-            return .init(source: .projectArtifact, risk: .safe, disposal: .trash,
+            return .init(source: .projectArtifact, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .projectArtifactTrash, activityGuard: .none,
                          reasonKey: "cleanup.risk.rebuildableDeveloperCache")
         case .warning:
@@ -266,7 +270,7 @@ enum CleanupRiskPolicy {
         let explicitSafeRoots = developerCacheRoots(home: home)
         if explicitSafeRoots.contains(where: { normalized == $0 || isStrictDescendant(normalized, of: $0) })
             || isGradleBuildCachePath(normalized, home: home) {
-            return .init(source: .developerCache, risk: .safe, disposal: .trash,
+            return .init(source: .developerCache, risk: .safe, disposal: .permanentDelete,
                          // Shared package caches can be touched by arbitrary
                          // build processes.  A process-name guard would hide
                          // all caches behind unrelated `node`/`python`/`java`
@@ -282,7 +286,7 @@ enum CleanupRiskPolicy {
             let remainder = String(normalized.dropFirst(reverseDNSCachePrefix.count))
             let owner = remainder.split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
             if isValidReverseDNSOwner(owner) {
-                return .init(source: .developerCache, risk: .safe, disposal: .trash,
+                return .init(source: .developerCache, risk: .safe, disposal: .permanentDelete,
                              applyRoute: .developerCacheTrash, activityGuard: .reverseDNSCache,
                              reasonKey: "cleanup.risk.rebuildableDeveloperCache")
             }
@@ -315,7 +319,7 @@ enum CleanupRiskPolicy {
             if aiCacheRoots(homeDirectory: homeDirectory).contains(where: {
                 normalized == $0 || isStrictDescendant(normalized, of: $0)
             }) {
-                return .init(source: .aiCache, risk: .safe, disposal: .trash,
+                return .init(source: .aiCache, risk: .safe, disposal: .permanentDelete,
                              applyRoute: .aiTrash, activityGuard: .ide,
                              reasonKey: "cleanup.risk.rebuildableCache")
             }
@@ -436,7 +440,7 @@ enum CleanupRiskPolicy {
             let guardKind: CleanupActivityGuard =
                 normalized == simulatorCacheRoot || isStrictDescendant(normalized, of: simulatorCacheRoot)
                 ? .simulator : .xcode
-            return .init(source: .xcodeCache, risk: .safe, disposal: .trash,
+            return .init(source: .xcodeCache, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .xcodeTrash, activityGuard: guardKind,
                          reasonKey: "cleanup.risk.rebuildableDeveloperCache")
         }
@@ -447,7 +451,7 @@ enum CleanupRiskPolicy {
         // directories themselves are rebuildable. The root and anything
         // deeper stay review-only.
         if normalizedKind == "clean", isStaleDeviceSupportVersion(normalized, home: home) {
-            return .init(source: .xcodeCache, risk: .safe, disposal: .trash,
+            return .init(source: .xcodeCache, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .xcodeTrash, activityGuard: .xcode,
                          reasonKey: "cleanup.risk.staleDeviceSupport")
         }
@@ -533,7 +537,7 @@ enum CleanupRiskPolicy {
                components[0].hasPrefix("account-"),
                components[1] == "postbox",
                components[2] == "media" {
-                return .init(source: .core, risk: .safe, disposal: .trash,
+                return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                               applyRoute: .genericTrash, activityGuard: .messenger,
                               reasonKey: "cleanup.risk.messengerCache")
             }
@@ -550,7 +554,7 @@ enum CleanupRiskPolicy {
                components[0] == "aha",
                components[1] == "users",
                components[3] == "profile_explorer" {
-                return .init(source: .core, risk: .safe, disposal: .trash,
+                return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                               applyRoute: .genericTrash, activityGuard: .messenger,
                               reasonKey: "cleanup.risk.messengerCache")
             }
@@ -564,7 +568,7 @@ enum CleanupRiskPolicy {
             let components = splitComponents(String(path.dropFirst(appSupport.count)))
             // 调试用独立 profile 整体可再生（下次调试启动自动重建）。
             if relative == "Google/ChromeDebug" {
-                return .init(source: .core, risk: .safe, disposal: .trash,
+                return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                               applyRoute: .genericTrash, activityGuard: .browser,
                               reasonKey: "cleanup.risk.rebuildableCache")
             }
@@ -577,7 +581,7 @@ enum CleanupRiskPolicy {
             }
             // Service Worker 目录整体可再生（含 ScriptCache/CacheStorage）。
             if components.dropFirst().contains("service worker") {
-                return .init(source: .core, risk: .safe, disposal: .trash,
+                return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                               applyRoute: .genericTrash, activityGuard: .browser,
                               reasonKey: "cleanup.risk.rebuildableCache")
             }
@@ -676,7 +680,7 @@ enum CleanupRiskPolicy {
         switch mode {
         case .manual:
             switch category.disposal {
-            case .trash:
+            case .permanentDelete:
                 return assessment.risk == .safe
             case .command, .privileged, .transform:
                 return assessment.risk != .protected
@@ -684,7 +688,7 @@ enum CleanupRiskPolicy {
                 return false
             }
         case .quickClean, .automatic:
-            return assessment.risk == .safe && category.disposal == .trash
+            return assessment.risk == .safe && category.disposal == .permanentDelete
         }
     }
 
@@ -767,12 +771,10 @@ enum CleanupRiskPolicy {
                                                "Helium", "zen"])
         case .messenger:
             // Telegram / 飞书 / 微信运行期间，其媒体与文档缓存一律保护：
-            // 边写边删既损坏缓存，也可能干扰消息库。
-            return snapshotMatches(snapshot,
-                                   bundles: ["ru.keepcoder.Telegram", "com.electron.lark",
-                                             "com.ss.lark", "com.tencent.xinWeChat"],
-                                   processes: ["Telegram", "Lark", "LarkHelper", "Feishu",
-                                               "飞书", "WeChat", "微信"])
+            // 边写边删既损坏缓存，也可能干扰消息库。保护只落在路径能够
+            // 认领的具体应用上——微信在跑不应冻结 Telegram 的缓存处理；
+            // 归属不可辨认时才退回整族检查。
+            return messengerOwnerIsRunning(for: category, snapshot: snapshot)
         case .xcode:
             return snapshotMatches(snapshot, bundles: ["com.apple.dt.Xcode"],
                                    processes: ["Xcode", "xcodebuild", "swift-frontend", "SourceKitService"])
@@ -790,6 +792,62 @@ enum CleanupRiskPolicy {
                                    processes: ["Code", "Cursor", "Electron", "Antigravity",
                                                "Filo", "Claude", "Qoder"])
         }
+    }
+
+    /// messenger 守卫的按应用收窄：从类目路径辨认归属（Telegram / Lark /
+    /// 飞书 / 微信 / QQ / 钉钉），只检查对应应用的运行状态。
+    private static func messengerOwnerIsRunning(for category: CleanupCategory,
+                                                snapshot: RunningApplicationSnapshot) -> Bool {
+        struct Owner {
+            let markers: [String]
+            let bundles: [String]
+            let processes: [String]
+        }
+        let owners = [
+            Owner(markers: ["ru.keepcoder.Telegram", "org.telegram.desktop",
+                            "Telegram Desktop", "Telegram Media"],
+                  bundles: ["ru.keepcoder.Telegram", "org.telegram.desktop"],
+                  processes: ["Telegram", "Telegram Desktop"]),
+            Owner(markers: ["LarkShell", "com.bytedance.feishu", "com.bytedance.lark",
+                            "com.electron.lark", "com.ss.lark", "/Lark", "/Feishu",
+                            "Lark Doc Cache"],
+                  bundles: ["com.bytedance.feishu", "com.bytedance.lark",
+                            "com.electron.lark", "com.ss.lark"],
+                  processes: ["Lark", "LarkHelper", "Feishu", "飞书"]),
+            Owner(markers: ["com.tencent.xinWeChat", "/WeChat"],
+                  bundles: ["com.tencent.xinWeChat"],
+                  processes: ["WeChat", "微信"]),
+            Owner(markers: ["com.tencent.qq", "Tencent/QQ"],
+                  bundles: ["com.tencent.qq"],
+                  processes: ["QQ"]),
+            Owner(markers: ["com.alibaba.DingTalkMac", "/DingTalk"],
+                  bundles: ["com.alibaba.DingTalkMac"],
+                  processes: ["DingTalk", "钉钉"])
+        ]
+        var bundles: [String] = []
+        var processes: [String] = []
+        var recognized = false
+        for owner in owners {
+            guard category.paths.contains(where: { path in
+                owner.markers.contains { path.contains($0) }
+            }) else { continue }
+            recognized = true
+            bundles.append(contentsOf: owner.bundles)
+            processes.append(contentsOf: owner.processes)
+        }
+        guard recognized else {
+            // 归属不可辨认：保持旧的整族保护（宁可多等，不误删）。
+            return snapshotMatches(snapshot,
+                                   bundles: ["ru.keepcoder.Telegram", "org.telegram.desktop",
+                                             "com.electron.lark", "com.ss.lark",
+                                             "com.bytedance.feishu", "com.bytedance.lark",
+                                             "com.tencent.xinWeChat", "com.tencent.qq",
+                                             "com.alibaba.DingTalkMac"],
+                                   processes: ["Telegram", "Telegram Desktop", "Lark",
+                                               "LarkHelper", "Feishu", "飞书",
+                                               "WeChat", "微信", "QQ", "DingTalk", "钉钉"])
+        }
+        return snapshotMatches(snapshot, bundles: bundles, processes: processes)
     }
 
     private static func snapshotMatches(_ snapshot: RunningApplicationSnapshot,
@@ -844,7 +902,7 @@ enum CleanupRiskPolicy {
     }
 
     private static func developerCacheRoots(home: String) -> [String] {
-        [
+        var roots = [
             home + "/.npm/_cacache",
             home + "/.npm/_logs",
             home + "/.swiftpm/cache",
@@ -918,13 +976,24 @@ enum CleanupRiskPolicy {
             home + "/.expo/versions-cache",
             home + "/Library/Logs/JetBrains"
         ]
+        // 工具配置声明的自定义缓存位置与默认位置同级可信：发现层会枚举
+        // 它们，策略层也必须承认它们（否则出现“扫得到却被保护拦下”）。
+        let locations = DeveloperCacheLocations.current(home: home)
+        for custom in [locations.npmCache, locations.yarnCache, locations.pipCache,
+                       locations.poetryCache, locations.goModCache, locations.goBuildCache] {
+            if let custom { roots.append(custom) }
+        }
+        if let cargoHome = locations.cargoHome {
+            roots.append(cargoHome + "/registry/cache")
+        }
+        return roots
     }
 
     /// Stores that builds consume directly. They are inventoried for review
     /// but never enter the one-click cleanup; Mole keeps the same list off its
     /// blanket delete path and resets them only through owner commands.
     static func dependencyStoreRoots(home: String) -> [String] {
-        [
+        var roots = [
             home + "/.m2/repository",
             home + "/.ivy2/cache",
             home + "/.gradle/caches",
@@ -937,16 +1006,35 @@ enum CleanupRiskPolicy {
             home + "/.sbt/boot",
             home + "/.sbt/launchers"
         ]
+        // 自定义 GRADLE_USER_HOME 的模块缓存与默认位置同等对待：
+        // 依赖仓库只复核，build-cache-* 仍按可重建缓存放行。
+        if let gradleHome = DeveloperCacheLocations.current(home: home).gradleUserHome {
+            roots.append(gradleHome + "/caches")
+        }
+        if let cargoHome = DeveloperCacheLocations.current(home: home).cargoHome {
+            roots.append(cargoHome + "/registry/src")
+            roots.append(cargoHome + "/git")
+        }
+        return roots
     }
 
-    /// `~/.gradle/caches/build-cache-*` holds task outputs keyed by input hash
-    /// and is rebuilt on the next build; the sibling module cache is not.
+    /// `~/.gradle/caches/build-cache-*`（或自定义 GRADLE_USER_HOME 下的同
+    /// 结构）持有按输入哈希键化的任务输出，下次构建自动重建；同级的模块
+    /// 缓存是依赖仓库，保持复核态。
     static func isGradleBuildCachePath(_ path: String, home: String) -> Bool {
-        let cachesRoot = home + "/.gradle/caches/"
-        guard path.hasPrefix(cachesRoot) else { return false }
-        let child = String(path.dropFirst(cachesRoot.count))
-            .split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
-        return child.hasPrefix("build-cache-")
+        let locations = DeveloperCacheLocations.current(home: home)
+        var gradleHomes = [home + "/.gradle"]
+        if let custom = locations.gradleUserHome, custom != home + "/.gradle" {
+            gradleHomes.append(custom)
+        }
+        for gradleHome in gradleHomes {
+            let cachesRoot = gradleHome + "/caches/"
+            guard path.hasPrefix(cachesRoot) else { continue }
+            let child = String(path.dropFirst(cachesRoot.count))
+                .split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
+            if child.hasPrefix("build-cache-") { return true }
+        }
+        return false
     }
 
     private static func isExplicitDeveloperCachePath(_ path: String, home: String) -> Bool {
@@ -1057,7 +1145,7 @@ enum CleanupRiskPolicy {
     private static func warningDescriptor(source: CleanupSource,
                                           route: CleanupApplyRoute,
                                           reasonKey: String) -> CleanupPolicyDescriptor {
-        .init(source: source, risk: .warning, disposal: .trash,
+        .init(source: source, risk: .warning, disposal: .permanentDelete,
               applyRoute: route, activityGuard: .unsupported, reasonKey: reasonKey)
     }
 
@@ -1077,7 +1165,7 @@ enum CleanupRiskPolicy {
 
     /// Keep the same intentionally narrow ASCII grammar as the final shell
     /// guard. A dotted but malformed cache owner is Warning, never Safe.
-    private static func isValidReverseDNSOwner(_ owner: String) -> Bool {
+    static func isValidReverseDNSOwner(_ owner: String) -> Bool {
         guard owner.contains("."),
               !owner.hasPrefix("."),
               !owner.hasSuffix("."),

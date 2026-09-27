@@ -21,8 +21,8 @@ ForgeSweep 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、�
 
 | 页面 | 能力 | 引擎路径 |
 | --- | --- | --- |
-| 硬盘清理 | 快速扫描常用缓存，深度扫描补充更多应用目录；只展示 Safe 垃圾，归入缓存、卸载残留、废纸篓、开发者缓存、AI 缓存五个可折叠大类，支持分类/子项勾选。一键清理永久删除所选垃圾；运行中的应用缓存默认不勾选 | `NativeCore.scanCleanup/applyCleanup` + `CleanupScanWorker`；AI/Xcode 缓存共用原生统计 |
-| 磁盘分析 | 用于定位大文件和目录占用，按大小只展示 Top 10；开发环境与 AI 占用单独分组，需要判断、应用和系统内容均留给用户检查，支持按目录继续下钻；选中的可再生项目内容由原生删除入口复验后移入废纸篓 | `NativeCore.scanAnalyze` + `NativeCore.applyCleanup` |
+| 硬盘清理 | 快速扫描常用缓存，深度扫描补充更多应用目录与历史残留；只展示 Safe 垃圾，归入缓存、卸载残留、废纸篓、开发者缓存、AI 缓存五个可折叠大类（默认只展开最大分组），支持分类/子项勾选；同一分组内小于 100MB 的长尾小项自动合并为「其他」。开发者缓存与构建产物默认按 **7 天未活跃**门槛推荐（活跃条目保留可见、默认不勾选），支持 npm/Yarn/pip/Gradle 等自定义缓存位置。Safe 垃圾默认全部勾选，一键清理**永久删除**所选；执行前会用最新进程快照与年龄证据重新评估，运行中或重新活跃的路径自动跳过并计入「已跳过」 | `NativeCore.scanCleanup/applyCleanup` + `CleanupScanWorker` + `CleanupAgePolicy`；AI/Xcode 缓存共用原生统计 |
+| 磁盘分析 | 两层策略：**快速分析**（默认）只测个人目录、既知缓存目录与保存位置，增量出结果、独立预算（总 90s / 单目录 20s / 8 并发），超时目录明确标注；**全盘深度分析**由用户主动启动，按大小只展示 Top 10，避免符号链接循环与硬链接重复计量，支持取消与下钻复用；开发环境与 AI 占用单独分组，需要判断、应用和系统内容均留给用户检查 | `QuickAnalysisWorker` + `NativeCore.scanAnalyze` + `DiskAnalysisWorker` |
 | 应用卸载 | 列出 `/Applications`、用户 Applications 和 Setapp 应用；按 Bundle ID 精确生成缓存、日志和需复核数据明细，应用本体与关联路径在串行队列中逐项复验身份后移入废纸篓 | `NativeCore.scanInstalledApps` + `NativeCore.uninstallPlan/applyUninstall` |
 | 系统优化 | 刷新 DNS、Quick Look、LaunchServices，清理 30 天以前的保存状态，并只读检查 Spotlight 状态；每项独立显示 applied/unchanged/unavailable/failed | `NativeCore.runOptimize` |
 | 状态监控 | 菜单栏和主窗口实时显示 CPU、内存、磁盘容量与读写、网络速率；可读取电池电量/健康/循环次数，快捷面板的内存榜也走原生进程快照 | `SystemMetrics.sample` + IOKit / Mach / sysctl / statfs / getifaddrs |
@@ -38,6 +38,8 @@ ForgeSweep 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、�
 深度扫描会补充应用容器和更多 Application Support 缓存，取消单目录时间限制，用户可随时取消。超时、无法读取或被取消的统计不会按完整容量展示，也不会写入完整结果缓存。页面可复用最近 5 分钟的完整快照，明确点击“快速扫描”或“深度扫描”会重新扫描。日志抽屉记录目录发现、容量统计耗时和未完成数量，便于实机比较。
 
 扫描回归与吞吐测试：`bash script/test_cleanup_scan.sh`。它只创建独立测试目录，不启动 GUI、不扫描真实用户缓存；覆盖重叠目录、保护路径、深度补充、取消、部分结果、硬链接和大输出量进程读取。
+
+清理与磁盘分析的完整策略（统一规则模型、7 天活跃门、快速/深度分析、处置语义、已知边界）见 [docs/cleanup-strategy.md](docs/cleanup-strategy.md)；与最初重写方案的有意偏差及安全论证见 [docs/decision-records.md](docs/decision-records.md)。删除出口静态审计：`bash script/audit_destructive_sinks.sh`（已并入 `script/test.sh`）。
 
 ### 自动目录清理
 

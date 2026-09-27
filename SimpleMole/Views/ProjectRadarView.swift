@@ -101,13 +101,13 @@ struct ProjectRadarView: View {
                          showsProgress: true)
         } else if let error = hibernation.lastError ?? store.lastError, !error.isEmpty {
             statusBanner(symbol: "exclamationmark.triangle.fill", text: error,
-                         color: .orange, showsProgress: false)
+                         color: Color.warning, showsProgress: false)
         } else if !store.snapshot.unavailableLocations.isEmpty {
             statusBanner(
                 symbol: "externaldrive.badge.exclamationmark",
                 text: l10n.tf("projectRadar.status.unavailable",
                               store.snapshot.unavailableLocations.joined(separator: ", ")),
-                color: .orange,
+                color: Color.warning,
                 showsProgress: false)
         }
     }
@@ -169,9 +169,9 @@ struct ProjectRadarView: View {
                 }
                 Spacer(minLength: 10)
                 riskBadge(l10n.t("cleanup.risk.safe"), count: project.safeArtifacts.count,
-                          bytes: project.safeBytes, color: .green)
+                          bytes: project.safeBytes, color: Color.success)
                 riskBadge(l10n.t("cleanup.risk.warning"), count: project.warningArtifacts.count,
-                          bytes: project.warningBytes, color: .orange)
+                          bytes: project.warningBytes, color: Color.warning)
                 Button(l10n.t("projectRadar.hibernate")) { pendingProject = project }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
@@ -218,7 +218,7 @@ struct ProjectRadarView: View {
             } else {
                 Image(systemName: artifact.risk == .safe
                       ? "checkmark.shield.fill" : "lock.shield.fill")
-                    .foregroundStyle(artifact.risk == .safe ? .green : .red)
+                    .foregroundStyle(artifact.risk == .safe ? Color.success : Color.danger)
                     .frame(width: 14)
             }
             VStack(alignment: .leading, spacing: 1) {
@@ -231,8 +231,8 @@ struct ProjectRadarView: View {
             Spacer()
             Text(riskTitle(artifact.risk))
                 .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(artifact.risk == .safe ? .green
-                    : artifact.risk == .warning ? .orange : .red)
+                .foregroundStyle(artifact.risk == .safe ? Color.success
+                    : artifact.risk == .warning ? Color.warning : Color.danger)
             Text(ByteFormat.format(artifact.bytes))
                 .font(.system(size: 9).monospacedDigit())
                 .foregroundStyle(.secondary)

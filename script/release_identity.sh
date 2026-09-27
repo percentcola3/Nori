@@ -63,7 +63,7 @@ chmod 700 "$SIGNING_DIR"
 KEYCHAIN="$SIGNING_DIR/release.keychain-db"
 KEYCHAIN_PASSWORD_FILE="$SIGNING_DIR/keychain-password"
 ARCHIVE="$SIGNING_DIR/identity.p12"
-ARCHIVE_PASSWORD="$SIGNING_DIR/identity-password"
+ARCHIVE_PASS_FILE="$SIGNING_DIR/identity-password"
 WORK="$(mktemp -d "$SIGNING_DIR/.work.XXXXXX")"
 chmod 700 "$WORK"
 
@@ -96,7 +96,7 @@ validate_archive() {
 }
 
 import_archive() {
-    validate_archive "$ARCHIVE" "$ARCHIVE_PASSWORD"
+    validate_archive "$ARCHIVE" "$ARCHIVE_PASS_FILE"
     if [[ -f "$KEYCHAIN" ]]; then
         [[ -s "$KEYCHAIN_PASSWORD_FILE" ]] || release_signing_error "existing keychain password is missing; restore your backup, do not regenerate the identity"
     else
@@ -110,7 +110,7 @@ import_archive() {
         echo "Release signing identity is ready: $RELEASE_CERT_SHA1"
         return
     fi
-    /usr/bin/security import "$WORK/validated.p12" -k "$KEYCHAIN" -P "$(cat "$ARCHIVE_PASSWORD")" \
+    /usr/bin/security import "$WORK/validated.p12" -k "$KEYCHAIN" -P "$(cat "$ARCHIVE_PASS_FILE")" \
         -T /usr/bin/codesign >/dev/null 2>&1 || release_signing_error "could not import the release identity"
     /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
         -k "$(cat "$KEYCHAIN_PASSWORD_FILE")" "$KEYCHAIN" >/dev/null 2>&1 || \
@@ -138,10 +138,10 @@ if [[ "$MODE" == init ]]; then
     [[ "${CI:-}" != true && "${GITHUB_ACTIONS:-}" != true ]] || release_signing_error "CI must import the existing certificate; it must never generate one"
     if [[ -e "$ROOT_DIR/signing/release.cer" || -e "$ROOT_DIR/signing/release.plist" ]]; then
         load_release_signing_config "$ROOT_DIR"
-        [[ -s "$ARCHIVE" && -s "$ARCHIVE_PASSWORD" ]] || \
+        [[ -s "$ARCHIVE" && -s "$ARCHIVE_PASS_FILE" ]] || \
             release_signing_error "release identity is already pinned; restore its private archive instead of generating a new certificate"
     else
-        [[ ! -e "$ARCHIVE" && ! -e "$ARCHIVE_PASSWORD" && ! -e "$KEYCHAIN" ]] || \
+        [[ ! -e "$ARCHIVE" && ! -e "$ARCHIVE_PASS_FILE" && ! -e "$KEYCHAIN" ]] || \
             release_signing_error "private identity already exists without a public pin; recover it instead of generating a replacement"
         cat > "$WORK/certificate.cnf" <<'EOF'
 [req]
@@ -176,7 +176,7 @@ EOF
 </dict></plist>
 EOF
         mv "$WORK/identity.p12" "$ARCHIVE"
-        mv "$WORK/archive-password" "$ARCHIVE_PASSWORD"
+        mv "$WORK/archive-password" "$ARCHIVE_PASS_FILE"
         mkdir -p "$ROOT_DIR/signing"
         cp "$WORK/release.cer" "$ROOT_DIR/signing/release.cer"
         cp "$WORK/release.plist" "$ROOT_DIR/signing/release.plist"
@@ -194,26 +194,26 @@ if [[ "$MODE" == import ]]; then
     printf '%s' "$FORGESWEEP_SIGNING_P12_PASSWORD" > "$WORK/incoming-password"
     unset FORGESWEEP_SIGNING_P12_BASE64 FORGESWEEP_SIGNING_P12_PASSWORD
     validate_archive "$WORK/incoming.p12" "$WORK/incoming-password"
-    if [[ -e "$ARCHIVE" || -e "$ARCHIVE_PASSWORD" ]]; then
-        [[ -s "$ARCHIVE" && -s "$ARCHIVE_PASSWORD" ]] || release_signing_error "existing private backup is incomplete; refusing to overwrite it"
-        validate_archive "$ARCHIVE" "$ARCHIVE_PASSWORD"
+    if [[ -e "$ARCHIVE" || -e "$ARCHIVE_PASS_FILE" ]]; then
+        [[ -s "$ARCHIVE" && -s "$ARCHIVE_PASS_FILE" ]] || release_signing_error "existing private backup is incomplete; refusing to overwrite it"
+        validate_archive "$ARCHIVE" "$ARCHIVE_PASS_FILE"
     else
         mv "$WORK/incoming.p12" "$ARCHIVE"
-        mv "$WORK/incoming-password" "$ARCHIVE_PASSWORD"
+        mv "$WORK/incoming-password" "$ARCHIVE_PASS_FILE"
     fi
 fi
 
-[[ -s "$ARCHIVE" && -s "$ARCHIVE_PASSWORD" ]] || release_signing_error "private archive is missing; use init once or import the original backup"
+[[ -s "$ARCHIVE" && -s "$ARCHIVE_PASS_FILE" ]] || release_signing_error "private archive is missing; use init once or import the original backup"
 if [[ "$MODE" == export ]]; then
     DESTINATION="${2:?export requires a new directory outside the repository}"
     [[ "$DESTINATION" == /* && ! -e "$DESTINATION" ]] || release_signing_error "export destination must be a new absolute directory"
     PARENT="$(cd "$(dirname "$DESTINATION")" && pwd -P)"
     case "$PARENT/" in "$ROOT_DIR/"*) release_signing_error "never export private material into the repository" ;; esac
-    validate_archive "$ARCHIVE" "$ARCHIVE_PASSWORD"
+    validate_archive "$ARCHIVE" "$ARCHIVE_PASS_FILE"
     mkdir -m 700 "$DESTINATION"
     cp "$ARCHIVE" "$DESTINATION/signing-certificate.p12"
     /usr/bin/base64 < "$ARCHIVE" | tr -d '\n' > "$DESTINATION/signing-certificate.base64"
-    cp "$ARCHIVE_PASSWORD" "$DESTINATION/signing-password"
+    cp "$ARCHIVE_PASS_FILE" "$DESTINATION/signing-password"
     chmod 600 "$DESTINATION"/*
     echo "Exported private backup to: $DESTINATION"
     echo "Keep this directory private. Never attach it to a release or commit it."

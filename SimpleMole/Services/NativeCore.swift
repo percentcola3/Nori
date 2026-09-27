@@ -122,14 +122,15 @@ final class NativeCore: @unchecked Sendable {
                                    error: "Home directory is unavailable.")
             }
 
-            let roots = self.cleanupRoots(home: home, mode: mode, control: control)
-            let orphanNames = self.cleanupOrphanNames(home: home, control: control)
+            let orphanNames = self.cleanupOrphanNames(home: home, mode: mode, control: control)
+            let roots = self.cleanupRoots(home: home, mode: mode, control: control,
+                                          orphanNames: orphanNames)
             let whitelist = self.loadWhitelist(homeDirectory: homeDirectory)
             let broadRoots = Set(["Library/Caches", "Library/Logs", "Library/DiagnosticReports",
                                   ".cache", ".Trash"].map { home.appendingPathComponent($0).path })
             var candidates: [CleanupScanCandidate] = []
             var seen = Set<String>()
-            for (root, label, _, _) in roots {
+            for (root, label, _, _, retention) in roots {
                 guard !control.shouldStop else { break }
                 guard self.cleanupPathIsPhysical(root, home: home) else { continue }
                 let entries = broadRoots.contains(root.path) ? self.directChildren(of: root) : [root]
@@ -173,7 +174,9 @@ final class NativeCore: @unchecked Sendable {
                     // Classify first: sessions, models and unverified roots do
                     // not consume the quick scan's I/O budget.
                     guard descriptor.risk == .safe, seen.insert(path).inserted else { continue }
-                    candidates.append(CleanupScanCandidate(path: path, name: name, policy: descriptor))
+                    candidates.append(CleanupScanCandidate(path: path, name: name,
+                                                          policy: descriptor,
+                                                          retention: retention))
                 }
             }
             candidates = Self.nonOverlappingCleanupCandidates(candidates)
@@ -194,30 +197,51 @@ final class NativeCore: @unchecked Sendable {
                 let candidate = candidates[index]
                 let policy = candidate.policy
                 let key = [candidate.name, policy.source.rawValue, policy.applyRoute.rawValue,
-                           policy.activityGuard.rawValue].joined(separator: "\t")
+                           policy.activityGuard.rawValue,
+                           String(format: "%.0f", candidate.retention)].joined(separator: "\t")
                 groups[key, default: []].append(index)
             }
+            let scanNow = Date()
             let categories = groups.values.map { indices -> CleanupCategory in
                 let first = candidates[indices[0]]
                 let sizes = Dictionary(uniqueKeysWithValues: indices.map {
                     (candidates[$0].path, measurements[$0].bytes)
                 })
-                return CleanupCategory(name: first.name, paths: indices.map { candidates[$0].path },
+                var category = CleanupCategory(name: first.name, paths: indices.map { candidates[$0].path },
                     bytes: sizes.values.reduce(0, &+), pathBytes: sizes, selected: true,
                     source: first.policy.source, risk: first.policy.risk,
                     disposal: first.policy.disposal, applyRoute: first.policy.applyRoute,
-                    activityGuard: first.policy.activityGuard, reasonKey: first.policy.reasonKey)
+                    activityGuard: first.policy.activityGuard, retention: first.retention,
+                    reasonKey: first.policy.reasonKey)
+                // 7 天活跃门按“可独立清理的单元”逐条生效：活跃条目保留在
+                // 页面上但默认不勾选；证据缺失（时间为空/未来）同样不推荐。
+                if first.retention > 0 {
+                    var hasActive = false
+                    for index in indices {
+                        let stale = CleanupAgePolicy.isStale(
+                            measurements[index].activityEvidence,
+                            now: scanNow, retention: first.retention)
+                        if !stale {
+                            hasActive = true
+                            category.setPathSelected(candidates[index].path, selected: false)
+                        }
+                    }
+                    if hasActive { category.reasonKey = "cleanup.risk.recentlyActive" }
+                }
+                return category
             }
             // Discovery itself may exhaust the deadline. Do not cache such a
             // snapshot as complete, even if every admitted candidate was sized.
             if discoverySeconds >= control.totalBudget { deferred.append(home.path) }
+            let ageGated = candidates.filter { $0.retention > 0 }.count
             return CleanupScan(categories: categories.sorted(by: CleanupCategory.sizeDescending),
                 succeeded: !control.isCancelled,
                 error: control.isCancelled ? "Scan cancelled." : nil,
                 deferredPaths: deferred,
-                diagnostics: String(format: "cleanup[%@] discovery=%.2fs sizing=%.2fs paths=%d deferred=%d files=%d",
+                diagnostics: String(format: "cleanup[%@] discovery=%.2fs sizing=%.2fs paths=%d deferred=%d files=%d ageGated=%d",
                     mode.rawValue, discoverySeconds, control.elapsed - discoverySeconds,
-                    candidates.count, deferred.count, measurements.reduce(0) { $0 + $1.files }))
+                    candidates.count, deferred.count,
+                    measurements.reduce(0) { $0 + $1.files }, ageGated))
         }.value
     }
 
@@ -225,6 +249,8 @@ final class NativeCore: @unchecked Sendable {
         let path: String
         let name: String
         let policy: CleanupPolicyDescriptor
+        /// 年龄门（秒）。0 表示该候选不按活跃时间过滤。
+        var retention: TimeInterval = 0
     }
 
     static func nonOverlappingCleanupCandidates(_ input: [CleanupScanCandidate]) -> [CleanupScanCandidate] {
@@ -259,29 +285,38 @@ final class NativeCore: @unchecked Sendable {
     /// never treated as evidence. Only rebuildable cache and log leaves are
     /// offered to the clean flow, while app data remains available through the
     /// uninstall/analyze review surfaces.
-    private func cleanupOrphanNames(home: URL, control: CleanupScanControl)
+    ///
+    /// 深度扫描补充第二种证据：反向 DNS 命名的沙盒容器，其归属应用既不在
+    /// 已安装清单里、也不是 Apple 系统组件时，按“疑似历史残留”标注它的
+    /// Caches/Logs 叶子（废纸篓已清空也能发现）。叶子内容本身可再生，风险
+    /// 由 appLeftover 按精确归属路径裁决；容器根与其余数据保持复核态。
+    private func cleanupOrphanNames(home: URL, mode: CleanupScanMode,
+                                    control: CleanupScanControl)
         -> [String: (name: String, bundleID: String)] {
+            var names: [String: (name: String, bundleID: String)] = [:]
             let trash = home.appendingPathComponent(".Trash", isDirectory: true)
-            guard cleanupPathIsPhysical(trash, home: home) else { return [:] }
+            guard cleanupPathIsPhysical(trash, home: home) else { return names }
             let trashedApps = self.directChildren(of: trash)
                 .filter { $0.pathExtension.lowercased() == "app" && !self.isSymlink($0) }
-            // Avoid preparing the installed-app inventory when there is no
-            // trashed bundle to correlate. Sizing uses the main queue once.
-            guard !trashedApps.isEmpty, !control.shouldStop else { return [:] }
+
+            let containers = home.appendingPathComponent("Library/Containers", isDirectory: true)
+            let containerScan = mode == .deep && cleanupPathIsPhysical(containers, home: home)
+            // Avoid preparing the installed-app inventory when there is neither
+            // a trashed bundle nor a container to correlate.
+            guard !control.shouldStop, !trashedApps.isEmpty || containerScan else { return names }
 
             var installedBundleIDs = Set<String>()
             for (root, _) in self.applicationRoots(home: home) {
-                guard !control.shouldStop else { return [:] }
+                guard !control.shouldStop else { return names }
                 for item in self.directChildren(of: root)
                     where item.pathExtension.lowercased() == "app" && !self.isSymlink(item) {
-                    guard !control.shouldStop else { return [:] }
+                    guard !control.shouldStop else { return names }
                     if let bundleID = self.applicationMetadata(at: item)?.bundleID {
                         installedBundleIDs.insert(bundleID)
                     }
                 }
             }
 
-            var names: [String: (name: String, bundleID: String)] = [:]
             for item in trashedApps {
                 guard !control.shouldStop else { return names }
                 guard let metadata = self.applicationMetadata(at: item),
@@ -297,6 +332,26 @@ final class NativeCore: @unchecked Sendable {
                     names[path] = (metadata.name, metadata.bundleID)
                 }
             }
+
+            if containerScan {
+                for container in self.directChildren(of: containers) {
+                    guard !control.shouldStop else { return names }
+                    let owner = container.lastPathComponent
+                    guard owner != ".DS_Store",
+                          !owner.hasPrefix("com.apple."),
+                          CleanupRiskPolicy.isValidReverseDNSOwner(owner),
+                          !installedBundleIDs.contains(owner),
+                          !self.isSymlink(container) else { continue }
+                    // 只标注可再生的缓存/日志叶子；容器根与用户数据留给
+                    // 磁盘分析复核。
+                    for leaf in ["Data/Library/Caches", "Data/Library/Logs"] {
+                        let path = container.appendingPathComponent(leaf, isDirectory: true)
+                            .standardizedFileURL.path
+                        guard self.fileManager.fileExists(atPath: path) else { continue }
+                        names[path] = (owner, owner)
+                    }
+                }
+            }
             return names
     }
 
@@ -305,17 +360,23 @@ final class NativeCore: @unchecked Sendable {
     /// their dedicated feature or shown as review-only items.  Keeping this
     /// list in Swift makes the core route independent from the vendored Mole
     /// shell catalog while retaining the same conservative path model.
-    private func cleanupRoots(home: URL, mode: CleanupScanMode, control: CleanupScanControl)
-        -> [(URL, String, CleanupSource, CleanupActivityGuard)] {
-        var roots: [(URL, String, CleanupSource, CleanupActivityGuard)] = []
+    ///
+    /// 每个条目同时声明该类内容的默认保留期（retention）：开发者缓存与构建
+    /// 产物默认 7 天未活跃才进入推荐；通用应用缓存不按年龄过滤，由运行态
+    /// 守卫与执行前复核把关。
+    private func cleanupRoots(home: URL, mode: CleanupScanMode, control: CleanupScanControl,
+                              orphanNames: [String: (name: String, bundleID: String)] = [:])
+        -> [(URL, String, CleanupSource, CleanupActivityGuard, TimeInterval)] {
+        var roots: [(URL, String, CleanupSource, CleanupActivityGuard, TimeInterval)] = []
         var seen = Set<String>()
+        let retention = CleanupAgePolicy.developerRetention
 
         func add(_ url: URL, _ label: String, _ source: CleanupSource,
-                 _ guardKind: CleanupActivityGuard) {
+                 _ guardKind: CleanupActivityGuard, _ retention: TimeInterval = 0) {
             let path = url.standardizedFileURL.path
             guard !control.shouldStop, self.cleanupPathIsPhysical(url, home: home),
                   seen.insert(path).inserted else { return }
-            roots.append((url, label, source, guardKind))
+            roots.append((url, label, source, guardKind, retention))
         }
 
         // Reuse the audited AI list instead of invoking a second du-based
@@ -332,64 +393,79 @@ final class NativeCore: @unchecked Sendable {
             "User Logs", .core, .openFile)
         add(home.appendingPathComponent("Library/DiagnosticReports", isDirectory: true),
             "Diagnostic Reports", .core, .openFile)
-        add(home.appendingPathComponent("Library/Developer/Xcode/DerivedData", isDirectory: true),
-            "Xcode DerivedData", .xcodeCache, .xcode)
+        // DerivedData 按项目单元枚举：一个活跃项目不会冻结其他项目的
+        // 构建产物回收；每个单元独立适用 7 天门槛。
+        let derivedData = home.appendingPathComponent("Library/Developer/Xcode/DerivedData",
+                                                      isDirectory: true)
+        if cleanupPathIsPhysical(derivedData, home: home) {
+            for project in directChildren(of: derivedData) where !isSymlink(project) {
+                add(project, "Xcode DerivedData", .xcodeCache, .xcode, retention)
+            }
+        }
         add(home.appendingPathComponent("Library/Developer/Xcode/SourcePackages", isDirectory: true),
-            "Xcode SourcePackages", .xcodeCache, .xcode)
+            "Xcode SourcePackages", .xcodeCache, .xcode, retention)
         add(home.appendingPathComponent("Library/Caches/com.apple.dt.Xcode", isDirectory: true),
             "Xcode Cache", .xcodeCache, .xcode)
         add(home.appendingPathComponent("Library/Developer/CoreSimulator/Caches", isDirectory: true),
-            "Simulator Caches", .developerCache, .simulator)
+            "Simulator Caches", .developerCache, .simulator, retention)
         // XCTestDevices accumulates one simulator clone per test run. Offer
         // each clone separately and leave the root for Xcode to reuse.
         let xctestDevices = home.appendingPathComponent("Library/Developer/XCTestDevices",
                                                         isDirectory: true)
         if cleanupPathIsPhysical(xctestDevices, home: home) {
             for clone in directChildren(of: xctestDevices) where !isSymlink(clone) {
-                add(clone, "Xcode Test Devices", .xcodeCache, .xcode)
+                add(clone, "Xcode Test Devices", .xcodeCache, .xcode, retention)
             }
         }
         add(home.appendingPathComponent(".cache", isDirectory: true),
             "User Cache", .core, .openFile)
         add(home.appendingPathComponent(".npm/_cacache", isDirectory: true),
-            "npm Cache", .developerCache, .packageManager)
+            "npm Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent(".yarn/cache", isDirectory: true),
-            "Yarn Cache", .developerCache, .packageManager)
+            "Yarn Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent(".bun/install/cache", isDirectory: true),
-            "Bun Cache", .developerCache, .packageManager)
+            "Bun Cache", .developerCache, .packageManager, retention)
         // Gradle: the module cache under ~/.gradle/caches and the Maven local
         // repository are dependency stores (review-only, see
         // CleanupRiskPolicy.dependencyStoreRoots). Only the hash-keyed build
         // cache, daemon logs, worker scratch and notifications are offered.
-        let gradleCaches = home.appendingPathComponent(".gradle/caches", isDirectory: true)
-        if cleanupPathIsPhysical(gradleCaches, home: home) {
-            for entry in directChildren(of: gradleCaches)
-                where entry.lastPathComponent.hasPrefix("build-cache-") && !isSymlink(entry) {
-                add(entry, "Gradle Build Cache", .developerCache, .packageManager)
+        // 自定义 GRADLE_USER_HOME 同样处理：发现与策略共用同一位置解析。
+        let locations = DeveloperCacheLocations.current(home: home.path)
+        var gradleHomes = [home.appendingPathComponent(".gradle", isDirectory: true)]
+        if let customGradle = locations.gradleUserHome {
+            gradleHomes.append(URL(fileURLWithPath: customGradle, isDirectory: true))
+        }
+        for gradleHome in gradleHomes {
+            let gradleCaches = gradleHome.appendingPathComponent("caches", isDirectory: true)
+            if cleanupPathIsPhysical(gradleCaches, home: home) {
+                for entry in directChildren(of: gradleCaches)
+                    where entry.lastPathComponent.hasPrefix("build-cache-") && !isSymlink(entry) {
+                    add(entry, "Gradle Build Cache", .developerCache, .packageManager, retention)
+                }
+            }
+            for (relative, label) in [("daemon", "Gradle Daemon Logs"),
+                                      ("workers", "Gradle Worker Cache"),
+                                      ("notifications", "Gradle Notifications")] {
+                add(gradleHome.appendingPathComponent(relative, isDirectory: true),
+                    label, .developerCache, .packageManager, retention)
             }
         }
-        for (relative, label) in [(".gradle/daemon", "Gradle Daemon Logs"),
-                                  (".gradle/workers", "Gradle Worker Cache"),
-                                  (".gradle/notifications", "Gradle Notifications")] {
-            add(home.appendingPathComponent(relative, isDirectory: true),
-                label, .developerCache, .packageManager)
-        }
         add(home.appendingPathComponent(".cargo/registry/cache", isDirectory: true),
-            "Cargo Cache", .developerCache, .packageManager)
+            "Cargo Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent(".swiftpm/cache", isDirectory: true),
-            "Swift Package Cache", .developerCache, .packageManager)
+            "Swift Package Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent(".cache/pip", isDirectory: true),
-            "pip Cache", .developerCache, .packageManager)
+            "pip Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent(".cache/uv", isDirectory: true),
-            "uv Cache", .developerCache, .packageManager)
+            "uv Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent(".cache/node/corepack", isDirectory: true),
-            "Corepack Cache", .developerCache, .packageManager)
+            "Corepack Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent("Library/Caches/Homebrew/downloads", isDirectory: true),
-            "Homebrew Cache", .developerCache, .packageManager)
+            "Homebrew Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent("Library/Caches/org.carthage.CarthageKit", isDirectory: true),
-            "Carthage Cache", .developerCache, .packageManager)
+            "Carthage Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent("go/pkg/mod/cache", isDirectory: true),
-            "Go Module Cache", .developerCache, .packageManager)
+            "Go Module Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent(".Trash", isDirectory: true),
             "Trash", .core, .openFile)
 
@@ -453,7 +529,23 @@ final class NativeCore: @unchecked Sendable {
         ]
         for (relative, label) in developerCaches {
             add(home.appendingPathComponent(relative, isDirectory: true),
-                label, .developerCache, .packageManager)
+                label, .developerCache, .packageManager, retention)
+        }
+        // 工具配置声明的自定义缓存位置（npmrc / yarnrc / pip.conf / 各类
+        // *_HOME 环境变量）与默认位置同等进入清单，同样适用 7 天门槛。
+        for (custom, label) in [(locations.npmCache, "npm Cache"),
+                                (locations.yarnCache, "Yarn Cache"),
+                                (locations.pipCache, "pip Cache"),
+                                (locations.poetryCache, "Poetry Cache"),
+                                (locations.goModCache, "Go Module Cache"),
+                                (locations.goBuildCache, "Go Build Cache")] {
+            guard let custom else { continue }
+            add(URL(fileURLWithPath: custom, isDirectory: true),
+                label, .developerCache, .packageManager, retention)
+        }
+        if let cargoHome = locations.cargoHome {
+            add(URL(fileURLWithPath: cargoHome + "/registry/cache", isDirectory: true),
+                "Cargo Cache", .developerCache, .packageManager, retention)
         }
 
         // 缓存地图：大体积、可重建的应用级缓存。发现层只负责枚举形状
@@ -647,11 +739,24 @@ final class NativeCore: @unchecked Sendable {
                                              ("Data/Library/Logs", "Logs"),
                                              ("Data/tmp", "tmp")] {
                         let root = container.appendingPathComponent(relative)
+                        // 疑似已卸载应用的容器：Caches/Logs 以整叶作为“历史
+                        // 残留”候选（见下方 orphanNames），不再拆成通用子项，
+                        // 避免同一目录双重计量。
+                        if relative != "Data/tmp",
+                           orphanNames[root.standardizedFileURL.path] != nil {
+                            continue
+                        }
                         guard cleanupPathIsPhysical(root, home: home) else { continue }
                         for child in directChildren(of: root) {
                             add(child, container.lastPathComponent + " " + leaf, .core, .openFile)
                         }
                     }
+                }
+                // 废纸篓已清空的历史残留：未安装应用容器的缓存/日志叶子。
+                for (path, owner) in orphanNames
+                    where path.hasPrefix(containers.standardizedFileURL.path + "/") {
+                    add(URL(fileURLWithPath: path, isDirectory: true),
+                        owner.name + " leftovers", .appLeftover, .openFile)
                 }
             }
             let support = home.appendingPathComponent("Library/Application Support", isDirectory: true)
@@ -698,6 +803,12 @@ final class NativeCore: @unchecked Sendable {
                                       uniquingKeysWith: { first, _ in first })
         for rawPath in nonOverlapping {
             let expectedIdentity = itemByRecord[rawPath]?.identity ?? ""
+            // 第一道：词法校验（绝对路径、无控制字符、无 "."/".." 分量）。
+            guard DeletionPlan.isLexicallySafePath(rawPath) else {
+                skipped += 1
+                messages.append("Skipped unsafe path literal: \(rawPath)")
+                continue
+            }
             let url = URL(fileURLWithPath: rawPath).standardizedFileURL
             let path = url.path
             let isHomePath = path.hasPrefix(home + "/")
@@ -736,22 +847,122 @@ final class NativeCore: @unchecked Sendable {
                 continue
             }
 
-            do {
-                if permanent {
-                    try fileManager.removeItem(at: url)
-                } else {
-                    var resultingURL: NSURL?
-                    try fileManager.trashItem(at: url, resultingItemURL: &resultingURL)
+            if permanent {
+                // 永久删除走 fd 链：从 "/" 开始逐级 openat(O_NOFOLLOW) 打开，
+                // 任何一级是符号链接或最终身份与计划不一致都拒绝；递归删除
+                // 在已打开的目录描述符下进行，全程不重新解析路径字符串，
+                // 扫描与删除之间被替换的路径删不到别处。
+                guard let identity = Self.parseIdentity(expectedIdentity),
+                      removeTreeSecurely(path, expectedDevice: identity.device,
+                                         expectedInode: identity.inode) else {
+                    failed += 1
+                    messages.append("Failed secure removal of \(path)")
+                    continue
                 }
                 removed += 1
                 removedPaths.insert(rawPath)
-            } catch {
-                failed += 1
-                messages.append("Failed to remove \(path): \(error.localizedDescription)")
+            } else {
+                do {
+                    var resultingURL: NSURL?
+                    try fileManager.trashItem(at: url, resultingItemURL: &resultingURL)
+                    removed += 1
+                    removedPaths.insert(rawPath)
+                } catch {
+                    failed += 1
+                    messages.append("Failed to remove \(path): \(error.localizedDescription)")
+                }
             }
         }
         return ApplySummary(removed: removed, skipped: skipped,
                             failed: failed, messages: messages, removedPaths: removedPaths)
+    }
+
+    /// `device:inode:mtime` 身份串的前两个字段。
+    private static func parseIdentity(_ identity: String) -> (device: UInt64, inode: UInt64)? {
+        let parts = identity.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count >= 2, let device = UInt64(parts[0]),
+              let inode = UInt64(parts[1]) else { return nil }
+        return (device, inode)
+    }
+
+    /// 逐级 openat(O_NOFOLLOW|O_DIRECTORY) 打开到目标的父目录，再打开目标
+    /// 本身并核对 (device, inode)。链上任何一级是符号链接（openat 失败）或
+    /// 身份不一致都返回 false，不做任何删除。
+    private func removeTreeSecurely(_ path: String,
+                                    expectedDevice: UInt64,
+                                    expectedInode: UInt64) -> Bool {
+        let components = path.split(separator: "/").map(String.init)
+        guard !components.isEmpty, components.count >= 2 else { return false }
+        var directoryFD = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard directoryFD >= 0 else { return false }
+        var opened = true
+        for component in components.dropLast() {
+            let next = openat(directoryFD, component,
+                              O_RDONLY | O_NOFOLLOW | O_DIRECTORY | O_CLOEXEC)
+            guard next >= 0 else { opened = false; break }
+            close(directoryFD)
+            directoryFD = next
+        }
+        defer { if opened { close(directoryFD) } }
+        guard opened else { return false }
+
+        let leaf = components[components.count - 1]
+        let targetFD = openat(directoryFD, leaf, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard targetFD >= 0 else { return false }
+        defer { close(targetFD) }
+        var target = stat()
+        guard fstat(targetFD, &target) == 0,
+              UInt64(target.st_dev) == expectedDevice,
+              UInt64(target.st_ino) == expectedInode else { return false }
+
+        if (target.st_mode & S_IFMT) == S_IFDIR {
+            guard removeContents(of: targetFD) else { return false }
+            return unlinkat(directoryFD, leaf, AT_REMOVEDIR) == 0
+        }
+        return unlinkat(directoryFD, leaf, 0) == 0
+    }
+
+    /// 在已打开的目录描述符下清空全部内容。不跟随符号链接：链接本身作为
+    /// 一个条目被 unlink，指向的外部内容不受影响。
+    private func removeContents(of directoryFD: Int32) -> Bool {
+        // fdopendir 会接管传入的描述符，先复制一份给目录流。
+        let streamFD = dup(directoryFD)
+        guard streamFD >= 0, let stream = fdopendir(streamFD) else {
+            if streamFD >= 0 { close(streamFD) }
+            return false
+        }
+        defer { closedir(stream) }
+        while let entry = readdir(stream) {
+            let name = withUnsafeBytes(of: entry.pointee.d_name) { raw -> String in
+                guard let base = raw.baseAddress else { return "" }
+                return String(cString: base.assumingMemoryBound(to: CChar.self))
+            }
+            guard !name.isEmpty, name != ".", name != ".." else { continue }
+            var entryStat = stat()
+            let isDirectory: Bool
+            if Int32(entry.pointee.d_type) == DT_UNKNOWN {
+                // 个别文件系统不提供 d_type：退回 fstatat(AT_SYMLINK_NOFOLLOW)。
+                guard fstatat(directoryFD, name, &entryStat, AT_SYMLINK_NOFOLLOW) == 0 else {
+                    return false
+                }
+                isDirectory = (entryStat.st_mode & S_IFMT) == S_IFDIR
+            } else {
+                isDirectory = Int32(entry.pointee.d_type) == DT_DIR
+            }
+            if isDirectory {
+                let childFD = openat(directoryFD, name,
+                                     O_RDONLY | O_NOFOLLOW | O_DIRECTORY | O_CLOEXEC)
+                guard childFD >= 0, removeContents(of: childFD),
+                      unlinkat(directoryFD, name, AT_REMOVEDIR) == 0 else {
+                    if childFD >= 0 { close(childFD) }
+                    return false
+                }
+                close(childFD)
+            } else if unlinkat(directoryFD, name, 0) != 0 {
+                return false
+            }
+        }
+        return true
     }
 
     // MARK: Analyze
