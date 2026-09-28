@@ -1,10 +1,11 @@
 import AppKit
 import SwiftUI
 
-// MARK: - 设计基调「Ultramarine 群青」
-// 单层液态玻璃 + 群青强调色，跟随系统浅色/深色外观。
-// 浅色底是带一点暖意的纸白，深色底是石墨中性色；强调色浅色深稳、
-// 深色清透，整体只保留一个强 hue，靠明度分层，克制而精致。
+// MARK: - 设计基调「Earth Blue 地球蓝」
+// 单层液态玻璃 + 水蓝强调色，跟随系统浅色/深色外观。
+// 玻璃底色取地球的海洋蓝：浅色底是清透的冰蓝白，深色底是深海蓝；
+// 强调色浅色是深海蓝、深色是清透水蓝，与玻璃同 hue 家族，
+// 靠明度分层，整体清爽而克制。
 //
 // 规则：
 // - 玻璃只有一层（GlassSurface），任何不透明色块都不要叠在玻璃上，否则模糊
@@ -13,17 +14,17 @@ import SwiftUI
 //   外观下分别取值，不要再写 Color.white.opacity(x)。
 // - 强调色只用于选中态、主按钮与关键数值；状态色用 success/warning/danger。
 
-/// Ultramarine 配色的原始值：token 与对比度测试共用同一份数据。
-enum UltramarinePalette {
-    static let accentDark: UInt32 = 0x8FA3F5
-    static let accentLight: UInt32 = 0x3E63DD
-    static let accentTextDark: UInt32 = 0xA9B6FF
-    static let accentTextLight: UInt32 = 0x3D5AC8
-    static let onAccentDark: UInt32 = 0x10141F
+/// Earth Blue 配色的原始值：token 与对比度测试共用同一份数据。
+enum EarthBluePalette {
+    static let accentDark: UInt32 = 0x45C6EA
+    static let accentLight: UInt32 = 0x0B6FC7
+    static let accentTextDark: UInt32 = 0x8FDCEF
+    static let accentTextLight: UInt32 = 0x07538F
+    static let onAccentDark: UInt32 = 0x051220
     static let onAccentLight: UInt32 = 0xFFFFFF
     /// 玻璃着色在典型后景（深色桌面 / 浅色桌面）上的等效实底，用于对比度估算。
-    static let glassDark: UInt32 = 0x16181D
-    static let glassLight: UInt32 = 0xF5F4F1
+    static let glassDark: UInt32 = 0x0C1B2E
+    static let glassLight: UInt32 = 0xEAF3FA
     static let successDark: UInt32 = 0x53C68C
     static let successLight: UInt32 = 0x1E8A55
     static let warningDark: UInt32 = 0xE3A43C
@@ -67,18 +68,18 @@ extension Color {
 
     // 强调色
     /// 主强调色：选中态、主按钮底色、进度。
-    static let accent = adaptive(light: srgb(UltramarinePalette.accentLight), dark: srgb(UltramarinePalette.accentDark))
+    static let accent = adaptive(light: srgb(EarthBluePalette.accentLight), dark: srgb(EarthBluePalette.accentDark))
     /// 强调色文字：在玻璃上保持 ≥ 4.5:1 对比。
-    static let accentText = adaptive(light: srgb(UltramarinePalette.accentTextLight), dark: srgb(UltramarinePalette.accentTextDark))
+    static let accentText = adaptive(light: srgb(EarthBluePalette.accentTextLight), dark: srgb(EarthBluePalette.accentTextDark))
     /// 主按钮上的文字。
-    static let onAccent = adaptive(light: srgb(UltramarinePalette.onAccentLight), dark: srgb(UltramarinePalette.onAccentDark))
+    static let onAccent = adaptive(light: srgb(EarthBluePalette.onAccentLight), dark: srgb(EarthBluePalette.onAccentDark))
 
     // 玻璃与表面
     /// 玻璃着色：淡到能看见后方内容的模糊与折射，但着色要足以承托正文——
-    /// 鲜艳桌面壁纸下文字依然可读优先于通透感。
-    static let glassTint = adaptive(light: srgb(0xF5F4F1, 0.62), dark: srgb(0x16181D, 0.46))
+    /// 鲜艳桌面壁纸下文字依然可读优先于通透感。地球蓝着色让玻璃自带海洋色调。
+    static let glassTint = adaptive(light: srgb(0xE9F2FA, 0.60), dark: srgb(0x0D1F33, 0.50))
     /// 减少透明度时的实底。
-    static let glassOpaque = adaptive(light: srgb(UltramarinePalette.glassLight), dark: srgb(UltramarinePalette.glassDark))
+    static let glassOpaque = adaptive(light: srgb(EarthBluePalette.glassLight), dark: srgb(EarthBluePalette.glassDark))
     /// 卡片 / 行底色三级：白罩会透出下层玻璃的暖调，与背景自然一致。
     static let surface1 = adaptive(light: NSColor.white.withAlphaComponent(0.55),
                                    dark: NSColor.white.withAlphaComponent(0.07))
@@ -95,9 +96,9 @@ extension Color {
                                    dark: NSColor.white.withAlphaComponent(0.13))
 
     // 状态色
-    static let success = adaptive(light: srgb(UltramarinePalette.successLight), dark: srgb(UltramarinePalette.successDark))
-    static let warning = adaptive(light: srgb(UltramarinePalette.warningLight), dark: srgb(UltramarinePalette.warningDark))
-    static let danger = adaptive(light: srgb(UltramarinePalette.dangerLight), dark: srgb(UltramarinePalette.dangerDark))
+    static let success = adaptive(light: srgb(EarthBluePalette.successLight), dark: srgb(EarthBluePalette.successDark))
+    static let warning = adaptive(light: srgb(EarthBluePalette.warningLight), dark: srgb(EarthBluePalette.warningDark))
+    static let danger = adaptive(light: srgb(EarthBluePalette.dangerLight), dark: srgb(EarthBluePalette.dangerDark))
 
     // 兼容别名：旧代码里的 mole* 名称直接映射到新 token，避免一次性改 100+ 处。
     static let moleAccent = accent
@@ -106,12 +107,17 @@ extension Color {
     static let moleGlassBase = glassOpaque
 }
 
+extension Color {
+    /// 折叠手柄上的三点提示。
+    static let islandHandleDot = Color.white.opacity(0.30)
+}
+
 extension NSColor {
     /// GlassSurface 传给 NSGlassEffectView 的着色（NSColor 版本，随外观变化）。
     static let forgeGlassTint = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(srgbRed: 0x16 / 255, green: 0x18 / 255, blue: 0x1D / 255, alpha: 0.46)
-            : NSColor(srgbRed: 0xF5 / 255, green: 0xF4 / 255, blue: 0xF1 / 255, alpha: 0.62)
+            ? NSColor(srgbRed: 0x0D / 255, green: 0x1F / 255, blue: 0x33 / 255, alpha: 0.50)
+            : NSColor(srgbRed: 0xE9 / 255, green: 0xF2 / 255, blue: 0xFA / 255, alpha: 0.60)
     }
 }
 

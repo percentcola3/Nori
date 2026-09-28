@@ -5,7 +5,7 @@ import Foundation
 enum L10nTables {
     static let en: [String: String] = [
         // 窗口与导航
-        "window.title": "Mac Cleaner & Optimizer",
+        "window.title": "Nori",
         "window.subtitle": "Scan, review by category — everything lives in this window",
         "footer.hint": "Native system stats · network in MB/s",
         "tab.cleanup": "Disk Cleanup",
@@ -236,7 +236,7 @@ enum L10nTables {
         "proc.confirm.killGroup.title": "End the whole app group?",
         "proc.confirm.kill.msg": "This terminates the process (PID %d). Unsaved data may be lost.",
         "proc.confirm.cleanupStale.title": "Clean up this abnormal process?",
-        "proc.confirm.cleanupStale.msg": "ForgeSweep revalidates its PID and state first. Zombies only ask their parent to reap them; a process stuck exiting may be force ended.",
+        "proc.confirm.cleanupStale.msg": "Nori revalidates its PID and state first. Zombies only ask their parent to reap them; a process stuck exiting may be force ended.",
         "proc.confirm.quit.title": "Quit %@?",
         "proc.confirm.quit.msg": "Sends macOS a regular quit request; the app can save its work first.",
 
@@ -283,8 +283,8 @@ enum L10nTables {
         "status.cleanupDone": "Cleanup done · %d items handled",
         "status.cleanupPartial": "Partially failed · %d handled, %d failed — see log",
         "status.systemScanning": "Requesting admin rights and scanning system items…",
-        "status.relaunching": "Restarting ForgeSweep…",
-        "status.relaunchFailed": "Could not restart. Quit ForgeSweep and open it again from Applications.",
+        "status.relaunching": "Restarting Nori…",
+        "status.relaunchFailed": "Could not restart. Quit Nori and open it again from Applications.",
         "status.systemDone": "System scan done · check items to clean",
         "status.systemEmpty": "No cleanable system items found",
         "status.systemFailed": "System scan failed · see the log for details",
@@ -364,7 +364,7 @@ enum L10nTables {
         "confirm.slimChoice.copy": "Create copies (-compressed)",
         "confirm.system.title": "Clean %d system items?",
         "confirm.system.msg": "Requests administrator approval. Selected items are permanently deleted after prefix, owner and file-identity re-verification.",
-        "tab.system": "System Data",
+        "cleanup.systemData.open": "System Data",
         "system.title": "System Data",
         "system.subtitle": "Root-owned logs, reports and caches · administrator approval per scan",
         "system.scan": "Scan System Data",
@@ -401,8 +401,8 @@ enum L10nTables {
         "confirm.env.msg.node": "The %d selected versions (%@) go to Trash, including %@ of version-specific global Node packages. Shared npm, pnpm and yarn caches are not removed automatically.",
 
         // 菜单
-        "menu.about": "About ForgeSweep",
-        "menu.quit": "Quit ForgeSweep",
+        "menu.about": "About Nori",
+        "menu.quit": "Quit Nori",
         "menu.edit": "Edit",
         "menu.copy": "Copy",
         "menu.selectAll": "Select All",
@@ -556,7 +556,7 @@ enum L10nTables {
     ]
 
     static let zhHans: [String: String] = [
-        "window.title": "Mac 清理与优化",
+        "window.title": "Nori",
         "window.subtitle": "扫描后按类别选择，所有工具都在此窗口内完成",
         "footer.hint": "原生系统状态 · 网络单位 MB/s",
         "tab.cleanup": "硬盘清理",
@@ -777,7 +777,7 @@ enum L10nTables {
         "proc.confirm.killGroup.title": "结束整个应用组？",
         "proc.confirm.kill.msg": "这会终止对应进程（PID %d）。未保存的数据可能丢失。",
         "proc.confirm.cleanupStale.title": "清理这个异常进程？",
-        "proc.confirm.cleanupStale.msg": "ForgeSweep 会先复核 PID 和进程状态。僵尸进程只会通知父进程回收；持续卡在退出状态的进程可能会被强制结束。",
+        "proc.confirm.cleanupStale.msg": "Nori 会先复核 PID 和进程状态。僵尸进程只会通知父进程回收；持续卡在退出状态的进程可能会被强制结束。",
         "proc.confirm.quit.title": "退出 %@？",
         "proc.confirm.quit.msg": "将使用 macOS 的正常退出请求；应用可以先保存未完成的工作。",
 
@@ -820,8 +820,8 @@ enum L10nTables {
         "status.cleanupDone": "清理完成 · 已处理 %d 项",
         "status.cleanupPartial": "清理部分失败 · 已处理 %d 项，%d 项失败，请查看日志",
         "status.systemScanning": "正在请求管理员权限并扫描系统项目…",
-        "status.relaunching": "正在重启 ForgeSweep…",
-        "status.relaunchFailed": "重启失败，请退出 ForgeSweep 后从应用程序目录重新打开。",
+        "status.relaunching": "正在重启 Nori…",
+        "status.relaunchFailed": "重启失败，请退出 Nori 后从应用程序目录重新打开。",
         "status.systemDone": "系统扫描完成 · 可勾选后清理",
         "status.systemEmpty": "没有发现可清理的系统项目",
         "status.systemFailed": "系统扫描失败 · 详情见日志",
@@ -899,7 +899,7 @@ enum L10nTables {
         "confirm.slimChoice.copy": "生成压缩副本（-compressed 文件）",
         "confirm.system.title": "确认清理 %d 个系统项目？",
         "confirm.system.msg": "将请求管理员授权。选中项目在前缀、属主与文件身份复核通过后永久删除。",
-        "tab.system": "系统数据",
+        "cleanup.systemData.open": "系统数据",
         "system.title": "系统数据",
         "system.subtitle": "系统级日志、报告与缓存 · 每次扫描需管理员授权",
         "system.scan": "扫描系统数据",
@@ -935,8 +935,8 @@ enum L10nTables {
         "confirm.env.msg": "选中的 %d 个运行时/工具链版本（%@）会移入废纸篓（可恢复）。正在使用的版本不会被清理。需要时可通过对应版本管理器重新安装。",
         "confirm.env.msg.node": "选中的 %d 个版本（%@）会移入废纸篓，其中包含 %@ 的版本内全局 Node 包。共享的 npm、pnpm、yarn 缓存不会自动删除。",
 
-        "menu.about": "关于 ForgeSweep",
-        "menu.quit": "退出 ForgeSweep",
+        "menu.about": "关于 Nori",
+        "menu.quit": "退出 Nori",
         "menu.edit": "编辑",
         "menu.copy": "拷贝",
         "menu.selectAll": "全选",

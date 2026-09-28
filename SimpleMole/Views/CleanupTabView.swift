@@ -8,6 +8,11 @@ struct CleanupTabView: View {
     /// nil 表示用户还没折叠/展开过：此时除最大分组外全部折叠，长列表首屏
     /// 先看到最重要的内容。一旦用户操作过就完全尊重用户的选择。
     @State private var userCollapsed: Set<CleanupGroupBucket>?
+    /// 从可再生缓存行发起的自动清理规则创建。
+    @State private var autoCleanIntent: AutoCleanupIntent?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 系统数据（root 拥有的日志/报告/缓存）从清理页下钻，不再占顶级 Tab。
+    @State private var showSystemData = false
 
     private var collapsedGroups: Set<CleanupGroupBucket> {
         userCollapsed ?? defaultCollapsedGroups
@@ -20,10 +25,21 @@ struct CleanupTabView: View {
     }
 
     private func toggleCollapsed(_ kind: CleanupGroupBucket) {
-        withAnimation(.easeInOut(duration: 0.18)) {
+        withAnimation(MoleMotion.panel) {
             var next = collapsedGroups
             if next.contains(kind) { next.remove(kind) } else { next.insert(kind) }
             userCollapsed = next
+        }
+    }
+
+    /// 只有“可再生缓存”类目提供自动清理入口：Safe 风险 + 走永久删除路由
+    /// 的缓存/日志项。需要确认的 Warning 项不进入自动化。
+    private func autoCleanAction(for category: CleanupCategory) -> (() -> Void)? {
+        guard category.risk == .safe,
+              category.disposal == .permanentDelete,
+              !category.paths.isEmpty else { return nil }
+        return {
+            autoCleanIntent = AutoCleanupIntent(paths: category.paths, cacheVerified: true)
         }
     }
 
@@ -34,6 +50,13 @@ struct CleanupTabView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                 Spacer()
+                Button {
+                    showSystemData = true
+                } label: {
+                    Label(l10n.t("cleanup.systemData.open"), systemImage: "shield.checkered")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .help(l10n.t("system.subtitle"))
                 Button { state.requestScanAccess(.deepCleanupScan) } label: {
                     Text(l10n.t("cleanup.scan.deep"))
                 }
@@ -47,6 +70,11 @@ struct CleanupTabView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 8)
+            // 与 autoCleanIntent 的 sheet 分开挂节点，避免多 sheet 同节点失联。
+            .sheet(isPresented: $showSystemData) {
+                SystemDataView(state: state)
+                    .frame(minWidth: 720, minHeight: 540)
+            }
 
             if !state.isCleanupScanning && !state.cleanupDeferredPaths.isEmpty {
                 Label(l10n.tf("cleanup.scan.deferred", state.cleanupDeferredPaths.count),
@@ -59,11 +87,32 @@ struct CleanupTabView: View {
                     .help(state.cleanupDeferredPaths.prefix(12).joined(separator: "\n"))
             }
 
-            if state.isCleanupScanning {
+            if !state.isCleanupScanning && !state.isApplying, let mood = state.cleanupOutcomeMood {
+                HStack(spacing: 12) {
+                    NoriStatusAnimation(mood: mood, size: 52)
+                        .id(state.cleanupFeedbackID)
+                    Text(state.statusText)
+                        .font(.system(size: 12, weight: .medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 8)
+            }
+
+            if state.isApplying {
+                VStack(spacing: 12) {
+                    NoriStatusAnimation(mood: .working, size: 84)
+                    Text(state.statusText).font(.system(size: 12))
+                    ProgressView().controlSize(.small)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if state.isCleanupScanning {
                 CleanupScanProgressView(state: state)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if state.categories.isEmpty {
                 VStack(spacing: 12) {
+                    if state.cleanupOutcomeMood == nil { NoriStatusAnimation(mood: .idle, size: 76) }
                     quickCleanButton
                     Text(l10n.t("cleanup.empty.subtitle"))
                         .font(.system(size: 11))
@@ -79,22 +128,31 @@ struct CleanupTabView: View {
                             VStack(spacing: 6) {
                                 cleanupGroupHeader(group)
                                 if !collapsedGroups.contains(group.kind) {
-                                    ForEach(group.categoryIDs, id: \.self) { categoryID in
-                                        if let index = state.categories.firstIndex(where: {
-                                            $0.id == categoryID
-                                        }) {
-                                            CategoryRowView(
-                                                category: $state.categories[index],
-                                                selectionEnabled: state.cleanupScanComplete
-                                                    && !state.isApplying)
+                                    LazyVStack(spacing: 0) {
+                                        ForEach(group.categoryIDs, id: \.self) { categoryID in
+                                            if let index = state.categories.firstIndex(where: {
+                                                $0.id == categoryID
+                                            }) {
+                                                CategoryRowView(
+                                                    category: $state.categories[index],
+                                                    selectionEnabled: state.cleanupScanComplete
+                                                        && !state.isApplying,
+                                                    onAutoClean: autoCleanAction(
+                                                        for: state.categories[index]))
+                                            }
                                         }
                                     }
+                                    .transition(.molePanelReveal)
                                 }
                             }
+                            .transition(.molePanelReveal)
                         }
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 4)
+                    // 扫描结果入场/移除的液态流动：按 id 变化触发，勾选操作不参与。
+                    .animation(reduceMotion ? nil : MoleMotion.panel,
+                               value: state.categories.map(\.id))
                 }
             }
 
@@ -112,6 +170,11 @@ struct CleanupTabView: View {
             if !state.isCleanupScanning && !state.categories.isEmpty {
                 Divider()
                 cleanupActions
+            }
+        }
+        .sheet(item: $autoCleanIntent) { intent in
+            AutoCleanupIntentSheet(state: state, intent: intent) {
+                autoCleanIntent = nil
             }
         }
     }
@@ -290,7 +353,7 @@ private struct CleanupScanProgressView: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 7) {
-                HeaderBrandIconView(size: 28, isSearching: true)
+                NoriStatusAnimation(mood: .working, size: 52)
                 Text(l10n.t(state.cleanupScanMode.titleKey))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.primary)
@@ -407,6 +470,7 @@ extension CleanupGroupBucket {
 struct CategoryRowView: View {
     @Binding var category: CleanupCategory
     let selectionEnabled: Bool
+    var onAutoClean: (() -> Void)? = nil
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
@@ -436,6 +500,15 @@ struct CategoryRowView: View {
                 .buttonStyle(MolePlainButtonStyle(pressedScale: 0.99))
                 Spacer()
                 SizeBadge(text: ByteFormat.format(category.bytes), prominent: category.selected)
+                if let onAutoClean {
+                    Button(action: onAutoClean) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .buttonStyle(MoleIconButtonStyle(size: 22))
+                    .help(l10n.t("auto.entry.create"))
+                    .disabled(!selectionEnabled)
+                }
                 Button {
                     toggleExpanded()
                 } label: {
@@ -493,7 +566,7 @@ struct CategoryRowView: View {
                         y: 1)
         )
         .onHover { hovering in
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.1)) {
+            withAnimation(reduceMotion ? nil : MoleMotion.hover) {
                 hovered = hovering
             }
         }

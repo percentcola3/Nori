@@ -12,20 +12,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var autoCleanupTimer: Timer?
     private var isCapturingScreenshot = false
 
+    // 灵动岛：codenotch 式顶部刘海悬浮窗。
+    private var islandPanel: NSPanel?
+    private var islandHosting: IslandHostingView<FloatingIslandView>?
+    private var islandPanelSafeTop: CGFloat?
+    private var islandPanelCollapsedWidth: CGFloat?
+    private var islandExpanded = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenu()
-
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let button = item.button {
-            if let image = menuBarIcon(size: NSSize(width: 18, height: 18)) {
-                button.image = image
-            }
-            button.imageScaling = .scaleProportionallyDown
-            button.toolTip = "ForgeSweep"
-            button.target = self
-            button.action = #selector(toggleQuickPanel(_:))
-        }
-        statusItem = item
+        updateStatusItem()
 
         // 附件应用：启动只驻留菜单栏；点击图标展示快捷面板，"更多"才开主窗口。
         runtimeTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
@@ -33,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self else { return }
                 self.appState.refreshMetrics()
                 self.appState.refreshRuntimeIfNeeded()
-                if self.quickPanel?.isVisible == true {
+                if self.quickPanel?.isVisible == true || self.islandExpanded {
                     self.appState.refreshTopMemoryApps()
                 }
             }
@@ -58,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.setupMenu() }
             .store(in: &observables)
+        setupIslandPanelObservers()
+        updateIslandPanel()
     }
 
     /// 退出必须无条件放行。系统设置的"退出并重新打开"（屏幕录制授权后的
@@ -154,7 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
-        appMenuItem.title = "ForgeSweep"
+        appMenuItem.title = "Nori"
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: L10n.shared.t("menu.about"), action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
@@ -180,23 +178,127 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings(_ sender: Any?) {
         showMainWindow()
         DispatchQueue.main.async { [weak self] in
-            self?.appState.showSettingsSheet = true
+            self?.appState.jump(to: .settings)
         }
     }
 
     private func menuBarIcon(size: NSSize) -> NSImage? {
-        guard let url = Bundle.main.url(forResource: "MenuBarIconTemplate", withExtension: "png"),
-              let image = NSImage(contentsOf: url) else { return nil }
-        image.size = size
+        let image = NSImage(size: size)
+        for name in ["MenuBarIconTemplate", "MenuBarIconTemplate@2x"] {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "png"),
+                  let data = try? Data(contentsOf: url),
+                  let representation = NSBitmapImageRep(data: data) else { continue }
+            representation.size = size
+            image.addRepresentation(representation)
+        }
+        guard !image.representations.isEmpty else { return nil }
         image.isTemplate = true
         return image
+    }
+
+    /// 菜单栏状态图标按设置装拆：隐藏后入口交给灵动岛与程序坞图标。
+    /// 隐藏时先收起快捷面板——它以状态图标为锚点，图标没了就不能再悬空显示。
+    private func updateStatusItem() {
+        if appState.menuBarIconVisible {
+            guard statusItem == nil else { return }
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            if let button = item.button {
+                if let image = menuBarIcon(size: NSSize(width: 18, height: 18)) {
+                    button.image = image
+                }
+                button.imageScaling = .scaleProportionallyDown
+                button.toolTip = "Nori"
+                button.setAccessibilityLabel("Nori")
+                button.target = self
+                button.action = #selector(toggleQuickPanel(_:))
+            }
+            statusItem = item
+        } else {
+            dismissLiquidPanel(quickPanel)
+            guard let statusItem else { return }
+            NSStatusBar.system.removeStatusItem(statusItem)
+            self.statusItem = nil
+        }
+    }
+
+    // MARK: - 面板液态呈现
+
+    /// AppKit 没有原生弹簧动画：用带轻微过冲的三次贝塞尔逼近 SwiftUI
+    /// MoleMotion.press 的回弹手感。
+    private static let liquidPresentTiming =
+        CAMediaTimingFunction(controlPoints: 0.22, 0.86, 0.26, 1.12)
+    private static let liquidResizeTiming =
+        CAMediaTimingFunction(controlPoints: 0.3, 0.9, 0.28, 1.06)
+
+    private var liquidMotionAllowed: Bool {
+        !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// 液态呈现：淡入 + 朝状态栏方向轻推入位（轻微过冲）。
+    /// `orderFront` 决定是否成为 key（快捷面板要，灵动岛不要）。
+    private func presentLiquidPanel(_ panel: NSPanel, orderFront: () -> Void) {
+        guard liquidMotionAllowed else {
+            orderFront()
+            return
+        }
+        let final = panel.frame
+        let start = NSRect(x: final.origin.x, y: final.origin.y - 12,
+                           width: final.width, height: final.height)
+        panel.setFrame(start, display: false)
+        panel.alphaValue = 0
+        orderFront()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.3
+            context.timingFunction = Self.liquidPresentTiming
+            panel.animator().setFrame(final, display: true)
+            panel.animator().alphaValue = 1
+        }
+    }
+
+    /// 液态收起：淡出下坠后 orderOut，并把帧复位供下次呈现。
+    private func dismissLiquidPanel(_ panel: NSPanel?) {
+        guard let panel, panel.isVisible else { return }
+        guard liquidMotionAllowed else {
+            panel.orderOut(nil)
+            return
+        }
+        let final = panel.frame
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            panel.animator().alphaValue = 0
+            panel.animator().setFrame(
+                NSRect(x: final.origin.x, y: final.origin.y - 8,
+                       width: final.width, height: final.height), display: true)
+        }, completionHandler: { [weak panel] in
+            panel?.orderOut(nil)
+            panel?.alphaValue = 1
+            panel?.setFrame(final, display: false)
+        })
+    }
+
+    /// 高度变化（面板内容展开收缩）沿顶边弹性生长。
+    private func animatePanelHeight(_ panel: NSPanel, toHeight height: CGFloat) {
+        guard liquidMotionAllowed, panel.isVisible else {
+            panel.setContentSize(NSSize(width: panel.frame.width, height: height))
+            positionQuickPanel(panel)
+            return
+        }
+        let current = panel.frame
+        let target = NSRect(x: current.origin.x, y: current.maxY - height,
+                            width: current.width, height: height)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.34
+            context.timingFunction = Self.liquidResizeTiming
+            panel.animator().setFrame(target, display: true)
+        }
     }
 
     // MARK: - 快捷面板
 
     @objc private func toggleQuickPanel(_ sender: Any?) {
         if let quickPanel, quickPanel.isVisible {
-            quickPanel.orderOut(nil)
+            dismissLiquidPanel(quickPanel)
             return
         }
         showQuickPanel()
@@ -223,8 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                              guard let panel = self?.quickPanel else { return }
                                              let newHeight = ceil(height) + 1
                                              guard abs(panel.frame.height - newHeight) > 1 else { return }
-                                             panel.setContentSize(NSSize(width: 284, height: newHeight))
-                                             self?.positionQuickPanel(panel)
+                                             self?.animatePanelHeight(panel, toHeight: newHeight)
                                          })
             panel.contentViewController = NSHostingController(rootView: content)
             quickPanel = panel
@@ -239,7 +340,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fitting = quickPanel.contentViewController?.view.fittingSize ?? NSSize(width: 284, height: 260)
         quickPanel.setContentSize(NSSize(width: ceil(fitting.width), height: ceil(fitting.height)))
         positionQuickPanel(quickPanel)
-        quickPanel.makeKeyAndOrderFront(nil)
+        presentLiquidPanel(quickPanel) {
+            quickPanel.makeKeyAndOrderFront(nil)
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -259,10 +362,120 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setFrameOrigin(origin)
     }
 
+    // MARK: - 灵动岛
+
+    /// 灵动岛显隐：设置开关驱动；主窗口置前时避让收起。
+    private func setupIslandPanelObservers() {
+        appState.$islandEnabled
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateIslandPanel() }
+            .store(in: &observables)
+        appState.$menuBarIconVisible
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateStatusItem() }
+            .store(in: &observables)
+        appState.$mainWindowVisible
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateIslandPanel() }
+            .store(in: &observables)
+        NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateIslandPanel() }
+            .store(in: &observables)
+    }
+
+    private func updateIslandPanel() {
+        guard appState.islandEnabled && !appState.mainWindowVisible else {
+            islandExpanded = false
+            dismissLiquidPanel(islandPanel)
+            return
+        }
+        // 屏幕参数（刘海带宽/外接屏）变化时重建视图锚定参数。
+        if islandPanel == nil
+            || islandPanelSafeTop != islandSafeTop
+            || islandPanelCollapsedWidth != islandCollapsedWidth {
+            createIslandPanel()
+        }
+        positionIslandPanel()
+        if let islandPanel, !islandPanel.isVisible {
+            presentLiquidPanel(islandPanel) {
+                islandPanel.orderFrontRegardless()
+            }
+        } else {
+            islandPanel?.orderFrontRegardless()
+        }
+    }
+
+    private func createIslandPanel() {
+        dismissLiquidPanel(islandPanel)
+        let size = islandWindowSize
+        let panel = IslandPanel(contentRect: NSRect(x: 0, y: 0, width: size.width, height: size.height),
+                            styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.hidesOnDeactivate = false
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        // 悬浮窗不画系统阴影：贴顶刘海自带描边，
+        // 透明窗口的系统阴影会把整个窗口矩形投出来。
+        panel.hasShadow = false
+        panel.isMovable = false
+        panel.acceptsMouseMovedEvents = true
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        let hosting = IslandHostingView(rootView: FloatingIslandView(
+            state: appState,
+            safeTop: islandSafeTop,
+            collapsedWidth: islandCollapsedWidth,
+            onOpenMain: { [weak self] in self?.showMainWindow() },
+            onHitFrameChange: { [weak self] frame in
+                DispatchQueue.main.async {
+                    self?.islandHosting?.islandHitFrame = frame
+                }
+            },
+            onExpandedChange: { [weak self] expanded in
+                self?.islandExpanded = expanded
+            }))
+        islandHosting = hosting
+        islandPanel = panel
+        panel.contentView = hosting
+        islandPanelSafeTop = islandSafeTop
+        islandPanelCollapsedWidth = islandCollapsedWidth
+    }
+
+    private var islandSafeTop: CGFloat {
+        NSScreen.main?.safeAreaInsets.top ?? 0
+    }
+
+    private var islandCollapsedWidth: CGFloat {
+        guard let screen = NSScreen.main,
+              let left = screen.auxiliaryTopLeftArea,
+              let right = screen.auxiliaryTopRightArea else { return IslandLayout.handleWidth }
+        return max(IslandLayout.handleWidth, right.minX - left.maxX + 24)
+    }
+
+    private var islandWindowSize: NSSize {
+        NSSize(width: max(IslandLayout.panelWidth, islandCollapsedWidth) + IslandLayout.windowMargin * 2,
+               height: ceil(islandSafeTop) + IslandLayout.metricsHeight
+                   + IslandLayout.detailBudget + IslandLayout.windowMargin)
+    }
+
+    private func positionIslandPanel() {
+        guard let islandPanel,
+              let screen = NSScreen.main else { return }
+        let size = islandWindowSize
+        // 所有屏幕均贴物理顶边；真实刘海的遮挡由内容安全区避让。
+        let origin = NSPoint(x: screen.frame.midX - size.width / 2,
+                             y: screen.frame.maxY - size.height)
+        islandPanel.setFrameOrigin(origin)
+    }
+
     // MARK: - 主窗口
 
     func showMainWindow() {
-        quickPanel?.orderOut(nil)
+        dismissLiquidPanel(quickPanel)
         if mainWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 940, height: 720),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],

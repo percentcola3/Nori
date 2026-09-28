@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Regenerate Support/AppIcon.icns from the ImageGen master artwork.
+# Regenerate Support/AppIcon.icns from the Nori raster master (regenerate everything with make_nori.sh).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

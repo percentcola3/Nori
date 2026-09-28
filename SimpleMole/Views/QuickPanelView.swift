@@ -130,8 +130,11 @@ struct QuickPanelView: View {
 }
 
 /// 快捷面板分组表面：统一承载指标与榜单，避免堆叠厚重的小卡片。
-private struct QuickPanelSectionSurface: View {
+/// 灵动岛详情面板复用同一表面，保持两处 HUD 的视觉一致；灵动岛自身
+/// 是深色悬浮胶囊，不叠加投影（shadowed = false）。
+struct QuickPanelSectionSurface: View {
     let cornerRadius: CGFloat
+    var shadowed = true
 
     var body: some View {
         RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -153,7 +156,8 @@ private struct QuickPanelSectionSurface: View {
                         lineWidth: 1
                     )
             }
-            .shadow(color: Color.black.opacity(0.16), radius: 7, y: 3)
+            .shadow(color: Color.black.opacity(shadowed ? 0.16 : 0),
+                    radius: shadowed ? 7 : 0, y: shadowed ? 3 : 0)
     }
 }
 

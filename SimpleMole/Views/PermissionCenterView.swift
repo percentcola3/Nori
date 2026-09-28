@@ -58,9 +58,8 @@ struct PermissionCenterView: View {
             footer
         }
         .frame(width: 580, height: 500)
-        .background(GlassSurface())
-        .animation(.easeInOut(duration: 0.22), value: diskPhase)
-        .animation(.easeInOut(duration: 0.22), value: screenPhase)
+        .animation(MoleMotion.control, value: diskPhase)
+        .animation(MoleMotion.control, value: screenPhase)
         .task { await pollWhileVisible() }
         .onDisappear { permissions.clearRepairMessage() }
     }
@@ -151,7 +150,7 @@ struct PermissionCenterView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
-        .animation(.easeInOut(duration: 0.18), value: isWaitingForDiskAccess)
+        .animation(MoleMotion.control, value: isWaitingForDiskAccess)
     }
 
     // MARK: - 提示条

@@ -571,7 +571,7 @@ struct PortRow: Identifiable, Hashable {
     let startIdentity: String
     let command: String
     let endpoint: String
-    var id: String { "\(port)-\(pid)-\(endpoint)" }
+    var id: String { "\(port)|\(pid)|\(startIdentity)|\(endpoint)" }
     var signalToken: String { "\(pid)|\(startIdentity)" }
 }
 

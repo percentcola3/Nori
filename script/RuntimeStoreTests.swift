@@ -7,6 +7,32 @@ private struct RuntimeStoreTestFailure: Error, CustomStringConvertible {
 @main
 struct RuntimeStoreTests {
     static func main() throws {
+        // IPv4/IPv6 wildcard listeners have identical bridge fields. Duplicate IDs
+        // used to leave blank row slots in the port page's LazyVStack.
+        let portText = """
+        7000\t1262\tMon_Aug_31_10:00:00_2026\tControlCenter\t*:7000
+        7000\t1262\tMon_Aug_31_10:00:00_2026\tControlCenter\t*:7000
+        5000\t1262\tMon_Aug_31_10:00:00_2026\tControlCenter\t*:5000
+        5000\t1262\tMon_Aug_31_10:00:00_2026\tControlCenter\t*:5000
+        7000\t1262\tMon_Aug_31_10:00:00_2026\tControlCenter\t127.0.0.1:7000
+        7000\t1262\tMon_Aug_31_10:00:00_2026\tControlCenter\t[::1]:7000
+        7000\t2000\tMon_Aug_31_10:00:01_2026\tOther\t*:7000
+        invalid input
+        """
+        let ports = RuntimeStore.portRows(fromText: portText)
+        try expect(ports.count == 5 && Set(ports.map(\.id)).count == ports.count,
+                   "duplicate listeners must be collapsed into unique port rows")
+        try expect(ports.map(\.endpoint) == ["*:7000", "*:5000", "127.0.0.1:7000", "[::1]:7000", "*:7000"],
+                   "deduplication must preserve order, distinct addresses and different processes")
+        let refreshedPorts = RuntimeStore.portRows(fromText: portText)
+        try expect(ports.map(\.id) == refreshedPorts.map(\.id),
+                   "port row identity must stay stable across refreshes")
+        let restartedPort = PortRow(port: ports[0].port, pid: ports[0].pid,
+                                    startIdentity: "Mon_Aug_31_11:00:00_2026",
+                                    command: ports[0].command, endpoint: ports[0].endpoint)
+        try expect(restartedPort.id != ports[0].id && restartedPort.signalToken != ports[0].signalToken,
+                   "PID reuse must change both row and action identity")
+
         let text = """
         100\t1\tMon_Aug_31_10:00:00_2026\t10.0\t1.0\t/AppOne\t/Applications/AppOne.app/Contents/MacOS/AppOne
         101\t100\tMon_Aug_31_10:00:01_2026\t20.0\t2.0\t/Helper\t/Applications/AppOne.app/Contents/Frameworks/Helper

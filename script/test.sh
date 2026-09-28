@@ -108,21 +108,21 @@ test_brand_contract() {
     local app_delegate="$ROOT_DIR/SimpleMole/AppDelegate.swift"
     local info_plist="$ROOT_DIR/SimpleMole/Support/Info.plist"
 
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$info_plist")" == "ForgeSweep" ]] || \
-        fail "bundle name is not ForgeSweep"
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$info_plist")" == "ForgeSweep" ]] || \
-        fail "bundle display name is not ForgeSweep"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$info_plist")" == "Nori" ]] || \
+        fail "bundle name is not Nori"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$info_plist")" == "Nori" ]] || \
+        fail "bundle display name is not Nori"
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")" == "com.forgesweep.app" ]] || \
         fail "bundle identifier still uses the previous brand"
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")" == "ForgeSweep" ]] || \
         fail "bundle executable is not ForgeSweep"
-    /usr/bin/grep -Fq 'appMenuItem.title = "ForgeSweep"' "$app_delegate" || \
-        fail "system app menu does not use the ForgeSweep name"
+    /usr/bin/grep -Fq 'appMenuItem.title = "Nori"' "$app_delegate" || \
+        fail "system app menu does not use the Nori name"
     if /usr/bin/grep -Fq 'appMenuItem.image' "$app_delegate"; then
         fail "system app menu still displays a brand icon"
     fi
 
-    pass "ForgeSweep brand and icon-free system menu contract"
+    pass "Nori brand, stable legacy identity and icon-free system menu contract"
 }
 
 test_tab_motion_contract() {
@@ -187,28 +187,15 @@ test_header_layout_contract() {
         fail "title-bar controls do not have a stable vertical alignment slot"
     /usr/bin/grep -Fq '.padding(.top, 2)' "$main_window" || \
         fail "title-bar controls can touch the top window edge"
-    /usr/bin/grep -Fq '.offset(y: 4)' "$main_window" || \
-        fail "title-bar glass actions lack optical top-edge correction"
-    /usr/bin/grep -Fq '.frame(width: 32, height: 24)' "$components" || \
-        fail "title-bar action buttons are oversized for the title region"
-    /usr/bin/grep -Fq 'Canvas { context, size in' "$components" || \
-        fail "title-bar mascot is not rendered as an animatable vector"
-    /usr/bin/grep -Fq 'MascotAnimationContext(reduceMotion: reduceMotion' "$components" || \
-        fail "title-bar mascot animation ignores reduced-motion lifecycle"
-    /usr/bin/grep -Fq 'MoleLogoMark(winkOpen: winkOpen, gazeX: gazeX, gazeY: gazeY)' "$components" || \
-        fail "title-bar mascot does not use the single-eye wink state"
-    /usr/bin/grep -Fq '.onContinuousHover { phase in' "$components" || \
-        fail "title-bar mascot eyes do not follow pointer movement"
-    /usr/bin/grep -Fq 'SearchMagnifier(size: size' "$components" || \
-        fail "title-bar mascot has no scanning magnifier state"
-    /usr/bin/grep -Fq 'ConfettiBurst(progress: confettiProgress)' "$components" || \
-        fail "title-bar mascot has no scan-completion celebration"
-    /usr/bin/grep -Fq 'private func performSpin() async -> Bool' "$components" || \
-        fail "title-bar mascot idle animation has no low-frequency spin"
-    /usr/bin/grep -Fq 'Bundle.main.url(forResource: "HeaderBrandIcon"' "$components" || \
-        fail "title-bar mascot does not reuse the rounded brand artwork"
-    if /usr/bin/grep -Fq 'peekAmount' "$components"; then
-        fail "title-bar mascot still contains the removed peek animation"
+    if /usr/bin/grep -Fq 'TitleBarButtonStyle' "$main_window"; then
+        fail "retired title-bar actions are still rendered"
+    fi
+    /usr/bin/grep -Fq 'case .settings: SettingsTabView(state: state)' "$main_window" || \
+        fail "settings is not a navigation tab"
+    /usr/bin/grep -Fq 'NoriMascotView(mood:' "$ROOT_DIR/SimpleMole/Views/NoriMascotView.swift" || \
+        fail "title-bar icon does not use the Nori semantic animation component"
+    if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
+        bash "$ROOT_DIR/script/test_nori.sh" || fail "Nori motion and asset invariants"
     fi
     /usr/bin/grep -Fq 'struct MoleSwitchToggleStyle: ToggleStyle' "$components" || \
         fail "switch controls do not share the animated brand interaction"
@@ -242,6 +229,57 @@ test_process_icon_contract() {
     pass "process application icon identity and fallback contract"
 }
 
+test_island_contract() {
+    local island="$ROOT_DIR/SimpleMole/Views/FloatingIslandView.swift"
+    local app_delegate="$ROOT_DIR/SimpleMole/AppDelegate.swift"
+    local app_state="$ROOT_DIR/SimpleMole/AppState.swift"
+    local components="$ROOT_DIR/SimpleMole/Views/Components.swift"
+    local quick_panel="$ROOT_DIR/SimpleMole/Views/QuickPanelView.swift"
+    local l10n="$ROOT_DIR/SimpleMole/L10n/TablesProductivity.swift"
+
+    [[ -f "$island" ]] || fail "floating island view is missing"
+    # 命中区域必须以视图根部命名坐标系上报：.global 在部分系统按屏幕原点解释，
+    # 会让悬停(tracking area)可用而点击(hitTest)整体落空。
+    /usr/bin/grep -Fq 'geo.frame(in: .named(IslandLayout.hitSpaceName))' "$island" || \
+        fail "island hit frame is not reported in the root coordinate space (buttons become unclickable)"
+    /usr/bin/grep -Fq 'coordinateSpace(name: IslandLayout.hitSpaceName)' "$island" || \
+        fail "island root coordinate space is not declared"
+    # codenotch 式深色胶囊不画投影：面板底层不允许再出现阴影层。
+    if /usr/bin/grep -Fq '.shadow(' "$island"; then
+        fail "island draws a shadow layer under the panel"
+    fi
+    /usr/bin/grep -Fq 'override func acceptsFirstMouse' "$ROOT_DIR/SimpleMole/Views/IslandWindow.swift" || \
+        fail "island first-click support is missing"
+    /usr/bin/grep -Fq 'struct NotchShape: Shape' "$ROOT_DIR/SimpleMole/Views/IslandWindow.swift" || \
+        fail "island notch shape is missing"
+    /usr/bin/grep -Fq 'safeTop: islandSafeTop' "$app_delegate" || \
+        fail "island does not avoid physical notch content"
+    /usr/bin/grep -Fq 'state.cleanIslandResource(resource)' "$island" || \
+        fail "CPU/memory resource cleanup is disconnected"
+    /usr/bin/grep -Fq 'onOpenMain()' "$island" || \
+        fail "island advanced action does not open main panel"
+    /usr/bin/grep -Fq 'y: screen.frame.maxY - size.height' "$app_delegate" || \
+        fail "island is not anchored to the physical screen top"
+    if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
+        bash "$ROOT_DIR/script/test_island_window.sh" || fail "island window hit testing"
+        bash "$ROOT_DIR/script/test_island_resources.sh" || fail "island resource policy"
+    fi
+    # 菜单栏图标可隐藏：设置驱动 + 状态项动态装拆 + 持久化。
+    /usr/bin/grep -Fq 'settings.menubaricon' "$ROOT_DIR/SimpleMole/Views/SettingsTabView.swift" || \
+        fail "settings has no menu bar icon visibility toggle"
+    /usr/bin/grep -Fq 'NSStatusBar.system.removeStatusItem(statusItem)' "$app_delegate" || \
+        fail "hiding the menu bar icon does not remove the status item"
+    /usr/bin/grep -Fq 'SMMenuBarIconVisible' "$app_state" || \
+        fail "menu bar icon visibility is not persisted"
+    /usr/bin/grep -Fq '"settings.menubaricon"' "$l10n" || \
+        fail "menu bar icon toggle has no localization"
+    if /usr/bin/grep -Fq 'island.edge' "$l10n"; then
+        fail "retired island edge dock keys are still localized"
+    fi
+
+    pass "floating island notch contract"
+}
+
 test_productivity_feature_contract() {
     local main_window="$ROOT_DIR/SimpleMole/Views/MainWindowView.swift"
     local app_state="$ROOT_DIR/SimpleMole/AppState.swift"
@@ -260,8 +298,8 @@ test_productivity_feature_contract() {
     local models="$ROOT_DIR/SimpleMole/Models.swift"
     local system_metrics="$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift"
 
-    /usr/bin/grep -Fq 'if state.showSettingsSheet {' "$main_window" || \
-        fail "settings button state is not connected to a presented panel"
+    /usr/bin/grep -Fq 'pages.append(.settings)' "$app_state" || \
+        fail "settings tab is not always available"
     /usr/bin/grep -Fq 'state.requestScanAccess(.quickOptimize)' \
         "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" || \
         fail "main cleanup page does not expose Quick Clean"
@@ -305,14 +343,15 @@ test_productivity_feature_contract() {
         fail "cleanup progress still reports the pre-policy request count"
     /usr/bin/grep -Fq 'selectionEnabled: state.cleanupScanComplete' "$cleanup_view" || \
         fail "cleanup category selection is not routed through a shared applying-state gate"
-    /usr/bin/grep -Fq '&& !state.isApplying)' "$cleanup_view" || \
+    /usr/bin/grep -Fq '&& !state.isApplying' "$cleanup_view" || \
         fail "cleanup category and child selection remain mutable during apply"
     /usr/bin/grep -Fq '.disabled(!state.cleanupScanComplete || state.isApplying)' "$cleanup_view" || \
         fail "cleanup group selection remains mutable during apply"
-    /usr/bin/grep -Fq '.transition(.moleFloatingPanel)' "$main_window" || \
-        fail "settings and header panels do not share an animated transition"
-    /usr/bin/grep -Fq 'headerFloatingPanel' "$main_window" || \
-        fail "header menus still bypass the animated in-window panel"
+    /usr/bin/grep -Fq '.liquidSurface(activeDialog)' "$main_window" || \
+        fail "main dialogs do not use a native glass surface"
+    /usr/bin/grep -Fq '.glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)' \
+        "$ROOT_DIR/SimpleMole/Views/LiquidPresentation.swift" || \
+        fail "glass dialogs do not use native matched-geometry transitions"
     /usr/bin/grep -Fq 'state.visiblePages.map' "$main_window" || \
         fail "visible page settings and tab labels use different data sources"
     /usr/bin/grep -Fq '!self.isCapturingScreenshot' "$app_delegate" || \
@@ -1164,9 +1203,9 @@ test_theme_contract() {
             -framework AppKit -framework SwiftUI \
             "$theme" "$ROOT_DIR/script/ThemeContrastTests.swift" \
             -o "$binary" || fail "theme contrast tests compile"
-        "$binary" || fail "Ultramarine palette contrast"
+        "$binary" || fail "Earth Blue palette contrast"
     fi
-    pass "Ultramarine theme: single-layer glass, system appearance, token convergence, WCAG contrast"
+    pass "Earth Blue theme: single-layer glass, system appearance, token convergence, WCAG contrast"
 }
 
 test_process_sampler() {
@@ -3146,7 +3185,26 @@ test_swift() {
     )
     arch="$(uname -m)"
     mkdir -p "$TEST_ROOT/swift-module-cache"
-    swiftc -typecheck -target "$arch-apple-macos13.0" \
+    # macOS 27 SDK 的 SwiftUI 宏插件只随完整版 Xcode 分发；CLT 环境探测失败时
+    # 回退到仍为非宏实现的 26.x SDK 再做 typecheck（与 build.sh 同一策略）。
+    local typecheck_sdkroot="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
+    /usr/bin/printf 'import SwiftUI\nstruct SwiftUIMacroProbe: View {\n    @State private var flag = false\n    var body: some View { Text(String(flag)) }\n}\n' \
+        > "$TEST_ROOT/swiftui-macro-probe.swift"
+    if ! SDKROOT="$typecheck_sdkroot" swiftc -typecheck -framework SwiftUI \
+            -module-cache-path "$TEST_ROOT/swift-module-cache" \
+            "$TEST_ROOT/swiftui-macro-probe.swift" >/dev/null 2>&1; then
+        for fallback_sdk in macosx26.5 macosx26.0; do
+            fallback_root="$(xcrun --sdk "$fallback_sdk" --show-sdk-path 2>/dev/null)" || continue
+            [[ -d "$fallback_root" ]] || continue
+            if SDKROOT="$fallback_root" swiftc -typecheck -framework SwiftUI \
+                    -module-cache-path "$TEST_ROOT/swift-module-cache" \
+                    "$TEST_ROOT/swiftui-macro-probe.swift" >/dev/null 2>&1; then
+                typecheck_sdkroot="$fallback_root"
+                break
+            fi
+        done
+    fi
+    SDKROOT="$typecheck_sdkroot" swiftc -typecheck -target "$arch-apple-macos13.0" \
         -module-cache-path "$TEST_ROOT/swift-module-cache" \
         -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit \
         "${swift_sources[@]}" || fail "Swift typecheck"
@@ -3177,6 +3235,7 @@ test_tab_motion_contract
 test_control_motion_contract
 test_header_layout_contract
 test_process_icon_contract
+test_island_contract
 test_productivity_feature_contract
 stage_bridge_runtime
 test_timeout_fallback

@@ -7,6 +7,8 @@ struct ScreenshotPresetTests {
         testBuiltInPresets()
         testPlainLayoutIsIdentity()
         testWindowLayoutAddsChromeAndPadding()
+        testPhoneShellLayout()
+        testPhoneShellWithoutPaddingKeepsButtons()
         testAspectNeverCropsContent()
         testChromeScalesWithResolution()
         testCompositionSelectionResetsOverrides()
@@ -17,11 +19,13 @@ struct ScreenshotPresetTests {
 
     static func testBuiltInPresets() {
         let presets = ScreenshotPreset.builtIn
-        precondition(presets.count == 10, "expected 10 built-in presets, got \(presets.count)")
+        precondition(presets.count == 11, "expected 11 built-in presets, got \(presets.count)")
         precondition(presets.first?.id == "plain", "plain must be the first preset")
         precondition(Set(presets.map(\.id)).count == presets.count, "preset ids must be unique")
         precondition(ScreenshotPreset.builtIn(id: ScreenshotPreset.defaultID) != nil,
                      "default preset must exist")
+        precondition(presets.contains { $0.frame == .iphone },
+                     "an iPhone shell preset must exist")
         for preset in presets {
             if case .mesh(let colors) = preset.background {
                 precondition(colors.count == 9, "mesh preset \(preset.id) needs 9 colors")
@@ -49,22 +53,65 @@ struct ScreenshotPresetTests {
         precondition(layout.contentRect == CGRect(x: 60, y: 90, width: 1000, height: 600), "content rect mismatch \(layout.contentRect)")
     }
 
+    static func testPhoneShellLayout() {
+        let composition = ScreenshotComposition(preset: ScreenshotPreset.builtIn(id: "iphone")!)
+        precondition(composition.preset.frame == .iphone && composition.frame == .iphone,
+                     "iphone preset must default to the iphone frame")
+        let layout = PresetLayout.compute(contentSize: CGSize(width: 600, height: 1200),
+                                          composition: composition)
+        // chromeScale = 600/1000 = 0.6
+        precondition(layout.bezelSide == 33 && layout.bezelTop == 66 && layout.bezelBottom == 33,
+                     "bezel must scale with content width, got \(layout.bezelSide)/\(layout.bezelTop)")
+        precondition(layout.cardRect.size == CGSize(width: 666, height: 1299),
+                     "body must be content plus bezels, got \(layout.cardRect.size)")
+        precondition(layout.contentRect == CGRect(x: layout.cardRect.minX + 33,
+                                                  y: layout.cardRect.minY + 66,
+                                                  width: 600, height: 1200),
+                     "content rect must sit inside the bezels, got \(layout.contentRect)")
+        precondition(layout.padding == 30, "5% padding of 600 must be 30, got \(layout.padding)")
+        precondition(layout.canvasSize == CGSize(width: 726, height: 1359),
+                     "canvas must be body + padding, got \(layout.canvasSize)")
+        precondition(layout.islandRect.midX == layout.cardRect.midX
+                     && layout.islandRect.maxY <= layout.contentRect.minY,
+                     "island must be centred inside the top bezel without covering content")
+        precondition(layout.bodyCornerRadius > layout.screenCornerRadius && layout.screenCornerRadius > 0,
+                     "screen corners must be tighter than the body corners")
+        precondition(layout.titleBarHeight == 0, "phone shell has no title bar")
+    }
+
+    static func testPhoneShellWithoutPaddingKeepsButtons() {
+        var composition = ScreenshotComposition(preset: ScreenshotPreset.builtIn(id: "plain")!)
+        composition.frame = .iphone
+        let layout = PresetLayout.compute(contentSize: CGSize(width: 500, height: 1000),
+                                          composition: composition)
+        precondition(layout.buttonProtrusion > 0, "phone shell must have side buttons")
+        precondition(layout.padding == layout.buttonProtrusion,
+                     "zero-ratio padding must still cover the button protrusion, got \(layout.padding)")
+        let canvas = CGRect(origin: .zero, size: layout.canvasSize)
+        precondition(canvas.contains(layout.cardRect), "body must stay inside the canvas")
+        precondition(canvas.minX + layout.buttonProtrusion <= layout.cardRect.minX
+                     && layout.cardRect.maxX + layout.buttonProtrusion <= canvas.maxX,
+                     "canvas must leave room for the protruding buttons on both sides")
+    }
+
     static func testAspectNeverCropsContent() {
         let content = CGSize(width: 1000, height: 600)
-        for aspect in PresetAspect.allCases {
-            let composition = ScreenshotComposition(preset: ScreenshotPreset.builtIn(id: "ocean")!,
-                                                    frame: .macWindow, aspect: aspect)
-            let layout = PresetLayout.compute(contentSize: content, composition: composition)
-            let canvas = CGRect(origin: .zero, size: layout.canvasSize)
-            precondition(canvas.contains(layout.cardRect), "\(aspect) must keep the card inside the canvas")
-            precondition(layout.contentRect.size == content, "\(aspect) must never resize the content")
-            if let ratio = aspect.ratio {
-                let actual = layout.canvasSize.width / layout.canvasSize.height
-                precondition(abs(actual - ratio) < 0.01, "\(aspect) ratio \(actual) != \(ratio)")
+        for frame in PresetFrameStyle.allCases {
+            for aspect in PresetAspect.allCases {
+                let composition = ScreenshotComposition(preset: ScreenshotPreset.builtIn(id: "ocean")!,
+                                                        frame: frame, aspect: aspect)
+                let layout = PresetLayout.compute(contentSize: content, composition: composition)
+                let canvas = CGRect(origin: .zero, size: layout.canvasSize)
+                precondition(canvas.contains(layout.cardRect), "\(frame)/\(aspect) must keep the card inside the canvas")
+                precondition(layout.contentRect.size == content, "\(frame)/\(aspect) must never resize the content")
+                if let ratio = aspect.ratio {
+                    let actual = layout.canvasSize.width / layout.canvasSize.height
+                    precondition(abs(actual - ratio) < 0.01, "\(frame)/\(aspect) ratio \(actual) != \(ratio)")
+                }
+                // centred
+                precondition(abs(layout.cardRect.midX - layout.canvasSize.width / 2) <= 1, "\(frame)/\(aspect) card not centred horizontally")
+                precondition(abs(layout.cardRect.midY - layout.canvasSize.height / 2) <= 1, "\(frame)/\(aspect) card not centred vertically")
             }
-            // centred
-            precondition(abs(layout.cardRect.midX - layout.canvasSize.width / 2) <= 1, "\(aspect) card not centred horizontally")
-            precondition(abs(layout.cardRect.midY - layout.canvasSize.height / 2) <= 1, "\(aspect) card not centred vertically")
         }
     }
 

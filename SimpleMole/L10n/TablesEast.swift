@@ -4,7 +4,7 @@ import Foundation
 
 extension L10nTables {
     static let zhHant: [String: String] = [
-        "window.title": "Mac 清理與最佳化",
+        "window.title": "Nori",
         "window.subtitle": "掃描後按類別選擇，所有工具都在此視窗內完成",
         "footer.hint": "原生系統狀態 · 網路單位 MB/s",
         "tab.cleanup": "硬碟清理",
@@ -246,7 +246,7 @@ extension L10nTables {
         "confirm.slimChoice.copy": "產生壓縮副本（-compressed 檔案）",
         "confirm.system.title": "確認清理 %d 個系統項目？",
         "confirm.system.msg": "將請求管理員授權。選取項目會在前綴、擁有者與檔案身分複核通過後永久刪除。",
-        "tab.system": "系統資料",
+        "cleanup.systemData.open": "系統資料",
         "system.title": "系統資料",
         "system.subtitle": "系統層級日誌、報告與快取 · 每次掃描需管理員授權",
         "system.scan": "掃描系統資料",
@@ -281,8 +281,8 @@ extension L10nTables {
         "confirm.env.title": "清理 %d 個開發環境版本？",
         "confirm.env.msg": "選中的 %d 個執行時/工具鏈版本（%@）會移入垃圾桶（可恢復）。使用中的版本不會被清理。需要時可透過對應版本管理器重新安裝。",
 
-        "menu.about": "關於 ForgeSweep",
-        "menu.quit": "結束 ForgeSweep",
+        "menu.about": "關於 Nori",
+        "menu.quit": "結束 Nori",
         "menu.edit": "編輯",
         "menu.copy": "拷貝",
         "menu.selectAll": "全選",
@@ -402,7 +402,7 @@ extension L10nTables {
     ]
 
     static let ja: [String: String] = [
-        "window.title": "Mac クリーンアップ＆最適化",
+        "window.title": "Nori",
         "window.subtitle": "スキャン後にカテゴリで選択。すべての機能がこのウィンドウで完結",
         "footer.hint": "ネイティブシステム状態 · ネットワーク単位 MB/s",
         "tab.cleanup": "ディスククリーンアップ",
@@ -642,7 +642,7 @@ extension L10nTables {
         "confirm.slimChoice.copy": "コピーを作成（-compressed）",
         "confirm.system.title": "%d 件のシステム項目をクリーンアップしますか？",
         "confirm.system.msg": "管理者権限を要求します。選択した項目は、プレフィックス・所有者・ファイル識別子の再検証を通過した後、完全に削除されます。",
-        "tab.system": "システムデータ",
+        "cleanup.systemData.open": "システムデータ",
         "system.title": "システムデータ",
         "system.subtitle": "システムのログ・レポート・キャッシュ · スキャンごとに管理者承認が必要",
         "system.scan": "システムデータをスキャン",
@@ -677,8 +677,8 @@ extension L10nTables {
         "confirm.env.title": "%d 件の開発環境バージョンをクリーンアップしますか？",
         "confirm.env.msg": "選択した %d 件のランタイム/ツールチェーンバージョン（%@）はゴミ箱へ移動します（復元可能）。使用中のバージョンはクリーンアップされません。必要に応じてバージョン管理ツールで再インストールできます。",
 
-        "menu.about": "ForgeSweep について",
-        "menu.quit": "ForgeSweep を終了",
+        "menu.about": "Nori について",
+        "menu.quit": "Nori を終了",
         "menu.edit": "編集",
         "menu.copy": "コピー",
         "menu.selectAll": "すべて選択",

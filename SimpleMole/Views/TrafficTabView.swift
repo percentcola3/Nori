@@ -118,7 +118,7 @@ struct TrafficTabView: View {
                     Image(systemName: "exclamationmark.circle")
                     VStack(alignment: .leading, spacing: 2) {
                         Text(clashStateText)
-                        Text(clashStateHint ?? l10n.t("netmon.clash.unavailableHint"))
+                        Text(degradedHint)
                             .foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
@@ -352,6 +352,14 @@ struct TrafficTabView: View {
 
     private var clashStateHint: String? {
         store.clashState == .stale ? l10n.t("netmon.clash.state.staleHint") : nil
+    }
+
+    /// 未配置时明确说明当前是系统口径的降级视图，而不是笼统的"连接失败"。
+    private var degradedHint: String {
+        if store.clashState == .notConfigured {
+            return l10n.t("netmon.clash.notConfiguredHint")
+        }
+        return clashStateHint ?? l10n.t("netmon.clash.unavailableHint")
     }
 
     private func clashRemoteText(_ connection: ClashAPI.Connection) -> String {

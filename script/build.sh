@@ -172,6 +172,29 @@ if [[ ! -d "$MOLE_SRC/lib" ]]; then
     exit 1
 fi
 
+# macOS 27 SDK 的 SwiftUI 把 @State 等属性实现为宏，而宏插件只随完整版 Xcode
+# 分发；纯 Command Line Tools 环境会报 "plugin for module 'SwiftUIMacros' not
+# found"。探测当前 SDK，失败时回退到仍为非宏实现的 26.x SDK。
+SWIFT_SDKROOT="${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}"
+swiftui_sdk_usable() {
+    /usr/bin/printf 'import SwiftUI\nstruct SwiftUIMacroProbe: View {\n    @State private var flag = false\n    var body: some View { Text(String(flag)) }\n}\n' \
+        > "$BUILD_TMP/swiftui-macro-probe.swift"
+    SDKROOT="$1" swiftc -typecheck -framework SwiftUI \
+        -module-cache-path "$BUILD_TMP/module-cache-probe" \
+        "$BUILD_TMP/swiftui-macro-probe.swift" >/dev/null 2>&1
+}
+if ! swiftui_sdk_usable "$SWIFT_SDKROOT"; then
+    for fallback_sdk in macosx26.5 macosx26.0; do
+        fallback_root="$(xcrun --sdk "$fallback_sdk" --show-sdk-path 2>/dev/null)" || continue
+        [[ -d "$fallback_root" ]] || continue
+        if swiftui_sdk_usable "$fallback_root"; then
+            echo "==> Default SDK lacks the SwiftUI macro plugin; building with $fallback_root"
+            SWIFT_SDKROOT="$fallback_root"
+            break
+        fi
+    done
+fi
+
 sign_one() {
     local target="$1"
     if [[ "$SIGN_IDENTITY_KIND" == "adhoc" ]]; then
@@ -196,7 +219,7 @@ for arch in $BUILD_ARCHS; do
     mkdir -p "$CONTENTS/MacOS" "$RESOURCES"
 
     echo "==> Compiling Swift app ($arch)"
-    swiftc -O -whole-module-optimization -target "$arch-apple-macos13.0" \
+    SDKROOT="$SWIFT_SDKROOT" swiftc -O -whole-module-optimization -target "$arch-apple-macos13.0" \
         -module-cache-path "$BUILD_TMP/module-cache-$arch" \
         -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit \
         "$ROOT_DIR"/SimpleMole/*.swift \
@@ -227,6 +250,10 @@ for arch in $BUILD_ARCHS; do
     if [[ -f "$ROOT_DIR/SimpleMole/Support/MenuBarIconTemplate.png" ]]; then
         cp "$ROOT_DIR/SimpleMole/Support/MenuBarIconTemplate.png" "$RESOURCES/MenuBarIconTemplate.png"
     fi
+
+    cp "$ROOT_DIR/SimpleMole/Support/MenuBarIconTemplate@2x.png" "$RESOURCES/MenuBarIconTemplate@2x.png"
+    mkdir -p "$RESOURCES/Nori"
+    cp "$ROOT_DIR/SimpleMole/Support/Nori/Animations/"*.svg "$RESOURCES/Nori/"
 
     # Resources contain only shell scripts and images, with no nested executables.
     sign_one "$CONTENTS/MacOS/ForgeSweep"

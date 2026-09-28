@@ -1,13 +1,13 @@
-# ForgeSweep
+# Nori
 
-面向工程师的原生 macOS 清理与效率工具：菜单栏常驻 + 快捷面板 + 主窗口（硬盘清理 / 磁盘分析 / 应用卸载 / 开发环境 / 进程清理 / 端口清理 / 图片瘦身 / 剪贴板）。支持 12 种语言，默认跟随系统语言，可随时手动切换。
+安静守护 Mac 的原生工具：菜单栏常驻 + 快捷面板 + 主窗口（硬盘清理 / 磁盘分析 / 应用卸载 / 开发环境 / 进程清理 / 端口清理 / 图片瘦身 / 截图 / 剪贴板）。支持 12 种语言，默认跟随系统语言，可随时手动切换。
 
 ## 多语言
 
 支持：简体中文、繁體中文、English、日本語、한국어、Deutsch、Français、Español、Português、Italiano、Русский、Türkçe。
 
 - **自动识别**：默认 `auto`，按系统偏好语言（含区域变体归一，如 pt-BR → pt、zh-TW → 繁中）匹配；回到前台会重新解析。
-- **手动切换**：主窗口标题栏的地球菜单，选择即持久化（`SMLanguage`）并即时刷新全部界面、状态栏文案与应用菜单。
+- **手动切换**：主窗口“设置”标签中的语言选项，选择即持久化（`SMLanguage`）并即时刷新全部界面、状态栏文案与应用菜单。
 - 语言表内置代码（`SimpleMole/L10n/`，覆盖 12 种语言），缺失键回退英文；格式化占位符保持一致。
 
 ## 定位
@@ -43,7 +43,13 @@ ForgeSweep 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、�
 
 ### 自动目录清理
 
-从主窗口顶部的“自动清理”进入规则管理。每个目录可选择“容量上限”（超限后按最旧优先清理至阈值）或“保留最近 X 天”；添加后的规则默认关闭，可先预览、手动确认清理，再显式开启。应用常驻期间每小时检查调度，实际扫描至少间隔六小时；执行失败会在下一次小时调度重试。
+从“设置”标签中的“自动清理”进入规则管理。每个目录可选择“容量上限”（超限后按最旧优先清理至阈值）或“保留最近 X 天”；添加后的规则默认关闭，可先预览、手动确认清理，再显式开启。应用常驻期间每小时检查调度，实际扫描至少间隔六小时；执行失败会在下一次小时调度重试。
+
+### 顶部刘海与设置
+
+顶部刘海悬停展开彩色进度环：绿色表示健康、橙色表示偏高、红色表示高占用。CPU 和内存支持悬停查看应用排行、单个正常退出，以及闪电按钮智能清理；智能清理只尝试正常退出符合策略的高占用隐藏应用，内存清理同时释放 Nori 自身缓存。右侧箭头直接打开主窗口。
+
+设置始终作为独立标签显示，集中管理语言、自动化、白名单、权限和功能开关。设置弹窗与刘海在 macOS 26 及以上使用原生 Liquid Glass 过渡；较早系统与辅助功能设置保留相应回退。扫描、清理中与清理结果使用 Nori SVG 状态动画，减少动态效果时显示静态图形。
 
 ## 构建与 GitHub Release
 
@@ -117,15 +123,22 @@ bash script/release.sh
 
 `SM_NOTARY_PROFILE` 是通过 `xcrun notarytool store-credentials` 保存的钥匙串配置名。此流程默认校验并使用 `vendor/mole/UPSTREAM_COMMIT`，分别公证两个架构，生成 `dist/ForgeSweep-arm64.zip` 和 `dist/ForgeSweep-x86_64.zip`，其中 App 已 stapled。升级 Mole 时应整体更新 `vendor/mole/`、重新审计并运行完整测试；也可通过 `MOLE_SRC=/path/to/Mole` 临时验证上游检出。
 
-## App 图标
+## Nori 图标与动态形象
 
-ImageGen 主图、菜单栏模板、生成提示词与 ICNS 分别位于 `SimpleMole/Support/AppIcon-1024.png`、`MenuBarIconTemplate.png`、`AppIcon.prompt.txt` 和 `AppIcon.icns`。更新主图后运行：
+新版品牌采用冰蓝 Nori 形象。已包含同源 SVG、Apple Icon Composer 工程、兼容 ICNS、菜单栏 1×/2× 模板，以及待机、彩带环绕工作、无聊、眨眼、庆祝、提醒、敲键盘、喝咖啡和照镜子动画。可见名称为 Nori，历史 Bundle ID、签名、可执行文件、构建输出与数据目录仍沿用 ForgeSweep，保持更新兼容。
+
+[设计和调用说明](docs/brand/nori-design.md) · [动画预览](docs/brand/nori-preview.html)
+
+全部资源重建：`bash script/make_nori.sh`；动画与资产验证：`bash script/test_nori.sh`。
+
+
+矢量渲染主图、菜单栏模板、设计记录与 ICNS 分别位于 `SimpleMole/Support/AppIcon-1024.png`、`MenuBarIconTemplate.png`、`AppIcon.prompt.txt` 和 `AppIcon.icns`。更新主图后运行：
 
 ```bash
 bash script/make_icon.sh
 ```
 
-主窗口应用栏及 Dock / Finder App 封面使用彩色 App 图标；菜单栏状态项使用独立的单色 Template 图标，由 macOS 自动适配深浅色。
+主窗口应用栏使用无底色 Nori 矢量动画，Dock / Finder 使用彩色 App 图标；菜单栏状态项使用独立的单色 Template 图标，由 macOS 自动适配深浅色。
 
 `dist/<架构>/ForgeSweep.app` 内嵌 Swift 主程序、`bridge/` 脚本，以及 `lib/core/`、
 `lib/clean/project.sh` 和 `lib/clean/purge_shared.sh`。构建与桥接回归共用

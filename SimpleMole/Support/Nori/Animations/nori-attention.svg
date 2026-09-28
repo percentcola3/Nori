@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="nori-attention-title">
+<title id="nori-attention-title">Nori · 需要关注</title>
+<style>
+:root {color-scheme:light dark; background:transparent}
+.jelly {transform-origin:132px 218px}
+.eyelid {transform-origin:0 0}
+.gaze {transform-origin:145px 110px}
+@keyframes blink {0%,43%,49%,100%{transform:scaleY(1)}46%{transform:scaleY(.08)}}
+@keyframes work {0%,100%{transform:translateY(0) scale(1,1)}25%{transform:translateY(0) scale(1.055,.945)}55%{transform:translateY(-3px) scale(.96,1.04)}80%{transform:translateY(0) scale(1.025,.975)}}
+@keyframes workGaze {0%,100%{transform:translateX(-4px)}50%{transform:translateX(4px)}}
+@keyframes bored {0%,20%,100%{transform:rotate(0deg) scale(1)}40%,60%{transform:rotate(-5deg) scale(1.03,.97)}80%{transform:rotate(3deg) scale(.99,1.01)}}
+@keyframes glance {0%,20%,100%{transform:translate(0,0)}40%,60%{transform:translate(-7px,2px)}80%{transform:translate(5px,0)}}
+@keyframes breathe {0%,100%{transform:scale(1)}50%{transform:scale(1.012,.988)}}
+@keyframes celebrate {0%,100%{transform:translateY(0) scale(1)}15%{transform:scale(1.12,.88)}38%{transform:translateY(-3px) scale(.965,1.035)}65%{transform:scale(1.07,.93)}82%{transform:scale(.98,1.02)}}
+@keyframes notice {0%,100%{transform:rotate(0deg)}25%{transform:rotate(-5deg)}60%{transform:rotate(5deg)}}
+@keyframes ribbon {0%,12%{opacity:0;transform:translate(0,0) rotate(0deg)}22%{opacity:1}100%{opacity:0;transform:translate(var(--dx),var(--dy)) rotate(var(--turn))}}
+.ribbon{opacity:0}
+
+@keyframes nori-orbit {to{transform:rotate(360deg)}}
+.orbit-spin{animation:nori-orbit 1.8s linear infinite;transform-origin:0 0}
+@keyframes nori-typeBody {0%,100%{transform:scale(1,1)}50%{transform:scale(1.025,.975)}}
+@keyframes nori-tap {from{transform:translateY(-4px) rotate(-3deg)}to{transform:translateY(5px) rotate(3deg)}}
+.hand-left{transform-origin:95px 182px}.hand-right{transform-origin:147px 182px}
+@keyframes nori-key {0%,49%{fill:#F2C66D}50%,100%{fill:#69C7DD}}
+.cup-lift{transform-origin:184px 176px}
+@keyframes nori-sip {0%,16%,78%,100%{transform:translate(0,0) rotate(0deg)}34%,60%{transform:translate(-32px,-24px) rotate(-12deg)}68%{transform:translate(-12px,-8px) rotate(-4deg)}}
+@keyframes nori-sipBody {0%,18%,78%,100%{transform:rotate(0deg) scale(1)}38%,60%{transform:rotate(3deg) scale(1.025,.975)}}
+@keyframes nori-contented {0%,24%,70%,100%{transform:scaleY(1)}35%,60%{transform:scaleY(.12)}}
+@keyframes nori-steam {0%{opacity:0;transform:translateY(3px)}25%{opacity:.6}100%{opacity:0;transform:translate(3px,-14px)}}
+@keyframes nori-mirrorPose {0%,15%,100%{transform:rotate(0deg)}38%{transform:rotate(4deg)}65%,80%{transform:rotate(-3deg)}}
+@keyframes nori-reflect {0%,15%,100%{transform:translate(0,0)}38%{transform:translate(-2px,1px)}65%,80%{transform:translate(2px,-1px)}}
+@keyframes nori-glint {0%,15%,65%,100%{opacity:0;transform:translateX(-10px)}25%{opacity:.6}50%{opacity:0;transform:translateX(12px)}}
+.jelly{animation:notice .8s ease-in-out 1}
+@media(prefers-reduced-motion:reduce){*{animation:none!important}.ribbon,.steam,.mirror-glint{display:none}}</style>
+<g class="jelly"><path d="M 72 218 C 36 209 25 186 29 150 C 34 105 56 67 91 43 C 126 18 171 8 199 21 C 225 34 232 82 235 127 C 238 173 235 194 209 204 C 174 218 119 228 72 218 Z" fill="#BFEAF2"/><g class="gaze"><g transform="translate(119 113) rotate(-10)"><g class="eyelid"><rect x="-9" y="-17" width="18" height="34" rx="9" fill="#10283F"/></g></g><g transform="translate(182 106) rotate(-10)"><g class="eyelid"><rect x="-9" y="-17" width="18" height="34" rx="9" fill="#10283F"/></g></g></g></g>
+
+</svg>

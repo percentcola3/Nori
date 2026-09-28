@@ -4,7 +4,7 @@ import Foundation
 
 extension L10nTables {
     static let ko: [String: String] = [
-        "window.title": "Mac 정리 및 최적화",
+        "window.title": "Nori",
         "window.subtitle": "스캔 후 카테고리별로 선택하세요. 모든 기능이 이 창에서 완료됩니다",
         "footer.hint": "네이티브 시스템 상태 · 네트워크 단위 MB/s",
         "tab.cleanup": "디스크 정리",
@@ -243,7 +243,7 @@ extension L10nTables {
         "confirm.slimChoice.copy": "복사본 만들기 (-compressed)",
         "confirm.system.title": "시스템 항목 %d개를 정리할까요?",
         "confirm.system.msg": "관리자 승인을 요청합니다. 선택한 항목은 접두사·소유자·파일 정체성 재검증을 통과한 후 영구 삭제됩니다.",
-        "tab.system": "시스템 데이터",
+        "cleanup.systemData.open": "시스템 데이터",
         "system.title": "시스템 데이터",
         "system.subtitle": "시스템 로그, 리포트 및 캐시 · 스캔 시 관리자 승인 필요",
         "system.scan": "시스템 데이터 스캔",
@@ -278,8 +278,8 @@ extension L10nTables {
         "confirm.env.title": "개발 환경 버전 %d개를 정리할까요?",
         "confirm.env.msg": "선택한 런타임/도구체인 버전 %d개 (%@)가 휴지통으로 이동합니다 (복원 가능). 사용 중인 버전은 정리되지 않습니다. 필요하면 버전 관리자로 다시 설치할 수 있습니다.",
 
-        "menu.about": "ForgeSweep 정보",
-        "menu.quit": "ForgeSweep 종료",
+        "menu.about": "Nori 정보",
+        "menu.quit": "Nori 종료",
         "menu.edit": "편집",
         "menu.copy": "복사",
         "menu.selectAll": "모두 선택",
@@ -399,7 +399,7 @@ extension L10nTables {
     ]
 
     static let de: [String: String] = [
-        "window.title": "Mac-Bereinigung & Optimierung",
+        "window.title": "Nori",
         "window.subtitle": "Scannen, nach Kategorie auswählen — alles in diesem Fenster",
         "footer.hint": "Native Systemstatistik · Netzwerk in MB/s",
         "tab.cleanup": "Festplatte bereinigen",
@@ -638,7 +638,7 @@ extension L10nTables {
         "confirm.slimChoice.copy": "Kopien erstellen (-compressed)",
         "confirm.system.title": "%d Systemelemente bereinigen?",
         "confirm.system.msg": "Fordert eine Administratorbestätigung. Ausgewählte Elemente werden nach erneuter Prüfung von Präfix, Eigentümer und Datei-Identität endgültig gelöscht.",
-        "tab.system": "Systemdaten",
+        "cleanup.systemData.open": "Systemdaten",
         "system.title": "Systemdaten",
         "system.subtitle": "Systemeigene Logs, Berichte und Caches · pro Scan Administratorbestätigung",
         "system.scan": "Systemdaten scannen",
@@ -673,8 +673,8 @@ extension L10nTables {
         "confirm.env.title": "%d Entwicklungsumgebungs-Versionen bereinigen?",
         "confirm.env.msg": "Die %d ausgewählten Runtime-/Toolchain-Versionen (%@) gehen in den Papierkorb (wiederherstellbar). Benutzte Versionen werden nie bereinigt. Neuinstallation jederzeit über den Versionsmanager.",
 
-        "menu.about": "Über ForgeSweep",
-        "menu.quit": "ForgeSweep beenden",
+        "menu.about": "Über Nori",
+        "menu.quit": "Nori beenden",
         "menu.edit": "Bearbeiten",
         "menu.copy": "Kopieren",
         "menu.selectAll": "Alles auswählen",
@@ -794,7 +794,7 @@ extension L10nTables {
     ]
 
     static let fr: [String: String] = [
-        "window.title": "Nettoyage & optimisation Mac",
+        "window.title": "Nori",
         "window.subtitle": "Scannez, choisissez par catégorie — tout se passe dans cette fenêtre",
         "footer.hint": "État système natif · réseau en Mo/s",
         "tab.cleanup": "Nettoyage disque",
@@ -1033,7 +1033,7 @@ extension L10nTables {
         "confirm.slimChoice.copy": "Créer des copies (-compressed)",
         "confirm.system.title": "Nettoyer %d éléments système ?",
         "confirm.system.msg": "Demande une approbation administrateur. Les éléments sélectionnés sont supprimés définitivement après revérification du préfixe, du propriétaire et de l'identité du fichier.",
-        "tab.system": "Données système",
+        "cleanup.systemData.open": "Données système",
         "system.title": "Données système",
         "system.subtitle": "Journaux, rapports et caches système · approbation administrateur par analyse",
         "system.scan": "Analyser les données système",
@@ -1068,8 +1068,8 @@ extension L10nTables {
         "confirm.env.title": "Nettoyer %d versions d'environnement dev ?",
         "confirm.env.msg": "Les %d versions sélectionnées (%@) vont à la corbeille (récupérables). Les versions en usage ne sont jamais nettoyées. Réinstallez via le gestionnaire de versions au besoin.",
 
-        "menu.about": "À propos de ForgeSweep",
-        "menu.quit": "Quitter ForgeSweep",
+        "menu.about": "À propos de Nori",
+        "menu.quit": "Quitter Nori",
         "menu.edit": "Édition",
         "menu.copy": "Copier",
         "menu.selectAll": "Tout sélectionner",

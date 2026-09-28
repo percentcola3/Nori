@@ -267,12 +267,17 @@ enum RuntimeStore {
 
     static func portRows(fromText text: String) -> [PortRow] {
         var rows: [PortRow] = []
+        var seen = Set<PortRow.ID>()
         for line in text.components(separatedBy: "\n") {
             let parts = line.components(separatedBy: "\t")
             guard parts.count >= 5, let pid = Int32(parts[1]),
                   validBridgeStartIdentity(parts[2]) else { continue }
-            rows.append(PortRow(port: parts[0], pid: pid, startIdentity: parts[2],
-                                command: parts[3], endpoint: parts[4...].joined(separator: "\t")))
+            let row = PortRow(port: parts[0], pid: pid, startIdentity: parts[2],
+                              command: parts[3], endpoint: parts[4...].joined(separator: "\t"))
+            // lsof 可为 IPv4/IPv6 或重复文件描述符返回相同监听项。
+            // 展示和关闭对象相同，只保留首条，保证 LazyVStack 的行标识唯一。
+            guard seen.insert(row.id).inserted else { continue }
+            rows.append(row)
         }
         return rows
     }

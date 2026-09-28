@@ -6,11 +6,14 @@ struct MainWindowView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var headerPanel: HeaderPanel?
+    @Namespace private var dialogNamespace
 
-    private enum HeaderPanel: Equatable {
-        case language
-        case automation
+    private var activeDialog: String? {
+        if state.showPermissionCenter { return "permissions" }
+        if state.showAutoCleanupSheet { return "autoCleanup" }
+        if state.showAutomationSettings { return "automation" }
+        if state.showWhitelistSheet { return "whitelist" }
+        return nil
     }
 
     private var tabs: [String] {
@@ -18,88 +21,43 @@ struct MainWindowView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            VStack(spacing: 0) {
-                titleBarRow
-                metricBar
-                    // 权限中心挂在独立子视图节点：与其他 sheet 分开，避免多 sheet 同节点时 dismiss 绑定失联。
-                    .sheet(isPresented: $state.showPermissionCenter) {
-                        PermissionCenterView(state: state)
-                    }
-                    .sheet(isPresented: $state.showAutoCleanupSheet) {
-                        AutoCleanupRulesView(state: state)
-                    }
-                Divider()
-                PillPicker(items: tabs, selection: $state.selectedTab)
-                    .padding(.top, 8)
-                    .padding(.bottom, 6)
-                    .sheet(isPresented: $state.showAutomationSettings) {
-                        AutomationSettingsView(
-                            locations: state.savedScanLocations,
-                            automations: state.smartAutomation,
-                            receipts: state.projectHibernation.receiptStore,
-                            projectRadar: state.projectRadar,
-                            hibernation: state.projectHibernation,
-                            authorizedLocationIDs: state.automationAuthorizedLocationIDs,
-                            fullDiskAccessGranted: state.permissionCenter.fullDiskAccessGranted,
-                            canMutate: !state.isBusy,
-                            onAddLocation: { state.addSavedScanLocation() },
-                            onRestore: { state.restoreHibernatedProject($0) })
-                    }
-                Divider()
-                AnimatedTabContent(state: state)
-                    .frame(maxHeight: .infinity)
-            }
+        LiquidGlassGroup {
+            ZStack {
+                VStack(spacing: 0) {
+                    titleBarRow
+                    metricBar
+                    Divider()
+                    PillPicker(items: tabs, selection: $state.selectedTab)
+                        .padding(.top, 8)
+                        .padding(.bottom, 6)
+                    Divider()
+                    AnimatedTabContent(state: state)
+                        .frame(maxHeight: .infinity)
+                }
+                .disabled(activeDialog != nil)
+                .accessibilityHidden(activeDialog != nil)
 
-            if let headerPanel {
-                Color.black.opacity(0.001)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture { dismissHeaderPanel() }
-                    .zIndex(1)
-
-                headerFloatingPanel(headerPanel)
-                    .padding(.top, 42)
-                    .padding(.trailing, 16)
-                    .transition(.moleFloatingPanel)
-                    .zIndex(2)
-            }
-
-            if state.showSettingsSheet {
-                Color.black.opacity(0.30)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture { state.showSettingsSheet = false }
-                    .transition(.opacity)
-                    .zIndex(3)
-
-                SettingsSheet(state: state)
-                    .background(GlassSurface(cornerRadius: 18))
-                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .strokeBorder(Color.hairline, lineWidth: 1))
-                    .shadow(color: .black.opacity(0.38), radius: 34, y: 14)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                    .transition(.moleFloatingPanel)
-                    .zIndex(4)
+                if let activeDialog {
+                    Color.black.opacity(0.20)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { dismissDialog() }
+                        .transition(.opacity)
+                    dialogContent(activeDialog)
+                        .liquidSurface(activeDialog)
+                        .padding(16)
+                        .transition(.opacity)
+                        .zIndex(2)
+                }
             }
         }
-        .frame(minWidth: 680, idealWidth: 720, minHeight: 620, idealHeight: 720)
-        .background {
-            GlassSurface()
-                .ignoresSafeArea()
-        }
-        // 内容上移进标题栏区域：交通灯与标题/按钮同排（titleBarRow 左侧已留交通灯空位）。
+        .environment(\.liquidNamespace, dialogNamespace)
+        .environment(\.liquidDialogID, activeDialog)
+        .frame(minWidth: 760, idealWidth: 940, minHeight: 620, idealHeight: 720)
+        .background { GlassSurface().ignoresSafeArea() }
         .ignoresSafeArea(.container, edges: .top)
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: headerPanel)
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.showSettingsSheet)
-        .onExitCommand {
-            if state.showSettingsSheet { state.showSettingsSheet = false }
-            else { dismissHeaderPanel() }
-        }
-        .sheet(isPresented: $state.showWhitelistSheet) {
-            WhitelistSheet(state: state)
-        }
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: activeDialog)
+        .onExitCommand { dismissDialog() }
         .alert(confirmationTitle,
                isPresented: confirmationBinding, presenting: state.confirmation) { accepted in
             Button(accepted.confirmLabel, role: .destructive) { state.runConfirmation(accepted) }
@@ -118,142 +76,48 @@ struct MainWindowView: View {
         }
     }
 
-    /// 顶部工具排：标题（左）+ 四个同款胶囊按钮（右），两端对齐。
     private var titleBarRow: some View {
         HStack(spacing: 8) {
-            // 避开交通灯区域
             Color.clear.frame(width: 66, height: 1)
-            HeaderBrandIconView(size: 20,
-                                isSearching: state.isScanning,
-                                searchSucceeded: state.cleanupScanComplete)
+            HeaderBrandIconView(size: 20, isSearching: state.isScanning,
+                                searchSucceeded: state.cleanupScanComplete, isWorking: state.isBusy)
             Text(l10n.t("window.title"))
                 .font(.system(size: 13, weight: .semibold))
             Spacer()
-            HStack(spacing: 8) {
-                languageButton
-                automationButton
-                Button { state.showWhitelistSheet = true } label: {
-                    Label(l10n.t("header.whitelist"), systemImage: "shield.lefthalf.filled")
-                }
-                .labelStyle(.iconOnly)
-                .help(l10n.t("header.whitelist"))
-                .buttonStyle(TitleBarButtonStyle())
-                Button {
-                    headerPanel = nil
-                    state.showSettingsSheet = true
-                } label: {
-                    Label(l10n.t("settings.title"), systemImage: "gearshape")
-                }
-                .labelStyle(.iconOnly)
-                .help(l10n.t("settings.title"))
-                .buttonStyle(TitleBarButtonStyle())
-            }
-            // 按钮玻璃合成范围略大于布局框，做独立光学校正，避免贴住顶边。
-            .offset(y: 4)
         }
-        // 固定标题栏内容槽：小按钮在槽内居中，不再贴住窗口顶边。
         .frame(height: 28)
-        .padding(.leading, 10)
-        .padding(.trailing, 26)
+        .padding(.horizontal, 10)
         .padding(.top, 2)
         .padding(.bottom, 4)
     }
 
-    private var languageButton: some View {
-        Button { toggleHeaderPanel(.language) } label: {
-            Label(l10n.t("header.language"), systemImage: "globe")
-        }
-        .labelStyle(.iconOnly)
-        .help(l10n.t("header.language"))
-        .buttonStyle(TitleBarButtonStyle(isActive: headerPanel == .language))
-    }
-
-    private var automationButton: some View {
-        Button { toggleHeaderPanel(.automation) } label: {
-            Label(l10n.t("automation.menu"), systemImage: "clock.arrow.circlepath")
-        }
-        .labelStyle(.iconOnly)
-        .help(l10n.t("automation.menu"))
-        .buttonStyle(TitleBarButtonStyle(isActive: headerPanel == .automation))
-    }
-
     @ViewBuilder
-    private func headerFloatingPanel(_ panel: HeaderPanel) -> some View {
-        switch panel {
-        case .language:
-            VStack(spacing: 3) {
-                ForEach(AppLanguage.allCases) { language in
-                    Button {
-                        L10n.shared.setLanguage(language)
-                        dismissHeaderPanel()
-                    } label: {
-                        HStack(spacing: 9) {
-                            Text(language.displayName)
-                                .lineLimit(1)
-                            Spacer(minLength: 12)
-                            Image(systemName: "checkmark")
-                                .opacity(L10n.shared.language == language ? 1 : 0)
-                        }
-                        .font(.system(size: 11, weight: L10n.shared.language == language ? .semibold : .regular))
-                        .foregroundStyle(L10n.shared.language == language ? Color.primary : Color.secondary)
-                        .padding(.horizontal, 10)
-                        .frame(height: 27)
-                        .background(RoundedRectangle(cornerRadius: 7)
-                            .fill(L10n.shared.language == language
-                                  ? Color.moleAccent.opacity(0.16) : Color.clear))
-                        .contentShape(RoundedRectangle(cornerRadius: 7))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(6)
-            .frame(width: 176)
-            .background(GlassSurface(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.hairline, lineWidth: 1))
-            .shadow(color: .black.opacity(0.34), radius: 18, y: 8)
-
-        case .automation:
-            VStack(spacing: 3) {
-                headerPanelAction(l10n.t("auto.header"), symbol: "folder.badge.clock") {
-                    dismissHeaderPanel()
-                    state.showAutoCleanupSheet = true
-                }
-                headerPanelAction(l10n.t("automation.header"), symbol: "gearshape.2") {
-                    dismissHeaderPanel()
-                    state.openAutomationSettings()
-                }
-            }
-            .padding(6)
-            .frame(width: 210)
-            .background(GlassSurface(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.hairline, lineWidth: 1))
-            .shadow(color: .black.opacity(0.34), radius: 18, y: 8)
+    private func dialogContent(_ id: String) -> some View {
+        switch id {
+        case "permissions": PermissionCenterView(state: state)
+        case "autoCleanup": AutoCleanupRulesView(state: state)
+        case "whitelist": WhitelistSheet(state: state)
+        case "automation":
+            AutomationSettingsView(
+                locations: state.savedScanLocations, automations: state.smartAutomation,
+                receipts: state.projectHibernation.receiptStore, projectRadar: state.projectRadar,
+                hibernation: state.projectHibernation,
+                authorizedLocationIDs: state.automationAuthorizedLocationIDs,
+                fullDiskAccessGranted: state.permissionCenter.fullDiskAccessGranted,
+                canMutate: !state.isBusy,
+                onAddLocation: { state.addSavedScanLocation() },
+                onRestore: { state.restoreHibernatedProject($0) },
+                onClose: { state.showAutomationSettings = false })
+                .frame(width: 700, height: 560)
+        default: EmptyView()
         }
     }
 
-    private func headerPanelAction(_ title: String, symbol: String,
-                                   action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: symbol)
-                .font(.system(size: 11, weight: .medium))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .frame(height: 29)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Color.surface2))
-                .contentShape(RoundedRectangle(cornerRadius: 7))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func toggleHeaderPanel(_ panel: HeaderPanel) {
-        state.showSettingsSheet = false
-        headerPanel = headerPanel == panel ? nil : panel
-    }
-
-    private func dismissHeaderPanel() {
-        headerPanel = nil
+    private func dismissDialog() {
+        if state.showPermissionCenter { state.cancelPermissionCenter() }
+        else if state.showAutoCleanupSheet { state.showAutoCleanupSheet = false }
+        else if state.showAutomationSettings { state.showAutomationSettings = false }
+        else { state.showWhitelistSheet = false }
     }
 
     private var metricBar: some View {
@@ -333,13 +197,13 @@ private struct AnimatedTabContent: View {
             case .analyze: AnalyzeTabView(state: state)
             case .uninstall: UninstallTabView(state: state)
             case .optimize: OptimizeTabView(state: state)
-            case .system: SystemDataView(state: state)
             case .devenv: DevEnvTabView(state: state)
             case .processes: ProcessesTabView(state: state)
             case .ports: PortsTabView(state: state)
             case .traffic: TrafficTabView(state: state)
             case .images: ImagesTabView(state: state)
             case .clipboard: ClipboardHistoryTabView(manager: state.clipboardManager)
+            case .settings: SettingsTabView(state: state)
             }
         } else {
             EmptyView()

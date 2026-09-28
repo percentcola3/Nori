@@ -3,7 +3,7 @@ import Foundation
 /// 流量监控面板的独立语言表；未翻译语言自动回退英文。
 enum L10nTrafficTables {
     static let en: [String: String] = [
-        "tab.traffic": "Traffic",
+        "tab.traffic": "Proxy Traffic",
         "netmon.status.sampling": "Sampling…",
         "netmon.status.lastSample": "Last sample %@",
         "netmon.status.bytesUnavailable": "App sampling is unavailable; app byte totals paused",
@@ -75,11 +75,12 @@ enum L10nTrafficTables {
         "netmon.detail.lastSeen": "Last observed %@",
         "netmon.detail.noBytes": "No attributed bytes",
         "netmon.clash.unavailableHint": "Proxy totals cannot be updated. Existing history is retained; zero does not mean no proxy traffic. Check Clash settings.",
+        "netmon.clash.notConfiguredHint": "No proxy core detected. Per-app traffic below uses system counters only; the node/direct split needs a Clash/mihomo controller (Settings).",
         "netmon.clash.connectionsHint": "Active connection counters start when each connection opens; app rankings and destination history count this monitoring session.",
     ]
 
     static let zhHans: [String: String] = [
-        "tab.traffic": "流量监控",
+        "tab.traffic": "代理流量",
         "netmon.status.sampling": "采样中…",
         "netmon.status.lastSample": "最近采样 %@",
         "netmon.status.bytesUnavailable": "App 采样不可用，App 字节统计暂停",
@@ -151,11 +152,12 @@ enum L10nTrafficTables {
         "netmon.detail.lastSeen": "最后观察 %@",
         "netmon.detail.noBytes": "暂无归属字节",
         "netmon.clash.unavailableHint": "代理统计暂时无法更新，已保留历史数据；数值为零不代表没有代理流量。请检查 Clash 设置。",
+        "netmon.clash.notConfiguredHint": "未检测到代理核心，当前仅显示系统口径的按应用流量；节点/直连拆分需要配置 Clash/mihomo 控制器（设置）。",
         "netmon.clash.connectionsHint": "活动连接显示自连接建立以来的流量；App 排名和目标地址历史统计本次监控会话。",
     ]
 
     static let zhHant: [String: String] = [
-        "tab.traffic": "流量監控",
+        "tab.traffic": "代理流量",
         "netmon.status.sampling": "取樣中…",
         "netmon.status.lastSample": "最近取樣 %@",
         "netmon.status.bytesUnavailable": "App 取樣無法使用，App 位元組統計暫停",
@@ -227,6 +229,7 @@ enum L10nTrafficTables {
         "netmon.detail.lastSeen": "最後觀察 %@",
         "netmon.detail.noBytes": "暫無歸屬位元組",
         "netmon.clash.unavailableHint": "代理統計暫時無法更新，已保留歷史資料；數值為零不代表沒有代理流量。請檢查 Clash 設定。",
+        "netmon.clash.notConfiguredHint": "未偵測到代理核心，目前僅顯示系統口徑的按應用流量；節點/直連拆分需要配置 Clash/mihomo 控制器（設定）。",
         "netmon.clash.connectionsHint": "活動連線顯示自連線建立以來的流量；App 排名和目標位址歷史統計本次監控工作階段。",
     ]
 

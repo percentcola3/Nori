@@ -6,7 +6,6 @@ struct AutomationProjectOption: Identifiable, Equatable {
 }
 
 struct AutomationSettingsView: View {
-    @Environment(\.dismiss) private var dismiss
     @ObservedObject var locations: SavedScanLocationStore
     @ObservedObject var automations: AutomationStore
     @ObservedObject var receipts: ProjectHibernationReceiptStore
@@ -17,6 +16,7 @@ struct AutomationSettingsView: View {
     let canMutate: Bool
     let onAddLocation: () -> Void
     let onRestore: (ProjectHibernationReceipt) -> Void
+    let onClose: () -> Void
     @ObservedObject private var l10n = L10n.shared
 
     @State private var showsRuleEditor = false
@@ -71,7 +71,7 @@ struct AutomationSettingsView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button(l10n.t("common.close")) { dismiss() }
+            Button(l10n.t("common.close")) { onClose() }
                 .buttonStyle(.bordered)
         }
         .padding(16)

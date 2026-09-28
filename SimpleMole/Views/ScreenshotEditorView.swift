@@ -328,7 +328,7 @@ struct ScreenshotEditorView: View {
             .labelsHidden()
         }
         .padding(14)
-        .frame(width: 320)
+        .frame(width: 360)
     }
 
     // MARK: 操作条
@@ -658,7 +658,15 @@ struct PresetBackgroundView: View {
     }
 }
 
-/// 预设相框：背景 + 窗口卡片（标题栏三点）/ 圆角卡片 / 无框 + 内容。
+/// iPhone 外壳的金属渐变后盖：钛黑 / 银白，随预设的明暗外观切换。
+private let darkPhoneBody = LinearGradient(
+    colors: [Color(white: 0.32), Color(white: 0.14), Color(white: 0.24)],
+    startPoint: .topLeading, endPoint: .bottomTrailing)
+private let lightPhoneBody = LinearGradient(
+    colors: [Color(white: 0.95), Color(white: 0.78), Color(white: 0.88)],
+    startPoint: .topLeading, endPoint: .bottomTrailing)
+
+/// 预设相框：背景 + 窗口卡片（标题栏三点）/ 圆角卡片 / iPhone 外壳 + 内容。
 struct PresetFrameView<Content: View>: View {
     let composition: ScreenshotComposition
     let contentSize: CGSize
@@ -678,7 +686,16 @@ struct PresetFrameView<Content: View>: View {
 
     private var isLight: Bool { composition.preset.frameAppearance == .light }
 
+    @ViewBuilder
     private func card(_ layout: PresetLayout) -> some View {
+        if composition.frame == .iphone {
+            phoneBody(layout)
+        } else {
+            windowCard(layout)
+        }
+    }
+
+    private func windowCard(_ layout: PresetLayout) -> some View {
         let shape = RoundedRectangle(cornerRadius: layout.cornerRadius, style: .continuous)
         return VStack(spacing: 0) {
             if composition.frame == .macWindow {
@@ -695,6 +712,79 @@ struct PresetFrameView<Content: View>: View {
             lineWidth: max(1, layout.chromeScale)))
         .shadow(color: .black.opacity(composition.preset.showsShadow ? 0.38 : 0),
                 radius: 24 * layout.chromeScale, y: 12 * layout.chromeScale)
+    }
+
+    // MARK: iPhone 外壳
+
+    /// 金属渐变后盖：钛黑 / 银白，随预设的明暗外观切换。
+    private var bodyFill: LinearGradient {
+        isLight ? lightPhoneBody : darkPhoneBody
+    }
+
+    /// iPhone 机身：渐变后盖 + 侧键 + 黑色屏幕包边；截图完整落在屏幕内，
+    /// 灵动岛留在上边框里，不遮挡内容。坐标同卡片（左上为原点）。
+    private func phoneBody(_ layout: PresetLayout) -> some View {
+        let bodyShape = RoundedRectangle(cornerRadius: layout.bodyCornerRadius, style: .continuous)
+        let rim = (3 * layout.chromeScale).rounded()
+        let screenShape = RoundedRectangle(cornerRadius: layout.screenCornerRadius, style: .continuous)
+        let rimShape = RoundedRectangle(cornerRadius: layout.screenCornerRadius + rim, style: .continuous)
+        return ZStack(alignment: .topLeading) {
+            bodyShape.fill(AnyShapeStyle(bodyFill))
+            phoneSideButtons(layout)
+            // 屏幕黑色包边：浅色截图也能看清屏幕边界
+            rimShape.fill(Color.black)
+                .frame(width: layout.contentRect.width + rim * 2,
+                       height: layout.contentRect.height + rim * 2)
+                .offset(x: layout.contentRect.minX - layout.cardRect.minX - rim,
+                        y: layout.contentRect.minY - layout.cardRect.minY - rim)
+            content()
+                .frame(width: layout.contentRect.width, height: layout.contentRect.height)
+                .clipShape(screenShape)
+                .offset(x: layout.contentRect.minX - layout.cardRect.minX,
+                        y: layout.contentRect.minY - layout.cardRect.minY)
+            Capsule()
+                .fill(Color.black)
+                .frame(width: layout.islandRect.width, height: layout.islandRect.height)
+                .offset(x: layout.islandRect.minX - layout.cardRect.minX,
+                        y: layout.islandRect.minY - layout.cardRect.minY)
+            bodyShape.strokeBorder(
+                isLight ? Color.black.opacity(0.20) : Color.white.opacity(0.25),
+                lineWidth: max(1, 1.5 * layout.chromeScale))
+        }
+        .frame(width: layout.cardRect.width, height: layout.cardRect.height)
+        .shadow(color: .black.opacity(composition.preset.showsShadow ? 0.38 : 0),
+                radius: 24 * layout.chromeScale, y: 12 * layout.chromeScale)
+    }
+
+    /// 左侧音量键 ×2、右侧电源键：凸出机身一点，留白由布局兜底不裁切。
+    @ViewBuilder
+    private func phoneSideButtons(_ layout: PresetLayout) -> some View {
+        let scale = layout.chromeScale
+        let thickness = max(2, 12 * scale)
+        let tuck = 6 * scale
+        let gap = 16 * scale
+        let protrusion = layout.buttonProtrusion
+        let width = protrusion + tuck
+        let length = 150 * scale
+        // 音量键位于机身上半区，电源键在右侧对准两颗音量键中间
+        let volumeY = layout.bezelTop + layout.contentRect.height * 0.16
+        let powerLength = min(length * 1.4, layout.contentRect.height * 0.4)
+        let powerY = volumeY + length + gap / 2 - powerLength / 2
+        let floor = layout.cardRect.height - layout.bezelBottom * 0.5
+        let buttonColor = isLight ? Color(white: 0.60) : Color(white: 0.36)
+        let shape = RoundedRectangle(cornerRadius: thickness / 2, style: .continuous)
+        shape.fill(buttonColor)
+            .frame(width: width, height: length)
+            .offset(x: -protrusion, y: volumeY)
+        // 内容太扁时装不下第二颗音量键，宁可少画也不越出机身
+        if volumeY + length * 2 + gap <= floor {
+            shape.fill(buttonColor)
+                .frame(width: width, height: length)
+                .offset(x: -protrusion, y: volumeY + length + gap)
+        }
+        shape.fill(buttonColor)
+            .frame(width: width, height: powerLength)
+            .offset(x: layout.cardRect.width - tuck, y: max(volumeY, min(powerY, floor - powerLength)))
     }
 
     private func titleBar(_ layout: PresetLayout) -> some View {
@@ -723,7 +813,19 @@ struct PresetThumbnail: View {
             } else {
                 PresetBackgroundView(background: preset.background)
             }
-            if preset.frame != .none {
+            if preset.frame == .iphone {
+                RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                    .fill(preset.frameAppearance == .light ? Color(white: 0.88) : Color(white: 0.22))
+                    .frame(width: 17, height: 30)
+                    .overlay(
+                        VStack(spacing: 2.5) {
+                            Capsule().fill(Color.black).frame(width: 6, height: 2.5)
+                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                .fill(Color(white: 0.96))
+                        }
+                        .padding(2.5))
+                    .shadow(color: .black.opacity(0.3), radius: 3, y: 1)
+            } else if preset.frame != .none {
                 VStack(spacing: 0) {
                     if preset.frame == .macWindow {
                         HStack(spacing: 2) {

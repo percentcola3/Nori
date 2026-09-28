@@ -4,7 +4,7 @@ import Foundation
 
 extension L10nTables {
     static let es: [String: String] = [
-        "window.title": "Limpieza y optimización de Mac",
+        "window.title": "Nori",
         "window.subtitle": "Escanea y elige por categoría — todo en esta ventana",
         "footer.hint": "Estado nativo del sistema · red en MB/s",
         "tab.cleanup": "Limpiar disco",
@@ -243,7 +243,7 @@ extension L10nTables {
         "confirm.slimChoice.copy": "Crear copias (-compressed)",
         "confirm.system.title": "¿Limpiar %d elementos del sistema?",
         "confirm.system.msg": "Pide una aprobación de administrador. Los elementos seleccionados se eliminan de forma permanente tras reverificar prefijo, propietario e identidad del archivo.",
-        "tab.system": "Datos del sistema",
+        "cleanup.systemData.open": "Datos del sistema",
         "system.title": "Datos del sistema",
         "system.subtitle": "Registros, informes y cachés del sistema · aprobación de administrador por análisis",
         "system.scan": "Analizar datos del sistema",
@@ -278,8 +278,8 @@ extension L10nTables {
         "confirm.env.title": "¿Limpiar %d versiones del entorno dev?",
         "confirm.env.msg": "Las %d versiones seleccionadas (%@) van a la papelera (recuperables). Las versiones en uso nunca se limpian. Reinstálalas con el gestor de versiones cuando quieras.",
 
-        "menu.about": "Acerca de ForgeSweep",
-        "menu.quit": "Salir de ForgeSweep",
+        "menu.about": "Acerca de Nori",
+        "menu.quit": "Salir de Nori",
         "menu.edit": "Edición",
         "menu.copy": "Copiar",
         "menu.selectAll": "Seleccionar todo",
@@ -399,7 +399,7 @@ extension L10nTables {
     ]
 
     static let pt: [String: String] = [
-        "window.title": "Limpeza e otimização do Mac",
+        "window.title": "Nori",
         "window.subtitle": "Escaneie e escolha por categoria — tudo nesta janela",
         "footer.hint": "Estado nativo do sistema · rede em MB/s",
         "tab.cleanup": "Limpar disco",
@@ -638,7 +638,7 @@ extension L10nTables {
         "confirm.slimChoice.copy": "Criar cópias (-compressed)",
         "confirm.system.title": "Limpar %d itens do sistema?",
         "confirm.system.msg": "Solicita uma aprovação de administrador. Os itens selecionados são excluídos permanentemente após reverificação de prefixo, proprietário e identidade do arquivo.",
-        "tab.system": "Dados do sistema",
+        "cleanup.systemData.open": "Dados do sistema",
         "system.title": "Dados do sistema",
         "system.subtitle": "Registros, relatórios e caches do sistema · aprovação de administrador por verificação",
         "system.scan": "Verificar dados do sistema",
@@ -673,8 +673,8 @@ extension L10nTables {
         "confirm.env.title": "Limpar %d versões do ambiente dev?",
         "confirm.env.msg": "As %d versões selecionadas (%@) vão para o Lixo (recuperáveis). Versões em uso nunca são limpas. Reinstale pelo gerenciador de versões quando precisar.",
 
-        "menu.about": "Sobre o ForgeSweep",
-        "menu.quit": "Encerrar ForgeSweep",
+        "menu.about": "Sobre o Nori",
+        "menu.quit": "Encerrar Nori",
         "menu.edit": "Editar",
         "menu.copy": "Copiar",
         "menu.selectAll": "Selecionar tudo",
@@ -794,7 +794,7 @@ extension L10nTables {
     ]
 
     static let it: [String: String] = [
-        "window.title": "Pulizia e ottimizzazione Mac",
+        "window.title": "Nori",
         "window.subtitle": "Scansiona e scegli per categoria — tutto in questa finestra",
         "footer.hint": "Stato nativo del sistema · rete in MB/s",
         "tab.cleanup": "Pulizia disco",
@@ -1033,7 +1033,7 @@ extension L10nTables {
         "confirm.slimChoice.copy": "Crea copie (-compressed)",
         "confirm.system.title": "Pulire %d elementi di sistema?",
         "confirm.system.msg": "Richiede un'approvazione di amministratore. Gli elementi selezionati vengono eliminati definitivamente dopo la riverifica di prefisso, proprietario e identità del file.",
-        "tab.system": "Dati di sistema",
+        "cleanup.systemData.open": "Dati di sistema",
         "system.title": "Dati di sistema",
         "system.subtitle": "Log, report e cache di sistema · approvazione amministratore per scansione",
         "system.scan": "Analizza dati di sistema",
@@ -1068,8 +1068,8 @@ extension L10nTables {
         "confirm.env.title": "Pulire %d versioni dell'ambiente dev?",
         "confirm.env.msg": "Le %d versioni selezionate (%@) vanno nel Cestino (recuperabili). Le versioni in uso non vengono mai pulite. Reinstalla col gestore di versioni quando vuoi.",
 
-        "menu.about": "Informazioni su ForgeSweep",
-        "menu.quit": "Esci da ForgeSweep",
+        "menu.about": "Informazioni su Nori",
+        "menu.quit": "Esci da Nori",
         "menu.edit": "Modifica",
         "menu.copy": "Copia",
         "menu.selectAll": "Seleziona tutto",
@@ -1189,7 +1189,7 @@ extension L10nTables {
     ]
 
     static let ru: [String: String] = [
-        "window.title": "Очистка и оптимизация Mac",
+        "window.title": "Nori",
         "window.subtitle": "Сканируйте и выбирайте по категориям — всё в этом окне",
         "footer.hint": "Нативное состояние системы · сеть в МБ/с",
         "tab.cleanup": "Очистка диска",
@@ -1428,7 +1428,7 @@ extension L10nTables {
         "confirm.slimChoice.copy": "Создать копии (-compressed)",
         "confirm.system.title": "Очистить системных объектов: %d?",
         "confirm.system.msg": "Запрашивает подтверждение администратора. Выбранные элементы удаляются безвозвратно после повторной проверки префикса, владельца и идентичности файла.",
-        "tab.system": "Системные данные",
+        "cleanup.systemData.open": "Системные данные",
         "system.title": "Системные данные",
         "system.subtitle": "Системные журналы, отчёты и кэши · подтверждение администратора на каждое сканирование",
         "system.scan": "Сканировать системные данные",
@@ -1463,8 +1463,8 @@ extension L10nTables {
         "confirm.env.title": "Очистить версий среды разработки: %d?",
         "confirm.env.msg": "Выбранные версии рантаймов/тулчейнов (%d, %@) попадут в Корзину (восстановимы). Используемые версии никогда не очищаются. Переустановите через менеджер версий при необходимости.",
 
-        "menu.about": "О ForgeSweep",
-        "menu.quit": "Завершить ForgeSweep",
+        "menu.about": "О Nori",
+        "menu.quit": "Завершить Nori",
         "menu.edit": "Правка",
         "menu.copy": "Копировать",
         "menu.selectAll": "Выбрать всё",
@@ -1584,7 +1584,7 @@ extension L10nTables {
     ]
 
     static let tr: [String: String] = [
-        "window.title": "Mac Temizlik ve Optimizasyon",
+        "window.title": "Nori",
         "window.subtitle": "Taratın, kategoriye göre seçin — her şey bu pencerede",
         "footer.hint": "Yerel sistem durumu · ağ MB/s cinsinden",
         "tab.cleanup": "Disk Temizliği",
@@ -1823,7 +1823,7 @@ extension L10nTables {
         "confirm.slimChoice.copy": "Kopya oluştur (-compressed)",
         "confirm.system.title": "%d sistem öğesi temizlensin mi?",
         "confirm.system.msg": "Yönetici onayı ister. Seçilen öğeler, ön ek, sahibi ve dosya kimliği yeniden doğrulandıktan sonra kalıcı olarak silinir.",
-        "tab.system": "Sistem verileri",
+        "cleanup.systemData.open": "Sistem verileri",
         "system.title": "Sistem verileri",
         "system.subtitle": "Sistem günlükleri, raporlar ve önbellekler · tarama başına yönetici onayı",
         "system.scan": "Sistem verilerini tara",
@@ -1858,8 +1858,8 @@ extension L10nTables {
         "confirm.env.title": "%d geliştirme ortamı sürümü temizlensin mi?",
         "confirm.env.msg": "Seçilen %d çalışma zamanı/araç zinciri sürümü (%@) Çöp Kutusu'na gider (geri alınabilir). Kullanımdaki sürümler asla temizlenmez. İstediğinizde sürüm yöneticisiyle yeniden yükleyebilirsiniz.",
 
-        "menu.about": "ForgeSweep Hakkında",
-        "menu.quit": "ForgeSweep'dan Çık",
+        "menu.about": "Nori Hakkında",
+        "menu.quit": "Nori'dan Çık",
         "menu.edit": "Düzenle",
         "menu.copy": "Kopyala",
         "menu.selectAll": "Tümünü seç",

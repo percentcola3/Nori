@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleName</key>
-	<string>ForgeSweep</string>
+	<string>Nori</string>
 	<key>CFBundleDisplayName</key>
-	<string>ForgeSweep</string>
+	<string>Nori</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.forgesweep.app</string>
 	<key>CFBundleExecutable</key>
@@ -27,11 +27,11 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSDesktopFolderUsageDescription</key>
-	<string>ForgeSweep scans your Desktop to find cleanable files. Scanning is read-only and nothing leaves your Mac.</string>
+	<string>Nori scans your Desktop to find cleanable files. Scanning is read-only and nothing leaves your Mac.</string>
 	<key>NSDocumentsFolderUsageDescription</key>
-	<string>ForgeSweep scans your Documents to find cleanable files. Scanning is read-only and nothing leaves your Mac.</string>
+	<string>Nori scans your Documents to find cleanable files. Scanning is read-only and nothing leaves your Mac.</string>
 	<key>NSDownloadsFolderUsageDescription</key>
-	<string>ForgeSweep scans your Downloads to find leftover installers. Scanning is read-only and nothing leaves your Mac.</string>
+	<string>Nori scans your Downloads to find leftover installers. Scanning is read-only and nothing leaves your Mac.</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 </dict>

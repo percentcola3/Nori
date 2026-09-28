@@ -24,32 +24,72 @@ final class AppState: ObservableObject {
     @Published var networkHistory: [Double] = []
     /// 快捷面板展示的内存占用最高应用组（按内存排序前 5）。
     @Published var topMemoryApps: [ProcessRow] = []
-    private var topMemoryInFlight = false
-    private var lastTopMemoryRefresh = Date.distantPast
+    @Published var topCPUApps: [ProcessRow] = []
+    @Published var islandResourceStatus: [IslandResource: String] = [:]
+    @Published var islandCleaningResource: IslandResource?
+    @Published var islandClosingPIDs: Set<Int32> = []
+    var islandProcessRows: [ProcessRow] = []
+    let islandProcessSampler = ProcessSampler()
+    var islandSampling = false
+    var lastIslandSample = Date.distantPast
 
     // MARK: 窗口与导航
 
     /// 功能页标识：设置中可按需隐藏。
     enum PageKey: String, CaseIterable, Identifiable {
-        case cleanup, analyze, uninstall, optimize, system, devenv, processes, ports, traffic, images, clipboard
+        case cleanup, analyze, uninstall, optimize, devenv, processes, ports, traffic, images, clipboard, settings
         var id: String { rawValue }
-        var titleKey: String { "tab.\(rawValue)" }
+        var titleKey: String { self == .settings ? "settings.title" : "tab.\(rawValue)" }
 
-        /// 剪贴板页由功能开关直接控制，不参与普通页面显隐配置。
+        /// 剪贴板页由功能开关控制，设置页始终保留。
         static var configurableCases: [PageKey] {
-            allCases.filter { $0 != .clipboard }
+            allCases.filter { $0 != .clipboard && $0 != .settings }
         }
+    }
+
+    /// 顶部刘海中常驻显示的快捷指标。
+    enum IslandItem: String, CaseIterable, Identifiable {
+        case cpu, memory, disk, network
+        var id: String { rawValue }
     }
 
     @Published var selectedTab = 0
     /// 用户隐藏的页面（UserDefaults 持久化）。
     @Published var hiddenPages: Set<String> = []
-    @Published var showSettingsSheet = false
-    var mainWindowVisible = false
+    @Published var mainWindowVisible = false
+
+    // MARK: 灵动岛 / 菜单栏入口
+    // 顶部刘海：悬停展开指标与资源排行，箭头直接打开主窗口。
+
+    @Published var islandEnabled = true
+    /// 菜单栏状态图标开关：隐藏后由灵动岛与程序坞图标承担入口。
+    @Published var menuBarIconVisible = true
+    /// 至少保留一项；这里控制刘海中的常驻指标。
+    @Published var islandItems: Set<IslandItem> = [.cpu, .memory, .network]
+
+    func setIslandEnabled(_ enabled: Bool) {
+        islandEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "SMIslandEnabled")
+    }
+
+    func setMenuBarIconVisible(_ visible: Bool) {
+        menuBarIconVisible = visible
+        UserDefaults.standard.set(visible, forKey: "SMMenuBarIconVisible")
+    }
+
+    func setIslandItem(_ item: IslandItem, enabled: Bool) {
+        if enabled {
+            islandItems.insert(item)
+        } else if islandItems.count > 1 {
+            islandItems.remove(item)
+        }
+        UserDefaults.standard.set(islandItems.map(\.rawValue), forKey: "SMIslandItems")
+    }
 
     var visiblePages: [PageKey] {
         var pages = PageKey.configurableCases.filter { !hiddenPages.contains($0.rawValue) }
         if clipboardHistoryEnabled { pages.append(.clipboard) }
+        pages.append(.settings)
         return pages
     }
 
@@ -61,14 +101,14 @@ final class AppState: ObservableObject {
     }
 
     func setPageVisible(_ key: PageKey, _ visible: Bool) {
-        guard key != .clipboard else { return }
+        guard PageKey.configurableCases.contains(key) else { return }
         let previousPages = visiblePages
         let selectedPage = previousPages.indices.contains(selectedTab) ? previousPages[selectedTab] : nil
         if visible {
             hiddenPages.remove(key.rawValue)
         } else {
             // 至少保留一个可见页
-            guard visiblePages.count > 1 else { return }
+            guard PageKey.configurableCases.filter({ !hiddenPages.contains($0.rawValue) }).count > 1 else { return }
             hiddenPages.insert(key.rawValue)
         }
         UserDefaults.standard.set(Array(hiddenPages), forKey: "SMHiddenPages")
@@ -84,6 +124,8 @@ final class AppState: ObservableObject {
     @Published var categories: [CleanupCategory] = []
     @Published var family: CleanupFamily = .clean
     @Published var isScanning = false
+    @Published var cleanupOutcomeMood: NoriMood?
+    @Published var cleanupFeedbackID = 0
     @Published var isApplying = false
     @Published var cleanupScanComplete = true
     @Published var statusText: String
@@ -405,9 +447,11 @@ final class AppState: ObservableObject {
         didSet {
             UserDefaults.standard.set(clipboardHistoryEnabled, forKey: "SMClipboardHistory")
             clipboardHistoryEnabled ? clipboardManager.start() : clipboardManager.stop()
-            if !clipboardHistoryEnabled {
-                selectedTab = min(selectedTab, max(0, visiblePages.count - 1))
-            }
+            let featurePageCount = visiblePages.count - 1 - (clipboardHistoryEnabled ? 1 : 0)
+            let previousSettingsIndex = featurePageCount + (oldValue ? 1 : 0)
+            let wasSettings = selectedTab == previousSettingsIndex
+            if wasSettings { jump(to: .settings) }
+            else { selectedTab = min(selectedTab, max(0, visiblePages.count - 1)) }
         }
     }
     @Published var screenshotHotKeyEnabled: Bool {
@@ -496,7 +540,6 @@ final class AppState: ObservableObject {
     func presentPermissionCenter() {
         permissionCenter.refresh()
         permissionCenter.clearDiskAuthorizationError()
-        showSettingsSheet = false
         showPermissionCenter = true
     }
 
@@ -654,6 +697,13 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(Array(sanitizedHiddenPages), forKey: "SMHiddenPages")
         clipboardHistoryEnabled = UserDefaults.standard.object(forKey: "SMClipboardHistory") as? Bool ?? false
         screenshotHotKeyEnabled = UserDefaults.standard.object(forKey: "SMShotHotKey") as? Bool ?? true
+        islandEnabled = UserDefaults.standard.object(forKey: "SMIslandEnabled") as? Bool ?? true
+        menuBarIconVisible = UserDefaults.standard.object(forKey: "SMMenuBarIconVisible") as? Bool ?? true
+        let knownItems = Set(IslandItem.allCases.map(\.rawValue))
+        let savedItems = Set(UserDefaults.standard.stringArray(forKey: "SMIslandItems") ?? []).intersection(knownItems)
+        islandItems = savedItems.isEmpty
+            ? [.cpu, .memory, .network]
+            : savedItems.compactMap(IslandItem.init(rawValue:)).reduce(into: Set()) { $0.insert($1) }
 
         statusText = L10n.shared.t("status.ready")
         processStatus = L10n.shared.t("proc.status.apps") // 会在首次刷新时替换为带数量文案
@@ -704,9 +754,6 @@ final class AppState: ObservableObject {
                     case .cleanup:
                         // Keep the existing result/selection. Scanning starts
                         // only from the user's quick/deep scan actions.
-                        break
-                    case .system:
-                        // System inventory also requires an explicit scan button.
                         break
                     case .analyze:
                         self.scanSnapshots()
@@ -910,7 +957,6 @@ final class AppState: ObservableObject {
     /// 否则 AppKit 可能在 sheet 呈现期间否决整个退出。
     func dismissAllSheetsForTermination() {
         showPermissionCenter = false
-        showSettingsSheet = false
         showAutoCleanupSheet = false
         showWhitelistSheet = false
         showAutomationSettings = false
@@ -926,18 +972,7 @@ final class AppState: ObservableObject {
 
     /// 仅在快捷面板可见时周期刷新；打开面板和操作完成后可立即刷新。
     func refreshTopMemoryApps(force: Bool = false) {
-        guard !topMemoryInFlight,
-              force || Date().timeIntervalSince(lastTopMemoryRefresh) >= 6 else { return }
-        lastTopMemoryRefresh = Date()
-        topMemoryInFlight = true
-        Task {
-            let rows: [ProcessRow] = await Task.detached(priority: .utility) { () -> [ProcessRow] in
-                guard let text = SystemMetrics.processSnapshotText() else { return [] }
-                return RuntimeStore.nativeRows(fromProcessText: text).rows
-            }.value
-            topMemoryInFlight = false
-            topMemoryApps = Array(rows.prefix(5))
-        }
+        refreshIslandProcesses(force: force)
     }
 
     /// 快捷面板强杀与进程页共用相同的确认语义。
@@ -1006,6 +1041,7 @@ final class AppState: ObservableObject {
     // MARK: - 扫描
 
     private func beginCleanupProgress(mode: CleanupScanMode = .quick) {
+        cleanupOutcomeMood = nil
         cleanupProgressGeneration += 1
         cleanupScanMode = mode
         cleanupDeferredPaths = []
@@ -1731,6 +1767,8 @@ final class AppState: ObservableObject {
 
     private func reportCleanupResult(_ result: CleanupExecutionResult,
                                      permanently: Bool) {
+        cleanupOutcomeMood = NoriCleanupFeedback.mood(removed: result.removed, skipped: result.skipped, failed: result.failed)
+        cleanupFeedbackID += 1
         analyzeCache.clear()
         // 报告文案与执行器的实际动作一致：永久删除与移入废纸篓分开表述。
         let key = permanently
@@ -2912,7 +2950,11 @@ final class AppState: ObservableObject {
         dupSelection.removeAll()
         analyzeIsOverview = report.overview
         analyzePath = report.path
-        analyzeEntries = report.entries.sorted(by: AnalyzeEntry.analysisOrder)
+        // 0 字节且统计完整的条目没有信息量：隐藏它们让列表聚焦真实占用；
+        // 标注为部分统计（未知大小）的条目保留展示。
+        analyzeEntries = report.entries
+            .filter { $0.size > 0 || $0.isPartial == true }
+            .sorted(by: AnalyzeEntry.analysisOrder)
         analyzeTotalSize = report.totalSize
         analyzeLargeFiles = report.largeFiles ?? []
         if let error = report.error {
@@ -3210,6 +3252,45 @@ final class AppState: ObservableObject {
             autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
             log(autoCleanupStatus)
         }
+    }
+
+    /// 从清理扫描（可再生缓存）或磁盘分析（目录）入口批量创建自动清理
+    /// 规则。清理页的路径已由风险策略判定为可再生缓存，创建时直接记录
+    /// 安全授权；磁盘分析的目录由用户在规则面板里自行确认“仅可再生
+    /// 内容”。规则一律默认关闭，创建后打开面板供审阅与启用。
+    @discardableResult
+    func addAutoCleanupRules(forDirectories directories: [String],
+                             policy: AutoCleanupPolicy,
+                             sizeLimitBytes: UInt64,
+                             retentionDays: Int,
+                             cacheVerifiedRegenerable: Bool) -> (added: Int, skipped: Int) {
+        var added = 0
+        var skipped = 0
+        for directory in directories {
+            do {
+                let validated = try AutoCleanupPlanner.validatedRoot(
+                    URL(fileURLWithPath: directory))
+                guard !autoCleanupRules.contains(where: { $0.directory == validated }) else {
+                    skipped += 1
+                    continue
+                }
+                autoCleanupRules.append(AutoCleanupRule(
+                    directory: validated,
+                    policy: policy,
+                    sizeLimitBytes: sizeLimitBytes,
+                    retentionDays: retentionDays,
+                    isEnabled: false,
+                    isRegenerable: cacheVerifiedRegenerable,
+                    lastRunAt: nil,
+                    lastReclaimedBytes: 0))
+                added += 1
+            } catch {
+                skipped += 1
+                log(l10n.tf("auto.status.invalid", error.localizedDescription))
+            }
+        }
+        if added > 0 { persistAutoCleanupRules() }
+        return (added, skipped)
     }
 
     func updateAutoCleanupRule(_ updated: AutoCleanupRule) {

@@ -63,6 +63,8 @@ enum PresetFrameStyle: String, CaseIterable, Hashable {
     case macWindow
     /// 圆角卡片：无标题栏，细边框。
     case roundedCard
+    /// iPhone 外壳：机身 + 灵动岛 + 侧键，截图完整落在屏幕内。
+    case iphone
 
     var l10nKey: String { "shot.frame.\(rawValue)" }
     var icon: String {
@@ -70,6 +72,7 @@ enum PresetFrameStyle: String, CaseIterable, Hashable {
         case .none: return "photo"
         case .macWindow: return "macwindow"
         case .roundedCard: return "rectangle.inset.filled"
+        case .iphone: return "iphone"
         }
     }
 }
@@ -168,6 +171,8 @@ struct ScreenshotPreset: Identifiable, Equatable, Hashable {
         ])),
         ScreenshotPreset(id: "frame", background: .transparent, frame: .macWindow,
                          paddingRatio: 0.04),
+        ScreenshotPreset(id: "iphone", background: .transparent, frame: .iphone,
+                         paddingRatio: 0.05),
     ]
 
     static func builtIn(id: String) -> ScreenshotPreset? {
@@ -210,7 +215,7 @@ struct ScreenshotComposition: Equatable {
 struct PresetLayout: Equatable {
     /// 整张输出图的尺寸。
     let canvasSize: CGSize
-    /// 相框（窗口卡片）的位置，包含标题栏。
+    /// 相框（窗口卡片 / iPhone 机身）的位置，包含标题栏与边框。
     let cardRect: CGRect
     /// 截图内容在画布中的位置。
     let contentRect: CGRect
@@ -219,6 +224,18 @@ struct PresetLayout: Equatable {
     let cornerRadius: CGFloat
     /// 相框细节（三点、边框、阴影）的缩放系数，随内容分辨率变化。
     let chromeScale: CGFloat
+    // iPhone 外壳（其余相框全为 0 / .zero）
+    /// 屏幕四周的机身边框；上边框加高以容纳灵动岛。
+    let bezelTop: CGFloat
+    let bezelSide: CGFloat
+    let bezelBottom: CGFloat
+    /// 机身外轮廓与屏幕内容的圆角。
+    let bodyCornerRadius: CGFloat
+    let screenCornerRadius: CGFloat
+    /// 侧键凸出机身的深度，留白至少要盖住它。
+    let buttonProtrusion: CGFloat
+    /// 灵动岛（画布坐标），完全落在上边框内、不遮挡内容。
+    let islandRect: CGRect
 
     static func compute(contentSize: CGSize, composition: ScreenshotComposition) -> PresetLayout {
         let preset = composition.preset
@@ -226,13 +243,19 @@ struct PresetLayout: Equatable {
         let height = max(1, contentSize.height)
         // 以 1000pt 宽为基准缩放相框细节，导出 2x 时线条与点仍成比例。
         let chromeScale = min(4, max(0.5, width / 1000))
-        let padding = (preset.paddingRatio * width).rounded()
+        let isPhone = composition.frame == .iphone
+        let bezelSide = isPhone ? (55 * chromeScale).rounded() : 0
+        let bezelTop = isPhone ? (110 * chromeScale).rounded() : 0
+        let bezelBottom = bezelSide
+        let buttonProtrusion = isPhone ? (16 * chromeScale).rounded() : 0
+        let padding = max((preset.paddingRatio * width).rounded(), buttonProtrusion)
         let titleBarHeight: CGFloat = composition.frame == .macWindow
             ? (30 * chromeScale).rounded() : 0
-        let cornerRadius: CGFloat = composition.frame == .none
+        let cornerRadius: CGFloat = composition.frame == .none || isPhone
             ? 0 : (14 * chromeScale).rounded()
 
-        let cardSize = CGSize(width: width, height: height + titleBarHeight)
+        let cardSize = CGSize(width: width + bezelSide * 2,
+                              height: height + titleBarHeight + bezelTop + bezelBottom)
         var canvas = CGSize(width: cardSize.width + padding * 2,
                             height: cardSize.height + padding * 2)
         if let ratio = composition.aspect.ratio {
@@ -246,11 +269,28 @@ struct PresetLayout: Equatable {
         let cardOrigin = CGPoint(x: ((canvas.width - cardSize.width) / 2).rounded(),
                                  y: ((canvas.height - cardSize.height) / 2).rounded())
         let cardRect = CGRect(origin: cardOrigin, size: cardSize)
-        let contentRect = CGRect(x: cardRect.minX, y: cardRect.minY + titleBarHeight,
+        let contentRect = CGRect(x: cardRect.minX + bezelSide,
+                                 y: cardRect.minY + titleBarHeight + bezelTop,
                                  width: width, height: height)
+        let bodyCornerRadius = isPhone ? (0.145 * cardSize.width).rounded() : 0
+        // 屏幕圆角 = 机身圆角内缩一个边框；再留一条黑色屏幕包边。
+        let screenRim = (3 * chromeScale).rounded()
+        let screenCornerRadius = isPhone
+            ? max(0, bodyCornerRadius - bezelSide - screenRim) : 0
+        let islandWidth = min((300 * chromeScale).rounded(), width * 0.9)
+        let islandHeight = min((72 * chromeScale).rounded(), bezelTop)
+        let islandRect = isPhone
+            ? CGRect(x: cardRect.midX - islandWidth / 2,
+                     y: cardRect.minY + ((bezelTop - islandHeight) / 2).rounded(),
+                     width: islandWidth, height: islandHeight)
+            : .zero
         return PresetLayout(canvasSize: canvas, cardRect: cardRect, contentRect: contentRect,
                             padding: padding, titleBarHeight: titleBarHeight,
-                            cornerRadius: cornerRadius, chromeScale: chromeScale)
+                            cornerRadius: cornerRadius, chromeScale: chromeScale,
+                            bezelTop: bezelTop, bezelSide: bezelSide, bezelBottom: bezelBottom,
+                            bodyCornerRadius: bodyCornerRadius,
+                            screenCornerRadius: screenCornerRadius,
+                            buttonProtrusion: buttonProtrusion, islandRect: islandRect)
     }
 }
 

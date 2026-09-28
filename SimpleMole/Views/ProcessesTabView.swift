@@ -233,7 +233,7 @@ struct ProcessesTabView: View {
         }
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.hairline, lineWidth: 1))
-        .animation(.easeInOut(duration: 0.16), value: isExpanded)
+        .animation(MoleMotion.panel, value: isExpanded)
     }
 
     private func childRow(_ child: ProcessRow) -> some View {

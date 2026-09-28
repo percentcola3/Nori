@@ -5,6 +5,9 @@ struct AnalyzeTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var savedLocations: SavedScanLocationStore
     @ObservedObject private var l10n = L10n.shared
+    /// 从分析结果目录发起的自动清理规则创建。
+    @State private var autoCleanIntent: AutoCleanupIntent?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     init(state: AppState) {
         self.state = state
@@ -153,7 +156,19 @@ struct AnalyzeTabView: View {
                             } onOpen: {
                                 state.openAnalyzeEntry(entry)
                             }
+                            .contextMenu {
+                                if entry.isDir {
+                                    Button {
+                                        autoCleanIntent = AutoCleanupIntent(
+                                            paths: [entry.path], cacheVerified: false)
+                                    } label: {
+                                        Label(l10n.t("auto.entry.create"),
+                                              systemImage: "clock.arrow.circlepath")
+                                    }
+                                }
+                            }
                             .disabled(state.isBusy)
+                            .transition(.molePanelReveal)
                         }
                         if !state.dupGroups.isEmpty {
                             duplicatesSection
@@ -164,6 +179,9 @@ struct AnalyzeTabView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
+                    // 分析结果增量到达/排序变化时的液态流动：按路径集合触发。
+                    .animation(reduceMotion ? nil : MoleMotion.panel,
+                               value: state.analyzeEntries.map(\.path))
                 }
             }
 
@@ -193,6 +211,11 @@ struct AnalyzeTabView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
+            }
+        }
+        .sheet(item: $autoCleanIntent) { intent in
+            AutoCleanupIntentSheet(state: state, intent: intent) {
+                autoCleanIntent = nil
             }
         }
     }
