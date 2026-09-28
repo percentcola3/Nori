@@ -41,7 +41,6 @@ struct FloatingIslandView: View {
     var onExpandedChange: (Bool) -> Void = { _ in }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var islandNamespace
     @FocusState private var focusedResource: IslandResource?
     @State private var expanded = false
     @State private var selectedResource: IslandResource?
@@ -101,7 +100,6 @@ struct FloatingIslandView: View {
                    height: expanded ? expandedHeight : handleHeight,
                    alignment: .top)
             .modifier(IslandLiquidSurface(shape: visibleShape,
-                                          namespace: islandNamespace,
                                           isExpanded: expanded, hasHardwareNotch: safeTop > 0))
             .onPreferenceChange(IslandExpandedHeightKey.self) { height in
                 if height > 0 { expandedHeight = height }

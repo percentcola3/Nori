@@ -92,38 +92,39 @@ struct LiquidActionButton: View {
 
 struct IslandLiquidSurface: ViewModifier {
     let shape: NotchShape
-    let namespace: Namespace.ID
     var isExpanded = true
     var hasHardwareNotch = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func body(content: Content) -> some View {
-        content
-            .background {
-                surface
-                    // Keep the glass mounted beneath a fading cap. The compact
-                    // handle has no bright rim; expansion reveals the same glass.
-                    .overlay {
-                        shape.fill(hasHardwareNotch ? Color.black : Color.islandHandleBackground)
-                            .opacity(isExpanded ? 0 : 1)
-                    }
-                    .allowsHitTesting(false)
-            }
-            .clipShape(shape)
-            .contentShape(shape)
-    }
-
-    @ViewBuilder private var surface: some View {
         if #available(macOS 26.0, *), !reduceTransparency {
-            Color.clear
+            // 玻璃必须直接承载内容（content.glassEffect），不能作为 background
+            // sibling 垫在内容后面——玻璃合成层会把上方内容反向遮挡成毛玻璃
+            // （同类坑见 Components.swift 原生分段控件的注释）。收起态实底
+            // curtain 画在内容之下、玻璃之上：盖住玻璃与镜面高光，展开时淡出。
+            content
+                .background {
+                    shape.fill(hasHardwareNotch ? Color.black : Color.islandHandleBackground)
+                        .opacity(isExpanded ? 0 : 1)
+                        .allowsHitTesting(false)
+                }
                 .glassEffect(Glass.regular.tint(Color.islandGlassTint), in: shape)
-                .glassEffectID("island.panel", in: namespace)
-                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-        } else if reduceTransparency {
-            shape.fill(Color.glassOpaque)
+                .clipShape(shape)
+                .contentShape(shape)
         } else {
-            shape.fill(.ultraThinMaterial)
+            content
+                .background {
+                    if !isExpanded {
+                        shape.fill(hasHardwareNotch ? Color.black : Color.islandHandleBackground)
+                    } else if reduceTransparency {
+                        shape.fill(Color.glassOpaque)
+                    } else {
+                        shape.fill(.ultraThinMaterial)
+                    }
+                }
+                .clipShape(shape)
+                .contentShape(shape)
         }
     }
 }
