@@ -6,7 +6,7 @@
 # Bridge scripts must still fail closed when that capability is absent so a
 # future call site cannot accidentally trigger native TCC folder prompts.
 
-forgesweep_full_disk_access_granted() {
+nori_full_disk_access_granted() {
     [[ "${FORGESWEEP_FULL_DISK_AUTHORIZED:-0}" == "1" ]]
 }
 
@@ -19,7 +19,7 @@ forgesweep_full_disk_access_granted() {
 # Missing leaf components are allowed: a scan may race with a cache writer and
 # the caller can then skip the absent root. A missing ancestor, malformed path,
 # or HOME=/ is rejected fail-closed.
-forgesweep_scan_path_is_physical() {
+nori_scan_path_is_physical() {
     local path="${1:-}" home="${HOME%/}" probe=""
     [[ -n "$home" && "$home" != "/" ]] || return 1
     [[ "$path" == /* && ! "$path" =~ [[:cntrl:]] ]] || return 1
@@ -57,7 +57,7 @@ forgesweep_scan_path_is_physical() {
     done
 }
 
-forgesweep_scan_path_is_protected() {
+nori_scan_path_is_protected() {
     local path="${1:-}" home="${HOME%/}"
     while [[ "$path" == *//* ]]; do path="${path//\/\//\/}"; done
     while [[ "$home" == *//* ]]; do home="${home//\/\//\/}"; done
@@ -102,19 +102,19 @@ forgesweep_scan_path_is_protected() {
 
 # Return success when the path can be enumerated without prompting. Callers
 # with mixed protected/unprotected roots should skip paths that return false.
-forgesweep_scan_path_allowed() {
+nori_scan_path_allowed() {
     local path="${1:-}"
-    if forgesweep_scan_path_is_protected "$path"; then
-        forgesweep_full_disk_access_granted
+    if nori_scan_path_is_protected "$path"; then
+        nori_full_disk_access_granted
         return $?
     fi
     return 0
 }
 
 # Whole-scope scanners use this stricter form and exit with EX_NOPERM (77).
-forgesweep_require_scan_path_access() {
+nori_require_scan_path_access() {
     local path="${1:-}"
-    if ! forgesweep_scan_path_allowed "$path"; then
+    if ! nori_scan_path_allowed "$path"; then
         echo "error: Full Disk Access is required for protected scan path: $path" >&2
         return 77
     fi

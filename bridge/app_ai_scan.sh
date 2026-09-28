@@ -58,7 +58,7 @@ ai_scan_path_allowed() {
     # for authorization even though it never traverses another app's data.
     # Application Support and all other scopes still use the shared TCC gate.
     if [[ "$path" != "$HOME_DIR/Library/Caches/"* ]]; then
-        forgesweep_scan_path_allowed "$path" || return 1
+        nori_scan_path_allowed "$path" || return 1
     fi
     return 0
 }

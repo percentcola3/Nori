@@ -4,7 +4,7 @@ import AppKit
 /// to one worker, and reuse images across tab visits. Callers never mutate the
 /// cached image; SwiftUI supplies the display size.
 enum UninstallIconLoader {
-    private static let queue = DispatchQueue(label: "com.forgesweep.uninstall-icons", qos: .utility)
+    private static let queue = DispatchQueue(label: "com.nori.uninstall-icons", qos: .utility)
     private static let cache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 256

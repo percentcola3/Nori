@@ -104,9 +104,7 @@ struct ProcessesTabView: View {
                         .lineLimit(1)
                     Spacer()
                     if let group = state.processGroups.first(where: { $0.id == alert.pid }) {
-                        Button(l10n.t("proc.quit")) { state.quitApplication(group.app) }
-                            .buttonStyle(SecondaryButtonStyle())
-                            .disabled(state.isBusy)
+                        quitButton(group.app)
                     }
                 }
             }
@@ -114,7 +112,7 @@ struct ProcessesTabView: View {
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.warning.opacity(0.10)))
         .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .strokeBorder(Color.warning.opacity(0.35), lineWidth: 1))
+            .strokeBorder(Color.warning.opacity(0.35), lineWidth: 1).allowsHitTesting(false))
     }
 
     // MARK: 应用分组列表
@@ -182,6 +180,12 @@ struct ProcessesTabView: View {
                     Text(group.app.detail)
                         .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(.secondary)
+                    if let feedback = state.processQuitFeedback[group.app.signalToken] {
+                        Text(l10n.t(feedbackKey(feedback)))
+                            .font(.system(size: 10))
+                            .foregroundStyle(feedback == .waiting ? Color.accentText : Color.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer()
                 ProcessSparkline(values: state.processCPUHistory(group.id),
@@ -194,9 +198,7 @@ struct ProcessesTabView: View {
                 ProcessMetric(label: l10n.t("proc.memory"),
                               value: group.totalBytes > 0 ? ByteFormat.short(group.totalBytes) : "--",
                               isElevated: group.app.mem >= 20)
-                Button(l10n.t("proc.quit")) { state.quitApplication(group.app) }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(state.isBusy)
+                quitButton(group.app)
                 Menu {
                     Button(l10n.t("proc.forceQuit"), role: .destructive) { state.terminateProcess(group.app) }
                     if !group.children.isEmpty {
@@ -210,7 +212,7 @@ struct ProcessesTabView: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .frame(width: 24)
-                .disabled(state.isBusy)
+                .disabled(state.processQuitFeedback[group.app.signalToken] == .waiting)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
@@ -232,8 +234,36 @@ struct ProcessesTabView: View {
             }
         }
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.hairline, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.hairline, lineWidth: 1)
+            .allowsHitTesting(false))
         .animation(MoleMotion.panel, value: isExpanded)
+    }
+
+    private func feedbackKey(_ feedback: AppState.ProcessQuitFeedback) -> String {
+        switch feedback {
+        case .waiting: return "proc.quit.waiting"
+        case .refused: return "proc.quit.refused"
+        case .stillRunning: return "proc.quit.stillRunning"
+        case .stale: return "proc.refusal.identity"
+        }
+    }
+
+    private func quitButton(_ row: ProcessRow) -> some View {
+        let feedback = state.processQuitFeedback[row.signalToken]
+        let waiting = feedback == .waiting
+        let needsForce = feedback == .refused || feedback == .stillRunning
+        return Button {
+            if needsForce { state.terminateProcess(row) }
+            else { state.quitApplication(row) }
+        } label: {
+            HStack(spacing: 5) {
+                if waiting { ProgressView().controlSize(.mini) }
+                Text(l10n.t(waiting ? "proc.quit.pending" : (needsForce ? "proc.forceQuit" : "proc.quit")))
+            }
+        }
+        .buttonStyle(SecondaryButtonStyle(tint: needsForce ? .danger : .accentText))
+        .disabled(waiting)
+        .help(l10n.t(needsForce ? "proc.force.message" : "proc.quit.help"))
     }
 
     private func childRow(_ child: ProcessRow) -> some View {
@@ -263,7 +293,6 @@ struct ProcessesTabView: View {
                           isElevated: child.mem >= 20)
             Button(l10n.t("proc.kill")) { state.terminateChildProcess(child) }
                 .buttonStyle(DangerButtonStyle())
-                .disabled(state.isBusy)
         }
         .padding(.leading, 34)
         .padding(.trailing, 10)
@@ -323,12 +352,13 @@ struct ProcessesTabView: View {
                                 state.terminateProcess(row)
                             }
                                 .buttonStyle(DangerButtonStyle())
-                                .disabled(state.isBusy || state.runtimeInFlight)
+                                .disabled(state.runtimeInFlight)
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
-                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.hairline, lineWidth: 1))
+                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.hairline, lineWidth: 1)
+                            .allowsHitTesting(false))
                     }
                 }
                 .padding(.horizontal, 16)

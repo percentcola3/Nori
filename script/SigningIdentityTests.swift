@@ -11,19 +11,19 @@ struct SigningIdentityTests {
 
         // Local self-signed certificate: identifier + pinned leaf hash.
         let local = SigningIdentityInspector.classify(
-            requirementString: "identifier \"com.forgesweep.app\" and certificate leaf = H\"0011223344556677889900aabbccddeeff001122\"")
+            requirementString: "identifier \"com.nori.app\" and certificate leaf = H\"0011223344556677889900aabbccddeeff001122\"")
         precondition(local == .local, "pinned leaf requirement must be local")
         precondition(local.isStable, "local identity must be stable")
 
         // Apple Development: contains both `anchor apple` and `certificate leaf[...]`.
         let apple = SigningIdentityInspector.classify(
-            requirementString: "identifier \"com.forgesweep.app\" and anchor apple generic and certificate leaf[subject.CN] = \"Apple Development: Dev (TEAM1)\" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */")
+            requirementString: "identifier \"com.nori.app\" and anchor apple generic and certificate leaf[subject.CN] = \"Apple Development: Dev (TEAM1)\" and certificate 1[field.1.2.840.113635.100.6.2.1] /* exists */")
         precondition(apple == .apple, "Apple Development requirement must be classified as apple")
         precondition(apple.isStable, "Apple identity must be stable")
 
         // Developer ID.
         let developerID = SigningIdentityInspector.classify(
-            requirementString: "anchor apple generic and identifier \"com.forgesweep.app\" and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = TEAM1)")
+            requirementString: "anchor apple generic and identifier \"com.nori.app\" and (certificate leaf[field.1.2.840.113635.100.6.1.9] /* exists */ or certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = TEAM1)")
         precondition(developerID == .apple, "Developer ID requirement must be classified as apple")
 
         precondition(SigningIdentityInspector.classify(requirementString: "") == .unknown,
@@ -67,7 +67,7 @@ struct SigningIdentityTests {
     private static func testDiskAccessProbeFallback() {
         let manager = FileManager.default
         let directory = manager.temporaryDirectory
-            .appendingPathComponent("forgesweep-permission-tests-" + UUID().uuidString)
+            .appendingPathComponent("nori-permission-tests-" + UUID().uuidString)
         try! manager.createDirectory(at: directory, withIntermediateDirectories: true)
         let missing = directory.appendingPathComponent("missing-user.db").path
         let readable = directory.appendingPathComponent("system.db").path

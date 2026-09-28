@@ -2,15 +2,15 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="ForgeSweep"
-BUNDLE_ID="com.forgesweep.app"
+APP_NAME="Nori"
+BUNDLE_ID="com.nori.app"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_ARCH="${SM_BUILD_ARCHS:-$(uname -m)}"
 case "$RUN_ARCH" in
     arm64|x86_64) ;;
     *) echo "error: build_and_run.sh requires one architecture; use package_dmg.sh to build both" >&2; exit 2 ;;
 esac
-APP_BUNDLE="$ROOT_DIR/dist/$RUN_ARCH/ForgeSweep.app"
+APP_BUNDLE="$ROOT_DIR/dist/$RUN_ARCH/Nori.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true

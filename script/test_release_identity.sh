@@ -4,7 +4,7 @@ set +x
 set -euo pipefail
 umask 077
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-identity-tests.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/nori-identity-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 FIXTURE="$WORK/repository"
 mkdir -p "$FIXTURE/script" "$FIXTURE/signing"
@@ -61,7 +61,7 @@ mkdir -p "$WORK/runner/unowned"
 expect_failure 'unowned directory' env GITHUB_ACTIONS=true RUNNER_TEMP="$WORK/runner" \
     SM_RELEASE_SIGNING_DIR="$WORK/runner/unowned" bash "$IDENTITY" cleanup
 mkdir -p "$WORK/runner/owned"
-touch "$WORK/runner/owned/.forgesweep-release-signing"
+touch "$WORK/runner/owned/.nori-release-signing"
 printf '%s' "$SENTINEL" > "$WORK/runner/owned/identity-password"
 env GITHUB_ACTIONS=true RUNNER_TEMP="$WORK/runner" SM_RELEASE_SIGNING_DIR="$WORK/runner/owned" \
     bash "$IDENTITY" cleanup >/dev/null

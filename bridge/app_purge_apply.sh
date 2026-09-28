@@ -6,7 +6,7 @@ APP_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$APP_ROOT_DIR/lib/core/common.sh"
 source "$APP_ROOT_DIR/lib/clean/project.sh"
 # shellcheck disable=SC1090
-source "$APP_ROOT_DIR/bin/app_project_activity.sh"
+source "$APP_ROOT_DIR/bin/app_purge_guard.sh"
 # shellcheck disable=SC1090
 source "$APP_ROOT_DIR/bin/app_runtime_guard.sh"
 load_mole_whitelist

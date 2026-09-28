@@ -1,13 +1,10 @@
 import SwiftUI
 
-/// 按应用排查代理消耗，保留独立的 Clash 和进程采样口径。
+/// 按应用展示系统采样流量与当前连接。
 struct TrafficTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var store: TrafficMonitorStore
     @ObservedObject private var l10n = L10n.shared
-    @State private var showConnections = false
-    @State private var showClashSettings = false
-    @State private var showAuxiliary = false
     @State private var detailApp: TrafficAppSelection?
 
     init(state: AppState) {
@@ -33,31 +30,17 @@ struct TrafficTabView: View {
                     .font(.system(size: 11))
                 Button(l10n.t("netmon.reset")) { store.resetSession() }
                     .controlSize(.small)
-                    .disabled(store.rows.isEmpty && store.clashSessionDown == 0 && store.clashSessionUp == 0)
-                Button {
-                    showClashSettings = true
-                } label: {
-                    Label(l10n.t("netmon.settings"), systemImage: "gearshape")
-                        .labelStyle(.titleAndIcon)
-                }
-                .controlSize(.small)
-                .popover(isPresented: $showClashSettings, arrowEdge: .bottom) {
-                    TrafficClashSettingsPanel(store: store)
-                        .frame(width: 320)
-                }
+                    .disabled(store.rows.isEmpty && store.physicalDown == 0 && store.physicalUp == 0)
             }
             .padding(.horizontal, 16)
             .padding(.top, 14)
             .padding(.bottom, 8)
 
             HStack(spacing: 6) {
-                TrafficSummaryCard(title: l10n.t("netmon.card.proxyNode"),
-                                   down: store.nodeDown, up: store.nodeUp, tint: .blue)
-                TrafficSummaryCard(title: l10n.t("netmon.card.proxyDirect"),
-                                   down: store.directDown, up: store.directUp, tint: Color.warning)
-                TrafficSummaryCard(title: l10n.t("netmon.card.unattributed"),
-                                   down: store.unattributedDown, up: store.unattributedUp,
-                                   tint: .secondary)
+                TrafficSummaryCard(title: l10n.t("netmon.card.physical"),
+                                   down: store.physicalDown, up: store.physicalUp, tint: Color.moleAccentText)
+                TrafficSummaryCard(title: l10n.t("netmon.card.tunnel"),
+                                   down: store.tunnelDown, up: store.tunnelUp, tint: .secondary)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 10)
@@ -69,15 +52,6 @@ struct TrafficTabView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
-                Button {
-                    showAuxiliary.toggle()
-                } label: {
-                    Label(l10n.t("netmon.auxiliary"),
-                          systemImage: showAuxiliary ? "chevron.up" : "chevron.down")
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
@@ -91,82 +65,23 @@ struct TrafficTabView: View {
                     .padding(.bottom, 8)
             }
 
-            if showAuxiliary {
-                HStack(spacing: 6) {
-                    TrafficSummaryCard(title: l10n.t("netmon.card.clashSession"),
-                                       down: store.clashSessionDown, up: store.clashSessionUp,
-                                       tint: .secondary)
-                    TrafficSummaryCard(title: l10n.t("netmon.card.clashCore"),
-                                       down: store.clashCoreDown, up: store.clashCoreUp,
-                                       tint: .secondary)
-                    TrafficSummaryCard(title: l10n.t("netmon.card.tunnel"),
-                                       down: store.tunnelDown, up: store.tunnelUp, tint: .secondary)
-                    TrafficSummaryCard(title: l10n.t("netmon.card.physical"),
-                                       down: store.physicalDown, up: store.physicalUp, tint: .secondary)
+            HStack(spacing: 8) {
+                Picker(l10n.t("netmon.sort.title"), selection: $store.sortOrder) {
+                    ForEach(TrafficSortOrder.allCases, id: \.rawValue) { order in
+                        Text(l10n.t(order.titleKey)).tag(order)
+                    }
                 }
-                .padding(.horizontal, 16)
-                Text(l10n.t("netmon.auxiliary.hint"))
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .fixedSize()
+                Text(l10n.t("netmon.sort.descending"))
                     .font(.system(size: 9))
                     .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
+                Spacer(minLength: 0)
             }
-
-            if store.clashState != .ok {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "exclamationmark.circle")
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(clashStateText)
-                        Text(degradedHint)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .font(.system(size: 10))
-                .foregroundStyle(clashTint)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 8)
-            }
-
-            Picker("", selection: $showConnections) {
-                Text(l10n.t("netmon.tab.apps")).tag(false)
-                Text(l10n.t("netmon.tab.connections")).tag(true)
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
             .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-
-            if !showConnections {
-                HStack(spacing: 8) {
-                    Picker(l10n.t("netmon.sort.title"), selection: $store.sortOrder) {
-                        ForEach(TrafficSortOrder.allCases, id: \.rawValue) { order in
-                            Text(l10n.t(order.titleKey)).tag(order)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .controlSize(.small)
-                    .fixedSize()
-                    Text(l10n.t("netmon.sort.descending"))
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 6)
-            } else {
-                Text(l10n.t("netmon.clash.connectionsHint"))
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 6)
-            }
-
-            if showConnections {
-                clashConnectionList
-            } else if store.rows.isEmpty {
+            .padding(.bottom, 6)
+            if store.rows.isEmpty {
                 EmptyStateView(symbol: "antenna.radiowaves.left.and.right",
                                title: l10n.t("netmon.empty.title"),
                                subtitle: l10n.t("netmon.empty.subtitle"))
@@ -196,14 +111,6 @@ struct TrafficTabView: View {
             return l10n.tf("netmon.status.lastSample", formatter.string(from: lastSample))
         }
         return l10n.t("netmon.status.sampling")
-    }
-
-    private var clashTint: Color {
-        switch store.clashState {
-        case .ok: return .blue
-        case .notConfigured: return .secondary
-        case .unauthorized, .unreachable, .stale: return Color.warning
-        }
     }
 
     private var appList: some View {
@@ -251,23 +158,9 @@ struct TrafficTabView: View {
                                     .font(.system(size: 9, weight: .semibold))
                                     .foregroundStyle(.tertiary)
                             }
-                            HStack(spacing: 8) {
-                                TrafficByteMetric(title: l10n.t("netmon.sort.proxyNode"),
-                                                  down: row.proxyNodeDown, up: row.proxyNodeUp,
-                                                  tint: .blue)
-                                TrafficByteMetric(title: l10n.t("netmon.card.proxyDirect"),
-                                                  down: row.proxyDirectDown, up: row.proxyDirectUp,
-                                                  tint: Color.warning)
-                                TrafficByteMetric(title: l10n.t("netmon.sort.appTotal"),
-                                                  down: row.sessionDown, up: row.sessionUp,
-                                                  tint: .secondary)
-                            }
-                            if row.proxyUnknownDown > 0 || row.proxyUnknownUp > 0 {
-                                Text(l10n.t("netmon.detail.proxyUnknown")
-                                     + "  ↓\(ByteFormat.short(row.proxyUnknownDown)) ↑\(ByteFormat.short(row.proxyUnknownUp))")
-                                    .font(.system(size: 9).monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
+                            Text("↓\(ByteFormat.short(row.sessionDown)) ↑\(ByteFormat.short(row.sessionUp))")
+                                .font(.system(size: 10).monospacedDigit())
+                                .foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -283,101 +176,6 @@ struct TrafficTabView: View {
         }
     }
 
-    private var clashConnectionList: some View {
-        Group {
-            if store.clashConnections.isEmpty {
-                VStack(spacing: 6) {
-                    EmptyStateView(symbol: "arrow.triangle.branch",
-                                   title: l10n.t("netmon.clash.noConnections"),
-                                   subtitle: clashStateText)
-                    if let hint = clashStateHint {
-                        Text(hint)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 24)
-                    }
-                }
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(store.clashConnections.sorted {
-                            $0.download + $0.upload > $1.download + $1.upload
-                        }, id: \.id) { connection in
-                            HStack(spacing: 8) {
-                                TrafficExitBadge(kind: clashExitKind(connection))
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(clashRemoteText(connection))
-                                        .font(.system(size: 12, weight: .medium))
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                    Text("\(connection.metadata.process ?? l10n.t("netmon.clash.unknownApp"))"
-                                         + " · \(l10n.t("netmon.clash.chains")): \((connection.chains ?? []).joined(separator: " → "))"
-                                         + (connection.rule.map { " · \($0)" } ?? ""))
-                                        .font(.system(size: 10).monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                                Spacer()
-                                TrafficMetric(label: l10n.t("netmon.col.down"),
-                                              value: ByteFormat.short(connection.download),
-                                              isElevated: false)
-                                TrafficMetric(label: l10n.t("netmon.col.up"),
-                                              value: ByteFormat.short(connection.upload),
-                                              isElevated: false)
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
-                            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-    }
-
-    private var clashStateText: String {
-        switch store.clashState {
-        case .ok: return l10n.t("netmon.clash.state.ok")
-        case .unauthorized: return l10n.t("netmon.clash.state.unauthorized")
-        case .unreachable: return l10n.t("netmon.clash.state.unreachable")
-        case .stale: return l10n.t("netmon.clash.state.stale")
-        case .notConfigured: return l10n.t("netmon.clash.state.notConfigured")
-        }
-    }
-
-    private var clashStateHint: String? {
-        store.clashState == .stale ? l10n.t("netmon.clash.state.staleHint") : nil
-    }
-
-    /// 未配置时明确说明当前是系统口径的降级视图，而不是笼统的"连接失败"。
-    private var degradedHint: String {
-        if store.clashState == .notConfigured {
-            return l10n.t("netmon.clash.notConfiguredHint")
-        }
-        return clashStateHint ?? l10n.t("netmon.clash.unavailableHint")
-    }
-
-    private func clashRemoteText(_ connection: ClashAPI.Connection) -> String {
-        let metadata = connection.metadata
-        if let host = metadata.host, !host.isEmpty {
-            return metadata.destinationPort.map { "\(host):\($0)" } ?? host
-        }
-        if let address = metadata.destinationIP, !address.isEmpty {
-            return metadata.destinationPort.map { "\(address):\($0)" } ?? address
-        }
-        return l10n.t("netmon.clash.unknownApp")
-    }
-
-    private func clashExitKind(_ connection: ClashAPI.Connection) -> TrafficExitKind {
-        guard let chains = connection.chains, !chains.isEmpty else { return .unknown }
-        return connection.isDirectExit ? .proxyDirect : .proxyNode
-    }
-
     private func rateText(_ down: Double, _ up: Double) -> String {
         "↓\(ByteFormat.short(UInt64(max(down, 0))))/s ↑\(ByteFormat.short(UInt64(max(up, 0))))/s"
     }
@@ -387,29 +185,6 @@ struct TrafficTabView: View {
 
 private struct TrafficAppSelection: Identifiable {
     let id: String
-}
-
-private struct TrafficByteMetric: View {
-    let title: String
-    let down: UInt64
-    let up: UInt64
-    let tint: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 9))
-                .foregroundStyle(.secondary)
-            Text(ByteFormat.short(down + up))
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                .foregroundStyle(tint)
-            Text("↓\(ByteFormat.short(down)) ↑\(ByteFormat.short(up))")
-                .font(.system(size: 9).monospacedDigit())
-                .foregroundStyle(.secondary)
-        }
-        .lineLimit(1)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
 }
 
 private struct TrafficSummaryCard: View {
@@ -466,9 +241,6 @@ private struct TrafficExitBadge: View {
         switch kind {
         case .direct: return .secondary
         case .tunnel: return .indigo
-        case .proxyDirect: return Color.warning
-        case .proxyNode: return .blue
-        case .proxy: return .teal
         case .loopback: return .gray
         case .unknown: return .secondary
         }
@@ -486,7 +258,7 @@ private struct TrafficExitBadge: View {
     }
 }
 
-/// 应用会话累计与端点历史，按稳定 appKey 读取最新数据。
+/// 应用会话累计与当前端点，按稳定 appKey 读取最新数据。
 private struct TrafficAppDetailSheet: View {
     @ObservedObject var store: TrafficMonitorStore
     let appKey: String
@@ -514,13 +286,6 @@ private struct TrafficAppDetailSheet: View {
 
             if let row {
                 HStack(spacing: 6) {
-                    TrafficSummaryCard(title: l10n.t("netmon.detail.proxyNode"),
-                                       down: row.proxyNodeDown, up: row.proxyNodeUp, tint: .blue)
-                    TrafficSummaryCard(title: l10n.t("netmon.detail.proxyDirect"),
-                                       down: row.proxyDirectDown, up: row.proxyDirectUp, tint: Color.warning)
-                    TrafficSummaryCard(title: l10n.t("netmon.detail.proxyUnknown"),
-                                       down: row.proxyUnknownDown, up: row.proxyUnknownUp,
-                                       tint: .secondary)
                     TrafficSummaryCard(title: l10n.t("netmon.detail.session"),
                                        down: row.sessionDown, up: row.sessionUp, tint: .secondary)
                 }
@@ -538,8 +303,6 @@ private struct TrafficAppDetailSheet: View {
                 Text(l10n.t("netmon.detail.endpoints"))
                     .font(.system(size: 11, weight: .semibold))
                 Spacer()
-                Text(l10n.t("netmon.sort.descending"))
-                    .font(.system(size: 9))
             }
             .foregroundStyle(.secondary)
             .padding(.horizontal, 16)
@@ -555,7 +318,7 @@ private struct TrafficAppDetailSheet: View {
                 ScrollView {
                     LazyVStack(spacing: 6) {
                         ForEach(endpoints) { endpoint in
-                            TrafficEndpointHistoryRow(endpoint: endpoint)
+                            TrafficEndpointRowView(endpoint: endpoint)
                         }
                     }
                     .padding(.horizontal, 16)
@@ -566,146 +329,25 @@ private struct TrafficAppDetailSheet: View {
     }
 }
 
-private struct TrafficEndpointHistoryRow: View {
+private struct TrafficEndpointRowView: View {
     let endpoint: TrafficEndpointRow
     @ObservedObject private var l10n = L10n.shared
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(spacing: 8) {
             TrafficExitBadge(kind: endpoint.kind)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(endpoint.remote)
-                    .font(.system(size: 11, weight: .medium).monospacedDigit())
-                    .textSelection(.enabled)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                if !endpoint.clashChains.isEmpty {
-                    Text("\(l10n.t("netmon.clash.chains")): \(endpoint.clashChains.joined(separator: " → "))")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                if !endpoint.clashRule.isEmpty {
-                    Text("\(l10n.t("netmon.clash.rule")): \(endpoint.clashRule)")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                HStack(spacing: 6) {
-                    Text(endpoint.activeConnections > 0
-                         ? l10n.tf("netmon.detail.active", endpoint.activeConnections)
-                         : l10n.t("netmon.detail.inactive"))
-                    if let lastSeen = endpoint.lastSeen {
-                        Text(l10n.tf("netmon.detail.lastSeen", lastSeen.formatted(date: .abbreviated, time: .shortened)))
-                    }
-                }
+            Text(endpoint.remote)
+                .font(.system(size: 11, weight: .medium).monospaced())
+                .textSelection(.enabled)
+            Text(endpoint.proto.uppercased())
                 .font(.system(size: 9))
-                .foregroundStyle(.tertiary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            if endpoint.clashDown > 0 || endpoint.clashUp > 0 {
-                TrafficMetric(label: l10n.t("netmon.col.down"),
-                              value: ByteFormat.short(endpoint.clashDown), isElevated: false)
-                TrafficMetric(label: l10n.t("netmon.col.up"),
-                              value: ByteFormat.short(endpoint.clashUp), isElevated: false)
-            } else {
-                Text(l10n.t("netmon.detail.noBytes"))
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
-            }
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(l10n.tf("netmon.detail.active", endpoint.activeConnections))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
+        .padding(12)
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
-    }
-}
-
-/// Clash 控制器配置：地址 / 密钥 / 自动发现 / 连通性测试。
-private struct TrafficClashSettingsPanel: View {
-    @ObservedObject var store: TrafficMonitorStore
-    @ObservedObject private var l10n = L10n.shared
-    @State private var endpointDraft: String
-    @State private var secretDraft: String
-
-    init(store: TrafficMonitorStore) {
-        self.store = store
-        _endpointDraft = State(initialValue: store.clashEndpoint)
-        _secretDraft = State(initialValue: store.clashSecret)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(l10n.t("netmon.settings"))
-                .font(.system(size: 12, weight: .semibold))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(l10n.t("netmon.clash.endpoint"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                TextField(l10n.t("netmon.clash.endpointHint"), text: $endpointDraft)
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-                    .font(.system(size: 11, design: .monospaced))
-                    .autocorrectionDisabled()
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(l10n.t("netmon.clash.secret"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                SecureField("", text: $secretDraft)
-                    .textFieldStyle(.roundedBorder)
-                    .controlSize(.small)
-            }
-
-            HStack(spacing: 8) {
-                Button(l10n.t("netmon.clash.discover")) {
-                    Task {
-                        await store.discoverClash()
-                        endpointDraft = store.clashEndpoint
-                        secretDraft = store.clashSecret
-                    }
-                }
-                Button(l10n.t("netmon.clash.test")) {
-                    store.applyClashConfiguration(endpoint: endpointDraft, secret: secretDraft)
-                    Task { await store.testConnection() }
-                }
-                Spacer()
-                Circle()
-                    .fill(stateTint)
-                    .frame(width: 7, height: 7)
-                Text(stateText)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-            }
-            .controlSize(.small)
-
-            if store.clashState == .stale {
-                Text(l10n.t("netmon.clash.state.staleHint"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(14)
-    }
-
-    private var stateTint: Color {
-        switch store.clashState {
-        case .ok: return Color.success
-        case .notConfigured: return .secondary
-        case .unauthorized, .unreachable, .stale: return Color.warning
-        }
-    }
-
-    private var stateText: String {
-        switch store.clashState {
-        case .ok: return l10n.t("netmon.clash.state.ok")
-        case .unauthorized: return l10n.t("netmon.clash.state.unauthorized")
-        case .unreachable: return l10n.t("netmon.clash.state.unreachable")
-        case .stale: return l10n.t("netmon.clash.state.stale")
-        case .notConfigured: return l10n.t("netmon.clash.state.notConfigured")
-        }
     }
 }

@@ -1,4 +1,4 @@
-# ForgeSweep 决策记录
+# Nori 决策记录
 
 记录与最初《macOS 清理工具 Swift 重写方案》的有意偏差及其安全论证。每条记录一个决定：为什么偏离、以什么条件成立。
 
@@ -33,7 +33,7 @@
 
 **决定**：永久删除不再使用路径字符串 API，改为 fd 链删除：从 `/` 逐级 `openat(O_NOFOLLOW|O_DIRECTORY)` 打开，最终句柄上核对 `(device, inode)` 后在已打开描述符下递归 `unlinkat`，全程不重新解析路径。`script/audit_destructive_sinks.sh` 纳入 `test.sh`：Swift 侧底层删除调用只允许出现在白名单文件（NativeCore 为用户数据唯一漏斗，其余仅清理应用自建临时文件）；bridge 侧 `mole_delete` 必须显式携带身份参数，`rm -rf` 只允许作用于脚本自建目录变量。
 
-## DR-6 · 系统数据降级为清理页入口、流量页定名「代理流量」（2026-09-27 新增）
+## DR-6 · 系统数据降级为清理页入口（2026-09-27；流量部分由 DR-8 取代）
 
 **决定**：
 - 系统数据（root 拥有的日志/报告/缓存/更新残留）不再占顶级 Tab，降级为「硬盘清理」页头部入口，以 sheet 承载原有整页视图；扫描/删除管线（特权预览 + NUL 计划 + SHA-256 + 身份复核）不变。
@@ -41,3 +41,16 @@
 
 **理由**：系统数据日常收益小且每次扫描需管理员授权，撑不起顶级 Tab，但它是应用唯一能清 root 数据的表面，能力保留、入口降级；通用按应用流量统计与活动监视器重合，没有独立场景，Clash 绑定正是使用场景。nettop/lsof/路由层保留为归因底座与无控制器兜底。
 **约束**：不做通用化改造；若未来支持其他代理内核，沿 Clash REST API 协议兼容（mihomo/sing-box clash-api 均同协议），不新增第二套控制器适配。
+
+## DR-7 · 产品身份全面切换为 Nori（2026-09-28 新增）
+
+**决定**：Bundle ID、可执行文件、构建产物与数据目录由 ForgeSweep 统一切换为 Nori（`com.nori.app` / `Nori.app`），可见名称与内部身份不再分叉。
+**迁移**：`BrandMigration` 在首次启动时迁移 `com.forgesweep.app`（及更早 `com.simplemole.app`）的 `SM*` 偏好，并搬移 Application Support / Caches / Logs 三个数据目录；`release_identity.sh` 一次性把本地私钥归档从 ForgeSweep 路径搬至 Nori 路径。
+**保留**：已发布的自签名 release 证书（CN "ForgeSweep Release Signing"，SHA-1 指纹 `ABF7136A66689BF6437F7C4252A3168401FF33F6` 不变）继续为 `com.nori.app` 签名——指定要求仍钉住同一证书根；GitHub Actions secrets（`FORGESWEEP_SIGNING_P12_*`）与 `FORGESWEEP_FULL_DISK_AUTHORIZED` 环境变量保持原名，避免破坏已配置的发布流水线与权限门禁契约。
+**代价（接受）**：Bundle ID 变化使既有 TCC 授权（完全磁盘访问、屏幕录制等）在升级后失效，需重新授予一次；本地开发身份换用 "Nori Local Signing"，首次构建重新生成。
+
+## DR-8 · 简化扫描范围与通用流量监控（2026-09-28）
+
+按用户最新要求，磁盘分析只保留用户空间（默认）、根目录、自定义目录三个范围。长期关注、开发项目雷达、项目休眠及相关自动化规则退役；普通目录自动清理和每日/每周安全清理继续保留。旧规则逐条读取，退役类型不再调度，不影响其余计划。
+
+流量页改名「流量监控」，删除 Clash 配置发现、控制器请求、节点/DIRECT 归因、专属历史账本和相关界面。保留 nettop 应用字节差分、lsof 当前连接、路由分类及物理/隧道接口计数；不同层级的计数不相加。新会话使用独立历史文件，不将旧代理统计混入系统采样。

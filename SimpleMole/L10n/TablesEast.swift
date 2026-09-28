@@ -153,10 +153,6 @@ extension L10nTables {
         "img.status.capped": "已發現 %d 張圖片 · 目前展示前 %d 張",
         "img.empty.subtitle": "點擊「掃描圖片」查看桌面、下載與圖片目錄",
 
-        "qp.cpu": "CPU 占用",
-        "qp.mem": "記憶體占用",
-        "qp.optimize": "一鍵清理",
-        "qp.topMemory": "記憶體占用最高",
 
         "status.ready": "準備就緒",
         "status.scanningCleanup": "正在掃描可清理項目…",
@@ -549,10 +545,6 @@ extension L10nTables {
         "img.status.capped": "%d 枚を検出 · 先頭 %d 枚を表示中",
         "img.empty.subtitle": "「画像をスキャン」でデスクトップ・ダウンロード・ピクチャを確認",
 
-        "qp.cpu": "CPU 使用率",
-        "qp.mem": "メモリ使用率",
-        "qp.optimize": "クイッククリーン",
-        "qp.topMemory": "メモリ使用量トップ",
 
         "status.ready": "準備完了",
         "status.scanningCleanup": "クリーン可能項目をスキャン中…",

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - 设置面板（语言 + 灵动岛 + 工具 + 功能页显隐）
@@ -25,6 +26,7 @@ private struct SettingsSection<Content: View>: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .strokeBorder(Color.hairline, lineWidth: 1)
+                    .allowsHitTesting(false)
             )
         }
     }
@@ -57,6 +59,7 @@ struct SettingsTabView: View {
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var languageExpanded = false
+    @StateObject private var loginItem = LoginItemController()
 
     var body: some View {
         ScrollView {
@@ -64,6 +67,7 @@ struct SettingsTabView: View {
                 Text(l10n.t("settings.title"))
                     .font(.system(size: 18, weight: .semibold))
                 languageSection
+                startupSection
                 SettingsSection(title: l10n.t("automation.menu")) {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], spacing: 12) {
                         LiquidActionButton(id: "autoCleanup", title: l10n.t("auto.header"), symbol: "folder.badge.clock") {
@@ -88,6 +92,65 @@ struct SettingsTabView: View {
             .frame(maxWidth: 740, alignment: .leading)
             .padding(20)
             .frame(maxWidth: .infinity)
+        }
+        .clipped()
+        .contentShape(Rectangle())
+        .onAppear { loginItem.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginItem.refresh()
+        }
+    }
+
+    // MARK: 启动与退出
+
+    private var startupSection: some View {
+        SettingsSection(title: l10n.t("settings.startup")) {
+            SettingsRow(divider: true) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(l10n.t("settings.launchAtLogin"), isOn: Binding(
+                        get: { loginItem.isRequested },
+                        set: { enabled in Task { await loginItem.setEnabled(enabled) } }))
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 12))
+                        .disabled(loginItem.isUpdating)
+
+                    Text(l10n.t("settings.background.hint"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if loginItem.needsApproval {
+                        Label(l10n.t("settings.launchAtLogin.approval"), systemImage: "exclamationmark.circle")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.warning)
+                        Button(l10n.t("settings.launchAtLogin.openSettings")) {
+                            loginItem.openSystemSettings()
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                    }
+                    if let error = loginItem.errorMessage {
+                        Text(l10n.tf("settings.launchAtLogin.failed", error))
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            SettingsRow {
+                HStack(spacing: 12) {
+                    Text(l10n.t("settings.quit.hint"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button {
+                        NSApp.terminate(nil)
+                    } label: {
+                        Label(l10n.t("settings.quit"), systemImage: "power")
+                    }
+                    .buttonStyle(DangerButtonStyle())
+                }
+            }
         }
     }
 
@@ -190,10 +253,13 @@ struct SettingsTabView: View {
             }
 
             SettingsRow(vertical: 6) {
-                Text(l10n.t("settings.island.hint"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(l10n.t("settings.island.hint"))
+                    Text(l10n.t("settings.background.keepEntry"))
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -305,15 +371,16 @@ struct SettingsTabView: View {
 
     private var pagesSection: some View {
         SettingsSection(title: l10n.t("settings.pages")) {
-            ForEach(Array(AppState.PageKey.configurableCases.enumerated()), id: \.element) { index, key in
-                SettingsRow(divider: index < AppState.PageKey.configurableCases.count - 1) {
-                    Toggle(l10n.t(key.titleKey), isOn: pageBinding(key))
-                        .toggleStyle(MoleSwitchToggleStyle())
-                        .controlSize(.small)
-                        .tint(Color.moleAccentText)
-                        .font(.system(size: 12))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            SettingsRow(vertical: 6) {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 6) {
+                        ForEach(AppState.PageKey.configurableCases) { key in
+                            pageChip(key)
+                        }
+                    }
+                    .padding(.vertical, 2)
                 }
+                .scrollIndicators(.hidden)
             }
             SettingsRow(vertical: 6) {
                 Text(l10n.t("settings.pages.hint"))
@@ -324,6 +391,39 @@ struct SettingsTabView: View {
         }
     }
 
+    private func pageChip(_ key: AppState.PageKey) -> some View {
+        let isSelected = !state.hiddenPages.contains(key.rawValue)
+        let isLastRemaining = isSelected && AppState.PageKey.configurableCases.filter {
+            !state.hiddenPages.contains($0.rawValue)
+        }.count == 1
+        return Button {
+            state.setPageVisible(key, !isSelected)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .frame(width: 8)
+                    .opacity(isSelected ? 1 : 0)
+                    .accessibilityHidden(true)
+                Text(l10n.t(key.titleKey))
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 7)
+            .frame(height: 28)
+            .foregroundStyle(isSelected ? Color.onAccent : Color.secondary)
+            .background(Capsule().fill(isSelected ? Color.accent : Color.surface2))
+            .overlay(Capsule().strokeBorder(isSelected ? Color.accentText.opacity(0.3) : Color.hairline,
+                                           lineWidth: 1).allowsHitTesting(false))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(MolePlainButtonStyle())
+        .disabled(isLastRemaining)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .help(isLastRemaining ? l10n.t("settings.pages.hint") : l10n.t(key.titleKey))
+    }
+
     private var islandEnabledBinding: Binding<Bool> {
         Binding(get: { state.islandEnabled },
                 set: { state.setIslandEnabled($0) })
@@ -332,12 +432,6 @@ struct SettingsTabView: View {
     private var menuBarIconBinding: Binding<Bool> {
         Binding(get: { state.menuBarIconVisible },
                 set: { state.setMenuBarIconVisible($0) })
-    }
-
-    private func pageBinding(_ key: AppState.PageKey) -> Binding<Bool> {
-        Binding(
-            get: { !state.hiddenPages.contains(key.rawValue) },
-            set: { state.setPageVisible(key, $0) })
     }
 
     private var clipboardCapacityBinding: Binding<Int> {

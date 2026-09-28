@@ -1,11 +1,9 @@
 import AppKit
 import SwiftUI
 
-// MARK: - 设计基调「Earth Blue 地球蓝」
-// 单层液态玻璃 + 水蓝强调色，跟随系统浅色/深色外观。
-// 玻璃底色取地球的海洋蓝：浅色底是清透的冰蓝白，深色底是深海蓝；
-// 强调色浅色是深海蓝、深色是清透水蓝，与玻璃同 hue 家族，
-// 靠明度分层，整体清爽而克制。
+// MARK: - Nori 品牌深蓝
+// 使用 Logo 的墨蓝 #10283F 与冰蓝 #BFEAF2，跟随系统浅色 / 深色外观。
+// 深色以墨蓝承托冰蓝 Logo 与按钮，浅色以近白底承托墨蓝文字与按钮。
 //
 // 规则：
 // - 玻璃只有一层（GlassSurface），任何不透明色块都不要叠在玻璃上，否则模糊
@@ -14,17 +12,20 @@ import SwiftUI
 //   外观下分别取值，不要再写 Color.white.opacity(x)。
 // - 强调色只用于选中态、主按钮与关键数值；状态色用 success/warning/danger。
 
-/// Earth Blue 配色的原始值：token 与对比度测试共用同一份数据。
+/// 品牌配色的原始值：token 与对比度测试共用同一份数据。
 enum EarthBluePalette {
-    static let accentDark: UInt32 = 0x45C6EA
-    static let accentLight: UInt32 = 0x0B6FC7
-    static let accentTextDark: UInt32 = 0x8FDCEF
-    static let accentTextLight: UInt32 = 0x07538F
-    static let onAccentDark: UInt32 = 0x051220
+    static let accentDark: UInt32 = 0xBFEAF2
+    static let accentLight: UInt32 = 0x10283F
+    static let accentTextDark: UInt32 = 0xBFEAF2
+    static let accentTextLight: UInt32 = 0x10283F
+    static let onAccentDark: UInt32 = 0x10283F
     static let onAccentLight: UInt32 = 0xFFFFFF
     /// 玻璃着色在典型后景（深色桌面 / 浅色桌面）上的等效实底，用于对比度估算。
-    static let glassDark: UInt32 = 0x0C1B2E
-    static let glassLight: UInt32 = 0xEAF3FA
+    static let glassDark: UInt32 = 0x10283F
+    static let glassLight: UInt32 = 0xF0F5FA
+    static let tintDark: UInt32 = 0x10283F
+    static let tintLight: UInt32 = 0xEAF1F8
+    static let tintAlpha: CGFloat = 0.66
     static let successDark: UInt32 = 0x53C68C
     static let successLight: UInt32 = 0x1E8A55
     static let warningDark: UInt32 = 0xE3A43C
@@ -59,7 +60,7 @@ extension Color {
         })
     }
 
-    private static func srgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
+    fileprivate static func srgb(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
         NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255,
                 green: CGFloat((hex >> 8) & 0xFF) / 255,
                 blue: CGFloat(hex & 0xFF) / 255,
@@ -75,18 +76,17 @@ extension Color {
     static let onAccent = adaptive(light: srgb(EarthBluePalette.onAccentLight), dark: srgb(EarthBluePalette.onAccentDark))
 
     // 玻璃与表面
-    /// 玻璃着色：淡到能看见后方内容的模糊与折射，但着色要足以承托正文——
-    /// 鲜艳桌面壁纸下文字依然可读优先于通透感。地球蓝着色让玻璃自带海洋色调。
-    static let glassTint = adaptive(light: srgb(0xE9F2FA, 0.60), dark: srgb(0x0D1F33, 0.50))
+    /// 品牌深蓝玻璃保留折射，提高着色强度以减轻后景造成的偏色。
+    static let glassTint = Color(nsColor: .forgeGlassTint)
     /// 减少透明度时的实底。
     static let glassOpaque = adaptive(light: srgb(EarthBluePalette.glassLight), dark: srgb(EarthBluePalette.glassDark))
-    /// 卡片 / 行底色三级：白罩会透出下层玻璃的暖调，与背景自然一致。
+    /// 卡片 / 行底色三级：中性白罩，避免给品牌深蓝叠加青色。
     static let surface1 = adaptive(light: NSColor.white.withAlphaComponent(0.55),
-                                   dark: NSColor.white.withAlphaComponent(0.07))
+                                   dark: NSColor.white.withAlphaComponent(0.06))
     static let surface2 = adaptive(light: NSColor.white.withAlphaComponent(0.72),
-                                   dark: NSColor.white.withAlphaComponent(0.105))
+                                   dark: NSColor.white.withAlphaComponent(0.10))
     static let surface3 = adaptive(light: NSColor.white.withAlphaComponent(0.88),
-                                   dark: NSColor.white.withAlphaComponent(0.15))
+                                   dark: NSColor.white.withAlphaComponent(0.16))
     /// 开关关闭态的轨道与滑块。
     static let trackOff = adaptive(light: NSColor.black.withAlphaComponent(0.12),
                                    dark: NSColor.white.withAlphaComponent(0.12))
@@ -108,16 +108,18 @@ extension Color {
 }
 
 extension Color {
-    /// 折叠手柄上的三点提示。
-    static let islandHandleDot = Color.white.opacity(0.30)
+    /// 折叠句柄上的短横线提示。
+    static let islandGlassTint = Color(nsColor: srgb(EarthBluePalette.tintDark, 0.28))
+    static let islandHandleGrip = Color.white.opacity(0.55)
+    static let islandHandleBackground = Color(nsColor: srgb(EarthBluePalette.glassDark))
 }
 
 extension NSColor {
     /// GlassSurface 传给 NSGlassEffectView 的着色（NSColor 版本，随外观变化）。
     static let forgeGlassTint = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(srgbRed: 0x0D / 255, green: 0x1F / 255, blue: 0x33 / 255, alpha: 0.50)
-            : NSColor(srgbRed: 0xE9 / 255, green: 0xF2 / 255, blue: 0xFA / 255, alpha: 0.60)
+            ? Color.srgb(EarthBluePalette.tintDark, EarthBluePalette.tintAlpha)
+            : Color.srgb(EarthBluePalette.tintLight, EarthBluePalette.tintAlpha)
     }
 }
 

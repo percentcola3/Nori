@@ -138,7 +138,7 @@ struct ScreenshotPresetTests {
     }
 
     static func testPreferencesRoundTrip() {
-        let suite = "com.forgesweep.screenshot-tests.\(UUID().uuidString)"
+        let suite = "com.nori.screenshot-tests.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suite) else { fatalError("no defaults") }
         defer { defaults.removePersistentDomain(forName: suite) }
         let prefs = ScreenshotPreferences(defaults: defaults)

@@ -3,16 +3,10 @@ import SwiftUI
 /// 从当前目录逐层浏览实际磁盘占用。
 struct AnalyzeTabView: View {
     @ObservedObject var state: AppState
-    @ObservedObject private var savedLocations: SavedScanLocationStore
     @ObservedObject private var l10n = L10n.shared
     /// 从分析结果目录发起的自动清理规则创建。
     @State private var autoCleanIntent: AutoCleanupIntent?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    init(state: AppState) {
-        self.state = state
-        self.savedLocations = state.savedScanLocations
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -26,46 +20,21 @@ struct AnalyzeTabView: View {
                     .help(l10n.t("analyze.up"))
                     .disabled(state.isBusy)
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(scopeTitle)
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(state.analyzePath)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+                Text(scopeTitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help(state.analyzePath)
                 Spacer()
-                Button { state.chooseAnalyzeFolder() } label: {
-                    Label(l10n.t("analyze.pick"), systemImage: "folder")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(state.isBusy)
                 Menu {
-                    Button { state.scanQuickAnalysis(force: true) } label: {
-                        Label(l10n.t("analyze.scope.quick"), systemImage: "bolt.horizontal")
+                    Button { state.scanAnalyze(NSHomeDirectory()) } label: {
+                        Label(l10n.t("analyze.scope.user"), systemImage: "person.crop.circle")
                     }
-                    Button { state.scanDiskOverview(force: true) } label: {
-                        Label(l10n.t("analyze.scope.full"), systemImage: "macbook.and.iphone")
+                    Button { state.scanAnalyze("/") } label: {
+                        Label(l10n.t("analyze.scope.root"), systemImage: "internaldrive")
                     }
                     Button { state.chooseAnalyzeFolder() } label: {
-                        Label(l10n.t("analyze.pick"), systemImage: "folder.badge.plus")
-                    }
-                    Divider()
-                    Button { state.addSavedScanLocation() } label: {
-                        Label(l10n.t("analyze.savedScope.add"), systemImage: "bookmark")
-                    }
-                    ForEach(savedLocations.locations) { location in
-                        Button {
-                            state.scanAnalyze(location.path)
-                        } label: {
-                            Label(location.displayName, systemImage: "bookmark.fill")
-                        }
-                        .disabled(location.availability != .available)
-                    }
-                    Divider()
-                    Button { state.openProjectRadar() } label: {
-                        Label(l10n.t("analyze.projectRadar"), systemImage: "scope")
+                        Label(l10n.t("analyze.scope.custom"), systemImage: "folder")
                     }
                 } label: {
                     Label(l10n.t("analyze.advanced"), systemImage: "ellipsis.circle")
@@ -85,23 +54,7 @@ struct AnalyzeTabView: View {
             .padding(.horizontal, 16)
             .padding(.top, 14)
             .padding(.bottom, 6)
-            .sheet(isPresented: $state.showProjectRadar) {
-                ProjectRadarView(
-                    store: state.projectRadar,
-                    locations: savedLocations.locations,
-                    hibernation: state.projectHibernation,
-                    fullDiskAccessGranted: state.permissionCenter.fullDiskAccessGranted,
-                    canMutate: !state.isBusy,
-                    onAddLocation: state.addSavedScanLocation)
-            }
-            .onAppear {
-                if state.permissionCenter.fullDiskAccessGranted {
-                    _ = savedLocations.refreshAvailability(persist: false)
-                }
-                // 默认第一层：快速分析只测个人目录、既知缓存和保存位置；
-                // 全盘深度分析从范围菜单主动启动。
-                state.scanQuickAnalysis()
-            }
+            .onAppear { state.scanUserSpace() }
 
             HStack(spacing: 6) {
                 if state.isAnalyzing { ProgressView().controlSize(.mini) }
@@ -130,10 +83,10 @@ struct AnalyzeTabView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
 
-            if state.isAnalyzing && state.analyzeEntries.isEmpty && state.analyzeAIItems.isEmpty {
+            if state.isAnalyzing {
                 VStack(spacing: 10) {
-                    ProgressView()
-                        .controlSize(.large)
+                    NoriStatusAnimation(mood: .working, size: 172, assetName: "nori-analyzing")
+                    ProgressView().controlSize(.small)
                     Text(l10n.t("analyze.scanning"))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -188,9 +141,11 @@ struct AnalyzeTabView: View {
             if !state.analyzeEntries.isEmpty || !state.analyzeAIItems.isEmpty {
                 Divider()
                 HStack {
-                    Text(footerText)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                    if let footerText {
+                        Text(footerText)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                     if !state.dupSelection.isEmpty {
                         Button { state.deleteDuplicates() } label: {
@@ -239,13 +194,8 @@ struct AnalyzeTabView: View {
             Image(systemName: "clock.arrow.circlepath")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.moleAccentText)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(l10n.t("analyze.snapshots"))
-                    .font(.system(size: 11, weight: .semibold))
-                Text(l10n.tf("analyze.snapshotCount", state.localSnapshots.count))
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
-            }
+                .accessibilityLabel(l10n.t("analyze.snapshots"))
+                .accessibilityValue(l10n.tf("analyze.snapshotCount", state.localSnapshots.count))
             Spacer()
             Text(state.purgeableBytes > 0 ? ByteFormat.format(state.purgeableBytes) : "--")
                 .font(.system(size: 11, weight: .semibold).monospacedDigit())
@@ -264,12 +214,12 @@ struct AnalyzeTabView: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
     }
 
-    private var footerText: String {
+    private var footerText: String? {
         if !state.dupSelection.isEmpty {
             return l10n.tf("analyze.dup.selected", state.dupSelection.count)
         }
         if state.analyzeSelection.isEmpty {
-            if state.analyzeAISelection.isEmpty { return l10n.t("analyze.hint") }
+            if state.analyzeAISelection.isEmpty { return nil }
         }
         return l10n.tf("analyze.selected", state.analyzeCombinedSelectedCount,
                        ByteFormat.format(state.analyzeCombinedSelectedBytes))

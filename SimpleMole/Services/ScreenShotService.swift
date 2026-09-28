@@ -54,7 +54,7 @@ enum ScreenShotService {
     static func captureInteractive(completion: @escaping (NSImage?) -> Void) {
         let fileManager = FileManager.default
         let directory = fileManager.temporaryDirectory
-            .appendingPathComponent("com.forgesweep.screenshot.\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("com.nori.screenshot.\(UUID().uuidString)", isDirectory: true)
         do {
             try fileManager.createDirectory(at: directory,
                                             withIntermediateDirectories: false,

@@ -1,5 +1,5 @@
 #!/bin/bash
-# ForgeSweep native system data preview.
+# Nori native system data preview.
 #
 # Read-only inventory of root-owned system data, grouped for the System Data
 # page. Executed through the signed privileged bridge because the scanned
@@ -25,7 +25,7 @@ trap cleanup EXIT
 
 new_tmp() {
     local tmp
-    tmp=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/forgesweep-system-preview.XXXXXX") || exit 1
+    tmp=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/nori-system-preview.XXXXXX") || exit 1
     TMP_FILES="$TMP_FILES $tmp"
     printf '%s' "$tmp"
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Shared socket and application identities for process snapshots and Clash metadata.
+/// Shared socket and application identities for system process snapshots.
 enum TrafficAttribution {
     static func applicationURL(in path: String) -> URL? {
         let path = path.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
@@ -48,10 +48,9 @@ enum TrafficAttribution {
             + "|\(remoteHost(remote))|\(remotePort(remote))"
     }
 
-    static func exitKind(remote: String, proxyPorts: Set<Int>, interface: String?) -> TrafficExitKind {
+    static func exitKind(remote: String, interface: String?) -> TrafficExitKind {
         let host = remoteHost(remote)
         if isLoopback(host) {
-            if let port = Int(remotePort(remote)), proxyPorts.contains(port) { return .proxy }
             return .loopback
         }
         guard let interface, !interface.isEmpty, interface != "unknown" else { return .unknown }

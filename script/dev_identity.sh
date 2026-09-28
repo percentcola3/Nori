@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create (or reuse) a local self-signed code-signing identity for ForgeSweep.
+# Create (or reuse) a local self-signed code-signing identity for Nori.
 #
 # Why: macOS privacy grants (Full Disk Access, Screen Recording) are bound to
 # the App's designated requirement. Ad-hoc signatures reduce that to a cdhash,
@@ -11,8 +11,8 @@
 # a distribution one.
 #
 # The identity lives in its own keychain (~/Library/Keychains/
-# ForgeSweepLocalSigning.keychain-db) with a random password kept in
-# ~/Library/Application Support/ForgeSweep/signing/keychain-password (0600).
+# NoriLocalSigning.keychain-db) with a random password kept in
+# ~/Library/Application Support/Nori/signing/keychain-password (0600).
 # That is what lets `codesign` use the key without a GUI prompt: the key's
 # partition list must be set with the keychain password, which we never have
 # for the login keychain (keys imported there fail with errSecInternalComponent).
@@ -25,19 +25,19 @@
 #             when it is absent (never creates anything).
 #   --remove  delete the dedicated keychain and password file.
 #
-#   SM_LOCAL_SIGN_LABEL   identity common name (default: ForgeSweep Local Signing)
+#   SM_LOCAL_SIGN_LABEL   identity common name (default: Nori Local Signing)
 #   SM_DEV_IDENTITY_DRY_RUN=1
 #                         describe the actions without touching any keychain
 #   SM_SECURITY_BIN / SM_OPENSSL_BIN
 #                         tool overrides used by the test-suite
 set -euo pipefail
 
-LABEL="${SM_LOCAL_SIGN_LABEL:-ForgeSweep Local Signing}"
+LABEL="${SM_LOCAL_SIGN_LABEL:-Nori Local Signing}"
 SECURITY="${SM_SECURITY_BIN:-/usr/bin/security}"
 OPENSSL="${SM_OPENSSL_BIN:-/usr/bin/openssl}"
 DRY_RUN="${SM_DEV_IDENTITY_DRY_RUN:-0}"
-KEYCHAIN="${SM_LOCAL_SIGN_KEYCHAIN:-$HOME/Library/Keychains/ForgeSweepLocalSigning.keychain-db}"
-PASSWORD_FILE="${SM_LOCAL_SIGN_PASSWORD_FILE:-$HOME/Library/Application Support/ForgeSweep/signing/keychain-password}"
+KEYCHAIN="${SM_LOCAL_SIGN_KEYCHAIN:-$HOME/Library/Keychains/NoriLocalSigning.keychain-db}"
+PASSWORD_FILE="${SM_LOCAL_SIGN_PASSWORD_FILE:-$HOME/Library/Application Support/Nori/signing/keychain-password}"
 MODE="ensure"
 
 case "${1:-}" in
@@ -136,7 +136,7 @@ if [[ -f "$LOGIN_KEYCHAIN" ]] && "$SECURITY" find-certificate -c "$LABEL" "$LOGI
         || echo "warning: could not remove it; delete \"$LABEL\" in Keychain Access → login when convenient" >&2
 fi
 
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-identity.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/nori-identity.XXXXXX")"
 chmod 700 "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -146,7 +146,7 @@ distinguished_name = dn
 prompt = no
 [ dn ]
 CN = $LABEL
-O = ForgeSweep local development
+O = Nori local development
 [ v3_codesign ]
 basicConstraints = critical, CA:false
 keyUsage = critical, digitalSignature
@@ -207,7 +207,7 @@ echo "==> Trusting the certificate for code signing (macOS may ask you to confir
 "$SECURITY" add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$WORK/cert.cer" \
     || {
         echo "error: the certificate was imported but not trusted." >&2
-        echo "Open Keychain Access → ForgeSweepLocalSigning → \"$LABEL\" → Trust → Code Signing: Always Trust, then rerun." >&2
+        echo "Open Keychain Access → NoriLocalSigning → \"$LABEL\" → Trust → Code Signing: Always Trust, then rerun." >&2
         exit 1
     }
 
@@ -218,5 +218,5 @@ if hash="$(identity_hash)"; then
 fi
 
 echo "error: identity was created but codesign does not list it as valid" >&2
-echo "Check Keychain Access → ForgeSweepLocalSigning → \"$LABEL\" → Trust settings." >&2
+echo "Check Keychain Access → NoriLocalSigning → \"$LABEL\" → Trust settings." >&2
 exit 1

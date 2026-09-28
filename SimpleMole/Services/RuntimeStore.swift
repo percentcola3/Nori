@@ -130,7 +130,7 @@ enum RuntimeStore {
     /// NSWorkspace 提供应用身份，ps 提供主进程及其子进程的实时资源占用。
     static func nativeRows(fromProcessText text: String) -> (rows: [ProcessRow], total: Int) {
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        let ownName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "ForgeSweep"
+        let ownName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Nori"
         let applications = NSWorkspace.shared.runningApplications.filter { application in
             guard !application.isTerminated,
                   application.processIdentifier > 1,

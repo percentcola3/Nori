@@ -21,7 +21,7 @@ t_cand="$work/cand.tsv"; t_full="$work/full.tsv"
 
 # 1) size index
 while IFS= read -r -d '' p; do
-    forgesweep_scan_path_allowed "$p" || continue
+    nori_scan_path_allowed "$p" || continue
     [[ -f "$p" ]] || continue
     printf '%s\t%s\n' "$(stat -f '%z' "$p" 2>/dev/null || echo 0)" "$p"
 done | sort -n > "$t_size"

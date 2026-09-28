@@ -50,7 +50,9 @@ struct UninstallQueue {
     mutating func startNext(blocked: Bool) -> UninstallJob? {
         guard !blocked, activeJob == nil,
               let index = jobs.firstIndex(where: { $0.state.isPending }) else { return nil }
-        jobs[index].state = jobs[index].plan == nil ? .preparing : .running
+        // Every request refreshes disposable residues before applying, even
+        // when the list already had a cached size/preview.
+        jobs[index].state = .preparing
         return jobs[index]
     }
 

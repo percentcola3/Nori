@@ -27,7 +27,7 @@ REQUESTED_IDENTITY=$(printf '%s' "${SM_CODESIGN_IDENTITY:-$RELEASE_CERT_SHA1}" |
 /usr/bin/openssl x509 -inform DER -in "$RELEASE_CERT_FILE" -noout -checkend 0 >/dev/null 2>&1 || \
     release_signing_error 'the pinned release certificate has expired'
 
-SIGNING_DIR="${SM_RELEASE_SIGNING_DIR:-$HOME/Library/Application Support/ForgeSweep/release-signing}"
+SIGNING_DIR="${SM_RELEASE_SIGNING_DIR:-$HOME/Library/Application Support/Nori/release-signing}"
 KEYCHAIN="$SIGNING_DIR/release.keychain-db"
 PASSWORD_FILE="$SIGNING_DIR/keychain-password"
 [[ -f "$KEYCHAIN" && -s "$PASSWORD_FILE" ]] || \
@@ -57,6 +57,6 @@ SM_LOCAL_SIGN_PASSWORD_FILE="$PASSWORD_FILE" \
     bash "$ROOT_DIR/script/package_dmg.sh"
 
 for arch in $BUILD_ARCHS; do
-    bash "$ROOT_DIR/script/verify_release.sh" "$ROOT_DIR/dist/$arch/ForgeSweep.app"
+    bash "$ROOT_DIR/script/verify_release.sh" "$ROOT_DIR/dist/$arch/Nori.app"
 done
 echo '==> Release packages verified. These self-signed builds are not Apple-notarized.'

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-scan-build.XXXXXX")"
+TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-scan-build.XXXXXX")"
 FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/.cleanup-scan-fixture.XXXXXX")"
 trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 swiftc -O -target "$(uname -m)-apple-macos13.0" \

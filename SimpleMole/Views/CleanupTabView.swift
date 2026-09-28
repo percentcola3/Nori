@@ -125,10 +125,10 @@ struct CleanupTabView: View {
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(groupedCategories) { group in
-                            VStack(spacing: 6) {
+                            VStack(spacing: 8) {
                                 cleanupGroupHeader(group)
                                 if !collapsedGroups.contains(group.kind) {
-                                    LazyVStack(spacing: 0) {
+                                    LazyVStack(spacing: 8) {
                                         ForEach(group.categoryIDs, id: \.self) { categoryID in
                                             if let index = state.categories.firstIndex(where: {
                                                 $0.id == categoryID
@@ -142,6 +142,7 @@ struct CleanupTabView: View {
                                             }
                                         }
                                     }
+                                    .padding(.leading, 14)
                                     .transition(.molePanelReveal)
                                 }
                             }
@@ -352,8 +353,9 @@ private struct CleanupScanProgressView: View {
 
     var body: some View {
         VStack(spacing: 10) {
+            NoriStatusAnimation(mood: .working, size: 156)
+                .padding(.bottom, 8)
             HStack(spacing: 7) {
-                NoriStatusAnimation(mood: .working, size: 52)
                 Text(l10n.t(state.cleanupScanMode.titleKey))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.primary)
@@ -403,9 +405,10 @@ private struct CleanupScanProgressView: View {
             .buttonStyle(SecondaryButtonStyle())
             .controlSize(.small)
         }
+        .frame(maxWidth: 540)
         .padding(.horizontal, 28)
         .padding(.vertical, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }
 

@@ -85,7 +85,7 @@ bash script/make_nori.sh
 
 `docs/brand/nori-preview.html` 提供所有状态、浅/深色背景、暂停、减少动态效果和单次动画重播；从仓库根目录启动本地 HTTP 服务预览，保留相对路径。
 
-可见名称更新为 Nori；历史 `com.forgesweep.app`、`ForgeSweep` 可执行文件名、签名标识、偏好与数据路径保持稳定。当前构建产物路径仍是 `dist/<arch>/ForgeSweep.app`，避免本次视觉更新引入额外的安装/迁移变化。
+可见名称与产品身份均为 Nori：Bundle ID `com.nori.app`，可执行文件与构建产物为 `dist/<arch>/Nori.app`。旧 ForgeSweep / Simple Mole 的偏好与数据目录（Application Support、Caches、Logs）由 `BrandMigration` 在首次启动时自动迁移；发布签名沿用已固定的历史证书（标签 "ForgeSweep Release Signing"，指纹不变）。
 
 ## 本次验证记录（2026-09-27）
 

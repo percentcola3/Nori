@@ -6,8 +6,8 @@ import Foundation
 enum UninstallInventoryCache {
     // One serial queue keeps older saves from overtaking newer inventories.
     // JSON encoding, disk writes and restore-time identity checks never block UI.
-    private static let ioQueue = DispatchQueue(label: "com.forgesweep.uninstall-cache", qos: .utility)
-    private static let version = 2
+    private static let ioQueue = DispatchQueue(label: "com.nori.uninstall-cache", qos: .utility)
+    private static let version = 4
     private static let maximumAge: TimeInterval = 7 * 24 * 60 * 60
 
     private struct Payload: Codable {
@@ -33,7 +33,7 @@ enum UninstallInventoryCache {
 
     private static var cacheURL: URL {
         let directory = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/Application Support/ForgeSweep", isDirectory: true)
+            .appendingPathComponent("Library/Application Support/Nori", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory,
                                                  withIntermediateDirectories: true)
         return directory.appendingPathComponent("uninstall-inventory.json")

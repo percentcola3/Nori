@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+<title id="title">Nori · 拿放大镜检查图片</title>
+<style>
+@keyframes breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.025,.975)}}
+@keyframes blink{0%,43%,49%,100%{transform:scaleY(1)}46%{transform:scaleY(.08)}}
+.body{transform-origin:132px 218px;animation:breathe 1.5s ease-in-out infinite}
+.eye{animation:blink 5s ease-in-out infinite}
+@keyframes inspect{0%,100%{transform:translate(-7px,0) rotate(-5deg)}50%{transform:translate(6px,-5px) rotate(3deg)}}
+.lens{transform-origin:179px 186px;animation:inspect 2.4s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+<g transform="translate(8 12) scale(.76)"><g class="body"><path d="M72 218C36 209 25 186 29 150C34 105 56 67 91 43C126 18 171 8 199 21C225 34 232 82 235 127C238 173 235 194 209 204C174 218 119 228 72 218Z" fill="#BFEAF2"/>
+<g fill="#10283F"><g transform="translate(119 113) rotate(-10)"><rect class="eye" x="-9" y="-17" width="18" height="34" rx="9"/></g><g transform="translate(182 106) rotate(-10)"><rect class="eye" x="-9" y="-17" width="18" height="34" rx="9"/></g></g></g></g>
+<rect x="108" y="161" width="119" height="76" rx="10" fill="#10283F" stroke="#69C7DD" stroke-width="3"/>
+<circle cx="198" cy="179" r="7" fill="#F2C66D"/>
+<path d="M119 224L145 188L170 215L184 200L215 224Z" fill="#69C7DD"/>
+<g class="lens"><path d="M184 185L212 218" stroke="#10283F" stroke-width="13" stroke-linecap="round"/><path d="M188 189L212 218" stroke="#69C7DD" stroke-width="7" stroke-linecap="round"/>
+<circle cx="170" cy="166" r="29" fill="#BFEAF2" fill-opacity=".42" stroke="#10283F" stroke-width="7"/>
+<circle cx="170" cy="166" r="24" fill="none" stroke="#69C7DD" stroke-width="3"/>
+<path d="M156 161Q156 153 165 151" fill="none" stroke="#FFFFFF" stroke-opacity=".85" stroke-width="4" stroke-linecap="round"/>
+<ellipse cx="194" cy="201" rx="13" ry="9" transform="rotate(45 194 201)" fill="#BFEAF2" stroke="#10283F" stroke-width="3"/></g>
+</svg>

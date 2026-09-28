@@ -5,7 +5,7 @@
 #   script/package_dmg_to_desktop.sh [label]
 #
 #   label               optional suffix, e.g. "cleanup-parity" gives
-#                       ~/Desktop/ForgeSweep-arm64-cleanup-parity.dmg;
+#                       ~/Desktop/Nori-arm64-cleanup-parity.dmg;
 #                       default is a YYYYmmdd-HHMM timestamp.
 #   SM_BUILD_ARCHS      architectures to build (default: this Mac only).
 #   SM_DESKTOP_DIR      destination folder (default: ~/Desktop).
@@ -24,7 +24,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
-PACKAGE_NAME="${SM_PACKAGE_NAME:-ForgeSweep}"
+PACKAGE_NAME="${SM_PACKAGE_NAME:-Nori}"
 BUILD_ARCHS="${SM_BUILD_ARCHS:-$(uname -m)}"
 DESKTOP_DIR="${SM_DESKTOP_DIR:-$HOME/Desktop}"
 REVEAL="${SM_DMG_REVEAL:-1}"
@@ -52,7 +52,7 @@ mkdir -p "$DESKTOP_DIR"
 # unless the caller forbade it.
 SIGN_IDENTITY="${SM_CODESIGN_IDENTITY:-}"
 ALLOW_ADHOC="${SM_ALLOW_ADHOC:-}"
-LOCAL_LABEL="${SM_LOCAL_SIGN_LABEL:-ForgeSweep Local Signing}"
+LOCAL_LABEL="${SM_LOCAL_SIGN_LABEL:-Nori Local Signing}"
 if [[ -z "$SIGN_IDENTITY" && -z "$ALLOW_ADHOC" ]]; then
     identities="$(/usr/bin/security find-identity -p codesigning -v 2>/dev/null || true)"
     if printf '%s\n' "$identities" | /usr/bin/grep -q '"Apple Development: '; then

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-analysis-tests.XXXXXX")"
+TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-analysis-tests.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 swiftc -O -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Models.swift" \

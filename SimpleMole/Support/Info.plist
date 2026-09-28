@@ -7,9 +7,9 @@
 	<key>CFBundleDisplayName</key>
 	<string>Nori</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.forgesweep.app</string>
+	<string>com.nori.app</string>
 	<key>CFBundleExecutable</key>
-	<string>ForgeSweep</string>
+	<string>Nori</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleVersion</key>
@@ -21,7 +21,7 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<key>LSUIElement</key>
-	<false/>
+	<true/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>NSHighResolutionCapable</key>

@@ -41,12 +41,15 @@ verify_process_identity() {
     [[ "$current" == "$expected" ]]
 }
 
-is_forgesweep_pid() {
-    local candidate="$1" mole_pid
-    while read -r mole_pid; do
-        [[ "$mole_pid" =~ ^[0-9]+$ ]] || continue
-        [[ "$candidate" != "$mole_pid" ]] || return 0
-    done < <("$PGREP_BIN" -x ForgeSweep 2>/dev/null || true)
+is_nori_pid() {
+    local candidate="$1" mole_pid app_name
+    # Legacy ForgeSweep builds may still be running across the rename.
+    for app_name in Nori ForgeSweep; do
+        while read -r mole_pid; do
+            [[ "$mole_pid" =~ ^[0-9]+$ ]] || continue
+            [[ "$candidate" != "$mole_pid" ]] || return 0
+        done < <("$PGREP_BIN" -x "$app_name" 2>/dev/null || true)
+    done
     return 1
 }
 
@@ -142,7 +145,7 @@ is_protected_runtime_pid() {
     pids_share_lineage "$candidate" "$$" || lineage_status=$?
     [[ "$lineage_status" -eq 1 ]] || return 0
 
-    for app_name in ForgeSweep SimpleMole; do
+    for app_name in Nori ForgeSweep SimpleMole; do
         probe_status=0
         app_pids=$("$PGREP_BIN" -x "$app_name" 2>/dev/null) || probe_status=$?
         # pgrep 1 conclusively means no match; every other error fails closed.
@@ -213,8 +216,8 @@ case "$mode" in
             echo "process changed or no longer exists" >&2
             exit 4
         }
-        ! is_forgesweep_pid "$signal_pid" || {
-            echo "refusing to terminate ForgeSweep" >&2
+        ! is_nori_pid "$signal_pid" || {
+            echo "refusing to terminate Nori" >&2
             exit 3
         }
         # Recheck immediately before the only destructive signal.
@@ -269,8 +272,8 @@ case "$mode" in
                 echo "process tree changed before signal" >&2
                 exit 4
             }
-            ! is_forgesweep_pid "$pid" || {
-                echo "refusing to terminate a tree containing ForgeSweep" >&2
+            ! is_nori_pid "$pid" || {
+                echo "refusing to terminate a tree containing Nori" >&2
                 exit 3
             }
             tree_active[$i]=true
@@ -282,7 +285,7 @@ case "$mode" in
             pid="${tree_pids[$i]}"
             identity="${tree_identities[$i]}"
             current=$(process_start_identity "$pid") || continue
-            if [[ "$current" != "$identity" ]] || is_forgesweep_pid "$pid"; then
+            if [[ "$current" != "$identity" ]] || is_nori_pid "$pid"; then
                 failed=$((failed + 1))
                 continue
             fi

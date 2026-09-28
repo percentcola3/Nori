@@ -151,10 +151,6 @@ extension L10nTables {
         "img.status.capped": "%d imágenes · se muestran las primeras %d",
         "img.empty.subtitle": "«Escanear imágenes» revisa Escritorio, Descargas e Imágenes",
 
-        "qp.cpu": "Uso de CPU",
-        "qp.mem": "Uso de memoria",
-        "qp.optimize": "Limpieza rápida",
-        "qp.topMemory": "Más memoria",
 
         "status.ready": "Listo",
         "status.scanningCleanup": "Escaneando elementos limpiables…",
@@ -546,10 +542,6 @@ extension L10nTables {
         "img.status.capped": "%d imagens · exibindo as primeiras %d",
         "img.empty.subtitle": "“Escaniar imagens” verifica Mesa, Downloads e Imagens",
 
-        "qp.cpu": "Uso de CPU",
-        "qp.mem": "Uso de memória",
-        "qp.optimize": "Limpeza rápida",
-        "qp.topMemory": "Mais memória",
 
         "status.ready": "Pronto",
         "status.scanningCleanup": "Escaneando itens limpáveis…",
@@ -941,10 +933,6 @@ extension L10nTables {
         "img.status.capped": "%d immagini · mostro le prime %d",
         "img.empty.subtitle": "“Scansiona immagini” controlla Scrivania, Scaricati e Immagini",
 
-        "qp.cpu": "Uso CPU",
-        "qp.mem": "Uso memoria",
-        "qp.optimize": "Pulizia rapida",
-        "qp.topMemory": "Più memoria",
 
         "status.ready": "Pronto",
         "status.scanningCleanup": "Scansione elementi ripulibili…",
@@ -1336,10 +1324,6 @@ extension L10nTables {
         "img.status.capped": "Найдено %d · показаны первые %d",
         "img.empty.subtitle": "«Сканировать изображения» проверяет Рабочий стол, Загрузки и Изображения",
 
-        "qp.cpu": "Загрузка ЦП",
-        "qp.mem": "Память",
-        "qp.optimize": "Быстрая очистка",
-        "qp.topMemory": "Больше всего памяти",
 
         "status.ready": "Готово",
         "status.scanningCleanup": "Сканирование очищаемых объектов…",
@@ -1731,10 +1715,6 @@ extension L10nTables {
         "img.status.capped": "%d görsel bulundu · ilk %d gösteriliyor",
         "img.empty.subtitle": "“Görselleri tara” Masaüstü, İndirilenler ve Resimler'i kontrol eder",
 
-        "qp.cpu": "CPU Kullanımı",
-        "qp.mem": "Bellek Kullanımı",
-        "qp.optimize": "Hızlı Temizleme",
-        "qp.topMemory": "En çok bellek",
 
         "status.ready": "Hazır",
         "status.scanningCleanup": "Temizlenebilir öğeler taranıyor…",

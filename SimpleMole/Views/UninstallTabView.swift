@@ -9,6 +9,7 @@ struct UninstallTabView: View {
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isListPresented = false
+    @State private var showsResultDetails = false
 
     private var isActive: Bool {
         let pages = state.visiblePages
@@ -20,7 +21,6 @@ struct UninstallTabView: View {
             toolbar
             searchField
             statusRow
-            queueSection
             content
         }
         .animation(reduceMotion ? nil : MoleMotion.panel,
@@ -85,104 +85,60 @@ struct UninstallTabView: View {
         .padding(.bottom, 6)
     }
 
+    // One status line follows the current operation; no separate task list.
+    private var statusJob: UninstallJob? {
+        if state.isScanningApps && !state.uninstallQueue.hasWork { return nil }
+        return state.uninstallQueue.activeJob
+            ?? state.uninstallQueue.jobs.first { $0.state.isPending }
+            ?? state.uninstallQueue.jobs.last { $0.state.isFinished }
+    }
+
     private var statusRow: some View {
-        HStack(spacing: 6) {
-            if state.isScanningApps { ProgressView().controlSize(.mini) }
-            Text(state.appListStatus)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer()
+        HStack(spacing: 8) {
+            if let job = statusJob {
+                NoriStatusAnimation(mood: job.state == .succeeded ? .success
+                                    : job.state == .failed ? .attention : .working,
+                                    size: 64,
+                                    assetName: job.state.isActive ? "nori-uninstalling" : nil)
+                    .id(job.id)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(job.message?.components(separatedBy: "\n").first ?? job.app.name)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                    UninstallJobStateLabel(job: job,
+                                           position: state.uninstallQueuePosition(for: job.app))
+                }
+                if job.state.isFinished, let message = job.message {
+                    Button { showsResultDetails.toggle() } label: {
+                        Image(systemName: "info.circle")
+                    }
+                    .buttonStyle(MoleIconButtonStyle(size: 22))
+                    .help(l10n.t("uninstall.resultDetails"))
+                    .accessibilityLabel(l10n.t("uninstall.resultDetails"))
+                    .popover(isPresented: $showsResultDetails) {
+                        ScrollView {
+                            Text(message)
+                                .font(.system(size: 11))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                        }
+                        .frame(width: 480, height: 220)
+                    }
+                }
+            } else {
+                if state.isScanningApps && !state.installedApps.isEmpty {
+                    NoriStatusAnimation(mood: .working, size: 64)
+                }
+                Text(state.appListStatus)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
-    }
-
-    /// The queue is intentionally kept above the app list and capped in
-    /// height.  It remains visible after a successful uninstall removes the
-    /// app from `installedApps`, while a long batch can still be inspected by
-    /// scrolling without taking over the tab.
-    @ViewBuilder
-    private var queueSection: some View {
-        let jobs = queueDisplayJobs
-        if !jobs.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 7) {
-                    Image(systemName: "clock.arrow.circlepath")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.moleAccentText)
-                    Text(l10n.t("uninstall.queue.title"))
-                        .font(.system(size: 11, weight: .semibold))
-                    Text(queueSummary)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    if hasFinishedUninstalls {
-                        Button {
-                            withAnimation(reduceMotion ? nil : MoleMotion.control) {
-                                state.dismissFinishedUninstalls()
-                            }
-                        } label: {
-                            Label(l10n.t("uninstall.queue.dismiss"),
-                                  systemImage: "xmark.circle")
-                        }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(MoleIconButtonStyle(size: 22))
-                        .help(l10n.t("uninstall.queue.dismiss"))
-                    }
-                }
-
-                ScrollView(.vertical) {
-                    LazyVStack(spacing: 4) {
-                        ForEach(jobs) { job in
-                            UninstallQueueRow(
-                                job: job,
-                                position: state.uninstallQueuePosition(for: job.app),
-                                onCancel: {
-                                    withAnimation(reduceMotion ? nil : MoleMotion.control) {
-                                        state.cancelQueuedUninstall(id: job.id)
-                                    }
-                                })
-                        }
-                    }
-                }
-                .frame(height: queueListHeight(for: jobs.count))
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .fill(Color.surface1))
-            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
-                .strokeBorder(.separator.opacity(0.35), lineWidth: 1))
-            .padding(.horizontal, 16)
-            .padding(.bottom, 6)
-            .transition(.molePanelReveal)
-        }
-    }
-
-    private var queueDisplayJobs: [UninstallJob] {
-        let jobs = state.uninstallQueue.jobs
-        // Active and waiting work must always be visible. Finished history is
-        // capped to keep the compact panel useful after a large batch.
-        return jobs.filter { $0.state.isActive }
-            + jobs.filter { $0.state.isPending }
-            + Array(jobs.filter { $0.state.isFinished }.suffix(4))
-    }
-
-    private var hasFinishedUninstalls: Bool {
-        state.uninstallQueue.jobs.contains { $0.state.isFinished }
-    }
-
-    private var queueSummary: String {
-        let jobs = state.uninstallQueue.jobs
-        return l10n.tf("uninstall.queue.summary",
-                       jobs.filter { $0.state.isActive }.count,
-                       jobs.filter { $0.state.isPending }.count,
-                       jobs.filter { $0.state.isFinished }.count)
-    }
-
-    private func queueListHeight(for count: Int) -> CGFloat {
-        let rows = CGFloat(max(1, min(count, 4)))
-        return min(132, rows * 35 + max(0, rows - 1) * 4)
+        .onChange(of: statusJob?.id) { _ in showsResultDetails = false }
     }
 
     @ViewBuilder
@@ -197,6 +153,8 @@ struct UninstallTabView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if state.isScanningApps && state.installedApps.isEmpty {
+            NoriScanActivity(text: state.appListStatus)
         } else if state.installedApps.isEmpty {
             EmptyStateView(
                 symbol: "app.dashed",
@@ -360,9 +318,7 @@ private struct UninstallAppRow: View {
     }
 }
 
-/// Compact status line shared by the app row and the queue history.  Keeping
-/// the state copy here means a queued request is understandable even when the
-/// queue panel is scrolled or the app list is filtered.
+/// Inline progress stays with the app and the current operation status.
 private struct UninstallJobStateLabel: View {
     let job: UninstallJob
     let position: Int?
@@ -420,53 +376,6 @@ private struct UninstallJobStateLabel: View {
         case .succeeded: return Color.success
         case .failed: return Color.warning
         }
-    }
-}
-
-/// One compact queue record. Finished records stay visible after their app is
-/// removed from the main list, and a failure exposes its message via help.
-private struct UninstallQueueRow: View {
-    let job: UninstallJob
-    let position: Int?
-    let onCancel: () -> Void
-
-    var body: some View {
-        HStack(spacing: 8) {
-            UninstallAppIcon(path: job.app.path,
-                             identity: job.app.appIdentity + job.app.infoIdentity, size: 24)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(job.app.name)
-                    .font(.system(size: 10, weight: .semibold))
-                    .lineLimit(1)
-                Text(job.app.path)
-                    .font(.system(size: 8, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            UninstallJobStateLabel(job: job, position: position)
-                .frame(maxWidth: 170, alignment: .leading)
-
-            if job.state.isPending {
-                Button(action: onCancel) {
-                    Image(systemName: "xmark")
-                }
-                .buttonStyle(MoleIconButtonStyle(size: 21))
-                .accessibilityLabel(L10n.shared.t("uninstall.queue.cancel"))
-                .help(L10n.shared.t("uninstall.queue.cancel"))
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .fill(job.state == .failed ? Color.surface2 : Color.surface1))
-        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .strokeBorder(job.state == .failed
-                          ? Color.warning.opacity(0.20)
-                          : Color.hairline, lineWidth: 1))
-        .help(job.message ?? "")
     }
 }
 

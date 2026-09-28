@@ -21,7 +21,6 @@ struct CleanupRiskPolicyTests {
         try testPathSelection()
         try testLongTailMerging(home: policyHome)
         try testAgePolicyBoundaries()
-        try testQuickAnalysisRootSelection(home: policyHome)
         try testDisposalDecoding()
         try testMessengerOwnerScoping(home: policyHome)
         try testAnalyzeEntrySafety()
@@ -765,7 +764,7 @@ struct CleanupRiskPolicyTests {
                    && flows[1].remote == "[2606:4700::1]:443" && flows[1].proto == "UDP",
                    "flow protocol or IPv6 endpoint was parsed incorrectly")
 
-        // routes + discover。
+        // routes。
         let routes = Parsers.netmonRoutes([
             "route\t8.8.8.8\ten0",
             "route\t2606:4700::1\tunknown",
@@ -773,55 +772,7 @@ struct CleanupRiskPolicyTests {
         ].joined(separator: "\n"))
         try expect(routes.count == 2 && routes[1].interface == "unknown",
                    "netmon routes were parsed incorrectly")
-        let discovery = Parsers.clashDiscovery([
-            "endpoint\tunix:/tmp/verge/verge-mihomo.sock",
-            "endpoint\thttp://127.0.0.1:9097",
-            "secret\tabcd",
-            "mixedport\t7897",
-            "proxyport\t7897",
-            "proxyport\t7891",
-            "proxyport\t7890",
-            "mixedport\t7898",
-            "mixedport\tnotanumber",
-            "proxyport\t0",
-            "proxyport\t65536",
-        ].joined(separator: "\n"))
-        try expect(discovery.endpoints == ["unix:/tmp/verge/verge-mihomo.sock",
-                                           "http://127.0.0.1:9097"]
-                   && discovery.secret == "abcd" && discovery.mixedPort == 7897
-                   && discovery.proxyPorts == [7897, 7891, 7890, 7898],
-                   "clash discovery was parsed incorrectly")
-        let socksOnly = Parsers.clashDiscovery("proxyport\t7891")
-        try expect(socksOnly.mixedPort == nil && socksOnly.proxyPorts == [7891],
-                   "a SOCKS-only listener was mislabeled as the mixed port")
 
-        // Clash /connections：DIRECT 链、节点链、null 连接列表。
-        let directJSON = #"{"downloadTotal":10,"uploadTotal":5,"connections":[{"id":"c1","metadata":{"network":"tcp","type":"HTTP","sourceIP":"127.0.0.1","sourcePort":"1","destinationIP":"1.2.3.4","destinationPort":"443","host":"example.com","process":"Chrome","processPath":"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"},"upload":1,"download":2,"start":"2026-09-12T10:00:00.000000+08:00","chains":["DIRECT"],"rule":"Match","rulePayload":""}]}"#
-        let direct = try unwrap(ClashAPI.connections(from: Data(directJSON.utf8)),
-                                "clash direct payload")
-        try expect(direct.downloadTotal == 10 && direct.uploadTotal == 5,
-                   "clash totals were parsed incorrectly")
-        try expect(direct.connections?.count == 1
-                   && direct.connections?[0].isDirectExit == true,
-                   "clash DIRECT chain was not detected")
-        let nodeJSON = #"{"downloadTotal":0,"uploadTotal":0,"connections":[{"id":"c2","metadata":{"destinationIP":"5.6.7.8","destinationPort":"443"},"upload":0,"download":0,"start":"","chains":["PROXY","HK-Node"],"rule":"DOMAIN-SUFFIX,example.com"}]}"#
-        let node = try unwrap(ClashAPI.connections(from: Data(nodeJSON.utf8)),
-                              "clash node payload")
-        try expect(node.connections?[0].isDirectExit == false,
-                   "clash node chain was misclassified as DIRECT")
-        let numericPortJSON = #"{"downloadTotal":0,"uploadTotal":0,"connections":[{"id":"c3","metadata":{"sourcePort":51234,"destinationPort":443},"upload":0,"download":0,"start":""}]}"#
-        let numericPorts = try unwrap(ClashAPI.connections(from: Data(numericPortJSON.utf8)),
-                                      "clash numeric port payload")
-        try expect(numericPorts.connections?[0].metadata.sourcePort == "51234"
-                   && numericPorts.connections?[0].metadata.destinationPort == "443",
-                   "numeric Clash ports were not normalized to strings")
-        let empty = try unwrap(ClashAPI.connections(
-            from: Data(#"{"downloadTotal":0,"uploadTotal":0,"connections":null,"memory":1}"#.utf8)),
-            "clash empty payload")
-        try expect(empty.connections == nil && empty.downloadTotal == 0,
-                   "clash null connections list was rejected")
-        try expect(ClashAPI.connections(from: Data("Unauthorized".utf8)) == nil,
-                   "clash non-JSON body was decoded")
     }
 
     private static func testCacheMapPolicy(home: String) throws {
@@ -1027,74 +978,7 @@ struct CleanupRiskPolicyTests {
                "missing re-check evidence must skip the entry")
     }
 
-    /// 快速分析范围：只含个人目录、既知缓存、废纸篓与保存位置；不出现
-    /// 系统目录、应用安装目录或应用包内部；嵌套根去重。
-    private static func testQuickAnalysisRootSelection(home: String) throws {
-        let roots = QuickAnalysisWorker.roots(home: home,
-                                              savedLocations: [home + "/Desktop/nested-project"])
-        let paths = roots.map(\.path)
-        try expect(paths.contains(home + "/Desktop") && paths.contains(home + "/Downloads")
-            && paths.contains(home + "/Documents"), "personal folders missing from quick scope")
-        try expect(paths.contains(home + "/.Trash"), "trash missing from quick scope")
-        try expect(!paths.contains(where: { $0.contains("/Applications") || $0.contains("/System")
-            || $0.contains("/private/var") || $0.hasSuffix(".app") }),
-            "quick scope must never include system dirs, app installs or bundle interiors")
-        try expect(paths.contains(home + "/.gradle/caches")
-            && paths.contains(home + "/Library/Developer/Xcode/DerivedData"),
-            "known developer locations missing from quick scope")
-        try expect(paths.allSatisfy { $0.hasPrefix(home + "/") },
-            "quick roots must stay inside the analyzed home")
-        try expect(!paths.contains(home + "/Desktop/nested-project"),
-            "a saved scope nested inside a personal folder must be deduplicated")
-        // 冒烟：真实夹具上计量，超预算目录标注 partial 而不是报零。
-        let fixture = FileManager.default.temporaryDirectory
-            .appendingPathComponent("quick-analysis-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: fixture.appendingPathComponent("cache/a"), withIntermediateDirectories: true)
-        try Data(repeating: 3, count: 2048).write(to: fixture.appendingPathComponent("cache/a/entry"))
-        let quickRoots = [QuickAnalysisWorker.Root(path: fixture.appendingPathComponent("cache").path,
-                                                   label: "cache", kind: .developer)]
-        let report = QuickAnalysisWorker.scan(quickRoots,
-                                              control: CleanupScanControl(mode: .quick))
-        try expect(report.entries.count == 1 && report.entries[0].size > 0,
-               "quick scan must report a measured size")
-        try expect(report.isPartial != true, "completed quick scan must not be flagged partial")
-        let starved = QuickAnalysisWorker.scan(quickRoots,
-            control: CleanupScanControl(mode: .quick, totalBudget: 0.0, directoryBudget: 0.0))
-        try expect(starved.entries.first?.isPartial == true && starved.isPartial == true,
-               "budget-exhausted roots must be marked partial")
 
-        // 性能采样：3000 个小文件、3 个根，记录首批结果耗时、总耗时与
-        // 遍历条目数（固定规模夹具，供回归比较）。
-        let benchStart = Date()
-        for index in 0..<3 {
-            let dir = fixture.appendingPathComponent("bench-\(index)")
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let payload = Data(repeating: 7, count: 512)
-            for file in 0..<1000 {
-                try payload.write(to: dir.appendingPathComponent("f-\(file)"))
-            }
-        }
-        let benchRoots = (0..<3).map {
-            QuickAnalysisWorker.Root(path: fixture.appendingPathComponent("bench-\($0)").path,
-                                     label: "bench-\($0)", kind: .developer)
-        }
-        var firstResult: TimeInterval?
-        let benchBegin = Date()
-        let benchReport = QuickAnalysisWorker.scan(benchRoots,
-            control: CleanupScanControl(mode: .quick)) { _ in
-                if firstResult == nil { firstResult = Date().timeIntervalSince(benchBegin) }
-            }
-        let benchTotal = Date().timeIntervalSince(benchBegin)
-        try expect(benchReport.totalFiles == 3000 && benchReport.isPartial != true,
-               "benchmark must count every fixture file")
-        print(String(format: "PASS: quick analysis bench: 3 roots, %d files, setup=%.2fs first-result=%.3fs total=%.3fs",
-                     benchReport.totalFiles ?? 0, Date().timeIntervalSince(benchStart) - benchTotal,
-                     firstResult ?? -1, benchTotal))
-        try? FileManager.default.removeItem(at: fixture)
-    }
-
-    /// 处置枚举与执行行为一致：旧快照的 "trash" 解码为永久删除。
     private static func testDisposalDecoding() throws {
         let legacy = Data("\"trash\"".utf8)
         let decoded = try JSONDecoder().decode(CleanupDisposal.self, from: legacy)

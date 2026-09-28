@@ -12,7 +12,7 @@
 bash script/release_identity.sh init
 ```
 
-私有归档存放于 `~/Library/Application Support/ForgeSweep/release-signing/identity.p12`，密码文件为同目录的 `identity-password`。初始化同时生成仓库内可以公开的证书与身份记录。仓库已有公开证书但本机缺少私钥时，`init` 会故意拒绝生成新的身份；新维护者或新 Mac 必须导入原来的备份。后续构建通常先确保原身份可用，再打包：
+私有归档存放于 `~/Library/Application Support/Nori/release-signing/identity.p12`，密码文件为同目录的 `identity-password`。产品由 ForgeSweep 更名为 Nori 后，`ensure`/`init` 会一次性把旧 ForgeSweep 路径下的归档搬移到新路径（显式设置 `SM_RELEASE_SIGNING_DIR` 的 CI 目录不受影响）。初始化同时生成仓库内可以公开的证书与身份记录。仓库已有公开证书但本机缺少私钥时，`init` 会故意拒绝生成新的身份；新维护者或新 Mac 必须导入原来的备份。发布证书 CN 为历史名称 "ForgeSweep Release Signing"，属于已固定发布的身份，不做更换。后续构建通常先确保原身份可用，再打包：
 
 ```bash
 bash script/release_identity.sh ensure
@@ -22,7 +22,7 @@ bash script/package_release.sh
 请先建立加密备份，再对外发布第一个版本。下面的目标目录必须尚不存在，而且必须在 Git 仓库之外；可以将它换成你的加密备份卷路径：
 
 ```bash
-bash script/release_identity.sh export "$HOME/ForgeSweep-release-backup"
+bash script/release_identity.sh export "$HOME/Nori-release-backup"
 ```
 
 导出目录包含 `signing-certificate.p12`、`signing-certificate.base64` 和 `signing-password`，用于备份及配置 GitHub Secrets。脚本限制目录和文件的访问权限，但这不等同于备份介质加密；应妥善保管整个目录。
@@ -31,8 +31,8 @@ bash script/release_identity.sh export "$HOME/ForgeSweep-release-backup"
 
 ```bash
 set +x
-FORGESWEEP_SIGNING_P12_BASE64="$(cat "$HOME/ForgeSweep-release-backup/signing-certificate.base64")" \
-FORGESWEEP_SIGNING_P12_PASSWORD="$(cat "$HOME/ForgeSweep-release-backup/signing-password")" \
+FORGESWEEP_SIGNING_P12_BASE64="$(cat "$HOME/Nori-release-backup/signing-certificate.base64")" \
+FORGESWEEP_SIGNING_P12_PASSWORD="$(cat "$HOME/Nori-release-backup/signing-password")" \
   bash script/release_identity.sh import
 ```
 
@@ -64,7 +64,7 @@ bash script/configure_release_secrets.sh
 ## 构建和发布
 
 1. 先把经过审核的工作流、发布脚本和公开证书推送到仓库默认分支。
-2. 在 **Actions → Signed macOS release → Run workflow** 选择默认分支试跑。手动运行只生成 `ForgeSweep-macos` artifact，不发布 GitHub Release。
+2. 在 **Actions → Signed macOS release → Run workflow** 选择默认分支试跑。手动运行只生成 `Nori-macos` artifact，不发布 GitHub Release。
 3. 下载 artifact，检查 Apple 芯片和 Intel 两个 DMG。确认版本号正确后，为待发布提交创建并推送 `v*` 标签，例如 `v1.0.1`。
 4. 标签构建成功后会创建 **draft Release**，附上两个 DMG 和 `SHA256SUMS`。完成安装与跨版本授权验证、补充更新说明后，再手动公开草稿。
 
@@ -78,7 +78,7 @@ CI 签名仅支持一次性的 GitHub-hosted runner。导入脚本使用 `sudo -
 
 ## 安装和升级验证
 
-用户从 DMG 将 `ForgeSweep.app` 拖到 `/Applications`，在相同位置覆盖升级。首次打开若因未经公证而被拦截，可尝试“系统设置 → 隐私与安全性 → 仍要打开”。无需给用户安装你的证书，也不应要求他们关闭 Gatekeeper。
+用户从 DMG 将 `Nori.app` 拖到 `/Applications`。旧版 `ForgeSweep.app` 不会在相同位置覆盖升级：首次启动新版会自动迁移偏好与数据，建议确认功能正常后手动删除旧的 `ForgeSweep.app`；因 Bundle ID 变化，完全磁盘访问与屏幕录制等系统权限需重新授予一次。首次打开若因未经公证而被拦截，可尝试“系统设置 → 隐私与安全性 → 仍要打开”。无需给用户安装你的证书，也不应要求他们关闭 Gatekeeper。
 
 公开前至少在另一台未导入、未信任发布证书的 Mac 上验证，使用浏览器下载 DMG 并保留系统的下载隔离标记，模拟真实用户安装。先安装旧版固定签名 App，授予完全磁盘访问与屏幕录制权限并使用对应功能，退出后以同样方式下载、覆盖安装同证书签署的新版，再确认打开流程、权限与功能。这里的旧版也必须来自同一个发布身份；本机 ad-hoc 构建不能用于证明跨版本授权保留。
 
@@ -91,7 +91,7 @@ shasum -a 256 -c SHA256SUMS
 若拥有源码中的固定公开证书，还可以对安装包内的 App 执行身份检查：
 
 ```bash
-bash script/verify_release.sh /Applications/ForgeSweep.app
+bash script/verify_release.sh /Applications/Nori.app
 ```
 
 此检查成功只证明签名有效且应用的指定要求（designated requirement）符合固定身份；不能证明 Gatekeeper 会放行，或 macOS 隐私授权会在升级后保留，后两项仍需上述真实安装验证。

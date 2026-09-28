@@ -69,8 +69,8 @@ struct NoriBrandTests {
             }
         }
         let info = NSDictionary(contentsOf: support.appendingPathComponent("Info.plist"))!
-        precondition(info["CFBundleIdentifier"] as? String == "com.forgesweep.app", "permission identity changed")
-        precondition(info["CFBundleExecutable"] as? String == "ForgeSweep", "legacy executable contract changed")
+        precondition(info["CFBundleIdentifier"] as? String == "com.nori.app", "permission identity changed")
+        precondition(info["CFBundleExecutable"] as? String == "Nori", "legacy executable contract changed")
         print("Nori: bounded motion, single-shot feedback, reduced motion, vector bounds, raster sizes, template alpha and stable identity passed")
     }
 }

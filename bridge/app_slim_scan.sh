@@ -10,7 +10,7 @@ roots=("$HOME/Pictures" "$HOME/Desktop" "$HOME/Downloads")
 tmp="$(mktemp "${TMPDIR:-/tmp}/mole-images.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
 for root in "${roots[@]}"; do
-    forgesweep_scan_path_allowed "$root" || continue
+    nori_scan_path_allowed "$root" || continue
     [[ -d "$root" ]] || continue
     find "$root" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.heic' -o -iname '*.webp' -o -iname '*.tiff' \) -size +2M -print0 2>/dev/null
 done | while IFS= read -r -d '' path; do

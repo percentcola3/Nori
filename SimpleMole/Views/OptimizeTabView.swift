@@ -30,7 +30,10 @@ struct OptimizeTabView: View {
             .padding(.bottom, 8)
 
             HStack(spacing: 6) {
-                if state.isOptimizing { ProgressView().controlSize(.mini) }
+                if let mood = operationMood {
+                    NoriStatusAnimation(mood: mood, size: 76,
+                                        assetName: state.isOptimizing ? "nori-typing" : nil)
+                }
                 Text(state.optimizeStatus)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -49,6 +52,16 @@ struct OptimizeTabView: View {
                 .padding(.vertical, 8)
             }
         }
+    }
+
+    private var operationMood: NoriMood? {
+        if state.isOptimizing { return .working }
+        let tasks = state.optimizeTasks
+        guard tasks.contains(where: { $0.state != .pending }) else { return nil }
+        if tasks.contains(where: { $0.state == .failed || $0.state == .unavailable }) {
+            return .attention
+        }
+        return tasks.contains(where: { $0.state == .applied }) ? .success : .idle
     }
 
     private func taskRow(_ task: NativeCore.OptimizeTask) -> some View {

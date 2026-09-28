@@ -7,7 +7,7 @@ umask 077
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 source "$ROOT_DIR/script/release_signing_common.sh"
-SIGNING_DIR="${SM_RELEASE_SIGNING_DIR:-$HOME/Library/Application Support/ForgeSweep/release-signing}"
+SIGNING_DIR="${SM_RELEASE_SIGNING_DIR:-$HOME/Library/Application Support/Nori/release-signing}"
 MODE="${1:-help}"
 WORK=""
 trap '[[ -z "$WORK" ]] || rm -rf "$WORK"' EXIT
@@ -39,7 +39,7 @@ if [[ "$MODE" == cleanup ]]; then
     CI_ROOT="$(cd "$RUNNER_TEMP" && pwd -P)"
     CI_DIR="$(cd "$SIGNING_DIR" && pwd -P)"
     case "$CI_DIR/" in "$CI_ROOT/"?*/) ;; *) release_signing_error "cleanup directory must be inside RUNNER_TEMP" ;; esac
-    [[ -f "$CI_DIR/.forgesweep-release-signing" ]] || release_signing_error "refusing to clean an unowned directory"
+    [[ -f "$CI_DIR/.nori-release-signing" ]] || release_signing_error "refusing to clean an unowned directory"
     cleanup_status=0
     if [[ -f "$CI_DIR/trust-domain" && -f "$CI_DIR/release.cer" ]]; then
         if [[ "$(cat "$CI_DIR/trust-domain")" == admin ]]; then
@@ -54,6 +54,20 @@ if [[ "$MODE" == cleanup ]]; then
     rm -rf "$CI_DIR"
     echo "Removed disposable release signing material."
     exit "$cleanup_status"
+fi
+
+# One-time relocation from the ForgeSweep-era default path. Explicit
+# SM_RELEASE_SIGNING_DIR overrides (CI runners) are never migrated.
+if [[ -z "${SM_RELEASE_SIGNING_DIR:-}" ]]; then
+    LEGACY_SIGNING_DIR="$HOME/Library/Application Support/ForgeSweep/release-signing"
+    if [[ -d "$LEGACY_SIGNING_DIR" && ! -d "$SIGNING_DIR" ]]; then
+        mkdir -p "$(dirname "$SIGNING_DIR")"
+        mv "$LEGACY_SIGNING_DIR" "$SIGNING_DIR"
+        if [[ -f "$SIGNING_DIR/.forgesweep-release-signing" ]]; then
+            mv "$SIGNING_DIR/.forgesweep-release-signing" "$SIGNING_DIR/.nori-release-signing"
+        fi
+        echo "Relocated the release signing archive from the ForgeSweep-era path."
+    fi
 fi
 
 mkdir -p "$SIGNING_DIR"
@@ -149,7 +163,7 @@ distinguished_name = dn
 prompt = no
 [dn]
 CN = ForgeSweep Release Signing
-O = ForgeSweep
+O = Nori
 [codesign]
 basicConstraints = critical, CA:false
 keyUsage = critical, digitalSignature
@@ -171,7 +185,7 @@ EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
     <key>CertificateSHA1</key><string>$RELEASE_CERT_SHA1</string>
-    <key>BundleIdentifier</key><string>com.forgesweep.app</string>
+    <key>BundleIdentifier</key><string>com.nori.app</string>
     <key>IdentityLabel</key><string>ForgeSweep Release Signing</string>
 </dict></plist>
 EOF
@@ -219,6 +233,6 @@ if [[ "$MODE" == export ]]; then
     echo "Keep this directory private. Never attach it to a release or commit it."
     exit 0
 fi
-touch "$SIGNING_DIR/.forgesweep-release-signing"
+touch "$SIGNING_DIR/.nori-release-signing"
 cp "$RELEASE_CERT_FILE" "$SIGNING_DIR/release.cer"
 import_archive

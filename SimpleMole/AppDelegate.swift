@@ -6,7 +6,6 @@ import Combine
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let appState = AppState()
     private var statusItem: NSStatusItem?
-    private var quickPanel: NSPanel?
     private var mainWindow: NSWindow?
     private var runtimeTimer: Timer?
     private var autoCleanupTimer: Timer?
@@ -23,14 +22,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenu()
         updateStatusItem()
 
-        // 附件应用：启动只驻留菜单栏；点击图标展示快捷面板，"更多"才开主窗口。
+        // 附件应用：启动只驻留菜单栏；点击图标直接打开高级主窗口。
         runtimeTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 self.appState.refreshMetrics()
                 self.appState.refreshRuntimeIfNeeded()
-                if self.quickPanel?.isVisible == true || self.islandExpanded {
-                    self.appState.refreshTopMemoryApps()
+                if self.islandExpanded {
+                    self.appState.refreshIslandProcesses()
                 }
             }
         }
@@ -77,7 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         MoleEngine.shared.cancelAll()
     }
 
-    /// 点击程序坞图标：唤起详细面板（主窗口）。
+    /// 关闭窗口后继续驻留；只有明确退出或系统退出才结束进程。
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    /// 从 Finder / Spotlight 再次打开时，唤起主窗口。
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         showMainWindow()
         return false
@@ -196,8 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return image
     }
 
-    /// 菜单栏状态图标按设置装拆：隐藏后入口交给灵动岛与程序坞图标。
-    /// 隐藏时先收起快捷面板——它以状态图标为锚点，图标没了就不能再悬空显示。
+    /// 菜单栏状态图标按设置装拆：隐藏后入口交给灵动岛。
     private func updateStatusItem() {
         if appState.menuBarIconVisible {
             guard statusItem == nil else { return }
@@ -210,11 +213,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 button.toolTip = "Nori"
                 button.setAccessibilityLabel("Nori")
                 button.target = self
-                button.action = #selector(toggleQuickPanel(_:))
+                button.action = #selector(openMainWindow(_:))
             }
             statusItem = item
         } else {
-            dismissLiquidPanel(quickPanel)
             guard let statusItem else { return }
             NSStatusBar.system.removeStatusItem(statusItem)
             self.statusItem = nil
@@ -227,15 +229,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// MoleMotion.press 的回弹手感。
     private static let liquidPresentTiming =
         CAMediaTimingFunction(controlPoints: 0.22, 0.86, 0.26, 1.12)
-    private static let liquidResizeTiming =
-        CAMediaTimingFunction(controlPoints: 0.3, 0.9, 0.28, 1.06)
 
     private var liquidMotionAllowed: Bool {
         !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
     }
 
     /// 液态呈现：淡入 + 朝状态栏方向轻推入位（轻微过冲）。
-    /// `orderFront` 决定是否成为 key（快捷面板要，灵动岛不要）。
+    /// 灵动岛展示时不抢占主窗口焦点。
     private func presentLiquidPanel(_ panel: NSPanel, orderFront: () -> Void) {
         guard liquidMotionAllowed else {
             orderFront()
@@ -277,89 +277,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
     }
 
-    /// 高度变化（面板内容展开收缩）沿顶边弹性生长。
-    private func animatePanelHeight(_ panel: NSPanel, toHeight height: CGFloat) {
-        guard liquidMotionAllowed, panel.isVisible else {
-            panel.setContentSize(NSSize(width: panel.frame.width, height: height))
-            positionQuickPanel(panel)
-            return
-        }
-        let current = panel.frame
-        let target = NSRect(x: current.origin.x, y: current.maxY - height,
-                            width: current.width, height: height)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.34
-            context.timingFunction = Self.liquidResizeTiming
-            panel.animator().setFrame(target, display: true)
-        }
-    }
-
-    // MARK: - 快捷面板
-
-    @objc private func toggleQuickPanel(_ sender: Any?) {
-        if let quickPanel, quickPanel.isVisible {
-            dismissLiquidPanel(quickPanel)
-            return
-        }
-        showQuickPanel()
-    }
-
-    private func showQuickPanel() {
-        if quickPanel == nil {
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 284, height: 260),
-                                styleMask: [.borderless, .utilityWindow],
-                                backing: .buffered, defer: false)
-            panel.isFloatingPanel = true
-            panel.level = .statusBar
-            panel.hidesOnDeactivate = true
-            panel.isOpaque = false
-            panel.backgroundColor = .clear
-            panel.hasShadow = true
-            panel.collectionBehavior = [.canJoinAllSpaces]
-            let content = QuickPanelView(state: appState,
-                                         onOpenMain: { [weak self] in
-                                             self?.showMainWindow()
-                                         },
-                                         onQuit: { NSApp.terminate(nil) },
-                                         onHeightChange: { [weak self] height in
-                                             guard let panel = self?.quickPanel else { return }
-                                             let newHeight = ceil(height) + 1
-                                             guard abs(panel.frame.height - newHeight) > 1 else { return }
-                                             self?.animatePanelHeight(panel, toHeight: newHeight)
-                                         })
-            panel.contentViewController = NSHostingController(rootView: content)
-            quickPanel = panel
-        }
-        guard let quickPanel else { return }
-        appState.refreshMetrics()
-        appState.refreshTopMemoryApps(force: true)
-        // 点击图标只看快捷面板：主窗口若开着先收起。
-        if let mainWindow, mainWindow.isVisible {
-            mainWindow.orderOut(nil)
-        }
-        let fitting = quickPanel.contentViewController?.view.fittingSize ?? NSSize(width: 284, height: 260)
-        quickPanel.setContentSize(NSSize(width: ceil(fitting.width), height: ceil(fitting.height)))
-        positionQuickPanel(quickPanel)
-        presentLiquidPanel(quickPanel) {
-            quickPanel.makeKeyAndOrderFront(nil)
-        }
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    private func positionQuickPanel(_ panel: NSPanel) {
-        guard let button = statusItem?.button,
-              let statusWindow = button.window,
-              let screen = statusWindow.screen else { return }
-        let buttonFrame = statusWindow.convertToScreen(button.frame)
-        let screenFrame = screen.visibleFrame
-        let panelSize = panel.frame.size
-        var origin = NSPoint(x: NSMidX(buttonFrame) - panelSize.width / 2,
-                             y: NSMinY(buttonFrame) - panelSize.height - 8)
-        if origin.y < NSMinY(screenFrame) + 8 {
-            origin.y = NSMaxY(buttonFrame) + 8
-        }
-        origin.x = max(NSMinX(screenFrame) + 8, min(origin.x, NSMaxX(screenFrame) - panelSize.width - 8))
-        panel.setFrameOrigin(origin)
+    @objc private func openMainWindow(_ sender: Any?) {
+        showMainWindow()
     }
 
     // MARK: - 灵动岛
@@ -429,10 +348,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state: appState,
             safeTop: islandSafeTop,
             collapsedWidth: islandCollapsedWidth,
-            onOpenMain: { [weak self] in self?.showMainWindow() },
-            onHitFrameChange: { [weak self] frame in
+            onOpenMain: { [weak self] in self?.openMainFromIsland() },
+            onHitFrameChange: { [weak self] frame, shape in
                 DispatchQueue.main.async {
                     self?.islandHosting?.islandHitFrame = frame
+                    self?.islandHosting?.islandHitShape = shape
                 }
             },
             onExpandedChange: { [weak self] expanded in
@@ -445,6 +365,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         islandPanelCollapsedWidth = islandCollapsedWidth
     }
 
+    private func openMainFromIsland() {
+        // End nonactivating-panel event tracking before activating a regular
+        // window. Otherwise the floating panel can retain the key-window focus.
+        islandPanel?.orderOut(nil)
+        islandExpanded = false
+        DispatchQueue.main.async { [weak self] in
+            self?.showMainWindow()
+        }
+    }
+
     private var islandSafeTop: CGFloat {
         NSScreen.main?.safeAreaInsets.top ?? 0
     }
@@ -453,7 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let screen = NSScreen.main,
               let left = screen.auxiliaryTopLeftArea,
               let right = screen.auxiliaryTopRightArea else { return IslandLayout.handleWidth }
-        return max(IslandLayout.handleWidth, right.minX - left.maxX + 24)
+        return max(IslandLayout.handleWidth, right.minX - left.maxX + 8)
     }
 
     private var islandWindowSize: NSSize {
@@ -475,7 +405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 主窗口
 
     func showMainWindow() {
-        dismissLiquidPanel(quickPanel)
+        NSApp.setActivationPolicy(.regular)
         if mainWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 940, height: 720),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -495,6 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             observeMainWindow(window)
             mainWindow = window
         }
+        mainWindow?.deminiaturize(nil)
         mainWindow?.makeKeyAndOrderFront(nil)
         if appState.visiblePages.indices.contains(appState.selectedTab),
            appState.visiblePages[appState.selectedTab] == .traffic {
@@ -512,6 +443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &observables)
         NotificationCenter.default.publisher(for: NSWindow.willCloseNotification, object: window)
             .sink { [weak self] _ in
+                NSApp.setActivationPolicy(.accessory)
                 self?.appState.mainWindowVisible = false
                 self?.appState.trafficMonitor.setPageVisible(false)
             }

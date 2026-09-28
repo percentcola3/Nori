@@ -2,19 +2,7 @@ import Foundation
 
 struct SmartTriggerContext: Sendable {
     var now: Date
-    var projectLastActivity: [String: Date]
-    var savedLocationBytes: [String: UInt64]
-    var savedLocationOldestItem: [String: Date]
-
-    init(now: Date = Date(),
-         projectLastActivity: [String: Date] = [:],
-         savedLocationBytes: [String: UInt64] = [:],
-         savedLocationOldestItem: [String: Date] = [:]) {
-        self.now = now
-        self.projectLastActivity = projectLastActivity
-        self.savedLocationBytes = savedLocationBytes
-        self.savedLocationOldestItem = savedLocationOldestItem
-    }
+    init(now: Date = Date()) { self.now = now }
 }
 
 enum SmartTriggerSkipReason: String, Sendable {
@@ -22,8 +10,6 @@ enum SmartTriggerSkipReason: String, Sendable {
     case invalidRule
     case cooldown
     case scheduleNotDue
-    case targetUnavailable
-    case thresholdNotReached
 }
 
 struct SmartTriggerEvaluation: Equatable, Sendable {
@@ -67,37 +53,6 @@ enum SmartTriggerEvaluator {
             }
             return .run(rule.id)
 
-        case .projectInactive:
-            guard let id = rule.scope.targetID,
-                  let lastActivity = context.projectLastActivity[id],
-                  let days = rule.condition.days,
-                  let cutoff = calendar.date(byAdding: .day, value: -days, to: context.now) else {
-                return .skip(rule.id, .targetUnavailable)
-            }
-            return lastActivity <= cutoff
-                ? .run(rule.id)
-                : .skip(rule.id, .thresholdNotReached)
-
-        case .savedLocationSizeLimit:
-            guard let id = rule.scope.targetID,
-                  let currentBytes = context.savedLocationBytes[id],
-                  let limit = rule.condition.bytes else {
-                return .skip(rule.id, .targetUnavailable)
-            }
-            return currentBytes > limit
-                ? .run(rule.id)
-                : .skip(rule.id, .thresholdNotReached)
-
-        case .savedLocationRetention:
-            guard let id = rule.scope.targetID,
-                  let oldest = context.savedLocationOldestItem[id],
-                  let days = rule.condition.days,
-                  let cutoff = calendar.date(byAdding: .day, value: -days, to: context.now) else {
-                return .skip(rule.id, .targetUnavailable)
-            }
-            return oldest < cutoff
-                ? .run(rule.id)
-                : .skip(rule.id, .thresholdNotReached)
         }
     }
 
@@ -131,8 +86,6 @@ enum SmartTriggerEvaluator {
                 ? thisWeek
                 : calendar.date(byAdding: .weekOfYear, value: -1, to: thisWeek)
 
-        default:
-            return nil
         }
     }
 }

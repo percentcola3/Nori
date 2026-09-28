@@ -7,7 +7,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/app_scan_access.sh"
 
 HOME_DIR="${HOME%/}"
-if ! forgesweep_full_disk_access_granted; then
+if ! nori_full_disk_access_granted; then
     echo "error: Full Disk Access is required for AI content inventory" >&2
     exit 77
 fi
@@ -34,7 +34,7 @@ emit_item() {
     local kind="$1" name="$2" path="$3" bytes=""
     has_control_characters "$name" && return 0
     has_control_characters "$path" && return 0
-    forgesweep_scan_path_allowed "$path" || return 0
+    nori_scan_path_allowed "$path" || return 0
     [[ -e "$path" || -L "$path" ]] || return 0
     bytes=$(path_bytes "$path")
     [[ "$bytes" =~ ^[0-9]+$ && "$bytes" -gt 0 ]] || return 0

@@ -3,13 +3,13 @@ import Foundation
 /// Uninstall queue copy is kept in a feature table so every locale receives
 /// the same state vocabulary without making the base navigation table harder
 /// to audit.  Queue labels are intentionally short because they are rendered
-/// inline in app rows as well as in the compact queue panel.
+/// inline in app rows and the current operation status.
 enum L10nUninstallQueueTables {
     static let en: [String: String] = [
+        "uninstall.retained": "Retained %d app data, shared, or system items for review:",
+        "uninstall.remaining": "%d items could not be cleaned:",
+        "uninstall.resultDetails": "View uninstall result and remaining files",
         "uninstall.loading": "Preparing app list…",
-        "uninstall.queue.title": "Uninstall queue",
-        "uninstall.queue.summary": "%d active · %d queued · %d recent",
-        "uninstall.queue.dismiss": "Dismiss finished",
         "uninstall.queue.cancel": "Cancel",
         "uninstall.queue.waiting": "Queued · #%d",
         "uninstall.queue.queued": "Queued",
@@ -24,10 +24,10 @@ enum L10nUninstallQueueTables {
     ]
 
     static let zhHans: [String: String] = [
+        "uninstall.retained": "已保留 %d 项应用数据、共享或系统项目，供复核：",
+        "uninstall.remaining": "以下 %d 项未能清理：",
+        "uninstall.resultDetails": "查看卸载结果与保留文件",
         "uninstall.loading": "正在准备应用列表…",
-        "uninstall.queue.title": "卸载队列",
-        "uninstall.queue.summary": "%d 个进行中 · %d 个排队 · %d 条最近记录",
-        "uninstall.queue.dismiss": "清除已完成",
         "uninstall.queue.cancel": "取消排队",
         "uninstall.queue.waiting": "排队中 · 第 %d 位",
         "uninstall.queue.queued": "排队中",
@@ -43,9 +43,6 @@ enum L10nUninstallQueueTables {
 
     static let zhHant: [String: String] = [
         "uninstall.loading": "正在準備應用程式列表…",
-        "uninstall.queue.title": "解除安裝佇列",
-        "uninstall.queue.summary": "%d 個進行中 · %d 個排隊 · %d 筆最近記錄",
-        "uninstall.queue.dismiss": "清除已完成",
         "uninstall.queue.cancel": "取消排隊",
         "uninstall.queue.waiting": "排隊中 · 第 %d 位",
         "uninstall.queue.queued": "排隊中",
@@ -61,9 +58,6 @@ enum L10nUninstallQueueTables {
 
     static let ja: [String: String] = [
         "uninstall.loading": "アプリ一覧を準備中…",
-        "uninstall.queue.title": "アンインストール待ち行列",
-        "uninstall.queue.summary": "%d 件実行中 · %d 件待機中 · 最近 %d 件",
-        "uninstall.queue.dismiss": "完了項目を閉じる",
         "uninstall.queue.cancel": "待機を取り消す",
         "uninstall.queue.waiting": "待機中 · #%d",
         "uninstall.queue.queued": "待機中",
@@ -79,9 +73,6 @@ enum L10nUninstallQueueTables {
 
     static let ko: [String: String] = [
         "uninstall.loading": "앱 목록 준비 중…",
-        "uninstall.queue.title": "앱 삭제 대기열",
-        "uninstall.queue.summary": "%d개 실행 중 · %d개 대기 · 최근 %d개",
-        "uninstall.queue.dismiss": "완료 항목 닫기",
         "uninstall.queue.cancel": "대기 취소",
         "uninstall.queue.waiting": "대기 중 · #%d",
         "uninstall.queue.queued": "대기 중",
@@ -97,9 +88,6 @@ enum L10nUninstallQueueTables {
 
     static let de: [String: String] = [
         "uninstall.loading": "App-Liste wird vorbereitet…",
-        "uninstall.queue.title": "Deinstallationswarteschlange",
-        "uninstall.queue.summary": "%d aktiv · %d warten · %d zuletzt",
-        "uninstall.queue.dismiss": "Erledigte schließen",
         "uninstall.queue.cancel": "Warten abbrechen",
         "uninstall.queue.waiting": "Wartet · Nr. %d",
         "uninstall.queue.queued": "Wartet",
@@ -115,9 +103,6 @@ enum L10nUninstallQueueTables {
 
     static let fr: [String: String] = [
         "uninstall.loading": "Préparation de la liste des apps…",
-        "uninstall.queue.title": "File de désinstallation",
-        "uninstall.queue.summary": "%d actif(s) · %d en attente · %d récent(s)",
-        "uninstall.queue.dismiss": "Fermer les éléments terminés",
         "uninstall.queue.cancel": "Annuler l’attente",
         "uninstall.queue.waiting": "En attente · n° %d",
         "uninstall.queue.queued": "En attente",
@@ -133,9 +118,6 @@ enum L10nUninstallQueueTables {
 
     static let es: [String: String] = [
         "uninstall.loading": "Preparando la lista de apps…",
-        "uninstall.queue.title": "Cola de desinstalación",
-        "uninstall.queue.summary": "%d activa(s) · %d en cola · %d recientes",
-        "uninstall.queue.dismiss": "Cerrar completadas",
         "uninstall.queue.cancel": "Cancelar espera",
         "uninstall.queue.waiting": "En cola · n.º %d",
         "uninstall.queue.queued": "En cola",
@@ -151,9 +133,6 @@ enum L10nUninstallQueueTables {
 
     static let pt: [String: String] = [
         "uninstall.loading": "Preparando a lista de apps…",
-        "uninstall.queue.title": "Fila de desinstalação",
-        "uninstall.queue.summary": "%d ativa(s) · %d na fila · %d recentes",
-        "uninstall.queue.dismiss": "Fechar concluídas",
         "uninstall.queue.cancel": "Cancelar espera",
         "uninstall.queue.waiting": "Na fila · nº %d",
         "uninstall.queue.queued": "Na fila",
@@ -169,9 +148,6 @@ enum L10nUninstallQueueTables {
 
     static let it: [String: String] = [
         "uninstall.loading": "Preparazione dell’elenco delle app…",
-        "uninstall.queue.title": "Coda di disinstallazione",
-        "uninstall.queue.summary": "%d attivo/i · %d in coda · %d recenti",
-        "uninstall.queue.dismiss": "Chiudi completati",
         "uninstall.queue.cancel": "Annulla attesa",
         "uninstall.queue.waiting": "In coda · n. %d",
         "uninstall.queue.queued": "In coda",
@@ -187,9 +163,6 @@ enum L10nUninstallQueueTables {
 
     static let ru: [String: String] = [
         "uninstall.loading": "Подготовка списка приложений…",
-        "uninstall.queue.title": "Очередь удаления",
-        "uninstall.queue.summary": "%d выполняется · %d в очереди · %d последних",
-        "uninstall.queue.dismiss": "Скрыть завершённые",
         "uninstall.queue.cancel": "Отменить ожидание",
         "uninstall.queue.waiting": "В очереди · № %d",
         "uninstall.queue.queued": "В очереди",
@@ -205,9 +178,6 @@ enum L10nUninstallQueueTables {
 
     static let tr: [String: String] = [
         "uninstall.loading": "Uygulama listesi hazırlanıyor…",
-        "uninstall.queue.title": "Kaldırma kuyruğu",
-        "uninstall.queue.summary": "%d etkin · %d sırada · %d son kayıt",
-        "uninstall.queue.dismiss": "Tamamlananları kapat",
         "uninstall.queue.cancel": "Beklemeyi iptal et",
         "uninstall.queue.waiting": "Sırada · #%d",
         "uninstall.queue.queued": "Sırada",

@@ -24,7 +24,7 @@ EXISTING="$(gh secret list --repo "$REPOSITORY" --json name --jq '.[].name')"
 if printf '%s\n' "$EXISTING" | grep -Eq '^FORGESWEEP_SIGNING_P12_(BASE64|PASSWORD)$'; then
     release_signing_error "release secrets already exist; refusing to replace a possibly published signing identity"
 fi
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-secret-upload.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/nori-secret-upload.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 bash "$ROOT_DIR/script/release_identity.sh" export "$WORK/credentials" >/dev/null
 gh secret set FORGESWEEP_SIGNING_P12_BASE64 --repo "$REPOSITORY" < "$WORK/credentials/signing-certificate.base64"

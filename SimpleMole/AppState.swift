@@ -22,7 +22,7 @@ final class AppState: ObservableObject {
 
     @Published var metrics = MetricsSnapshot()
     @Published var networkHistory: [Double] = []
-    /// 快捷面板展示的内存占用最高应用组（按内存排序前 5）。
+    /// 灵动岛展示的内存占用最高应用组（按内存排序前 5）。
     @Published var topMemoryApps: [ProcessRow] = []
     @Published var topCPUApps: [ProcessRow] = []
     @Published var islandResourceStatus: [IslandResource: String] = [:]
@@ -62,17 +62,19 @@ final class AppState: ObservableObject {
     // 顶部刘海：悬停展开指标与资源排行，箭头直接打开主窗口。
 
     @Published var islandEnabled = true
-    /// 菜单栏状态图标开关：隐藏后由灵动岛与程序坞图标承担入口。
+    /// 菜单栏状态图标开关：与灵动岛至少保留一个后台入口。
     @Published var menuBarIconVisible = true
     /// 至少保留一项；这里控制刘海中的常驻指标。
     @Published var islandItems: Set<IslandItem> = [.cpu, .memory, .network]
 
     func setIslandEnabled(_ enabled: Bool) {
+        if !enabled && !menuBarIconVisible { setMenuBarIconVisible(true) }
         islandEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "SMIslandEnabled")
     }
 
     func setMenuBarIconVisible(_ visible: Bool) {
+        if !visible && !islandEnabled { setIslandEnabled(true) }
         menuBarIconVisible = visible
         UserDefaults.standard.set(visible, forKey: "SMMenuBarIconVisible")
     }
@@ -142,9 +144,12 @@ final class AppState: ObservableObject {
     /// 系统数据页的独立清单：root 拥有的日志、报告与缓存。
     /// 与通用清理页的 categories/family 完全解耦，避免互相覆盖状态。
     @Published var installerCandidates: CleanupCategory?
-    @Published var quickPanelCleaning = false
-    @Published var quickPanelStatus = ""
     @Published var processActionStatus = ""
+    enum ProcessQuitFeedback {
+        case waiting, refused, stillRunning, stale
+    }
+    /// Bind feedback to the launch identity, so a reused PID never inherits an action.
+    @Published var processQuitFeedback: [String: ProcessQuitFeedback] = [:]
     @Published var cleanupQueued = false
     private var pendingCleanup: (() -> Void)?
 
@@ -227,7 +232,7 @@ final class AppState: ObservableObject {
     @Published private(set) var filteredApps: [UninstallApp] = []
     @Published private(set) var uninstallQueue = UninstallQueue()
     private let uninstallPresentationQueue = DispatchQueue(
-        label: "com.forgesweep.uninstall-presentation", qos: .userInitiated)
+        label: "com.nori.uninstall-presentation", qos: .userInitiated)
     private var isStoppingUninstallQueue = false
     var isPreviewingUninstall: Bool { uninstallQueue.activeJob?.state == .preparing }
     var isUninstalling: Bool { uninstallQueue.activeJob != nil }
@@ -257,23 +262,11 @@ final class AppState: ObservableObject {
 
     let trafficMonitor = TrafficMonitorStore()
 
-    // MARK: 项目雷达与受限自动化
+    // MARK: 定时自动化
 
-    let savedScanLocations = SavedScanLocationStore()
-    let projectRadar = ProjectRadarStore()
-    let projectHibernation = ProjectHibernationService()
     let smartAutomation = AutomationStore()
-    @Published var showProjectRadar = false
     @Published var showAutomationSettings = false
     @Published var isSmartAutomationRunning = false
-
-    var automationAuthorizedLocationIDs: Set<UUID> {
-        Set(savedScanLocations.locations.compactMap { location in
-            autoCleanupRules.contains {
-                $0.directory == location.path && $0.isEnabled && $0.isSafetyAuthorized
-            } ? location.id : nil
-        })
-    }
 
     // MARK: 自动目录清理
 
@@ -364,7 +357,7 @@ final class AppState: ObservableObject {
 
     // MARK: 磁盘分析
 
-    @Published var analyzePath: String = "/"
+    @Published var analyzePath: String = NSHomeDirectory()
     @Published var analyzeEntries: [AnalyzeEntry] = []
     @Published var analyzeSelection: Set<String> = []
     @Published var analyzeAIItems: [AnalyzeAIItem] = []
@@ -374,7 +367,6 @@ final class AppState: ObservableObject {
     @Published var isAnalyzing = false
     @Published var analyzeIsOverview = false
     /// 当前展示的是第一层“快速分析”结果（个人目录 + 既知缓存 + 保存位置）。
-    @Published var analyzeIsQuickScope = false
     @Published var analyzeStatus: String
     private var analyzeCache = DiskAnalysisCache()
     private var analyzeHasScanned = false
@@ -493,42 +485,6 @@ final class AppState: ObservableObject {
         executeProtectedOperation(operation)
     }
 
-    /// Explicit quick-panel action: reclaim disposable app memory and clean
-    /// runtime-checked caches, keeping progress and results in the panel.
-    func requestQuickOptimizeFromQuickPanel() {
-        guard !isBusy else {
-            quickPanelStatus = l10n.t("status.quickOptimizeBusy")
-            return
-        }
-        guard authorize(.quickPanelClean, presentingPermissionCenter: true) else {
-            quickPanelStatus = l10n.t("quick.panel.permission")
-            return
-        }
-        quickPanelCleaning = true
-        isScanning = true
-        quickPanelStatus = l10n.t("status.scanningCleanup")
-        Task {
-            MosaicCache.shared.clear()
-            _ = malloc_zone_pressure_relief(nil, 0)
-            let scan = await unifiedCleanupScan(mode: .quick)
-            isScanning = false
-            guard scan.runtimeResult.succeeded,
-                  scan.requiredSourceResults.allSatisfy(\.succeeded) else {
-                quickPanelCleaning = false
-                quickPanelStatus = l10n.t("log.scanPartial")
-                return
-            }
-            let safe = finalizedCleanupCategories(scan.categories)
-                .compactMap { category in
-                    category.retainingPaths(category.paths.filter {
-                        !$0.hasPrefix(NSHomeDirectory() + "/.Trash/")
-                    })?.selectedSubset
-                }
-            quickPanelStatus = l10n.t("cleanup.apply.busy")
-            performApply(categories: safe, imageMode: nil, family: .clean, mode: .quickClean)
-        }
-    }
-
     func recheckFullDiskAccess() {
         guard permissionCenter.refresh() else {
             permissionCenter.reportDiskAccessNotDetected()
@@ -617,7 +573,6 @@ final class AppState: ObservableObject {
         case .cleanupScan(let force): scanCleanup(force: force)
         case .deepCleanupScan: scanCleanup(force: true, mode: .deep)
         case .quickOptimize: quickOptimize()
-        case .quickPanelClean: requestQuickOptimizeFromQuickPanel()
         case .optimize: runOptimize()
         case .developerToolsScan: scanDeveloperTools()
         case .aiScan: scanAI()
@@ -631,9 +586,7 @@ final class AppState: ObservableObject {
         case .diskOverview(let force): scanDiskOverview(force: force)
         case .diskAnalyze(let path): scanAnalyze(path)
         case .duplicateScan: scanDuplicates()
-        case .openProjectRadar: openProjectRadar()
         case .openAutomationSettings: openAutomationSettings()
-        case .restoreProject(let receipt): restoreHibernatedProject(receipt)
         case .previewAutoCleanup(let ruleID): previewAutoCleanup(ruleID)
         case .runAutoCleanup(let ruleID): runAutoCleanupNow(ruleID)
         }
@@ -657,9 +610,9 @@ final class AppState: ObservableObject {
             || isScanningEnv
             || isAnalyzing || isThinning || isScanningDups
             || gcRunningId != nil || netFixRunning || isAutoCleanupScanning
-            || isSmartAutomationRunning || projectHibernation.isWorking
+            || isSmartAutomationRunning
             || isOptimizing || systemScanning || systemApplying
-            || simulatorInventory.isDeleting || projectRadar.isScanning
+            || simulatorInventory.isDeleting
     }
 
     var selectedCount: Int {
@@ -714,6 +667,7 @@ final class AppState: ObservableObject {
         analyzeStatus = L10n.shared.t("analyze.status.empty")
         autoCleanupStatus = L10n.shared.t("auto.status.ready")
         optimizeStatus = L10n.shared.t("optimize.status.ready")
+        if !islandEnabled && !menuBarIconVisible { setMenuBarIconVisible(true) }
 
         Publishers.CombineLatest3($installedApps, $uninstallPlans, $uninstallSearch)
             .debounce(for: .milliseconds(80), scheduler: uninstallPresentationQueue)
@@ -759,7 +713,7 @@ final class AppState: ObservableObject {
                         self.scanSnapshots()
                         self.permissionCenter.refresh()
                         if self.permissionCenter.fullDiskAccessGranted {
-                            self.scanDiskOverview()
+                            self.scanUserSpace()
                         }
                     case .uninstall:
                         // The page's cancellable loading task starts data work
@@ -811,18 +765,6 @@ final class AppState: ObservableObject {
                 }
             }
             .store(in: &cancellables)
-        savedScanLocations.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-        projectRadar.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
-        projectHibernation.objectWillChange
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &cancellables)
         simulatorInventory.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -871,7 +813,7 @@ final class AppState: ObservableObject {
     }
 
     func requestScreenRecordingAccess() {
-        // 请求 API 负责把 ForgeSweep 注册进屏幕录制列表；系统弹窗之外
+        // 请求 API 负责把 Nori 注册进屏幕录制列表；系统弹窗之外
         // 直接把设置面板打开到位，省掉用户再找入口。
         let granted = permissionCenter.requestScreenRecordingAccess()
         if granted { return }
@@ -914,7 +856,7 @@ final class AppState: ObservableObject {
         let pid = ProcessInfo.processInfo.processIdentifier
         let bundlePath = Bundle.main.bundlePath
         // 日志放在用户自己的 Logs 目录（0700），不再落到所有用户可写的 /tmp。
-        let logDirectory = NSHomeDirectory() + "/Library/Logs/ForgeSweep"
+        let logDirectory = NSHomeDirectory() + "/Library/Logs/Nori"
         try? FileManager.default.createDirectory(
             atPath: logDirectory, withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700])
@@ -968,44 +910,6 @@ final class AppState: ObservableObject {
         metrics = SystemMetrics.sample()
         networkHistory.append(metrics.networkRxMBps)
         if networkHistory.count > 60 { networkHistory.removeFirst(networkHistory.count - 60) }
-    }
-
-    /// 仅在快捷面板可见时周期刷新；打开面板和操作完成后可立即刷新。
-    func refreshTopMemoryApps(force: Bool = false) {
-        refreshIslandProcesses(force: force)
-    }
-
-    /// 快捷面板强杀与进程页共用相同的确认语义。
-    func forceQuitTopApp(_ row: ProcessRow) {
-        guard !isBusy else { return }
-        // 快捷面板可能是当前唯一窗口，不能依赖挂在主窗口上的 SwiftUI alert。
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = l10n.t("proc.confirm.killGroup.title")
-        alert.informativeText = l10n.tf("proc.confirm.kill.msg", row.pid)
-        let destructiveButton = alert.addButton(withTitle: l10n.t("proc.kill"))
-        destructiveButton.hasDestructiveAction = true
-        alert.addButton(withTitle: l10n.t("common.cancel"))
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        Task {
-            if row.isNativeApp, let application = runningApplication(for: row) {
-                // 应用行走原生强制退出，并把结果反馈到面板自己的状态行。
-                let requested = application.forceTerminate()
-                quickPanelStatus = requested
-                    ? l10n.t("status.quitRequested") : l10n.t("status.quitRefused")
-                for _ in 0..<20 where !application.isTerminated {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                }
-                quickPanelStatus = application.isTerminated
-                    ? l10n.t("proc.force.done") : l10n.t("status.quitRefused")
-            } else {
-                let result = await MoleEngine.shared.runRuntime("kill-group", row.signalToken)
-                quickPanelStatus = result.succeeded
-                    ? l10n.t("status.signalSent") : l10n.t("status.signalFailed")
-                if !result.succeeded { log(l10n.t("status.signalFailed")) }
-            }
-            refreshTopMemoryApps(force: true)
-        }
     }
 
     // MARK: - 日志
@@ -1721,6 +1625,7 @@ final class AppState: ObservableObject {
             // selection, is the number this execution will actually submit.
             statusText = l10n.tf("status.processing", eligibleCount)
             guard !eligible.isEmpty else {
+                await refreshCleanupInventory(after: applyFamily)
                 isApplying = false
                 reportCleanupResult(executionResult,
                                     permanently: Self.permanentFamilies.contains(applyFamily))
@@ -1739,23 +1644,12 @@ final class AppState: ObservableObject {
                 executionResult.merge(routeResult)
             }
 
-            let completedResult = executionResult
-            let displayedCategories = categories
-            let remainingCategories = await Task.detached(priority: .utility) {
-                CleanupCache.invalidate()
-                return displayedCategories.compactMap { category in
-                    category.retainingPaths(completedResult.remainingPaths(in: category.paths))
-                }.sorted(by: CleanupCategory.sizeDescending)
-            }.value
+            await refreshCleanupInventory(after: applyFamily)
             isApplying = false
             reportCleanupResult(executionResult,
                                 permanently: Self.permanentFamilies.contains(applyFamily))
             switch applyFamily {
-            case .clean:
-                // A skip/failure does not invalidate the completed scan. Remove
-                // confirmed successes and allow the remaining selection to retry;
-                // its original identities and runtime guards still apply.
-                categories = remainingCategories
+            case .clean: break
             case .slim: scanSlim()
             case .tools: scanDeveloperTools()
             case .ai: scanAI()
@@ -1763,6 +1657,18 @@ final class AppState: ObservableObject {
             default: break
             }
         }
+    }
+
+    private func refreshCleanupInventory(after family: CleanupFamily) async {
+        CleanupCache.invalidate()
+        guard family == .clean else { return }
+        statusText = l10n.t("cleanup.refreshing")
+        let displayed = categories
+        let refreshed = await Task.detached(priority: .utility) {
+            CleanupInventoryRefresh.refresh(displayed)
+        }.value
+        categories = refreshed.categories
+        cleanupDeferredPaths = Array(Set(cleanupDeferredPaths + refreshed.deferredPaths)).sorted()
     }
 
     private func reportCleanupResult(_ result: CleanupExecutionResult,
@@ -1776,10 +1682,6 @@ final class AppState: ObservableObject {
             : "cleanup.execution.summary"
         let summary = l10n.tf(key, result.removed, result.skipped, result.failed)
         statusText = summary
-        if quickPanelCleaning {
-            quickPanelStatus = summary + " · " + l10n.t("quick.panel.memory")
-            quickPanelCleaning = false
-        }
         log(summary)
     }
 
@@ -1990,7 +1892,7 @@ final class AppState: ObservableObject {
         processSampleInFlight = true
         if processGroups.isEmpty { processStatus = l10n.t("proc.status.reading") }
         let ownPID = ProcessInfo.processInfo.processIdentifier
-        let ownName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "ForgeSweep"
+        let ownName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Nori"
         let applications: [(pid: Int32, name: String, startIdentity: String)] =
             NSWorkspace.shared.runningApplications.compactMap { application in
                 guard !application.isTerminated,
@@ -2014,6 +1916,10 @@ final class AppState: ObservableObject {
             processSampleInFlight = false
             guard !advancedProcesses else { return }
             processGroups = sampled.groups
+            let liveTokens = Set(sampled.groups.map { $0.app.signalToken })
+            processQuitFeedback = processQuitFeedback.filter {
+                liveTokens.contains($0.key) || $0.value == .waiting
+            }
             processRows = sampled.groups.map(\.app)
             processHistory.record(sampled.groups)
             processAlerts = highUsageTracker.update(sampled.groups)
@@ -2030,12 +1936,17 @@ final class AppState: ObservableObject {
 
     /// 温和退出（等同 ⌘Q）：应用可以弹出保存提示；5 秒后仍在运行则提示可强制退出。
     func quitApplication(_ row: ProcessRow) {
+        guard processQuitFeedback[row.signalToken] != .waiting else { return }
         guard let application = runningApplication(for: row) else {
-            processActionStatus = l10n.t("status.quitRefused")
+            processQuitFeedback[row.signalToken] = .stale
+            processActionStatus = l10n.t("proc.refusal.identity")
+            refreshNativeProcesses()
             return
         }
+        processQuitFeedback[row.signalToken] = .waiting
         processActionStatus = l10n.tf("proc.status.quitRequested", row.name)
         guard application.terminate() else {
+            processQuitFeedback[row.signalToken] = .refused
             processActionStatus = l10n.t("status.quitRefused")
             return
         }
@@ -2047,6 +1958,7 @@ final class AppState: ObservableObject {
             processActionStatus = application.isTerminated
                 ? l10n.tf("proc.status.quitDone", row.name)
                 : l10n.tf("proc.status.stillRunning", row.name)
+            processQuitFeedback[row.signalToken] = application.isTerminated ? nil : .stillRunning
             refreshNativeProcesses()
         }
     }
@@ -2064,6 +1976,9 @@ final class AppState: ObservableObject {
     }
 
     private func performEndGroup(_ group: ProcessGroup) async {
+        guard processQuitFeedback[group.app.signalToken] != .waiting else { return }
+        processQuitFeedback[group.app.signalToken] = .waiting
+        defer { processQuitFeedback[group.app.signalToken] = nil }
         processActionStatus = l10n.tf("proc.status.quitRequested", group.app.name)
         let application = runningApplication(for: group.app)
         var mainEnded = application == nil
@@ -2245,16 +2160,19 @@ final class AppState: ObservableObject {
 
     func terminateProcess(_ row: ProcessRow) {
         if row.isNativeApp {
+            guard processQuitFeedback[row.signalToken] != .waiting else { return }
             confirmation = Confirmation(
                 title: l10n.tf("proc.confirm.quit.title", row.name),
                 message: l10n.t("proc.force.message"),
                 confirmLabel: l10n.t("proc.force.action")) {
+                    guard self.processQuitFeedback[row.signalToken] != .waiting else { return }
                     let application = NSRunningApplication(processIdentifier: row.pid)
                     let identityMatches = application.flatMap(RuntimeStore.nativeStartIdentity(for:))
                         == row.startIdentity
                     let requested = identityMatches && !(application?.isTerminated ?? true)
                         ? (application?.forceTerminate() ?? false)
                         : false
+                    self.processQuitFeedback[row.signalToken] = requested ? .waiting : .refused
                     Task { @MainActor in
                         self.processActionStatus = requested
                             ? self.l10n.t("status.quitRequested")
@@ -2266,6 +2184,7 @@ final class AppState: ObservableObject {
                         }
                         self.processActionStatus = application.isTerminated
                             ? self.l10n.t("proc.force.done") : self.l10n.t("status.quitRefused")
+                        self.processQuitFeedback[row.signalToken] = application.isTerminated ? nil : .refused
                         self.refreshProcesses(allowAutomaticCleanup: false)
                     }
                 }
@@ -2558,12 +2477,11 @@ final class AppState: ObservableObject {
             finishUninstall(job, succeeded: false, message: l10n.t("uninstall.queue.permissionLost"))
             return
         }
-        var plan = job.plan
-        if plan == nil || plan?.fileIdentities.isEmpty == true {
-            log(l10n.tf("log.uninstallScan", target.name))
-            let (_, fetched) = await Self.fetchUninstallPlan(for: target)
-            plan = fetched
-        }
+        // The cached plan is for presentation only. Apps create caches after
+        // inventory scans and while requests wait in the queue; rescan the
+        // same captured application identity immediately before removal.
+        log(l10n.tf("log.uninstallScan", target.name))
+        let (_, plan) = await Self.fetchUninstallPlan(for: target)
         guard let plan, !plan.files.isEmpty, plan.includesProtectedAppData else {
             finishUninstall(job, succeeded: false, message: l10n.tf("log.uninstallPreviewFail", target.name))
             return
@@ -2576,19 +2494,29 @@ final class AppState: ObservableObject {
                                              homeDirectory: NSHomeDirectory())
         }.value
         if !result.messages.isEmpty { log(result.messages.joined(separator: "\n")) }
+        if result.removed > 0 { CleanupCache.invalidate() }
         uninstallInventoryGeneration += 1
         if result.succeeded {
             installedApps.removeAll { $0.id == target.id && $0.appIdentity == target.appIdentity }
             uninstallPlans.removeValue(forKey: target.id)
             persistUninstallInventory()
             appListStatus = l10n.tf("uninstall.status.count", installedApps.count)
-            finishUninstall(job, succeeded: true, message: l10n.tf("status.uninstalled", target.name))
+            var message = l10n.tf("status.uninstalled", target.name)
+            if !result.retainedPaths.isEmpty {
+                message += "\n" + l10n.tf("uninstall.retained", result.retainedPaths.count)
+                    + "\n" + result.retainedPaths.joined(separator: "\n")
+            }
+            finishUninstall(job, succeeded: true, message: message)
         } else {
             // A partial uninstall can change the identity. A retry must pass
             // through a fresh user confirmation after inventory refresh.
             uninstallPlans.removeValue(forKey: target.id)
             persistUninstallInventory()
-            let detail = l10n.tf("log.uninstallPartial", result.removed, result.failed)
+            var detail = l10n.tf("log.uninstallPartial", result.removed, result.failed)
+            if !result.remainingPaths.isEmpty {
+                detail += "\n" + l10n.tf("uninstall.remaining", result.remainingPaths.count)
+                    + "\n" + result.remainingPaths.joined(separator: "\n")
+            }
             finishUninstall(job, succeeded: false,
                             message: l10n.tf("status.uninstallPartial", target.name) + "\n" + detail)
         }
@@ -2636,8 +2564,6 @@ final class AppState: ObservableObject {
     private func activateProtectedDiskServices() {
         guard permissionCenter.fullDiskAccessGranted else { return }
         startUninstallInventoryMonitoring(includeProtectedPaths: true)
-        _ = savedScanLocations.refreshAvailability(persist: false)
-        projectHibernation.receiptStore.refreshAvailability()
     }
 
     private func scheduleUninstallInventoryRefresh(after delay: TimeInterval) {
@@ -2773,66 +2699,12 @@ final class AppState: ObservableObject {
 
     // MARK: - 磁盘分析
 
-    func addSavedScanLocation() {
-        guard !isBusy else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.canCreateDirectories = false
-        panel.message = l10n.t("savedLocation.pick")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let location = try savedScanLocations.add(path: url.path)
-            analyzePath = location.path
-            analyzeStatus = l10n.tf("savedLocation.added", location.displayName)
-        } catch {
-            analyzeStatus = error.localizedDescription
-            log(error.localizedDescription)
-        }
-    }
-
-    func openProjectRadar() {
-        guard authorize(.openProjectRadar, presentingPermissionCenter: true) else { return }
-        guard permissionCenter.fullDiskAccessGranted else { return }
-        savedScanLocations.refreshAvailability()
-        showProjectRadar = true
-        if !isBusy {
-            projectRadar.scan(
-                locations: savedScanLocations.locations,
-                fullDiskAccessGranted: permissionCenter.fullDiskAccessGranted)
-        }
-    }
-
     func openAutomationSettings() {
         guard authorize(.openAutomationSettings, presentingPermissionCenter: true) else { return }
-        guard permissionCenter.fullDiskAccessGranted else { return }
-        savedScanLocations.refreshAvailability()
         showAutomationSettings = true
-        if !isBusy {
-            projectRadar.scan(
-                locations: savedScanLocations.locations,
-                fullDiskAccessGranted: permissionCenter.fullDiskAccessGranted)
-        }
     }
 
-    func restoreHibernatedProject(_ receipt: ProjectHibernationReceipt) {
-        guard authorize(.restoreProject(receipt: receipt),
-                        presentingPermissionCenter: true) else { return }
-        guard !isBusy, !projectHibernation.isWorking else { return }
-        let granted = permissionCenter.fullDiskAccessGranted
-        guard granted else { return }
-        Task {
-            _ = await projectHibernation.restore(
-                receipt, fullDiskAccessGranted: granted)
-            projectRadar.scan(
-                locations: savedScanLocations.locations,
-                fullDiskAccessGranted: granted)
-        }
-    }
-
-    /// The default scope is the filesystem root, using the same directory
-    /// traversal and navigation as every user-selected folder.
+    /// Explicit root scope uses the same traversal as custom directories.
     func scanDiskOverview(force: Bool = false) {
         guard authorize(.diskOverview(force: force),
                         presentingPermissionCenter: true), !isBusy else { return }
@@ -2841,49 +2713,10 @@ final class AppState: ObservableObject {
         startAnalyze(displayPath: "/", overview: true)
     }
 
-    /// 第一层分析（默认）：只测个人目录、既知缓存目录和保存的分析位置，
-    /// 不递归整盘。第二层“整台 Mac”由用户在范围菜单里主动启动。
-    func scanQuickAnalysis(force: Bool = false) {
-        guard authorize(.diskOverview(force: force),
-                        presentingPermissionCenter: true), !isBusy else { return }
-        if !force, analyzeHasScanned { return }
-        let savedPaths = savedScanLocations.locations
-            .filter { $0.availability == .available }
-            .map(\.path)
-        let roots = QuickAnalysisWorker.roots(home: NSHomeDirectory(),
-                                              savedLocations: savedPaths)
-        guard !roots.isEmpty else { return }
-        analyzeHasScanned = true
-        analyzeIsQuickScope = true
-        analyzeIsOverview = false
-        analyzePath = NSHomeDirectory()
-        isAnalyzing = true
-        analyzeEntries = []
-        analyzeTotalSize = 0
-        analyzeLargeFiles = []
-        analyzeSelection.removeAll()
-        analyzeAISelection.removeAll()
-        analyzeAIItems = []
-        dupGroups = []
-        dupSelection.removeAll()
-        analyzeStatus = l10n.t("analyze.quick.scanning")
-        // 快速分析使用独立预算：总 90 秒、单目录 20 秒、8 路并发。
-        let control = CleanupScanControl(mode: .quick, totalBudget: 90, directoryBudget: 20)
-        analyzeScanControl = control
-        Task {
-            let report = await Task.detached(priority: .utility) {
-                QuickAnalysisWorker.scan(roots, control: control) { snapshot in
-                    Task { @MainActor [weak self] in
-                        guard let self, self.analyzeScanControl === control else { return }
-                        self.analyzeEntries = snapshot.entries
-                        self.analyzeTotalSize = snapshot.totalSize
-                    }
-                }
-            }.value
-            analyzeScanControl = nil
-            isAnalyzing = false
-            showAnalyzeReport(report)
-        }
+    /// 首次进入从当前用户目录开始，返回页面时保留当前浏览位置。
+    func scanUserSpace() {
+        guard !analyzeHasScanned else { return }
+        scanAnalyze(NSHomeDirectory())
     }
 
     func scanAnalyze(_ path: String? = nil, force: Bool = false) {
@@ -2904,7 +2737,6 @@ final class AppState: ObservableObject {
     private func startAnalyze(displayPath: String, overview: Bool) {
         guard fullDiskScanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
         analyzeHasScanned = true
-        analyzeIsQuickScope = false
         analyzePath = displayPath
         analyzeIsOverview = overview
         if let cached = analyzeCache.report(for: displayPath) {
@@ -3513,7 +3345,7 @@ final class AppState: ObservableObject {
 
         isSmartAutomationRunning = true
         Task {
-            let context = await makeSmartTriggerContext(for: rules)
+            let context = SmartTriggerContext()
             let due = SmartTriggerEvaluator.dueRules(rules, context: context)
             for snapshot in due {
                 guard let current = currentSmartTrigger(matching: snapshot),
@@ -3532,72 +3364,6 @@ final class AppState: ObservableObject {
             }
             isSmartAutomationRunning = false
         }
-    }
-
-    private func makeSmartTriggerContext(for rules: [SmartTriggerRule]) async
-        -> SmartTriggerContext {
-        // Availability is runtime state, not deletion authority. Refresh it for
-        // every scheduler pass so a remounted saved location becomes eligible
-        // without requiring the user to open a settings window first.
-        _ = savedScanLocations.refreshAvailability(persist: false)
-        var projectActivity: [String: Date] = [:]
-        if rules.contains(where: { $0.scope.kind == .project }) {
-            let hasFreshSnapshot: Bool
-            if projectRadar.isScanning {
-                hasFreshSnapshot = false
-            } else {
-                hasFreshSnapshot = await projectRadar.reload(
-                    locations: savedScanLocations.locations,
-                    fullDiskAccessGranted: permissionCenter.fullDiskAccessGranted)
-            }
-            if hasFreshSnapshot {
-                for project in projectRadar.snapshot.projects
-                    where ProjectHibernation.supportsRecoverableTrash(for: project.rootPath) {
-                    projectActivity[project.id] = project.lastActivityAt
-                }
-            }
-        }
-
-        var locationBytes: [String: UInt64] = [:]
-        var locationOldest: [String: Date] = [:]
-        for location in savedScanLocations.locations where location.availability == .available {
-            let locationRules = rules.filter {
-                $0.action == .cleanSavedLocationSafe
-                    && $0.scope.targetID == location.id.uuidString
-            }
-            guard !locationRules.isEmpty,
-                  let authorizationRule = authorizedDirectoryRule(for: location) else { continue }
-
-            // The threshold configured by the Smart Trigger is authoritative.
-            // The matching directory rule only provides the user's explicit
-            // regenerable-content authorization and the fixed Trash boundary.
-            var contextRule = authorizationRule
-            if let minimumRetention = locationRules.compactMap({ trigger -> Int? in
-                guard trigger.condition.kind == .savedLocationRetention else { return nil }
-                return trigger.condition.days
-            }).min() {
-                contextRule.policy = .retentionDays
-                contextRule.retentionDays = minimumRetention
-            } else {
-                contextRule.policy = .sizeLimit
-                contextRule.sizeLimitBytes = AutoCleanupRule.maximumSizeLimitBytes
-            }
-            do {
-                let plan = try await AutoCleanupPlanner.plan(
-                    for: contextRule,
-                    protecting: protectedAutoCleanupDirectories(excluding: contextRule.id))
-                locationBytes[location.id.uuidString] = plan.totalBytes
-                if let oldest = plan.candidates.map(\.modifiedAt).min() {
-                    locationOldest[location.id.uuidString] = oldest
-                }
-            } catch {
-                log(l10n.tf("auto.log.ruleFailed", location.path, error.localizedDescription))
-            }
-        }
-        return SmartTriggerContext(now: Date(),
-                                   projectLastActivity: projectActivity,
-                                   savedLocationBytes: locationBytes,
-                                   savedLocationOldestItem: locationOldest)
     }
 
     private func executeSmartTrigger(_ rule: SmartTriggerRule) async -> Bool {
@@ -3632,63 +3398,6 @@ final class AppState: ObservableObject {
             CleanupCache.invalidate()
             return failed == 0
 
-        case .cleanSavedLocationSafe:
-            guard let targetID = rule.scope.targetID,
-                  let location = savedScanLocations.locations.first(where: {
-                      $0.id.uuidString == targetID && $0.availability == .available
-                  }),
-                  let authorizationRule = authorizedDirectoryRule(for: location),
-                  let effectiveRule = directoryRule(
-                      for: rule, authorizedBy: authorizationRule) else { return false }
-            do {
-                let plan = try await AutoCleanupPlanner.plan(
-                    for: effectiveRule,
-                    protecting: protectedAutoCleanupDirectories(excluding: effectiveRule.id))
-                guard currentSmartTrigger(matching: rule) != nil,
-                      let currentAuthorization = currentAuthorizedDirectoryRule(
-                          matching: authorizationRule, location: location),
-                      let currentEffectiveRule = directoryRule(
-                          for: rule, authorizedBy: currentAuthorization),
-                      currentEffectiveRule == effectiveRule else { return false }
-                guard !plan.candidates.isEmpty else { return true }
-                let result = await applyAutoCleanup(rule: currentEffectiveRule, plan: plan)
-                return result.failed == 0
-            } catch {
-                log(l10n.tf("auto.log.ruleFailed", location.path, error.localizedDescription))
-                return false
-            }
-
-        case .hibernateProjectSafeArtifacts:
-            guard let projectID = rule.scope.targetID,
-                  await projectRadar.reload(
-                    locations: savedScanLocations.locations,
-                    fullDiskAccessGranted: permissionCenter.fullDiskAccessGranted),
-                  let project = projectRadar.snapshot.projects.first(where: { $0.id == projectID }),
-                  ProjectHibernation.supportsRecoverableTrash(for: project.rootPath),
-                  let currentRule = currentSmartTrigger(matching: rule)
-            else { return false }
-            let freshContext = SmartTriggerContext(
-                now: Date(),
-                projectLastActivity: [project.id: project.lastActivityAt])
-            guard SmartTriggerEvaluator.evaluate(
-                currentRule, context: freshContext).shouldRun else { return false }
-            let maximumActivityAt: Date?
-            if currentRule.condition.kind == .projectInactive,
-               let days = currentRule.condition.days {
-                maximumActivityAt = Calendar.current.date(
-                    byAdding: .day, value: -days, to: freshContext.now)
-            } else {
-                maximumActivityAt = nil
-            }
-            guard let receipt = await projectHibernation.hibernate(
-                project: project,
-                mode: .automatic,
-                fullDiskAccessGranted: permissionCenter.fullDiskAccessGranted,
-                maximumProjectActivityAt: maximumActivityAt,
-                shouldProceed: { [weak self] in
-                    self?.currentSmartTrigger(matching: currentRule) != nil
-                }) else { return false }
-            return receipt.state == .hibernated
         }
     }
 
@@ -3714,44 +3423,6 @@ final class AppState: ObservableObject {
     private func cancelAutomationRetry() {
         scheduledAutomationRetry?.cancel()
         scheduledAutomationRetry = nil
-    }
-
-    private func authorizedDirectoryRule(for location: SavedScanLocation) -> AutoCleanupRule? {
-        autoCleanupRules.first {
-            $0.directory == location.path && $0.isEnabled && $0.isSafetyAuthorized
-        }
-    }
-
-    private func currentAuthorizedDirectoryRule(
-        matching snapshot: AutoCleanupRule,
-        location: SavedScanLocation
-    ) -> AutoCleanupRule? {
-        guard let current = autoCleanupRules.first(where: { $0.id == snapshot.id }),
-              current == snapshot,
-              current.directory == location.path,
-              current.isEnabled,
-              current.isSafetyAuthorized else { return nil }
-        return current
-    }
-
-    private func directoryRule(for trigger: SmartTriggerRule,
-                               authorizedBy rule: AutoCleanupRule) -> AutoCleanupRule? {
-        var effective = rule
-        switch trigger.condition.kind {
-        case .savedLocationSizeLimit:
-            guard let bytes = trigger.condition.bytes else { return nil }
-            effective.policy = .sizeLimit
-            effective.sizeLimitBytes = bytes
-        case .savedLocationRetention:
-            guard let days = trigger.condition.days else { return nil }
-            effective.policy = .retentionDays
-            effective.retentionDays = days
-        case .dailySchedule, .weeklySchedule:
-            break
-        case .projectInactive:
-            return nil
-        }
-        return effective
     }
 
     private func applyAutoCleanup(rule: AutoCleanupRule, plan: AutoCleanupPlan) async
@@ -3848,7 +3519,7 @@ final class AppState: ObservableObject {
 
     func saveWhitelist() {
         let header = """
-        # ForgeSweep whitelist (shared by native clean / purge / bridge cleanup)
+        # Nori whitelist (shared by native clean / purge / bridge cleanup)
         # One absolute path or glob per line; built-in engine safety always applies.
 
         """

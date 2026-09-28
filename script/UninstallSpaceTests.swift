@@ -125,6 +125,12 @@ struct UninstallSpaceTests {
         UninstallInventoryCache.save([.init(app: fixtureApp, plan: fixturePlan)], to: cacheURL)
         expect(UninstallInventoryCache.restore(from: cacheURL).count == 1,
                "valid uninstall inventory must survive app restart")
+        var oldCache = try! JSONSerialization.jsonObject(with: Data(contentsOf: cacheURL)) as! [String: Any]
+        oldCache["version"] = 3
+        try! JSONSerialization.data(withJSONObject: oldCache).write(to: cacheURL)
+        expect(UninstallInventoryCache.restore(from: cacheURL).isEmpty,
+               "old inventories with installer-alias duplicates must be invalidated")
+        UninstallInventoryCache.save([.init(app: fixtureApp, plan: fixturePlan)], to: cacheURL)
         try? FileManager.default.removeItem(at: appURL)
         expect(UninstallInventoryCache.restore(from: cacheURL).isEmpty,
                "cache restore must discard an externally uninstalled app")

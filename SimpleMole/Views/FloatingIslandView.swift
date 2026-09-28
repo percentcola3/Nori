@@ -3,9 +3,10 @@ import SwiftUI
 
 enum IslandLayout {
     static let panelWidth: CGFloat = 300
-    static let handleWidth: CGFloat = 108
-    static let handleHeight: CGFloat = 20
-    static let metricsHeight: CGFloat = 60
+    static let handleWidth: CGFloat = 72
+    static let handleHeight: CGFloat = 12
+    static let notchHandleHeight: CGFloat = 8
+    static let metricsHeight: CGFloat = 76
     static let detailBudget: CGFloat = 340
     static let windowMargin: CGFloat = 14
     static let hitSpaceName = "islandRoot"
@@ -36,7 +37,7 @@ struct FloatingIslandView: View {
     var safeTop: CGFloat = 0
     var collapsedWidth: CGFloat = IslandLayout.handleWidth
     var onOpenMain: () -> Void
-    var onHitFrameChange: (CGRect) -> Void
+    var onHitFrameChange: (CGRect, NotchShape) -> Void
     var onExpandedChange: (Bool) -> Void = { _ in }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -47,9 +48,28 @@ struct FloatingIslandView: View {
     @State private var hoveredResource: IslandResource?
     @State private var hoverDebounce: Task<Void, Never>?
     @State private var resourceDebounce: Task<Void, Never>?
+    @State private var feedbackDismissal: Task<Void, Never>?
+    @State private var feedbackPinned = false
+    @State private var islandHovered = false
+    @State private var moreHovered = false
+    @State private var morePressed = false
+    @State private var expandedHeight: CGFloat = IslandLayout.metricsHeight
+    @State private var visibleSize: CGSize = .zero
+    @State private var resourceHoverDebounce: Task<Void, Never>?
+    @State private var ringReveal: CGFloat = 1
+    @State private var ringReplay: Task<Void, Never>?
 
-    private var motion: Animation? { reduceMotion ? nil : MoleMotion.panel }
-    private var shape: NotchShape { NotchShape(bottomRadius: expanded ? 20 : 10) }
+    private var motion: Animation? {
+        reduceMotion ? nil : .spring(response: 0.52, dampingFraction: 0.8)
+    }
+    /// 详情展开/收起也走弹簧：表面高度跟随生长的“液态”手感来自轻微过冲，
+    /// easeInOut 的匀速段落会让生长显得机械。
+    private var detailMotion: Animation? {
+        reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)
+    }
+    private var visibleShape: NotchShape {
+        NotchShape(bottomRadius: expanded ? 20 : 5, shoulderRadius: expanded ? 10 : 4)
+    }
 
     var body: some View {
         LiquidGlassGroup { islandBody }
@@ -58,41 +78,62 @@ struct FloatingIslandView: View {
     private var islandBody: some View {
         VStack(spacing: 0) {
             Color.clear.frame(height: safeTop).allowsHitTesting(false)
-            if expanded {
-                headerRow.transition(.opacity)
-                if let resource = selectedResource {
-                    resourcePanel(resource)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                }
-            } else {
-                Button { setExpanded(true) } label: {
-                    HStack(spacing: 4) {
-                        ForEach(0..<3, id: \.self) { _ in
-                            Circle().fill(Color.islandHandleDot).frame(width: 2.5, height: 2.5)
+            // Keep one surface alive: animate its bounds and shoulder geometry,
+            // rather than cross-fading two unrelated backgrounds.
+            ZStack(alignment: .top) {
+                expandedPanel
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.preference(key: IslandExpandedHeightKey.self,
+                                                   value: geo.size.height)
                         }
                     }
-                    .frame(width: collapsedWidth, height: safeTop > 0 ? 10 : IslandLayout.handleHeight)
-                    .contentShape(Rectangle())
+                    .opacity(expanded ? 1 : 0)
+                    .allowsHitTesting(expanded)
+                    .accessibilityHidden(!expanded)
+                collapsedHandle
+                    .opacity(expanded ? 0 : 1)
+                    .allowsHitTesting(!expanded)
+                    .accessibilityHidden(expanded)
+            }
+            .frame(width: expanded ? IslandLayout.panelWidth : collapsedWidth,
+                   height: expanded ? expandedHeight : handleHeight,
+                   alignment: .top)
+            .modifier(IslandLiquidSurface(shape: visibleShape,
+                                          namespace: islandNamespace,
+                                          isExpanded: expanded, hasHardwareNotch: safeTop > 0))
+            .onPreferenceChange(IslandExpandedHeightKey.self) { height in
+                if height > 0 { expandedHeight = height }
+            }
+            .contentShape(visibleShape)
+            .background {
+                GeometryReader { geo in
+                    let frame = geo.frame(in: .named(IslandLayout.hitSpaceName))
+                    Color.clear
+                        .onAppear {
+                            visibleSize = geo.size
+                            onHitFrameChange(frame, visibleShape)
+                        }
+                        .onChange(of: frame) {
+                            visibleSize = geo.size
+                            onHitFrameChange($0, visibleShape)
+                        }
+                        .onChange(of: expanded) { _ in onHitFrameChange(frame, visibleShape) }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(l10n.t("settings.island"))
+                .allowsHitTesting(false)
+            }
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let point):
+                    handleHover(visibleShape.path(in: CGRect(origin: .zero, size: visibleSize)).contains(point))
+                case .ended: handleHover(false)
+                }
             }
         }
-        .frame(width: expanded ? IslandLayout.panelWidth : collapsedWidth)
-        .modifier(IslandLiquidSurface(shape: shape, namespace: islandNamespace))
-        .contentShape(shape)
-        .background {
-            GeometryReader { geo in
-                let frame = geo.frame(in: .named(IslandLayout.hitSpaceName))
-                Color.clear
-                    .onAppear { onHitFrameChange(frame) }
-                    .onChange(of: frame) { onHitFrameChange($0) }
-            }
-            .allowsHitTesting(false)
-        }
-        .onHover(perform: handleHover)
         .animation(motion, value: expanded)
-        .animation(motion, value: selectedResource)
+        .animation(detailMotion, value: selectedResource)
+        .animation(detailMotion, value: expandedHeight)
         .padding(.horizontal, IslandLayout.windowMargin)
         .padding(.bottom, IslandLayout.windowMargin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -101,9 +142,22 @@ struct FloatingIslandView: View {
         .onChange(of: focusedResource) { resource in
             if let resource { selectResource(resource) }
         }
+        .onChange(of: state.islandCleaningResource) { resource in
+            if resource == nil, feedbackPinned {
+                replayUsageRings()
+                releaseFeedbackAfterDelay()
+            }
+        }
         .onDisappear {
             hoverDebounce?.cancel()
             resourceDebounce?.cancel()
+            resourceHoverDebounce?.cancel()
+            feedbackDismissal?.cancel()
+            ringReplay?.cancel()
+            ringReveal = 1
+            moreHovered = false
+            feedbackPinned = false
+            islandHovered = false
             expanded = false
             selectedResource = nil
             hoveredResource = nil
@@ -111,48 +165,127 @@ struct FloatingIslandView: View {
         }
     }
 
+    /// 展开态：指标行 + 可选资源详情，占满面板宽度。
+    private var expandedPanel: some View {
+        VStack(spacing: 0) {
+            headerRow
+            if selectedResource != nil {
+                ZStack(alignment: .top) {
+                    ForEach([IslandResource.cpu, .memory], id: \.self) { resource in
+                        resourcePanel(resource)
+                            .opacity(selectedResource == resource ? 1 : 0)
+                            .offset(x: selectedResource == resource ? 0 : (resource == .cpu ? -10 : 10))
+                            .allowsHitTesting(selectedResource == resource)
+                            .accessibilityHidden(selectedResource != resource)
+                    }
+                }
+                .frame(minHeight: 214, alignment: .top)
+                .clipped()
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    if hovering { resourceDebounce?.cancel() }
+                    else { scheduleResourceDismissal() }
+                }
+                .transition(.opacity)
+            }
+        }
+        .frame(width: IslandLayout.panelWidth)
+    }
+
+    private var handleHeight: CGFloat {
+        safeTop > 0 ? IslandLayout.notchHandleHeight : IslandLayout.handleHeight
+    }
+
+    private var collapsedHandle: some View {
+        Button { setExpanded(true) } label: {
+            Capsule()
+                .fill(Color.islandHandleGrip)
+                .frame(width: 18, height: 2)
+                .frame(width: collapsedWidth,
+                       height: handleHeight)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(l10n.t("settings.island"))
+    }
+
     private var headerRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             ForEach(AppState.IslandItem.allCases.filter { state.islandItems.contains($0) }, id: \.self) { item in
                 metric(item).frame(maxWidth: .infinity)
             }
-            Button {
-                setExpanded(false)
-                onOpenMain()
-            } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .frame(width: 24, height: 36)
-                    .contentShape(Rectangle())
+            VStack(spacing: 2) {
+                ZStack {
+                    Circle().stroke(.white.opacity(0.16), lineWidth: 4)
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                .frame(width: 34, height: 34)
+                .padding(6)
+                .background(Circle().fill(Color.white.opacity(moreHovered ? 0.16 : 0.04)))
+                Text(l10n.t("common.more"))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(height: 14)
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
+            .frame(height: IslandLayout.metricsHeight)
+            .contentShape(Rectangle())
+            .brightness(morePressed ? 0.12 : 0)
+            .scaleEffect(morePressed && !reduceMotion ? 0.96 : 1)
+            .animation(reduceMotion ? nil : MoleMotion.press, value: morePressed)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .overlay {
+                IslandActionTarget(label: l10n.t("island.advanced"),
+                                   isEnabled: expanded,
+                                   onPressChange: { morePressed = $0 }) {
+                    hoverDebounce?.cancel()
+                    resourceDebounce?.cancel()
+                    resourceHoverDebounce?.cancel()
+                    setExpanded(false)
+                    onOpenMain()
+                }
+            }
+            .frame(maxWidth: .infinity)
             .help(l10n.t("island.advanced"))
-            .accessibilityLabel(l10n.t("island.advanced"))
-            .onHover { if $0 { selectResource(nil) } }
+            .onHover {
+                moreHovered = $0
+                if $0 {
+                    resourceDebounce?.cancel()
+                    resourceHoverDebounce?.cancel()
+                }
+            }
         }
-        .padding(.horizontal, 22)
+        .padding(.horizontal, 20)
         .frame(height: IslandLayout.metricsHeight)
     }
 
     @ViewBuilder
     private func metric(_ item: AppState.IslandItem) -> some View {
         if let resource = item.resource {
-            Button {
-                selectResource(resource)
-                state.cleanIslandResource(resource)
-            } label: { ring(item) }
-                .buttonStyle(.plain)
+            Button { beginCleanup(resource) } label: { ring(item) }
+                .buttonStyle(IslandResourceButtonStyle())
                 .disabled(state.islandCleaningResource != nil)
                 .focused($focusedResource, equals: resource)
                 .help(l10n.t("island.clean.hint"))
                 .accessibilityLabel(l10n.t(item.labelKey) + " · " + l10n.t("island.clean"))
                 .accessibilityValue(valueText(item))
+                .accessibilityAddTraits(selectedResource == resource ? .isSelected : [])
                 .onHover { hovering in
-                    hoveredResource = hovering ? resource : nil
+                    resourceHoverDebounce?.cancel()
                     if hovering {
-                        selectResource(resource)
+                        hoveredResource = resource
+                        resourceDebounce?.cancel()
+                        resourceHoverDebounce = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 160_000_000)
+                            guard !Task.isCancelled else { return }
+                            selectResource(resource)
+                        }
                     } else {
+                        if hoveredResource == resource { hoveredResource = nil }
                         scheduleResourceDismissal()
                     }
                 }
@@ -167,23 +300,55 @@ struct FloatingIslandView: View {
     }
 
     private func ring(_ item: AppState.IslandItem) -> some View {
+        let selected = item.resource != nil && selectedResource == item.resource
+        return VStack(spacing: 2) {
+            ringIcon(item)
+            Text(l10n.t(item.labelKey))
+                .font(.system(size: 9, weight: selected ? .semibold : .medium))
+                .foregroundStyle(selected ? Color.accentText : Color.secondary)
+                .lineLimit(1)
+                .padding(.bottom, 4)
+                .frame(height: 14)
+                .overlay(alignment: .bottom) {
+                    Capsule().fill(selected ? Color.accentText : .clear)
+                        .frame(width: 16, height: 2)
+                        .allowsHitTesting(false)
+                }
+        }
+        .frame(width: 46)
+        .contentShape(Rectangle())
+    }
+
+    private func ringIcon(_ item: AppState.IslandItem) -> some View {
         ZStack {
             Circle().stroke(.white.opacity(0.16), lineWidth: 4)
             Circle()
-                .trim(from: 0, to: max(0.015, min(1, progress(item))))
+                .trim(from: 0, to: max(0, min(1, progress(item))) * ringReveal)
                 .stroke(healthColor(item), style: StrokeStyle(lineWidth: 4, lineCap: .round))
                 .rotationEffect(.degrees(-90))
             if let resource = item.resource, state.islandCleaningResource == resource {
                 ProgressView().controlSize(.small)
             } else {
-                Image(systemName: item.resource != nil && (hoveredResource == item.resource || focusedResource == item.resource) ? "bolt.fill" : item.systemImage)
+                Image(systemName: item.systemImage)
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(.white)
             }
         }
         .frame(width: 34, height: 34)
         .padding(6)
-        .contentShape(Rectangle())
+        .background {
+            if let resource = item.resource {
+                Circle().fill(Color.white.opacity(
+                    selectedResource == resource || hoveredResource == resource || focusedResource == resource ? 0.16 : 0.04))
+            }
+        }
+        .overlay {
+            if let resource = item.resource, selectedResource == resource {
+                Circle().strokeBorder(Color.accentText.opacity(0.6), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+        }
+        .contentShape(Circle())
     }
 
     private func progress(_ item: AppState.IslandItem) -> Double {
@@ -231,11 +396,8 @@ struct FloatingIslandView: View {
             }
             ForEach(rows) { row in
                 HStack(spacing: 8) {
-                    if let icon = NSRunningApplication(processIdentifier: row.pid)?.icon {
-                        Image(nsImage: icon).resizable().frame(width: 19, height: 19)
-                    } else {
-                        Image(systemName: "app").frame(width: 19, height: 19)
-                    }
+                    ProcessAppIcon(row: row, size: 19, fallbackSystemName: "app",
+                                   fallbackTint: .secondary, validatesNativeStartIdentity: true)
                     Text(row.name).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                     Text(resource == .cpu ? String(format: "%.1f%%", row.cpu) : ByteFormat.memoryShort(row.memBytes))
                         .monospacedDigit().foregroundStyle(.secondary)
@@ -257,26 +419,28 @@ struct FloatingIslandView: View {
                 .frame(height: 29)
             }
             if let status = state.islandResourceStatus[resource] {
-                Text(status).font(.system(size: 10)).foregroundStyle(.secondary)
+                Text(status)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 5)
+                    .padding(.top, 6)
+                    .accessibilityAddTraits(.updatesFrequently)
             }
         }
         .padding(.horizontal, 24)
         .padding(.top, 8)
         .padding(.bottom, 16)
-        .background(Color.white.opacity(0.035))
         .contentShape(Rectangle())
-        .onHover { hovering in
-            if hovering { resourceDebounce?.cancel() }
-            else { scheduleResourceDismissal() }
-        }
     }
 
     private func selectResource(_ resource: IslandResource?) {
+        guard state.islandCleaningResource == nil else { return }
+        if feedbackPinned, resource == nil { return }
         resourceDebounce?.cancel()
-        withAnimation(motion) { selectedResource = resource }
+        resourceHoverDebounce?.cancel()
+        guard selectedResource != resource else { return }
+        withAnimation(detailMotion) { selectedResource = resource }
         if resource != nil { state.refreshIslandProcesses() }
     }
 
@@ -285,17 +449,70 @@ struct FloatingIslandView: View {
         resourceDebounce = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled, state.islandCleaningResource == nil,
-                  state.islandClosingPIDs.isEmpty else { return }
-            withAnimation(motion) { selectedResource = nil }
+                  state.islandClosingPIDs.isEmpty, hoveredResource == nil, !moreHovered, !feedbackPinned else { return }
+            withAnimation(detailMotion) { selectedResource = nil }
         }
     }
 
     private func handleHover(_ hovering: Bool) {
+        guard islandHovered != hovering else { return }
+        islandHovered = hovering
         hoverDebounce?.cancel()
         hoverDebounce = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: hovering ? 100_000_000 : 400_000_000)
+            try? await Task.sleep(nanoseconds: hovering ? 220_000_000 : 400_000_000)
             guard !Task.isCancelled else { return }
+            if !hovering, feedbackPinned || state.islandCleaningResource != nil { return }
             setExpanded(hovering)
+        }
+    }
+
+    private func beginCleanup(_ resource: IslandResource) {
+        guard state.islandCleaningResource == nil else { return }
+        ringReplay?.cancel()
+        resetRingReveal(to: 1)
+        hoverDebounce?.cancel()
+        resourceDebounce?.cancel()
+        feedbackDismissal?.cancel()
+        resourceHoverDebounce?.cancel()
+        withAnimation(detailMotion) { selectedResource = resource }
+        feedbackPinned = true
+        state.cleanIslandResource(resource)
+        // Busy rejection also needs visible feedback, although no job starts.
+        if state.islandCleaningResource == nil { releaseFeedbackAfterDelay() }
+    }
+
+    private func resetRingReveal(to value: CGFloat) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { ringReveal = value }
+    }
+
+    private func replayUsageRings() {
+        ringReplay?.cancel()
+        guard expanded, !reduceMotion else {
+            resetRingReveal(to: 1)
+            return
+        }
+        // Reset only presentation, never the sampled metrics or accessibility values.
+        resetRingReveal(to: 0)
+        ringReplay = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 80_000_000)
+            guard !Task.isCancelled else { return }
+            if reduceMotion || !expanded {
+                resetRingReveal(to: 1)
+            } else {
+                withAnimation(.easeOut(duration: 0.65)) { ringReveal = 1 }
+            }
+        }
+    }
+
+    private func releaseFeedbackAfterDelay() {
+        feedbackDismissal?.cancel()
+        feedbackDismissal = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            feedbackPinned = false
+            if !islandHovered { setExpanded(false) }
         }
     }
 
@@ -304,12 +521,33 @@ struct FloatingIslandView: View {
         withAnimation(motion) {
             expanded = value
             if !value {
+                ringReplay?.cancel()
+                resetRingReveal(to: 1)
                 resourceDebounce?.cancel()
+                resourceHoverDebounce?.cancel()
                 selectedResource = nil
                 hoveredResource = nil
             }
         }
         if value { state.refreshMetrics(); state.refreshIslandProcesses(force: true) }
         onExpandedChange(value)
+    }
+}
+
+private struct IslandResourceButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .brightness(configuration.isPressed ? 0.12 : 0)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.96 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+private struct IslandExpandedHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = IslandLayout.metricsHeight
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }

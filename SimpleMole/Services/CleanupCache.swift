@@ -11,7 +11,7 @@ enum CleanupCache {
     private static let maximumAge: TimeInterval = 5 * 60
 
     private static var cacheURL: URL {
-        let directory = NSHomeDirectory().appending("/Library/Application Support/ForgeSweep")
+        let directory = NSHomeDirectory().appending("/Library/Application Support/Nori")
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         return URL(fileURLWithPath: directory).appendingPathComponent("cleanup-cache.json")
     }

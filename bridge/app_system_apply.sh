@@ -1,5 +1,5 @@
 #!/bin/bash
-# ForgeSweep native system apply. The privileged launcher validates the signed
+# Nori native system apply. The privileged launcher validates the signed
 # App before invoking this script; this script validates the reviewed plan and
 # performs only exact root-owned file removals.
 set -euo pipefail
@@ -35,7 +35,7 @@ fd_inode=$(/usr/bin/stat -f '%i' /dev/fd/3 2>/dev/null) || fail_selection "canno
 [[ "$path_inode" == "$fd_inode" ]] || fail_selection "changed while opening"
 old_umask=$(umask)
 umask 077
-stage_dir=$(/usr/bin/mktemp -d /private/tmp/forgesweep-system-selection.XXXXXX) || fail_selection "cannot create private directory"
+stage_dir=$(/usr/bin/mktemp -d /private/tmp/nori-system-selection.XXXXXX) || fail_selection "cannot create private directory"
 umask "$old_umask"
 staged_file="$stage_dir/selection.bin"
 trap 'exec 3<&- 2>/dev/null || true; /bin/rm -rf "$stage_dir"' EXIT

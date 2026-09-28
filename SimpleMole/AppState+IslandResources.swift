@@ -9,7 +9,7 @@ extension AppState {
         Task { _ = await sampleIslandProcesses() }
     }
 
-    /// 独立 CPU 基线，避免进程页或快捷面板抢用采样周期。
+    /// 独立 CPU 基线，避免进程页抢用采样周期。
     private func sampleIslandProcesses() async -> [ProcessRow] {
         while islandSampling { try? await Task.sleep(nanoseconds: 50_000_000) }
         islandSampling = true
@@ -53,7 +53,7 @@ extension AppState {
               app.activationPolicy == .regular,
               RuntimeStore.nativeStartIdentity(for: app) == row.startIdentity,
               let path = app.executableURL?.path, !ProcessAggregator.isProtectedPath(path),
-              !(app.bundleIdentifier ?? "").hasPrefix("com.forgesweep.") else { return nil }
+              !(app.bundleIdentifier ?? "").hasPrefix("com.nori.") else { return nil }
         return app
     }
 
@@ -128,9 +128,11 @@ extension AppState {
                 ? " " + (cacheBytes > 0
                     ? L10n.shared.tf("island.clean.cache", ByteFormat.format(UInt64(cacheBytes)))
                     : L10n.shared.t("island.clean.cache.empty")) : "")
-            islandCleaningResource = nil
             _ = await sampleIslandProcesses()
             refreshMetrics()
+            // Completion is observed by the rings: publish it only after the
+            // post-cleanup sample, so the reveal uses current occupancy.
+            islandCleaningResource = nil
         }
     }
 }

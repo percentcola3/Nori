@@ -30,7 +30,7 @@ load_release_signing_config() {
         release_signing_error 'release.plist is missing BundleIdentifier'
     RELEASE_SIGN_LABEL=$(/usr/libexec/PlistBuddy -c 'Print :IdentityLabel' "$RELEASE_CONFIG_FILE" 2>/dev/null) || \
         release_signing_error 'release.plist is missing IdentityLabel'
-    [[ "$RELEASE_BUNDLE_ID" == 'com.forgesweep.app' ]] || release_signing_error 'unexpected release BundleIdentifier'
+    [[ "$RELEASE_BUNDLE_ID" == 'com.nori.app' ]] || release_signing_error 'unexpected release BundleIdentifier'
     [[ "$RELEASE_SIGN_LABEL" == 'ForgeSweep Release Signing' ]] || release_signing_error 'unexpected release IdentityLabel'
     actual_sha1=$(release_certificate_sha1 "$RELEASE_CERT_FILE") || release_signing_error 'release.cer is not a valid DER certificate'
     [[ "$actual_sha1" == "$RELEASE_CERT_SHA1" ]] || release_signing_error 'release.cer does not match the pinned CertificateSHA1'

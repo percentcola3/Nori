@@ -115,65 +115,20 @@ struct PrimaryButtonStyle: ButtonStyle {
     }
 }
 
-/// 快捷面板主动作使用独立的品牌黄到金色渐变，并保留明确的按压反馈。
-/// 不要复用于删除、卸载等高风险确认动作。
-struct QuickActionButtonStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(Color.moleOnAccent.opacity(configuration.isPressed ? 0.86 : 1))
-            .padding(.horizontal, 14)
-            .frame(height: 36)
-            .background {
-                Capsule()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.moleAccent.opacity(configuration.isPressed ? 0.84 : 1),
-                                Color(red: 0.91, green: 0.66, blue: 0.04)
-                                    .opacity(configuration.isPressed ? 0.82 : 1),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .shadow(
-                        color: Color.moleAccent.opacity(configuration.isPressed ? 0.10 : 0.25),
-                        radius: configuration.isPressed ? 2 : 7,
-                        y: configuration.isPressed ? 1 : 3
-                    )
-            }
-            .overlay {
-                Capsule()
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.58), Color.moleAccentText.opacity(0.30)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 1
-                    )
-            }
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.982)
-            .offset(y: reduceMotion || !configuration.isPressed ? 0 : 1)
-            .animation(reduceMotion ? nil : MoleMotion.press,
-                       value: configuration.isPressed)
-    }
-}
-
 struct SecondaryButtonStyle: ButtonStyle {
     var tint: Color?
+    @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(tint ?? .primary)
+            .foregroundStyle(isEnabled ? (tint ?? .primary) : .secondary)
             .padding(.horizontal, 12)
             .frame(height: 28)
-            .background(Capsule().fill(.quinary.opacity(configuration.isPressed ? 0.7 : 1)))
-            .overlay(Capsule().strokeBorder(.separator.opacity(0.6), lineWidth: 1))
+            .background(Capsule().fill(configuration.isPressed ? Color.accent.opacity(0.22) : Color.surface2))
+            .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1).allowsHitTesting(false))
+            .contentShape(Capsule())
+            .opacity(isEnabled ? 1 : 0.5)
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
     }
 }

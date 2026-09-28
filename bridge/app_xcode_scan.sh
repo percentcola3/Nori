@@ -46,7 +46,7 @@ xcode_scan_path_allowed() {
     local path="${1:-}"
     xcode_scan_path_is_physical "$path" || return 1
     is_path_whitelisted "$path" && return 1
-    forgesweep_scan_path_allowed "$path" || return 1
+    nori_scan_path_allowed "$path" || return 1
     return 0
 }
 

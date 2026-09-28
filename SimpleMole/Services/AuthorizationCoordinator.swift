@@ -9,7 +9,6 @@ enum ProtectedOperation: Codable, Equatable {
     case cleanupScan(force: Bool)
     case deepCleanupScan
     case quickOptimize
-    case quickPanelClean
     case optimize
     case developerToolsScan
     case aiScan
@@ -23,9 +22,7 @@ enum ProtectedOperation: Codable, Equatable {
     case diskOverview(force: Bool)
     case diskAnalyze(path: String?)
     case duplicateScan
-    case openProjectRadar
     case openAutomationSettings
-    case restoreProject(receipt: ProjectHibernationReceipt)
     case previewAutoCleanup(ruleID: UUID)
     case runAutoCleanup(ruleID: UUID)
 }
@@ -38,7 +35,7 @@ enum ProtectedOperation: Codable, Equatable {
 final class AuthorizationCoordinator: ObservableObject {
     @Published private(set) var pendingOperation: ProtectedOperation?
 
-    private static let pendingOperationKey = "ForgeSweep.PendingProtectedOperation.v1"
+    private static let pendingOperationKey = "Nori.PendingProtectedOperation.v1"
     private let defaults: UserDefaults
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()

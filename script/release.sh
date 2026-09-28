@@ -79,9 +79,9 @@ MOLE_SRC="$MOLE_SRC" SM_BUILD_ARCHS="$BUILD_ARCHS" SM_CODESIGN_IDENTITY="$IDENTI
     bash "$ROOT_DIR/script/build.sh"
 
 for arch in $BUILD_ARCHS; do
-    APP_BUNDLE="$ROOT_DIR/dist/$arch/ForgeSweep.app"
-    NOTARY_ARCHIVE="$ROOT_DIR/dist/ForgeSweep-$arch-notarization.zip"
-    DISTRIBUTION_ARCHIVE="$ROOT_DIR/dist/ForgeSweep-$arch.zip"
+    APP_BUNDLE="$ROOT_DIR/dist/$arch/Nori.app"
+    NOTARY_ARCHIVE="$ROOT_DIR/dist/Nori-$arch-notarization.zip"
+    DISTRIBUTION_ARCHIVE="$ROOT_DIR/dist/Nori-$arch.zip"
     /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
     RELEASE_SIGN_DETAILS=$(/usr/bin/codesign -dvvv "$APP_BUNDLE" 2>&1)
     printf '%s\n' "$RELEASE_SIGN_DETAILS" | /usr/bin/grep -Fq 'Authority=Developer ID Application:' || {

@@ -109,7 +109,7 @@ struct UninstallQueueTests {
         expect(queue.jobs.map(\.state) == [.queued, .queued],
                "a shared busy gate must not consume a pending job")
         expect(queue.startNext(blocked: false)?.id == first, "worker must start FIFO")
-        expect(queue.activeJob?.state == .running, "cached preview starts in running state")
+        expect(queue.activeJob?.state == .preparing, "cached preview must refresh before removal")
         expect(queue.startNext(blocked: false) == nil, "an active worker must exclude another")
         expect(!queue.markRunning(second) && !queue.finish(second, succeeded: true, message: "wrong"),
                "pending work cannot be marked active or finished by a different callback")

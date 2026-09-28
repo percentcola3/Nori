@@ -13,7 +13,7 @@ import Foundation
 /// 屏幕录制使用 Core Graphics 的公开预检 API，但它有三个让用户觉得
 /// "授权了也没用"的特性，这里逐一兜住：
 /// 1. `CGPreflightScreenCaptureAccess` 的结果在进程内缓存，授权后必须重启
-///    才会变成 true —— 用一个子进程（`ForgeSweep --preflight-screen-capture`）
+///    才会变成 true —— 用一个子进程（`Nori --preflight-screen-capture`）
 ///    做实时复检，区分"真没授权"和"已授权、等重启"。
 /// 2. `CGRequestScreenCaptureAccess` 对同一签名身份只弹一次窗，之后静默
 ///    返回 false —— 记住"已经为当前签名请求过"，第二次直接给出修复路径。

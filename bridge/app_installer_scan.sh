@@ -31,7 +31,7 @@ is_installer_zip() {
 
 seen_paths=""
 for root in "${roots[@]}"; do
-    forgesweep_scan_path_allowed "$root" || continue
+    nori_scan_path_allowed "$root" || continue
     [[ -d "$root" ]] || continue
     while IFS= read -r -d '' file; do
         [[ -L "$file" ]] && continue

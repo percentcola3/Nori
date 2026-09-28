@@ -2,6 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
     <key>CertificateSHA1</key><string>ABF7136A66689BF6437F7C4252A3168401FF33F6</string>
-    <key>BundleIdentifier</key><string>com.forgesweep.app</string>
+    <key>BundleIdentifier</key><string>com.nori.app</string>
     <key>IdentityLabel</key><string>ForgeSweep Release Signing</string>
 </dict></plist>

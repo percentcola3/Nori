@@ -5,7 +5,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
-PACKAGE_NAME="${SM_PACKAGE_NAME:-ForgeSweep}"
+PACKAGE_NAME="${SM_PACKAGE_NAME:-Nori}"
 REQUESTED_DMG_PATH="${SM_DMG_PATH:-}"
 BUILD_ARCHS="${SM_BUILD_ARCHS:-arm64 x86_64}"
 
@@ -18,7 +18,7 @@ fi
 # Leave identity selection to build.sh unless the caller supplies one.
 SIGN_IDENTITY="${SM_CODESIGN_IDENTITY:-}"
 ALLOW_ADHOC="${SM_ALLOW_ADHOC:-0}"
-STAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-dmg.XXXXXX")"
+STAGE_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/nori-dmg.XXXXXX")"
 trap 'rm -rf "$STAGE_ROOT"' EXIT
 
 [[ "$(uname -s)" == "Darwin" ]] || {
@@ -34,14 +34,14 @@ SIGNING_LABEL="${SIGN_IDENTITY:-build.sh default}"
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
     SIGNING_LABEL="ad-hoc"
 fi
-echo "==> Building ForgeSweep for DMG ($SIGNING_LABEL)"
+echo "==> Building Nori for DMG ($SIGNING_LABEL)"
 SM_BUILD_ARCHS="$BUILD_ARCHS" \
 SM_CODESIGN_IDENTITY="$SIGN_IDENTITY" \
 SM_ALLOW_ADHOC="$ALLOW_ADHOC" \
     bash "$ROOT_DIR/script/build.sh"
 
 for arch in $BUILD_ARCHS; do
-    APP_BUNDLE="$DIST_DIR/$arch/ForgeSweep.app"
+    APP_BUNDLE="$DIST_DIR/$arch/Nori.app"
     DMG_PATH="${REQUESTED_DMG_PATH:-$DIST_DIR/$PACKAGE_NAME-$arch.dmg}"
     [[ -d "$APP_BUNDLE" ]] || {
         echo "error: app bundle was not produced: $APP_BUNDLE" >&2
@@ -50,7 +50,7 @@ for arch in $BUILD_ARCHS; do
 
     STAGE_DIR="$STAGE_ROOT/$arch"
     mkdir -p "$STAGE_DIR"
-    /usr/bin/ditto "$APP_BUNDLE" "$STAGE_DIR/ForgeSweep.app"
+    /usr/bin/ditto "$APP_BUNDLE" "$STAGE_DIR/Nori.app"
     # Finder shows the conventional Applications shortcut alongside the App.
     ln -s /Applications "$STAGE_DIR/Applications"
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build ForgeSweep.app: compile the Swift UI layer, then bundle only the
+# Build Nori.app: compile the Swift UI layer, then bundle only the
 # vendored shell libraries still used by optional bridge features.  The five
 # core operations are implemented by Swift and do not ship or invoke Mole's
 # command router or Go helpers.
@@ -15,11 +15,11 @@ ALLOW_ADHOC="${SM_ALLOW_ADHOC:-0}"
 # It is not an Apple identity, but its designated requirement is stable, so
 # its code identity is stable across rebuilds (unlike ad-hoc cdhash requirements).
 # Actual privacy-grant retention still requires cross-version macOS validation.
-LOCAL_SIGN_LABEL="${SM_LOCAL_SIGN_LABEL:-ForgeSweep Local Signing}"
+LOCAL_SIGN_LABEL="${SM_LOCAL_SIGN_LABEL:-Nori Local Signing}"
 SIGN_IDENTITY=""
 SIGN_IDENTITY_LABEL=""
 SIGN_IDENTITY_KIND=""
-BUILD_TMP="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-build.XXXXXX")"
+BUILD_TMP="$(mktemp -d "${TMPDIR:-/tmp}/nori-build.XXXXXX")"
 trap 'rm -rf "$BUILD_TMP"' EXIT
 
 # Validate the whole request before replacing any existing architecture bundle.
@@ -38,8 +38,8 @@ esac
 # The local identity lives in its own keychain (see script/dev_identity.sh);
 # codesign is pointed at it explicitly so the user's keychain search list is
 # never modified.
-LOCAL_SIGN_KEYCHAIN="${SM_LOCAL_SIGN_KEYCHAIN:-$HOME/Library/Keychains/ForgeSweepLocalSigning.keychain-db}"
-LOCAL_SIGN_PASSWORD_FILE="${SM_LOCAL_SIGN_PASSWORD_FILE:-$HOME/Library/Application Support/ForgeSweep/signing/keychain-password}"
+LOCAL_SIGN_KEYCHAIN="${SM_LOCAL_SIGN_KEYCHAIN:-$HOME/Library/Keychains/NoriLocalSigning.keychain-db}"
+LOCAL_SIGN_PASSWORD_FILE="${SM_LOCAL_SIGN_PASSWORD_FILE:-$HOME/Library/Application Support/Nori/signing/keychain-password}"
 LOCAL_SIGN_KEYCHAIN_ARGS=()
 
 unlock_local_keychain() {
@@ -212,7 +212,7 @@ sign_one() {
 
 # Keep each architecture in its own bundle; local builds default to this Mac.
 for arch in $BUILD_ARCHS; do
-    APP_DIR="$ROOT_DIR/dist/$arch/ForgeSweep.app"
+    APP_DIR="$ROOT_DIR/dist/$arch/Nori.app"
     CONTENTS="$APP_DIR/Contents"
     RESOURCES="$CONTENTS/Resources"
     rm -rf "$APP_DIR"
@@ -221,20 +221,20 @@ for arch in $BUILD_ARCHS; do
     echo "==> Compiling Swift app ($arch)"
     SDKROOT="$SWIFT_SDKROOT" swiftc -O -whole-module-optimization -target "$arch-apple-macos13.0" \
         -module-cache-path "$BUILD_TMP/module-cache-$arch" \
-        -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit \
+        -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement \
         "$ROOT_DIR"/SimpleMole/*.swift \
         "$ROOT_DIR"/SimpleMole/L10n/*.swift \
         "$ROOT_DIR"/SimpleMole/Services/*.swift \
         "$ROOT_DIR"/SimpleMole/Views/*.swift \
-        -o "$CONTENTS/MacOS/ForgeSweep"
+        -o "$CONTENTS/MacOS/Nori"
 
-    [[ "$(/usr/bin/lipo -archs "$CONTENTS/MacOS/ForgeSweep")" == "$arch" ]] || {
+    [[ "$(/usr/bin/lipo -archs "$CONTENTS/MacOS/Nori")" == "$arch" ]] || {
         echo "error: expected a single $arch executable" >&2
         exit 2
     }
 
     # Remove local symbols before signing this architecture's executable.
-    /usr/bin/strip -x "$CONTENTS/MacOS/ForgeSweep"
+    /usr/bin/strip -x "$CONTENTS/MacOS/Nori"
 
     cp "$ROOT_DIR/SimpleMole/Support/Info.plist" "$CONTENTS/Info.plist"
 
@@ -256,7 +256,7 @@ for arch in $BUILD_ARCHS; do
     cp "$ROOT_DIR/SimpleMole/Support/Nori/Animations/"*.svg "$RESOURCES/Nori/"
 
     # Resources contain only shell scripts and images, with no nested executables.
-    sign_one "$CONTENTS/MacOS/ForgeSweep"
+    sign_one "$CONTENTS/MacOS/Nori"
     sign_one "$APP_DIR"
     /usr/bin/codesign --verify --deep --strict "$APP_DIR"
 

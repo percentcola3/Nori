@@ -99,14 +99,8 @@ struct MainWindowView: View {
         case "whitelist": WhitelistSheet(state: state)
         case "automation":
             AutomationSettingsView(
-                locations: state.savedScanLocations, automations: state.smartAutomation,
-                receipts: state.projectHibernation.receiptStore, projectRadar: state.projectRadar,
-                hibernation: state.projectHibernation,
-                authorizedLocationIDs: state.automationAuthorizedLocationIDs,
-                fullDiskAccessGranted: state.permissionCenter.fullDiskAccessGranted,
+                automations: state.smartAutomation,
                 canMutate: !state.isBusy,
-                onAddLocation: { state.addSavedScanLocation() },
-                onRestore: { state.restoreHibernatedProject($0) },
                 onClose: { state.showAutomationSettings = false })
                 .frame(width: 700, height: 560)
         default: EmptyView()

@@ -1,6 +1,6 @@
 # Nori
 
-安静守护 Mac 的原生工具：菜单栏常驻 + 快捷面板 + 主窗口（硬盘清理 / 磁盘分析 / 应用卸载 / 开发环境 / 进程清理 / 端口清理 / 图片瘦身 / 截图 / 剪贴板）。支持 12 种语言，默认跟随系统语言，可随时手动切换。
+安静守护 Mac 的原生工具：菜单栏常驻（点击直达主窗口）+ 灵动岛 + 主窗口（硬盘清理 / 磁盘分析 / 应用卸载 / 开发环境 / 进程清理 / 端口清理 / 图片瘦身 / 截图 / 剪贴板）。支持 12 种语言，默认跟随系统语言，可随时手动切换。
 
 ## 多语言
 
@@ -12,9 +12,9 @@
 
 ## 定位
 
-ForgeSweep 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、磁盘分析、应用卸载和系统优化由 Swift `NativeCore` 直接实现；Mole 的库代码只为尚未原生迁移的特色 bridge 提供基础能力：
+Nori 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、磁盘分析、应用卸载和系统优化由 Swift `NativeCore` 直接实现；Mole 的库代码只为尚未原生迁移的特色 bridge 提供基础能力：
 
-- **核心路径原生化**。`NativeCore` 使用 `FileManager`、`Bundle`、`NSWorkspace` 和 `Process` 完成候选扫描、大小分析、应用身份校验、废纸篓/永久删除和优化命令。每条待删除路径携带扫描时的 `device:inode:mtime`，执行前再次读取并比对；软链接、保护目录、白名单和运行中的应用默认跳过。`vendor/mole/` 仍随仓库提供给 AI、Xcode、项目雷达、图片和其他尚未原生迁移的桥接能力，上游版本记录在 `vendor/mole/UPSTREAM_COMMIT`，许可证见 `vendor/mole/LICENSE`。
+- **核心路径原生化**。`NativeCore` 使用 `FileManager`、`Bundle`、`NSWorkspace` 和 `Process` 完成候选扫描、大小分析、应用身份校验、废纸篓/永久删除和优化命令。每条待删除路径携带扫描时的 `device:inode:mtime`，执行前再次读取并比对；软链接、保护目录、白名单和运行中的应用默认跳过。`vendor/mole/` 仍随仓库提供给 AI、Xcode、开发缓存清理、图片和其他尚未原生迁移的桥接能力，上游版本记录在 `vendor/mole/UPSTREAM_COMMIT`，许可证见 `vendor/mole/LICENSE`。
 - **UI 层为 Swift + SwiftUI 原生实现**。周期指标（CPU / 内存 / 网络 / 磁盘）走系统 API；进程排行按需读取一次 `/bin/ps`。耗时扫描和清理通过日志抽屉展示阶段状态与聚合结果，结构化清单在完成后一次性更新，避免逐行 UI 调度拖慢文件扫描。
 
 ## 功能面
@@ -22,12 +22,13 @@ ForgeSweep 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、�
 | 页面 | 能力 | 引擎路径 |
 | --- | --- | --- |
 | 硬盘清理 | 快速扫描常用缓存，深度扫描补充更多应用目录与历史残留；只展示 Safe 垃圾，归入缓存、卸载残留、废纸篓、开发者缓存、AI 缓存五个可折叠大类（默认只展开最大分组），支持分类/子项勾选；同一分组内小于 100MB 的长尾小项自动合并为「其他」。开发者缓存与构建产物默认按 **7 天未活跃**门槛推荐（活跃条目保留可见、默认不勾选），支持 npm/Yarn/pip/Gradle 等自定义缓存位置。Safe 垃圾默认全部勾选，一键清理**永久删除**所选；执行前会用最新进程快照与年龄证据重新评估，运行中或重新活跃的路径自动跳过并计入「已跳过」 | `NativeCore.scanCleanup/applyCleanup` + `CleanupScanWorker` + `CleanupAgePolicy`；AI/Xcode 缓存共用原生统计 |
-| 磁盘分析 | 两层策略：**快速分析**（默认）只测个人目录、既知缓存目录与保存位置，增量出结果、独立预算（总 90s / 单目录 20s / 8 并发），超时目录明确标注；**全盘深度分析**由用户主动启动，按大小只展示 Top 10，避免符号链接循环与硬链接重复计量，支持取消与下钻复用；开发环境与 AI 占用单独分组，需要判断、应用和系统内容均留给用户检查 | `QuickAnalysisWorker` + `NativeCore.scanAnalyze` + `DiskAnalysisWorker` |
+| 磁盘分析 | 统一扫描范围：用户空间（默认当前用户主目录）、根目录、自定义目录；支持取消、逐层浏览和缓存复用，避免符号链接循环与硬链接重复计量 | `NativeCore.scanAnalyze` + `DiskAnalysisWorker` |
 | 应用卸载 | 列出 `/Applications`、用户 Applications 和 Setapp 应用；按 Bundle ID 精确生成缓存、日志和需复核数据明细，应用本体与关联路径在串行队列中逐项复验身份后移入废纸篓 | `NativeCore.scanInstalledApps` + `NativeCore.uninstallPlan/applyUninstall` |
 | 系统优化 | 刷新 DNS、Quick Look、LaunchServices，清理 30 天以前的保存状态，并只读检查 Spotlight 状态；每项独立显示 applied/unchanged/unavailable/failed | `NativeCore.runOptimize` |
-| 状态监控 | 菜单栏和主窗口实时显示 CPU、内存、磁盘容量与读写、网络速率；可读取电池电量/健康/循环次数，快捷面板的内存榜也走原生进程快照 | `SystemMetrics.sample` + IOKit / Mach / sysctl / statfs / getifaddrs |
+| 状态监控 | 菜单栏和主窗口实时显示 CPU、内存、磁盘容量与读写、网络速率；可读取电池电量/健康/循环次数，灵动岛的内存榜也走原生进程快照 | `SystemMetrics.sample` + IOKit / Mach / sysctl / statfs / getifaddrs |
 | 开发环境 | 识别 nvm 版本（默认/使用中锁定，可勾选清理旧版本）；fnm/Volta/asdf/pyenv/rbenv/rustup/Homebrew/JDK 版本及 Bun/Deno 等工具只读展示，版本移除交给各自管理器 | `app_env_scan.sh` + `app_apply.sh` |
 | 进程/端口 | NSWorkspace 应用级管理、高级 PID 模式、lsof 监听端口 | 原生 + `app_runtime.sh` |
+| 流量监控 | 通用应用流量排行（总量 / 下载 / 上传）、实时速率、当前连接、物理接口与隧道独立计数；无需代理客户端配置 | `TrafficMonitorStore` + `app_netmon.sh` |
 | 图片瘦身 | 图片清单、压缩（副本/替换）、重复图清理 | `app_{image,slim}_*.sh` |
 | 白名单 | `~/.config/mole/whitelist` 的 GUI 维护，clean / purge / 全部桥接清理共用 | `load_mole_whitelist` / `is_path_whitelisted` |
 
@@ -64,7 +65,7 @@ bash script/release_identity.sh ensure
 bash script/package_release.sh
 ```
 
-输出为 `dist/ForgeSweep-arm64.dmg`（Apple 芯片）和 `dist/ForgeSweep-x86_64.dmg`（Intel），每个 DMG 包含对应架构的 `ForgeSweep.app` 与 `/Applications` 快捷方式。可通过 `SM_BUILD_ARCHS=arm64` 或 `SM_BUILD_ARCHS=x86_64` 只生成一个架构。
+输出为 `dist/Nori-arm64.dmg`（Apple 芯片）和 `dist/Nori-x86_64.dmg`（Intel），每个 DMG 包含对应架构的 `Nori.app` 与 `/Applications` 快捷方式。可通过 `SM_BUILD_ARCHS=arm64` 或 `SM_BUILD_ARCHS=x86_64` 只生成一个架构。
 
 `release_identity.sh init` 只用于维护者首次建立发布身份；仓库已有公开证书但本机缺少私钥时，它会拒绝生成替代身份。新维护者或新 Mac 必须通过 `import` 导入原来的加密 PKCS#12 备份。私钥、密码、钥匙串不得提交到 Git。初始化、恢复、备份和安装验证见 [发布签名指南](docs/release-signing.md)。
 
@@ -87,7 +88,7 @@ bash script/dev_identity.sh --ensure
 bash script/build_and_run.sh
 ```
 
-`build.sh` 优先选择钥匙串中的 `Apple Development` 身份，其次选择本机自签名身份；也可通过 `SM_CODESIGN_IDENTITY` 指定。构建使用 `-O` 与 Swift 跨文件优化，签名前移除本地符号；默认只构建当前架构，输出到 `dist/arm64/ForgeSweep.app` 或 `dist/x86_64/ForgeSweep.app`。设置 `SM_BUILD_ARCHS="arm64 x86_64"` 可生成两个独立 App。本地开发证书与项目的公开发布证书是不同身份。
+`build.sh` 优先选择钥匙串中的 `Apple Development` 身份，其次选择本机自签名身份；也可通过 `SM_CODESIGN_IDENTITY` 指定。构建使用 `-O` 与 Swift 跨文件优化，签名前移除本地符号；默认只构建当前架构，输出到 `dist/arm64/Nori.app` 或 `dist/x86_64/Nori.app`。设置 `SM_BUILD_ARCHS="arm64 x86_64"` 可生成两个独立 App。本地开发证书与项目的公开发布证书是不同身份。
 
 如果本机 CLT 27 报缺少 `SwiftUIMacros`，且已经安装 macOS 26.5 SDK，可显式选择该 SDK：
 
@@ -101,7 +102,7 @@ SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk bash script/buil
 SM_ALLOW_ADHOC=0 bash script/package_dmg_to_desktop.sh cleanup-parity
 ```
 
-结果位于 `~/Desktop/ForgeSweep-<arch>-cleanup-parity.dmg`，并在 Finder 中定位；不传 label 时使用时间戳。公开发行应使用 `package_release.sh`，确保使用仓库固定的发布身份。
+结果位于 `~/Desktop/Nori-<arch>-cleanup-parity.dmg`，并在 Finder 中定位；不传 label 时使用时间戳。公开发行应使用 `package_release.sh`，确保使用仓库固定的发布身份。
 
 仅用于临时测试的 ad-hoc 构建需显式开启：
 
@@ -121,11 +122,11 @@ SM_NOTARY_PROFILE="forgesweep" \
 bash script/release.sh
 ```
 
-`SM_NOTARY_PROFILE` 是通过 `xcrun notarytool store-credentials` 保存的钥匙串配置名。此流程默认校验并使用 `vendor/mole/UPSTREAM_COMMIT`，分别公证两个架构，生成 `dist/ForgeSweep-arm64.zip` 和 `dist/ForgeSweep-x86_64.zip`，其中 App 已 stapled。升级 Mole 时应整体更新 `vendor/mole/`、重新审计并运行完整测试；也可通过 `MOLE_SRC=/path/to/Mole` 临时验证上游检出。
+`SM_NOTARY_PROFILE` 是通过 `xcrun notarytool store-credentials` 保存的钥匙串配置名。此流程默认校验并使用 `vendor/mole/UPSTREAM_COMMIT`，分别公证两个架构，生成 `dist/Nori-arm64.zip` 和 `dist/Nori-x86_64.zip`，其中 App 已 stapled。升级 Mole 时应整体更新 `vendor/mole/`、重新审计并运行完整测试；也可通过 `MOLE_SRC=/path/to/Mole` 临时验证上游检出。
 
 ## Nori 图标与动态形象
 
-新版品牌采用冰蓝 Nori 形象。已包含同源 SVG、Apple Icon Composer 工程、兼容 ICNS、菜单栏 1×/2× 模板，以及待机、彩带环绕工作、无聊、眨眼、庆祝、提醒、敲键盘、喝咖啡和照镜子动画。可见名称为 Nori，历史 Bundle ID、签名、可执行文件、构建输出与数据目录仍沿用 ForgeSweep，保持更新兼容。
+新版品牌采用冰蓝 Nori 形象。已包含同源 SVG、Apple Icon Composer 工程、兼容 ICNS、菜单栏 1×/2× 模板，以及待机、彩带环绕工作、无聊、眨眼、庆祝、提醒、敲键盘、喝咖啡和照镜子动画。产品身份已全面切换为 Nori：Bundle ID 为 `com.nori.app`，可执行文件与构建产物均为 `Nori.app`；旧 ForgeSweep / Simple Mole 的偏好设置与数据目录（Application Support、Caches、Logs）在首次启动时自动迁移。因 Bundle ID 变化，升级后需要重新授予一次完全磁盘访问、屏幕录制等系统权限。发布签名证书沿用已固定的历史身份（标签 "ForgeSweep Release Signing"，指纹不变），GitHub Actions secret 名称保持 `FORGESWEEP_SIGNING_P12_*` 不变，已配置的仓库无需改动。
 
 [设计和调用说明](docs/brand/nori-design.md) · [动画预览](docs/brand/nori-preview.html)
 
@@ -140,7 +141,7 @@ bash script/make_icon.sh
 
 主窗口应用栏使用无底色 Nori 矢量动画，Dock / Finder 使用彩色 App 图标；菜单栏状态项使用独立的单色 Template 图标，由 macOS 自动适配深浅色。
 
-`dist/<架构>/ForgeSweep.app` 内嵌 Swift 主程序、`bridge/` 脚本，以及 `lib/core/`、
+`dist/<架构>/Nori.app` 内嵌 Swift 主程序、`bridge/` 脚本，以及 `lib/core/`、
 `lib/clean/project.sh` 和 `lib/clean/purge_shared.sh`。构建与桥接回归共用
 `script/stage_bridge_resources.sh`，避免未被调用的 Mole 模块进入成品；
 不再打包 Mole CLI、旧卸载入口或 Go 辅助程序。开源 GitHub Release 使用
@@ -172,7 +173,7 @@ bash script/test.sh
 
 - 磁盘清理、全盘分析、卸载残留和图片全目录扫描统一经过权限门禁。未检测到“完全磁盘访问”时只打开 App 内权限中心，不启动扫描；授权后自动恢复用户刚才的操作。后台任务在未授权时安静跳过。
 - Swift 只在实测授权成功后向扫描子进程传递 `FORGESWEEP_FULL_DISK_AUTHORIZED=1`。桥接脚本默认拒绝或跳过 Desktop、Documents、Downloads、Pictures、其他 App 的 Application Support / Containers 等受保护根，避免未来调用点遗漏门禁后触发原生文件夹弹窗。
-- 完全磁盘访问和屏幕录制是 macOS 的两项独立权限：前者一次授权覆盖 ForgeSweep 的磁盘扫描，后者仅在使用截图功能时单独请求。开发者签名用于稳定识别 App，不会自动授予这两项权限。
+- 完全磁盘访问和屏幕录制是 macOS 的两项独立权限：前者一次授权覆盖 Nori 的磁盘扫描，后者仅在使用截图功能时单独请求。开发者签名用于稳定识别 App，不会自动授予这两项权限。
 
 - 所有原生删除计划同时携带确认时捕获的 `device:inode:mtime` 身份，并在最终落盘前复验；桥接删除仍使用 NUL 协议传递，文件名中的空格或换行不会改变边界。
 - 卸载同时绑定应用绝对路径、Bundle ID、应用目录身份和 `Info.plist` 身份；预览与执行都重新扫描并要求精确匹配，拒绝同名应用或中途替换。

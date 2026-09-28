@@ -3,7 +3,7 @@
 # never opens a real keychain, creates a private key, or invokes a compiler.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-release-tests.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/nori-release-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 FIXTURE="$WORK/repository"
 STUBS="$WORK/stubs"
@@ -66,7 +66,7 @@ case "$1" in
         ;;
     -dr)
         hash=$(printf '%s' "$TEST_RELEASE_SHA1" | tr '[:upper:]' '[:lower:]')
-        dr="identifier \"com.forgesweep.app\" and certificate root = H\"$hash\""
+        dr="identifier \"com.nori.app\" and certificate root = H\"$hash\""
         [[ "$mode" != unstable_requirement ]] || dr="$dr and cdhash H\"1111111111111111111111111111111111111111\""
         [[ "$mode" != weak_requirement ]] || dr="$dr or true"
         # Simulate an old app with an extra requirement while the current
@@ -83,10 +83,10 @@ set -euo pipefail
 printf '%s\n' "$SM_BUILD_ARCHS" "$SM_ALLOW_ADHOC" "$SM_CODESIGN_IDENTITY" \
     "$SM_LOCAL_SIGN_LABEL" "$SM_LOCAL_SIGN_KEYCHAIN" "$SM_LOCAL_SIGN_PASSWORD_FILE" >"$TEST_RELEASE_LOG"
 for arch in $SM_BUILD_ARCHS; do
-    mkdir -p "$TEST_RELEASE_ROOT/dist/$arch/ForgeSweep.app/Contents"
-    rm -f "$TEST_RELEASE_ROOT/dist/$arch/ForgeSweep.app/Contents/Info.plist"
-    /usr/libexec/PlistBuddy -c 'Add :CFBundleIdentifier string com.forgesweep.app' \
-        "$TEST_RELEASE_ROOT/dist/$arch/ForgeSweep.app/Contents/Info.plist" >/dev/null
+    mkdir -p "$TEST_RELEASE_ROOT/dist/$arch/Nori.app/Contents"
+    rm -f "$TEST_RELEASE_ROOT/dist/$arch/Nori.app/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c 'Add :CFBundleIdentifier string com.nori.app' \
+        "$TEST_RELEASE_ROOT/dist/$arch/Nori.app/Contents/Info.plist" >/dev/null
 done
 STUB
 chmod +x "$STUBS/security" "$STUBS/codesign"
@@ -136,7 +136,7 @@ if /usr/bin/grep -Fq 'test-fixture-only' "$WORK/output"; then fail 'shell tracin
 [[ "$(sed -n '5p' "$TEST_RELEASE_LOG")" == "$SM_RELEASE_SIGNING_DIR/release.keychain-db" ]] || fail 'a local keychain override replaced the release keychain'
 [[ "$(grep -c '^Verified release:' "$WORK/output")" == 1 ]] || fail 'single architecture release was not verified exactly once'
 
-APP="$FIXTURE/dist/arm64/ForgeSweep.app"
+APP="$FIXTURE/dist/arm64/Nori.app"
 cp -R "$APP" "$WORK/Previous.app"
 bash "$FIXTURE/script/verify_release.sh" "$APP" --previous-app "$WORK/Previous.app" >"$WORK/output" 2>&1 || fail 'matching previous release was rejected'
 /usr/bin/grep -Fq 'designated requirements match' "$WORK/output" || fail 'previous release comparison was skipped'
@@ -161,7 +161,7 @@ if bash "$FIXTURE/script/verify_release.sh" "$APP" >"$WORK/output" 2>&1; then fa
 REAL_APP="$WORK/Adhoc.app"
 mkdir -p "$REAL_APP/Contents/MacOS"
 cp /usr/bin/true "$REAL_APP/Contents/MacOS/Fixture"
-/usr/libexec/PlistBuddy -c 'Add :CFBundleIdentifier string com.forgesweep.app' "$REAL_APP/Contents/Info.plist" >/dev/null
+/usr/libexec/PlistBuddy -c 'Add :CFBundleIdentifier string com.nori.app' "$REAL_APP/Contents/Info.plist" >/dev/null
 /usr/libexec/PlistBuddy -c 'Add :CFBundleExecutable string Fixture' "$REAL_APP/Contents/Info.plist" >/dev/null
 /usr/bin/codesign --force --sign - "$REAL_APP" >/dev/null 2>&1
 if bash "$ROOT_DIR/script/verify_release.sh" "$REAL_APP" >"$WORK/output" 2>&1; then fail 'production verifier accepted an ad-hoc app'; fi

@@ -55,10 +55,10 @@ elapsed=$(/usr/bin/awk -v start="$start" -v finish="$finish" \
     fail "Perl fallback timeout was not enforced promptly (${elapsed}s)"
 pass "Perl fallback preserves timeout status and deadline (${elapsed}s)"
 
-fixture_root=$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-timeout-tests.XXXXXX") ||
+fixture_root=$(mktemp -d "${TMPDIR:-/tmp}/nori-timeout-tests.XXXXXX") ||
     fail "could not create timeout fixture"
 case "$fixture_root" in
-    "${TMPDIR:-/tmp}"/forgesweep-timeout-tests.*) ;;
+    "${TMPDIR:-/tmp}"/nori-timeout-tests.*) ;;
     *) fail "unsafe timeout fixture path" ;;
 esac
 owner_pid=""

@@ -33,12 +33,8 @@ struct ImagesTabView: View {
             .padding(.top, 14)
             .padding(.bottom, 6)
 
-            if state.isScanningImages || !state.images.isEmpty {
+            if !state.isScanningImages && !state.images.isEmpty {
                 HStack(spacing: 6) {
-                    if state.isScanningImages {
-                        ProgressView()
-                            .controlSize(.mini)
-                    }
                     Text(state.imageStatus)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -48,7 +44,9 @@ struct ImagesTabView: View {
                 .padding(.bottom, 8)
             }
 
-            if state.images.isEmpty {
+            if state.isScanningImages {
+                NoriScanActivity(text: state.imageStatus, assetName: "nori-inspecting")
+            } else if state.images.isEmpty {
                 EmptyStateView(symbol: "photo.on.rectangle.angled",
                                title: state.isScanningImages ? l10n.t("img.status.scanning") : l10n.t("img.status.none"),
                                subtitle: state.isScanningImages ? nil : l10n.t("img.empty.subtitle"))

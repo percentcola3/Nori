@@ -10,15 +10,9 @@ private func normalizedArmedAt(_ date: Date) -> Date {
 enum SmartTriggerConditionKind: String, Codable, CaseIterable, Sendable {
     case dailySchedule
     case weeklySchedule
-    case projectInactive
-    case savedLocationSizeLimit
-    case savedLocationRetention
 }
 
 struct SmartTriggerCondition: Codable, Equatable, Sendable {
-    static let minimumSizeLimitBytes: UInt64 = 100_000_000 // 0.1 GB.
-    static let maximumSizeLimitBytes: UInt64 = 1_024_000_000_000 // 1024 GB.
-
     let kind: SmartTriggerConditionKind
     let hour: Int?
     let minute: Int?
@@ -36,33 +30,13 @@ struct SmartTriggerCondition: Codable, Equatable, Sendable {
               weekday: weekday, days: nil, bytes: nil)
     }
 
-    static func projectInactive(days: Int) -> Self {
-        .init(kind: .projectInactive, hour: nil, minute: nil,
-              weekday: nil, days: days, bytes: nil)
-    }
-
-    static func savedLocationSizeLimit(bytes: UInt64) -> Self {
-        .init(kind: .savedLocationSizeLimit, hour: nil, minute: nil,
-              weekday: nil, days: nil, bytes: bytes)
-    }
-
-    static func savedLocationRetention(days: Int) -> Self {
-        .init(kind: .savedLocationRetention, hour: nil, minute: nil,
-              weekday: nil, days: days, bytes: nil)
-    }
-
     var isValid: Bool {
         switch kind {
         case .dailySchedule:
             return validTime && weekday == nil && days == nil && bytes == nil
         case .weeklySchedule:
             return validTime && (1...7).contains(weekday ?? 0) && days == nil && bytes == nil
-        case .projectInactive, .savedLocationRetention:
-            return hour == nil && minute == nil && weekday == nil
-                && (1...3650).contains(days ?? 0) && bytes == nil
-        case .savedLocationSizeLimit:
-            return hour == nil && minute == nil && weekday == nil && days == nil
-                && (Self.minimumSizeLimitBytes...Self.maximumSizeLimitBytes).contains(bytes ?? 0)
+
         }
     }
 
@@ -73,14 +47,10 @@ struct SmartTriggerCondition: Codable, Equatable, Sendable {
 
 enum AutomationAction: String, Codable, CaseIterable, Sendable {
     case quickCleanSafe
-    case cleanSavedLocationSafe
-    case hibernateProjectSafeArtifacts
 }
 
 enum AutomationScopeKind: String, Codable, CaseIterable, Sendable {
     case allSafe
-    case savedLocation
-    case project
 }
 
 struct AutomationScope: Codable, Equatable, Sendable {
@@ -89,18 +59,9 @@ struct AutomationScope: Codable, Equatable, Sendable {
 
     static let allSafe = AutomationScope(kind: .allSafe, targetID: nil)
 
-    static func savedLocation(_ id: UUID) -> Self {
-        AutomationScope(kind: .savedLocation, targetID: id.uuidString)
-    }
-
-    static func project(_ id: String) -> Self {
-        AutomationScope(kind: .project, targetID: id)
-    }
-
     var isValid: Bool {
         switch kind {
         case .allSafe: return targetID == nil
-        case .savedLocation, .project: return !(targetID ?? "").isEmpty
         }
     }
 }
@@ -144,14 +105,7 @@ struct SmartTriggerRule: Identifiable, Codable, Equatable, Sendable {
         case .quickCleanSafe:
             return scope.kind == .allSafe
                 && (condition.kind == .dailySchedule || condition.kind == .weeklySchedule)
-        case .cleanSavedLocationSafe:
-            return scope.kind == .savedLocation
-                && condition.kind != .projectInactive
-        case .hibernateProjectSafeArtifacts:
-            return scope.kind == .project
-                && (condition.kind == .projectInactive
-                    || condition.kind == .dailySchedule
-                    || condition.kind == .weeklySchedule)
+
         }
     }
 }
@@ -167,7 +121,7 @@ final class AutomationStore: ObservableObject {
 
     static var defaultFileURL: URL {
         URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
-            .appendingPathComponent("Library/Application Support/ForgeSweep", isDirectory: true)
+            .appendingPathComponent("Library/Application Support/Nori", isDirectory: true)
             .appendingPathComponent("automation-v1.json", isDirectory: false)
     }
 
@@ -306,11 +260,19 @@ final class AutomationStore: ObservableObject {
             let data = try Data(contentsOf: fileURL)
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            let payload = try decoder.decode(Payload.self, from: data)
-            guard payload.schemaVersion == schemaVersion else {
+            guard let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  payload["schemaVersion"] as? Int == schemaVersion,
+                  let records = payload["triggers"] as? [[String: Any]] else {
                 return ([], "Smart Triggers use an unsupported data version.")
             }
-            return (payload.triggers, nil)
+            let triggers = try records.compactMap { record -> SmartTriggerRule? in
+                // Removed actions are intentionally no longer loaded or scheduled.
+                guard let action = record["action"] as? String,
+                      AutomationAction(rawValue: action) != nil else { return nil }
+                return try decoder.decode(SmartTriggerRule.self,
+                    from: JSONSerialization.data(withJSONObject: record))
+            }
+            return (triggers, nil)
         } catch {
             return ([], "Could not load Smart Triggers: \(error.localizedDescription)")
         }

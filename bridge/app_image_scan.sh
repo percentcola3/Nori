@@ -6,7 +6,7 @@ set -euo pipefail
 root="${1:-$HOME}"
 limit="${2:-500}"
 source "$(dirname "${BASH_SOURCE[0]}")/app_scan_access.sh"
-forgesweep_require_scan_path_access "$root" || exit $?
+nori_require_scan_path_access "$root" || exit $?
 declare -a files=()
 if command -v mdfind >/dev/null 2>&1; then
     while IFS= read -r path; do

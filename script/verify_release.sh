@@ -11,7 +11,7 @@ source "$ROOT_DIR/script/release_signing_common.sh"
 APP="$1"
 PREVIOUS_APP="${3:-}"
 load_release_signing_config "$ROOT_DIR"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-verify-release.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/nori-verify-release.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 EXPECTED_REQUIREMENT="identifier \"$RELEASE_BUNDLE_ID\" and certificate root = H\"$(printf '%s' "$RELEASE_CERT_SHA1" | /usr/bin/tr '[:upper:]' '[:lower:]')\""
 

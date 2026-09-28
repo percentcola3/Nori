@@ -53,8 +53,8 @@ if [[ -n "${CARGO_HOME:-}" && -d "$CARGO_HOME/registry/cache" ]]; then
 fi
 is_allowed() {
     local candidate="$1" item
-    forgesweep_scan_path_is_physical "$candidate" || return 1
-    forgesweep_scan_path_allowed "$candidate" || return 1
+    nori_scan_path_is_physical "$candidate" || return 1
+    nori_scan_path_allowed "$candidate" || return 1
     for item in "${allowed[@]}"; do
         # The scanner may submit a concrete child path (for example an npm
         # cache shard) when the user expands a category. The old exact-match
@@ -86,8 +86,8 @@ simplemole_dev_path_guard() {
     if [[ "${MOLE_TEST_MODE:-0}" == "1" && -n "${SIMPLEMOLE_TEST_FINAL_GUARD_LOG:-}" ]]; then
         printf 'developer\n' >> "$SIMPLEMOLE_TEST_FINAL_GUARD_LOG"
     fi
-    forgesweep_scan_path_is_physical "$candidate" || return 1
-    forgesweep_scan_path_allowed "$candidate" || return 1
+    nori_scan_path_is_physical "$candidate" || return 1
+    nori_scan_path_allowed "$candidate" || return 1
     load_mole_whitelist
     is_path_whitelisted "$candidate" && return 1
     simplemole_execution_content_allowed "$candidate" || return 1

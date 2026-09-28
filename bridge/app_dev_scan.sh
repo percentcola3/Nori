@@ -95,8 +95,8 @@ declare -a candidate_paths=()
 declare -a candidate_names=()
 emit_candidate() {
     local path="${1:-}" name="${2:-}" existing=""
-    forgesweep_scan_path_is_physical "$path" || return 0
-    forgesweep_scan_path_allowed "$path" || return 0
+    nori_scan_path_is_physical "$path" || return 0
+    nori_scan_path_allowed "$path" || return 0
     [[ -e "$path" && ! -L "$path" ]] || return 0
     is_path_whitelisted "$path" && return 0
     if [[ ${#emitted_paths[@]} -gt 0 ]]; then

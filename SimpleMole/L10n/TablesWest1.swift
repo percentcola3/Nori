@@ -151,10 +151,6 @@ extension L10nTables {
         "img.status.capped": "%d장 발견 · 처음 %d장 표시 중",
         "img.empty.subtitle": "“이미지 스캔”으로 데스크탑·다운로드·사진 폴더를 확인하세요",
 
-        "qp.cpu": "CPU 사용률",
-        "qp.mem": "메모리 사용률",
-        "qp.optimize": "빠른 정리",
-        "qp.topMemory": "메모리 최다 사용",
 
         "status.ready": "준비 완료",
         "status.scanningCleanup": "정리 가능 항목 스캔 중…",
@@ -546,10 +542,6 @@ extension L10nTables {
         "img.status.capped": "%d Bilder gefunden · die ersten %d werden angezeigt",
         "img.empty.subtitle": "„Bilder scannen“ prüft Schreibtisch, Downloads und Bilder",
 
-        "qp.cpu": "CPU-Auslastung",
-        "qp.mem": "Speichernutzung",
-        "qp.optimize": "Schnellbereinigung",
-        "qp.topMemory": "Top-Speicher",
 
         "status.ready": "Bereit",
         "status.scanningCleanup": "Bereinigbare Elemente werden gescannt…",
@@ -941,10 +933,6 @@ extension L10nTables {
         "img.status.capped": "%d images trouvées · %d premières affichées",
         "img.empty.subtitle": "« Scanner les images » examine Bureau, Téléchargements et Images",
 
-        "qp.cpu": "CPU",
-        "qp.mem": "Mémoire",
-        "qp.optimize": "Nettoyage rapide",
-        "qp.topMemory": "Mémoire max",
 
         "status.ready": "Prêt",
         "status.scanningCleanup": "Analyse des éléments nettoyables…",

@@ -40,7 +40,7 @@ final class MoleEngine {
     private let appBundleURL: URL
     private let runningCodeDirectoryHash: String?
     private let state = OSAllocatedUnfairLock(uncheckedState: EngineState())
-    private static let logger = Logger(subsystem: "com.forgesweep.app", category: "process")
+    private static let logger = Logger(subsystem: "com.nori.app", category: "process")
 
     init() {
         let bundle = Bundle.main.bundleURL.standardizedFileURL
@@ -157,16 +157,16 @@ final class MoleEngine {
             "stage_root=''",
             "worker_pid=''",
             "terminate_tree() { tree_pid=$1; tree_signal=$2; for tree_child in $(/bin/ps -axo pid=,ppid= | /usr/bin/awk -v parent=\"$tree_pid\" '$2 == parent {print $1}'); do terminate_tree \"$tree_child\" \"$tree_signal\"; done; /bin/kill -\"$tree_signal\" \"$tree_pid\" 2>/dev/null || true; }",
-            "cleanup() { if [ -n \"$worker_pid\" ] && /bin/kill -0 \"$worker_pid\" 2>/dev/null; then terminate_tree \"$worker_pid\" TERM; /bin/sleep 1; terminate_tree \"$worker_pid\" KILL; fi; case \"$stage_root\" in /private/var/tmp/com.forgesweep.privileged.*) /bin/rm -rf -- \"$stage_root\" ;; esac; }",
+            "cleanup() { if [ -n \"$worker_pid\" ] && /bin/kill -0 \"$worker_pid\" 2>/dev/null; then terminate_tree \"$worker_pid\" TERM; /bin/sleep 1; terminate_tree \"$worker_pid\" KILL; fi; case \"$stage_root\" in /private/var/tmp/com.nori.privileged.*) /bin/rm -rf -- \"$stage_root\" ;; esac; }",
             "trap cleanup 0",
             "trap 'exit 129' HUP",
             "trap 'exit 130' INT",
             "trap 'exit 143' TERM",
-            "stage_root=$(/usr/bin/mktemp -d /private/var/tmp/com.forgesweep.privileged.XXXXXXXX)",
-            "case \"$stage_root\" in /private/var/tmp/com.forgesweep.privileged.*) ;; *) exit 77 ;; esac",
+            "stage_root=$(/usr/bin/mktemp -d /private/var/tmp/com.nori.privileged.XXXXXXXX)",
+            "case \"$stage_root\" in /private/var/tmp/com.nori.privileged.*) ;; *) exit 77 ;; esac",
             "[ -f \(shellQuote(cancellationToken.url.path)) ] || exit 143",
             "/bin/chmod 700 \"$stage_root\"",
-            "staged_app=\"$stage_root/ForgeSweep.app\"",
+            "staged_app=\"$stage_root/Nori.app\"",
             "staged_resources=\"$staged_app/Contents/Resources\"",
             "/usr/bin/ditto --noqtn \(shellQuote(appBundleURL.path)) \"$staged_app\"",
             "/usr/bin/codesign --verify --deep --strict \"$staged_app\"",
@@ -493,7 +493,7 @@ private final class PrivilegedCancellationToken {
 
     init?() {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        url = directory.appendingPathComponent("forgesweep-privileged-\(UUID().uuidString).token")
+        url = directory.appendingPathComponent("nori-privileged-\(UUID().uuidString).token")
         let created = FileManager.default.createFile(
             atPath: url.path,
             contents: Data(),

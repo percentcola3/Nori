@@ -1,9 +1,9 @@
 #!/bin/bash
-# ForgeSweep per-app network traffic observation (read-only).
+# Nori per-app network traffic observation (read-only).
 #
-# Four modes feeding the Traffic tab. All output is TSV on stdout; errors and
+# Three modes feeding the Traffic tab. All output is TSV on stdout; errors and
 # diagnostics go to stderr. No mode mutates anything, escalates or inspects
-# file content beyond routing tables and the local proxy controller.
+# file content beyond routing tables.
 #
 #   bytes     nettop per-process cumulative counters
 #             `proc<TAB>pid<TAB>bytes_in<TAB>bytes_out<TAB>comm`
@@ -11,20 +11,11 @@
 #             `flow<TAB>pid<TAB>comm<TAB>proto<TAB>local<TAB>remote`
 #   routes    route lookup for IPs read from stdin (one per line)
 #             `route<TAB>address<TAB>interface`
-#   clash     GET /connections from the Clash/mihomo controller; raw JSON on
-#             stdout. Endpoint from CLASH_ENDPOINT (`http://host:port` or
-#             `unix:/path/to.sock`), optional CLASH_SECRET (env, never argv).
-#   discover  best-effort local Clash core discovery from running processes
-#             and their config: `endpoint<TAB>…`, `secret<TAB>…`,
-#             `mixedport<TAB>N`, `proxyport<TAB>N` lines. Prints nothing when nothing is found.
-#
-# Test seams: MOLE_TEST_NETTOP_BIN / MOLE_TEST_LSOF_BIN / MOLE_TEST_ROUTE_BIN /
-# MOLE_TEST_PS_BIN / MOLE_TEST_CURL_BIN replace the real binaries when
-# MOLE_TEST_MODE=1.
+# Test seams replace system binaries only when MOLE_TEST_MODE=1.
 set -euo pipefail
 export LC_ALL=C
 
-mode="${1:?usage: app_netmon.sh bytes|flows|routes|clash|discover}"
+mode="${1:?usage: app_netmon.sh bytes|flows|routes}"
 
 is_test_mode() { [[ "${MOLE_TEST_MODE:-0}" == "1" ]]; }
 
@@ -106,74 +97,9 @@ route_lookups() {
     done
 }
 
-clash_connections() {
-    local curl_bin="/usr/bin/curl"
-    is_test_mode && curl_bin="${MOLE_TEST_CURL_BIN:-/usr/bin/curl}"
-    local endpoint="${CLASH_ENDPOINT:-}" secret="${CLASH_SECRET:-}"
-    [[ -n "$endpoint" ]] || { echo "CLASH_ENDPOINT is empty" >&2; return 2; }
-    [[ -x "$curl_bin" ]] || { echo "curl is unavailable" >&2; return 1; }
-    local -a args=()
-    if [[ "$endpoint" == unix:* ]]; then
-        args+=(--unix-socket "${endpoint#unix:}" "http://localhost/connections")
-    else
-        args+=("${endpoint%/}/connections")
-    fi
-    # 密钥只经环境与 HTTP 头传递，绝不进入 argv。
-    [[ -n "$secret" ]] && args+=(-H "Authorization: Bearer $secret")
-    "$curl_bin" -m 4 -s "${args[@]}" || {
-        echo "clash controller unreachable: $endpoint" >&2
-        return 1
-    }
-}
-
-discover_clash() {
-    local ps_bin="/bin/ps"
-    is_test_mode && ps_bin="${MOLE_TEST_PS_BIN:-/bin/ps}"
-    local processes config endpoint secret port port_value
-    processes=$("$ps_bin" -axo command= 2>/dev/null) || return 0
-
-    while IFS= read -r endpoint; do
-        [[ -n "$endpoint" ]] && printf 'endpoint\tunix:%s\n' "$endpoint"
-    done < <(printf '%s\n' "$processes" | /usr/bin/grep -E 'mihomo|clash' \
-        | /usr/bin/sed -nE 's/.*-ext-ctl-unix[ =]([^ ]+).*/\1/p' | /usr/bin/sort -u)
-
-    while IFS= read -r config; do
-        [[ -f "$config" ]] || continue
-        endpoint=$(/usr/bin/sed -nE \
-            "s/^external-controller:[[:space:]]*['\"]?([^'\"[:space:]]+)['\"]?[[:space:]]*$/\1/p" \
-            "$config" | /usr/bin/head -n 1)
-        if [[ -n "$endpoint" ]]; then
-            case "$endpoint" in
-                http://*|https://*) printf 'endpoint\t%s\n' "$endpoint" ;;
-                *) printf 'endpoint\thttp://%s\n' "$endpoint" ;;
-            esac
-        fi
-        secret=$(/usr/bin/sed -nE \
-            "s/^secret:[[:space:]]*['\"]?([^'\"[:space:]]+)['\"]?[[:space:]]*$/\1/p" \
-            "$config" | /usr/bin/head -n 1)
-        [[ -n "$secret" ]] && printf 'secret\t%s\n' "$secret"
-        for port in mixed-port socks-port port; do
-            port_value=$(/usr/bin/sed -nE \
-                "s/^${port}:[[:space:]]*([0-9]+)[[:space:]]*$/\1/p" "$config" \
-                | /usr/bin/head -n 1)
-            if [[ -n "$port_value" ]]; then
-                printf 'proxyport\t%s\n' "$port_value"
-                if [[ "$port" == mixed-port ]]; then
-                    printf 'mixedport\t%s\n' "$port_value"
-                fi
-            fi
-        done
-    done < <(printf '%s\n' "$processes" | /usr/bin/grep -E 'mihomo|clash' \
-        | /usr/bin/sed -nE 's/.* -f (.*)$/\1/p' | /usr/bin/sed -E 's/ -[a-zA-Z][a-zA-Z0-9_-]* .*$//; s/ -[a-zA-Z][a-zA-Z0-9_-]*$//' \
-        | /usr/bin/sort -u)
-    return 0
-}
-
 case "$mode" in
     bytes) nettop_bytes ;;
     flows) lsof_flows ;;
     routes) route_lookups ;;
-    clash) clash_connections ;;
-    discover) discover_clash ;;
     *) echo "unknown mode: $mode" >&2; exit 2 ;;
 esac

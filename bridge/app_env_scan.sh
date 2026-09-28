@@ -68,7 +68,7 @@ emit_manager_dir() {
 # filesystem deletion through the generic cleanup sink.
 emit_readonly_runtime_family() {
     local manager="$1" root="$2" inner="${3:-}"
-    forgesweep_scan_path_allowed "$root" || return 0
+    nori_scan_path_allowed "$root" || return 0
     [[ -d "$root" ]] || return 0
     local dir target
     while IFS= read -r dir; do

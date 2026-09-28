@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/core/common.sh"
 source "$SCRIPT_DIR/../lib/clean/project.sh"
 # shellcheck disable=SC1090
-source "$SCRIPT_DIR/app_project_activity.sh"
+source "$SCRIPT_DIR/app_purge_guard.sh"
 source "$SCRIPT_DIR/app_scan_access.sh"
 load_mole_whitelist
 export SM_PROJECT_ACTIVITY_REUSE_SNAPSHOT=1
@@ -85,7 +85,7 @@ wait_scan_batch() {
 # concurrent; result validation and activity classification remain serial below,
 # preserving the original ordering and all dynamic-scope guard semantics.
 for root in "${PURGE_SEARCH_PATHS[@]}"; do
-    forgesweep_scan_path_allowed "$root" || continue
+    nori_scan_path_allowed "$root" || continue
     [[ -d "$root" ]] || continue
 
     # Each output is private to this invocation. An ordinal avoids a hash

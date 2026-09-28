@@ -257,7 +257,7 @@ final class ClipboardHistoryManager: ObservableObject {
         let root = FileManager.default.urls(for: .applicationSupportDirectory,
                                             in: .userDomainMask).first!
         return root
-            .appendingPathComponent("ForgeSweep", isDirectory: true)
+            .appendingPathComponent("Nori", isDirectory: true)
             .appendingPathComponent("clipboard-history.plist")
     }
 

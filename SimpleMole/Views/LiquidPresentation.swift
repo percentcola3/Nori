@@ -17,8 +17,8 @@ extension EnvironmentValues {
     }
 }
 
-/// The source control and destination surface share a native glass identity.
-/// Older macOS and accessibility settings retain a readable material fallback.
+/// Group native glass surfaces; scrolling controls use ordinary SwiftUI surfaces
+/// so the window-level glass compositor cannot draw them outside their viewport.
 struct LiquidGlassGroup<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
@@ -73,16 +73,19 @@ struct LiquidActionButton: View {
         if activeID == id {
             label.hidden().accessibilityHidden(true)
         } else if activeID != nil {
-            // Background controls must leave the glass compositor while a modal
-            // overlaps them, otherwise native glass joins them to the dialog.
             label.background(RoundedRectangle(cornerRadius: 12).fill(Color.surface1))
                 .allowsHitTesting(false)
         } else {
             Button {
                 withAnimation(reduceMotion ? nil : MoleMotion.panel, action)
             } label: { label }
-            .buttonStyle(.plain)
-            .liquidSurface(id, radius: 12)
+            .buttonStyle(MolePlainButtonStyle())
+            // Native glass is composed by the window-level container and can
+            // escape ScrollView clipping. Only the modal uses liquidSurface.
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.surface2))
+            .overlay(RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.hairline, lineWidth: 1)
+                .allowsHitTesting(false))
         }
     }
 }
@@ -90,21 +93,37 @@ struct LiquidActionButton: View {
 struct IslandLiquidSurface: ViewModifier {
     let shape: NotchShape
     let namespace: Namespace.ID
+    var isExpanded = true
+    var hasHardwareNotch = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency {
-            content
-                .glassEffect(.regular.tint(.black.opacity(0.25)), in: shape)
-                .glassEffectID("notch", in: namespace)
-                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-        } else {
-            content.background {
-                if reduceTransparency { shape.fill(Color.glassOpaque) }
-                else { shape.fill(.ultraThinMaterial) }
+    func body(content: Content) -> some View {
+        content
+            .background {
+                surface
+                    // Keep the glass mounted beneath a fading cap. The compact
+                    // handle has no bright rim; expansion reveals the same glass.
+                    .overlay {
+                        shape.fill(hasHardwareNotch ? Color.black : Color.islandHandleBackground)
+                            .opacity(isExpanded ? 0 : 1)
+                    }
+                    .allowsHitTesting(false)
             }
             .clipShape(shape)
+            .contentShape(shape)
+    }
+
+    @ViewBuilder private var surface: some View {
+        if #available(macOS 26.0, *), !reduceTransparency {
+            Color.clear
+                .glassEffect(Glass.regular.tint(Color.islandGlassTint), in: shape)
+                .glassEffectID("island.panel", in: namespace)
+                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+        } else if reduceTransparency {
+            shape.fill(Color.glassOpaque)
+        } else {
+            shape.fill(.ultraThinMaterial)
         }
     }
 }

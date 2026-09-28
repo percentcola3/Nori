@@ -52,7 +52,6 @@ struct DevEnvTabView: View {
             }
 
             HStack(spacing: 6) {
-                if state.isScanningEnv { ProgressView().controlSize(.mini) }
                 Text(state.devEnvStatus)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -64,7 +63,9 @@ struct DevEnvTabView: View {
                 DockerDetailsView(store: state.dockerInventory)
             }
 
-            if state.devEnvEntries.isEmpty && state.gcActions.isEmpty {
+            if state.isScanningEnv {
+                NoriScanActivity(text: state.devEnvStatus, assetName: "nori-typing")
+            } else if state.devEnvEntries.isEmpty && state.gcActions.isEmpty {
                 EmptyStateView(symbol: "cpu",
                                title: state.isScanningEnv ? l10n.t("devenv.status.scanning") : l10n.t("devenv.status.empty"),
                                subtitle: state.isScanningEnv ? nil : l10n.t("devenv.empty.subtitle"))

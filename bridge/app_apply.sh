@@ -31,7 +31,7 @@ simplemole_generic_cache_guard() {
     if [[ "${MOLE_TEST_MODE:-0}" == "1" && -n "${SIMPLEMOLE_TEST_FINAL_GUARD_LOG:-}" ]]; then
         printf 'generic\n' >> "$SIMPLEMOLE_TEST_FINAL_GUARD_LOG"
     fi
-    forgesweep_scan_path_is_physical "$candidate" || return 1
+    nori_scan_path_is_physical "$candidate" || return 1
     load_mole_whitelist
     is_path_whitelisted "$candidate" && return 1
     if simplemole_is_home_trash_item "$candidate"; then

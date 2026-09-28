@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MOLE_SRC="${MOLE_SRC:-$ROOT_DIR/vendor/mole}"
-TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/forgesweep-tests.XXXXXX")"
+TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/nori-tests.XXXXXX")"
 RUNTIME_DIR="$TEST_ROOT/runtime"
 PASSED=0
 AUTO_CLEANUP_FIXTURE=""
@@ -112,10 +112,10 @@ test_brand_contract() {
         fail "bundle name is not Nori"
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$info_plist")" == "Nori" ]] || \
         fail "bundle display name is not Nori"
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")" == "com.forgesweep.app" ]] || \
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$info_plist")" == "com.nori.app" ]] || \
         fail "bundle identifier still uses the previous brand"
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")" == "ForgeSweep" ]] || \
-        fail "bundle executable is not ForgeSweep"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$info_plist")" == "Nori" ]] || \
+        fail "bundle executable is not Nori"
     /usr/bin/grep -Fq 'appMenuItem.title = "Nori"' "$app_delegate" || \
         fail "system app menu does not use the Nori name"
     if /usr/bin/grep -Fq 'appMenuItem.image' "$app_delegate"; then
@@ -209,7 +209,6 @@ test_header_layout_contract() {
 test_process_icon_contract() {
     local component="$ROOT_DIR/SimpleMole/Views/ProcessAppIcon.swift"
     local processes="$ROOT_DIR/SimpleMole/Views/ProcessesTabView.swift"
-    local quick_panel="$ROOT_DIR/SimpleMole/Views/QuickPanelView.swift"
 
     [[ -f "$component" ]] || fail "shared process app icon component is missing"
     /usr/bin/grep -Fq 'NSRunningApplication(processIdentifier: row.pid)' "$component" || \
@@ -220,9 +219,7 @@ test_process_icon_contract() {
         fail "native process icons are not bound to the application launch identity"
     /usr/bin/grep -Fq 'ProcessAppIcon(row: row,' "$processes" || \
         fail "process cleanup does not render real application icons"
-    /usr/bin/grep -Fq 'ProcessAppIcon(row: row,' "$quick_panel" || \
-        fail "quick panel does not reuse the process icon component"
-    if /usr/bin/grep -Fq 'image.size =' "$component" "$quick_panel"; then
+    if /usr/bin/grep -Fq 'image.size =' "$component"; then
         fail "process icon rendering mutates shared NSImage dimensions"
     fi
 
@@ -234,7 +231,6 @@ test_island_contract() {
     local app_delegate="$ROOT_DIR/SimpleMole/AppDelegate.swift"
     local app_state="$ROOT_DIR/SimpleMole/AppState.swift"
     local components="$ROOT_DIR/SimpleMole/Views/Components.swift"
-    local quick_panel="$ROOT_DIR/SimpleMole/Views/QuickPanelView.swift"
     local l10n="$ROOT_DIR/SimpleMole/L10n/TablesProductivity.swift"
 
     [[ -f "$island" ]] || fail "floating island view is missing"
@@ -294,7 +290,6 @@ test_productivity_feature_contract() {
     local permission_view="$ROOT_DIR/SimpleMole/Views/PermissionCenterView.swift"
     local mole_engine="$ROOT_DIR/SimpleMole/Services/MoleEngine.swift"
     local analyze_view="$ROOT_DIR/SimpleMole/Views/AnalyzeTabView.swift"
-    local quick_panel="$ROOT_DIR/SimpleMole/Views/QuickPanelView.swift"
     local models="$ROOT_DIR/SimpleMole/Models.swift"
     local system_metrics="$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift"
 
@@ -310,18 +305,10 @@ test_productivity_feature_contract() {
     fi
     /usr/bin/grep -Fq 'cleanupOrphanNames(home: home, mode: mode, control: control)' \
         "$ROOT_DIR/SimpleMole/Services/NativeCore.swift" || fail "cleanup lost orphan correlation"
-    /usr/bin/grep -Fq 'state.requestQuickOptimizeFromQuickPanel()' "$quick_panel" || \
-        fail "quick panel does not use the feedback-aware Quick Clean entry point"
-    /usr/bin/grep -Fq 'func requestQuickOptimizeFromQuickPanel()' "$app_state" || \
-        fail "quick panel Quick Clean has no busy feedback path"
-    if /usr/bin/grep -Fq '.disabled(state.isBusy)' "$quick_panel"; then
-        fail "quick panel Quick Clean is still silently disabled by unrelated work"
-    fi
-    if /usr/bin/grep -Fq 'clipboardManager' "$quick_panel"; then
-        fail "quick panel still renders clipboard history"
-    fi
-    /usr/bin/grep -Fq 'ByteFormat.memoryShort(state.metrics.memoryTotalBytes)' "$quick_panel" || \
-        fail "quick panel physical memory still uses decimal disk formatting"
+    /usr/bin/grep -Fq 'button.action = #selector(openMainWindow(_:))' "$app_delegate" || \
+        fail "menu bar icon does not open the main window directly"
+    [[ ! -f "$ROOT_DIR/SimpleMole/Views/QuickPanelView.swift" ]] || \
+        fail "retired quick panel view is still present"
     /usr/bin/grep -Fq 'static func memoryShort(_ bytes: UInt64)' "$models" || \
         fail "memory has no hardware-capacity formatter"
     /usr/bin/grep -Fq 'internalPages: UInt64(info.internal_page_count)' "$system_metrics" || \
@@ -358,7 +345,7 @@ test_productivity_feature_contract() {
         fail "screenshot hotkey can start overlapping capture processes"
     /usr/bin/grep -Fq 'self.editorWindow?.isVisible != true' "$app_delegate" || \
         fail "closed screenshot editor still blocks future captures"
-    /usr/bin/grep -Fq 'com.forgesweep.screenshot.' "$screenshot_service" || \
+    /usr/bin/grep -Fq 'com.nori.screenshot.' "$screenshot_service" || \
         fail "screenshot capture does not use a private temporary directory"
     /usr/bin/grep -Fq 'removeItem(at: directory)' "$screenshot_service" || \
         fail "screenshot temporary directory is not cleaned"
@@ -548,14 +535,14 @@ test_scan_access_boundary() {
     printf 'session\n' > "$ai_session"
     printf 'protected-ai\n' > "$protected_ai"
 
-    if env HOME="$home" bash -c 'source "$1"; forgesweep_scan_path_allowed "$HOME/Documents"' \
+    if env HOME="$home" bash -c 'source "$1"; nori_scan_path_allowed "$HOME/Documents"' \
         _ "$helper"; then
         fail "protected Documents root was accepted without Full Disk Access"
     fi
-    env HOME="$home" bash -c 'source "$1"; forgesweep_scan_path_allowed "$HOME/.cache"' \
+    env HOME="$home" bash -c 'source "$1"; nori_scan_path_allowed "$HOME/.cache"' \
         _ "$helper" || fail "ordinary dot-cache path was incorrectly permission-gated"
     env HOME="$home" FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
-        bash -c 'source "$1"; forgesweep_scan_path_allowed "$HOME/Documents"' \
+        bash -c 'source "$1"; nori_scan_path_allowed "$HOME/Documents"' \
         _ "$helper" || fail "authorized protected root was rejected"
 
     output=$(env HOME="$home" TMPDIR="$TEST_ROOT" \
@@ -646,7 +633,7 @@ test_scan_access_boundary() {
         fail "AI scan followed a symlinked cache root"
 
     for scanner in app_dup_scan.sh app_env_scan.sh app_installer_scan.sh \
-        app_project_activity.sh app_project_radar.sh app_purge_scan.sh \
+        app_purge_guard.sh app_purge_scan.sh \
         app_slim_scan.sh; do
         /usr/bin/grep -Fq 'app_scan_access.sh' "$ROOT_DIR/bridge/$scanner" || \
             fail "$scanner bypasses the shared protected-path boundary"
@@ -775,10 +762,10 @@ test_developer_scan_boundary() {
 
     /usr/bin/grep -Fq 'app_scan_access.sh' "$ROOT_DIR/bridge/app_dev_scan.sh" || \
         fail "developer-cache scan bypasses the shared protected-path boundary"
-    /usr/bin/grep -Fq 'forgesweep_scan_path_is_physical "$path"' \
+    /usr/bin/grep -Fq 'nori_scan_path_is_physical "$path"' \
         "$ROOT_DIR/bridge/app_dev_scan.sh" || \
         fail "developer-cache scan lacks the physical-path guard"
-    /usr/bin/grep -Fq 'forgesweep_scan_path_is_physical "$candidate"' \
+    /usr/bin/grep -Fq 'nori_scan_path_is_physical "$candidate"' \
         "$ROOT_DIR/bridge/app_dev_apply.sh" || \
         fail "developer-cache apply lacks the physical-path guard"
 
@@ -877,7 +864,7 @@ test_developer_scan_boundary() {
 
     # The shared helper rejects the same redirected path independently of the
     # scanner, so future bridges cannot accidentally re-enable traversal.
-    if env HOME="$home" bash -c 'source "$1"; forgesweep_scan_path_is_physical "$HOME/.npm"' \
+    if env HOME="$home" bash -c 'source "$1"; nori_scan_path_is_physical "$HOME/.npm"' \
         _ "$RUNTIME_DIR/bin/app_scan_access.sh"; then
         fail "physical-path helper accepted a symlinked developer cache"
     fi
@@ -1072,20 +1059,20 @@ test_local_signing_identity() {
         fail "dev_identity.sh does not clean up key material"
 
     # dry-run never touches the keychain and reports the missing identity.
-    resolved=$(SM_DEV_IDENTITY_DRY_RUN=1 SM_LOCAL_SIGN_LABEL="ForgeSweep Test Missing $$" \
+    resolved=$(SM_DEV_IDENTITY_DRY_RUN=1 SM_LOCAL_SIGN_LABEL="Nori Test Missing $$" \
         bash "$identity_script" --ensure) || fail "dev_identity.sh --ensure dry-run failed"
     [[ "$resolved" == *"dry-run: would create"* ]] || fail "dev_identity.sh dry-run did not describe creation"
     status=0
-    SM_LOCAL_SIGN_LABEL="ForgeSweep Test Missing $$" bash "$identity_script" --print >/dev/null 2>&1 || status=$?
+    SM_LOCAL_SIGN_LABEL="Nori Test Missing $$" bash "$identity_script" --print >/dev/null 2>&1 || status=$?
     assert_status 3 "$status" "dev_identity.sh --print must fail when the identity is absent"
 
     # build.sh identity selection, driven by a canned find-identity listing.
-    resolved=$(SM_BUILD_RESOLVE_ONLY=1 SM_TEST_SIGNING_IDENTITIES=$'  1) AAAA "ForgeSweep Local Signing"\n     1 valid identities found' \
+    resolved=$(SM_BUILD_RESOLVE_ONLY=1 SM_TEST_SIGNING_IDENTITIES=$'  1) AAAA "Nori Local Signing"\n     1 valid identities found' \
         bash "$build_script" 2>/dev/null) || fail "build.sh rejected the local signing identity"
     [[ "$resolved" == *"kind=local"* ]] || fail "build.sh did not classify the local identity (got: $resolved)"
     [[ "$resolved" == *"identity=AAAA"* ]] || fail "build.sh must sign the local identity by hash (got: $resolved)"
 
-    resolved=$(SM_BUILD_RESOLVE_ONLY=1 SM_TEST_SIGNING_IDENTITIES=$'  1) AAAA "ForgeSweep Local Signing"\n  2) BBBB "Apple Development: Dev (TEAM1)"\n     2 valid identities found' \
+    resolved=$(SM_BUILD_RESOLVE_ONLY=1 SM_TEST_SIGNING_IDENTITIES=$'  1) AAAA "Nori Local Signing"\n  2) BBBB "Apple Development: Dev (TEAM1)"\n     2 valid identities found' \
         bash "$build_script" 2>/dev/null) || fail "build.sh failed with Apple + local identities"
     [[ "$resolved" == *"kind=development"* ]] || fail "build.sh must prefer Apple Development over the local identity"
 
@@ -1122,9 +1109,9 @@ test_local_signing_identity() {
         fail "full disk access has no granted-but-needs-relaunch detection"
     /usr/bin/grep -Fq 'permissions.disk.needsRelaunch' "$ROOT_DIR/SimpleMole/Views/PermissionCenterView.swift" || \
         fail "permission center does not offer a restart when full disk access is granted at the system level"
-    /usr/bin/grep -Fq 'Library/Logs/ForgeSweep' "$ROOT_DIR/SimpleMole/AppState.swift" || \
+    /usr/bin/grep -Fq 'Library/Logs/Nori' "$ROOT_DIR/SimpleMole/AppState.swift" || \
         fail "relaunch helper still logs to a world-writable /tmp path"
-    if /usr/bin/grep -Fq '/tmp/forgesweep-relaunch.log' "$ROOT_DIR/SimpleMole/AppState.swift"; then
+    if /usr/bin/grep -Fq '/tmp/nori-relaunch.log' "$ROOT_DIR/SimpleMole/AppState.swift"; then
         fail "relaunch helper still logs to /tmp"
     fi
     pass "local self-signed identity, build selection and permission self-healing contracts"
@@ -1219,8 +1206,6 @@ test_process_sampler() {
         fail "apps are not offered a graceful quit before force quit"
     /usr/bin/grep -Fq 'ports.status.readFailed' "$app_state" || \
         fail "port read failures are still shown as an empty list"
-    /usr/bin/grep -Fq 'quickPanelStatus = application.isTerminated' "$app_state" || \
-        fail "quick panel force quit does not report its result"
     /usr/bin/grep -Fq 'state.processSearch' "$processes_view" || fail "process list has no search"
     /usr/bin/grep -Fq 'state.processSort' "$processes_view" || fail "process list has no sort"
     /usr/bin/grep -Fq 'ProcessSparkline(' "$processes_view" || fail "process list has no trend line"
@@ -2583,7 +2568,7 @@ test_runtime_process_identity_binding() {
         'fi' > "$stub_dir/ps"
     printf '%s\n' \
         '#!/usr/bin/env bash' \
-        '[[ "${2:-}" == "ForgeSweep" && -n "${MOLE_TEST_FORGESWEEP_PID:-}" ]] && printf "%s\\n" "$MOLE_TEST_FORGESWEEP_PID"' \
+        '[[ "${2:-}" == "Nori" && -n "${MOLE_TEST_FORGESWEEP_PID:-}" ]] && printf "%s\\n" "$MOLE_TEST_FORGESWEEP_PID"' \
         'exit 0' > "$stub_dir/pgrep"
     printf '%s\n' \
         '#!/usr/bin/env bash' \
@@ -2644,7 +2629,7 @@ test_runtime_process_identity_binding() {
     output=$(MOLE_TEST_FORGESWEEP_PID=4322 run_runtime_fixture kill-group "4321|$start" 2>&1)
     rc=$?
     set -e
-    assert_status 3 "$rc" "runtime kill-group accepted a tree containing ForgeSweep"
+    assert_status 3 "$rc" "runtime kill-group accepted a tree containing Nori"
     [[ ! -s "$signal_log" ]] || fail "runtime kill-group signalled before self-protection completed"
 
     printf '' > "$signal_log"
@@ -2713,7 +2698,7 @@ test_runtime_process_identity_binding() {
         MOLE_TEST_KILL_BIN="$stub_dir/kill" MOLE_TEST_SIGNAL_LOG="$signal_log" MOLE_TEST_UID="$current_uid" \
         MOLE_TEST_STALE_STATE=E MOLE_TEST_REUSED_PID=4321
 
-    assert_stale_rejected_without_signal 3 "runtime cleanup-stale accepted the ForgeSweep tree" \
+    assert_stale_rejected_without_signal 3 "runtime cleanup-stale accepted the Nori tree" \
         MOLE_TEST_MODE=1 MOLE_TEST_PS_BIN="$stub_dir/ps" MOLE_TEST_PGREP_BIN="$stub_dir/pgrep" \
         MOLE_TEST_KILL_BIN="$stub_dir/kill" MOLE_TEST_SIGNAL_LOG="$signal_log" MOLE_TEST_UID="$current_uid" \
         MOLE_TEST_STALE_STATE=E MOLE_TEST_FORGESWEEP_PID=4321
@@ -2729,12 +2714,8 @@ test_runtime_process_identity_binding() {
 test_netmon_bridge() {
     local helper="$RUNTIME_DIR/bin/app_netmon.sh"
     local stub_dir="$TEST_ROOT/netmon-stub"
-    local fixture_cfg="$TEST_ROOT/netmon-clash.yaml"
-    local output="" rc=0
-
+    local output rc
     mkdir -p "$stub_dir"
-
-    # nettop：空格/点号进程名和 PID 数字后缀必须分开处理。
     printf '%s\n' \
         '#!/usr/bin/env bash' \
         'printf "time\\tinterface\\tstate\\tbytes_in\\tbytes_out\\n"' \
@@ -2762,23 +2743,6 @@ test_netmon_bridge() {
         '    else printf "   interface: utun9\\n"; fi' \
         'fi' \
         > "$stub_dir/route"
-    printf '%s\n' \
-        '#!/usr/bin/env bash' \
-        'printf "%s\\n" "$*" >> "$MOLE_TEST_CURL_ARGS"' \
-        'cat "${MOLE_TEST_CURL_BODY:-/dev/null}"' \
-        > "$stub_dir/curl"
-    printf '%s\n' \
-        '#!/usr/bin/env bash' \
-        'printf "/Applications/Clash Verge.app/Contents/MacOS/verge-mihomo -d /tmp/verge-data -f %s -ext-ctl-unix /tmp/verge/verge-mihomo.sock\\n" "$MOLE_TEST_CLASH_CFG"' \
-        > "$stub_dir/ps"
-    printf '%s\n' \
-        "external-controller: ''" \
-        'external-controller-unix: /tmp/verge/verge-mihomo.sock' \
-        'secret: testsecret' \
-        'mixed-port: 7897' \
-        'socks-port: 7891' \
-        'port: 7890' \
-        > "$fixture_cfg"
     chmod +x "$stub_dir"/*
 
     output=$(env MOLE_TEST_MODE=1 MOLE_TEST_NETTOP_BIN="$stub_dir/nettop" \
@@ -2814,51 +2778,13 @@ test_netmon_bridge() {
     [[ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" == "3" ]] || \
         fail "netmon routes accepted a non-address line: $output"
 
-    output=$(env MOLE_TEST_MODE=1 MOLE_TEST_CURL_BIN="$stub_dir/curl" \
-        MOLE_TEST_CURL_ARGS="$TEST_ROOT/netmon-curl-args" \
-        CLASH_ENDPOINT="unix:/tmp/verge/verge-mihomo.sock" \
-        CLASH_SECRET="s3cr3t" \
-        MOLE_TEST_CURL_BODY="$TEST_ROOT/netmon-curl-body" \
-        bash -c 'printf "{\"version\":\"test\"}" > "$MOLE_TEST_CURL_BODY"; bash "$0" clash' "$helper") || \
-        fail "netmon clash mode failed"
-    [[ "$output" == '{"version":"test"}' ]] || \
-        fail "netmon clash did not pass the controller body through: $output"
-    grep -Fq -- "--unix-socket /tmp/verge/verge-mihomo.sock" "$TEST_ROOT/netmon-curl-args" || \
-        fail "netmon clash did not use the unix socket"
-    grep -Fq -- "Authorization: Bearer s3cr3t" "$TEST_ROOT/netmon-curl-args" || \
-        fail "netmon clash did not send the bearer secret"
-
-    set +e
-    output=$(env MOLE_TEST_MODE=1 bash "$helper" clash 2>/dev/null)
-    rc=$?
-    set -e
-    assert_status 2 "$rc" "clash mode without an endpoint did not fail closed"
-
-    output=$(env MOLE_TEST_MODE=1 MOLE_TEST_PS_BIN="$stub_dir/ps" \
-        MOLE_TEST_CLASH_CFG="$fixture_cfg" \
-        bash "$helper" discover) || fail "netmon discover mode failed"
-    [[ "$output" == *"endpoint"$'\t'"unix:/tmp/verge/verge-mihomo.sock"* ]] || \
-        fail "netmon discover lost the unix endpoint: $output"
-    [[ "$output" == *"secret"$'\t'"testsecret"* ]] || \
-        fail "netmon discover lost the controller secret: $output"
-    [[ "$output" == *"mixedport"$'\t'"7897"* ]] || \
-        fail "netmon discover lost the mixed port: $output"
-    [[ "$output" == *"proxyport"$'\t'"7897"* \
-        && "$output" == *"proxyport"$'\t'"7891"* \
-        && "$output" == *"proxyport"$'\t'"7890"* ]] || \
-        fail "netmon discover lost a configured proxy port: $output"
-    [[ "$output" != *"mixedport"$'\t'"7891"* && "$output" != *"mixedport"$'\t'"7890"* ]] || \
-        fail "netmon discover mislabeled HTTP/SOCKS ports as mixed ports: $output"
-    [[ "$output" != *"endpoint"$'\t'"http:"* ]] || \
-        fail "netmon discover invented a TCP endpoint from an empty controller"
-
     set +e
     output=$(env MOLE_TEST_MODE=1 bash "$helper" bogus-mode 2>/dev/null)
     rc=$?
     set -e
     assert_status 2 "$rc" "netmon unknown mode did not fail closed"
 
-    pass "netmon bridge byte, flow, route, clash and discovery contracts"
+    pass "netmon bridge byte, flow and route contracts"
 }
 
 test_dev_env_current_version_lock() {
@@ -3080,7 +3006,6 @@ test_cleanup_risk_policy() {
         "$ROOT_DIR/SimpleMole/Services/CleanupCache.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
-        "$ROOT_DIR/SimpleMole/Services/QuickAnalysisWorker.swift" \
         "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
         "$ROOT_DIR/script/CleanupRiskPolicyTests.swift" \
         -o "$binary" || fail "compile cleanup risk policy tests"
@@ -3094,34 +3019,11 @@ test_inventory_components() {
     pass "simulator and Docker inventory safety contracts"
 }
 
-test_project_automation() {
+test_scheduled_automation() {
     if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
-        local arch binary module_cache
-        arch="$(uname -m)"
-        binary="$TEST_ROOT/project-automation-tests"
-        module_cache="$TEST_ROOT/project-automation-module-cache"
-        mkdir -p "$module_cache"
-        swiftc -target "$arch-apple-macos13.0" \
-            -module-cache-path "$module_cache" \
-            -DPROJECT_RADAR_PARSER_TESTS -DPROJECT_HIBERNATION_PARSER_TESTS \
-            "$ROOT_DIR/SimpleMole/Models.swift" \
-            "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
-            "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
-            "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
-            "$ROOT_DIR/SimpleMole/Services/AutomationPolicy.swift" \
-            "$ROOT_DIR/SimpleMole/Services/SavedScanLocation.swift" \
-            "$ROOT_DIR/SimpleMole/Services/AutomationStore.swift" \
-            "$ROOT_DIR/SimpleMole/Services/SmartTriggerEvaluator.swift" \
-            "$ROOT_DIR/SimpleMole/Services/ProjectRadar.swift" \
-            "$ROOT_DIR/SimpleMole/Services/ProjectHibernation.swift" \
-            "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
-            "$ROOT_DIR/script/ProjectAutomationTests.swift" \
-            -o "$binary" || fail "compile project automation tests"
-        "$binary" || fail "project automation Swift tests"
+        bash "$ROOT_DIR/script/test_scheduled_automation.sh" || fail "scheduled automation tests"
     fi
-    bash "$ROOT_DIR/script/ProjectAutomationBridgeTests.sh" || \
-        fail "project automation bridge tests"
-    pass "project radar, hibernation, restore and typed automation contracts"
+    pass "scheduled automation and retired-rule migration"
 }
 
 test_cleanup_execution_accounting() {
@@ -3206,7 +3108,7 @@ test_swift() {
     fi
     SDKROOT="$typecheck_sdkroot" swiftc -typecheck -target "$arch-apple-macos13.0" \
         -module-cache-path "$TEST_ROOT/swift-module-cache" \
-        -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit \
+        -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement \
         "${swift_sources[@]}" || fail "Swift typecheck"
     pass "Swift typecheck"
 
@@ -3215,18 +3117,21 @@ test_swift() {
             SM_CODESIGN_IDENTITY="${SM_TEST_CODESIGN_IDENTITY:--}" SM_ALLOW_ADHOC=1 \
             "$ROOT_DIR/script/build.sh" || fail "app build"
         for built_arch in ${SM_TEST_BUILD_ARCHS:-$arch}; do
-            codesign --verify --deep --strict "$ROOT_DIR/dist/$built_arch/ForgeSweep.app" || \
+            codesign --verify --deep --strict "$ROOT_DIR/dist/$built_arch/Nori.app" || \
                 fail "app code signature ($built_arch)"
         done
         pass "app build and code signature"
     fi
 }
 
-printf 'ForgeSweep local regression tests\n'
+printf 'Nori local regression tests\n'
 test_shell_syntax
 if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
+    bash "$ROOT_DIR/script/test_cleanup_refresh.sh" || fail "post-cleanup inventory refresh tests"
     bash "$ROOT_DIR/script/test_disk_analysis.sh" || fail "directory analysis tests"
+    bash "$ROOT_DIR/script/test_login_item.sh" || fail "login item opt-in and system status tests"
+    bash "$ROOT_DIR/script/test_uninstall_residue.sh" || fail "uninstall residue discovery and result tests"
 fi
 test_native_core_ownership_contract
 test_plists
@@ -3279,7 +3184,7 @@ test_auto_cleanup_planner
 test_cleanup_risk_policy
 test_cleanup_execution_accounting
 test_inventory_components
-test_project_automation
+test_scheduled_automation
 test_clipboard_history
 test_swift
 printf 'All %d checks passed.\n' "$PASSED"
