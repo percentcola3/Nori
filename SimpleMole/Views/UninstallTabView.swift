@@ -90,17 +90,22 @@ struct UninstallTabView: View {
         if state.isScanningApps && !state.uninstallQueue.hasWork { return nil }
         return state.uninstallQueue.activeJob
             ?? state.uninstallQueue.jobs.first { $0.state.isPending }
-            ?? state.uninstallQueue.jobs.last { $0.state.isFinished }
+            ?? state.uninstallQueue.jobs.last { job in
+                job.state == .failed
+                    || (job.state == .succeeded && job.message?.contains("\n") == true)
+            }
     }
 
     private var statusRow: some View {
         HStack(spacing: 8) {
             if let job = statusJob {
-                NoriStatusAnimation(mood: job.state == .succeeded ? .success
-                                    : job.state == .failed ? .attention : .working,
-                                    size: 64,
-                                    assetName: job.state.isActive ? "nori-uninstalling" : nil)
-                    .id(job.id)
+                if job.state.isActive || job.state.isPending {
+                    NoriStatusAnimation(mood: .working, size: 64, assetName: "nori-uninstalling")
+                        .id(job.id)
+                } else if job.state == .failed {
+                    NoriStatusAnimation(mood: .attention, size: 44)
+                        .id(job.id)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(job.message?.components(separatedBy: "\n").first ?? job.app.name)
                         .font(.system(size: 11, weight: .medium))

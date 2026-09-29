@@ -44,6 +44,12 @@ struct NoriBrandTests {
         precondition(NoriCleanupFeedback.mood(removed: 0, skipped: 0, failed: 0) == .idle)
         precondition(NoriCleanupFeedback.mood(removed: 4, skipped: 1, failed: 0) == .attention)
         precondition(NoriCleanupFeedback.mood(removed: 4, skipped: 0, failed: 1) == .attention)
+        precondition(NoriHeaderReaction.mood(succeeded: true) == .success)
+        precondition(NoriHeaderReaction.mood(succeeded: false) == .attention)
+        precondition(NoriHeaderReaction.mood(succeeded: true, cancelled: true) == nil)
+        precondition(NoriHeaderReaction.mood(removed: 2, skipped: 0, failed: 0) == .success)
+        precondition(NoriHeaderReaction.mood(removed: 0, skipped: 0, failed: 1) == .attention)
+        precondition(NoriHeaderReaction.mood(removed: 0, skipped: 0, failed: 0) == nil)
         let support = URL(fileURLWithPath: CommandLine.arguments[1])
         for (name, dimension) in [("AppIcon-1024.png",1024), ("HeaderBrandIcon.png",256),
                                   ("MenuBarIconTemplate.png",18), ("MenuBarIconTemplate@2x.png",36)] {

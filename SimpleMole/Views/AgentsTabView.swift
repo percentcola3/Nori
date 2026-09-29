@@ -15,7 +15,7 @@ struct AgentsTabView: View {
             header
             if state.agentScanning || state.agentApplying {
                 VStack(spacing: 12) {
-                    NoriStatusAnimation(mood: .working, size: 96)
+                    NoriStatusAnimation(mood: .working, size: 156)
                     Text(state.agentStatus).font(.system(size: 12))
                     ProgressView().controlSize(.small)
                 }
@@ -23,7 +23,7 @@ struct AgentsTabView: View {
             } else if !state.agentHasScanned {
                 emptyState
             } else {
-                statusRow
+                if showsAgentNotice { statusRow }
                 PillPicker(items: [l10n.t("agents.section.space"),
                                    l10n.tf("agents.section.skills", state.agentSkills.count),
                                    l10n.tf("agents.section.mcp", state.agentServers.count)],
@@ -46,13 +46,6 @@ struct AgentsTabView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(l10n.t("agents.title"))
-                    .font(.system(size: 13, weight: .semibold))
-                Text(l10n.t("agents.subtitle"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-            }
             Spacer()
             Button { state.requestScanAccess(.aiScan) } label: {
                 Label(state.agentHasScanned ? l10n.t("agents.rescan") : l10n.t("agents.scan"),
@@ -68,7 +61,7 @@ struct AgentsTabView: View {
 
     private var emptyState: some View {
         VStack(spacing: 12) {
-            NoriStatusAnimation(mood: .idle, size: 76)
+            NoriStatusAnimation(mood: .idle, size: 120, assetName: "nori-coffee")
             Text(l10n.t("agents.empty.hint"))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
@@ -78,10 +71,15 @@ struct AgentsTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// 成功之后直接进入结果列表。只有失败或未完成扫描才留一条说明。
+    private var showsAgentNotice: Bool {
+        state.agentOutcomeMood == .attention || !state.agentScanComplete
+    }
+
     private var statusRow: some View {
         HStack(spacing: 8) {
-            if let mood = state.agentOutcomeMood {
-                NoriStatusAnimation(mood: mood, size: 44)
+            if state.agentOutcomeMood == .attention {
+                NoriStatusAnimation(mood: .attention, size: 44)
             }
             Text(state.agentStatus)
                 .font(.system(size: 11))

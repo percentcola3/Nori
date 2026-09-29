@@ -71,10 +71,21 @@ struct MainWindowView: View {
         HStack(spacing: 8) {
             Color.clear.frame(width: 66, height: 1)
             HeaderBrandIconView(size: 20, isSearching: state.isScanning,
-                                searchSucceeded: state.cleanupScanComplete, isWorking: state.isBusy)
+                                searchSucceeded: state.cleanupScanComplete, isWorking: state.isBusy,
+                                reactionID: state.headerReactionID,
+                                reactionMood: state.headerReactionMood)
             Text(l10n.t("window.title"))
                 .font(.system(size: 13, weight: .semibold))
             Spacer()
+            Button {
+                NSApp.terminate(nil)
+            } label: {
+                Label(l10n.t("settings.quit"), systemImage: "power")
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(Color.warning)
+            .help(l10n.t("settings.quit.hint"))
         }
         .frame(height: 28)
         .padding(.horizontal, 10)

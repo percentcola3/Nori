@@ -33,6 +33,9 @@ extension AppState {
             agentScanning = false
             agentHasScanned = true
             agentScanComplete = report.complete
+            if completionStatus == nil {
+                noteHeaderReaction(report.complete ? .success : .attention)
+            }
             if !report.complete {
                 // 计量被预算截断时不预选任何项，避免按不完整的占用做决定。
                 for index in agentCategories.indices { agentCategories[index].selected = false }
@@ -107,6 +110,7 @@ extension AppState {
             let skipped = outcome.summary.skipped + outcome.refused
             let failed = outcome.summary.failed
             agentOutcomeMood = NoriCleanupFeedback.mood(removed: removed, skipped: skipped, failed: failed)
+            noteHeaderReaction(NoriHeaderReaction.mood(removed: removed, skipped: skipped, failed: failed))
             let summary = L10n.shared.tf("cleanup.execution.summary", removed, skipped, failed)
             log(summary)
             scanAgents(completionStatus: summary)

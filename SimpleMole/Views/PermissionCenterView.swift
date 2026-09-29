@@ -19,49 +19,65 @@ struct PermissionCenterView: View {
     @ObservedObject private var permissions: PermissionCenter
     @ObservedObject private var l10n = L10n.shared
 
-    init(state: AppState) {
+    /// 设置页内直接展示时不带弹层标题、底栏和固定尺寸。
+    var embedded = false
+
+    init(state: AppState, embedded: Bool = false) {
         self.state = state
+        self.embedded = embedded
         _permissions = ObservedObject(wrappedValue: state.permissionCenter)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollView {
-                VStack(spacing: 12) {
-                    if permissions.signingWarningNeeded {
-                        signingBanner
+        Group {
+            if embedded {
+                permissionCards
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 8)
+            } else {
+                VStack(spacing: 0) {
+                    header
+                    Divider()
+                    ScrollView {
+                        permissionCards
+                            .padding(18)
                     }
-                    if let repairKey = permissions.repairMessageKey {
-                        notice(l10n.t(repairKey),
-                               icon: repairKey.hasSuffix("failed")
-                                   ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
-                               tint: repairKey.hasSuffix("failed") ? .warning : .success)
-                    } else if let errorKey = permissions.diskAuthorizationErrorKey,
-                              diskPhase == .missing {
-                        notice(l10n.t(errorKey), icon: "exclamationmark.triangle.fill", tint: .warning)
-                    }
-
-                    diskAccessCard
-                    screenRecordingCard
-
-                    Label(l10n.t("permissions.noAccessibility"), systemImage: "checkmark.shield")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 4)
+                    Divider()
+                    footer
                 }
-                .padding(18)
+                .frame(width: 580, height: 500)
             }
-            Divider()
-            footer
         }
-        .frame(width: 580, height: 500)
         .animation(MoleMotion.control, value: diskPhase)
         .animation(MoleMotion.control, value: screenPhase)
         .task { await pollWhileVisible() }
         .onDisappear { permissions.clearRepairMessage() }
+    }
+
+    private var permissionCards: some View {
+        VStack(spacing: 12) {
+            if permissions.signingWarningNeeded {
+                signingBanner
+            }
+            if let repairKey = permissions.repairMessageKey {
+                notice(l10n.t(repairKey),
+                       icon: repairKey.hasSuffix("failed")
+                           ? "exclamationmark.triangle.fill" : "checkmark.circle.fill",
+                       tint: repairKey.hasSuffix("failed") ? .warning : .success)
+            } else if let errorKey = permissions.diskAuthorizationErrorKey,
+                      diskPhase == .missing {
+                notice(l10n.t(errorKey), icon: "exclamationmark.triangle.fill", tint: .warning)
+            }
+
+            diskAccessCard
+            screenRecordingCard
+
+            Label(l10n.t("permissions.noAccessibility"), systemImage: "checkmark.shield")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 4)
+        }
     }
 
     // MARK: - 阶段

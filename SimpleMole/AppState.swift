@@ -53,6 +53,13 @@ final class AppState: ObservableObject {
         var id: String { rawValue }
     }
 
+    /// 灵动岛贴在屏幕顶边的哪一侧。
+    enum IslandEdge: String, CaseIterable, Identifiable {
+        case top, left, right
+        var id: String { rawValue }
+        var labelKey: String { "settings.island.edge.\(rawValue)" }
+    }
+
     @Published var selectedTab = 0
     /// 用户隐藏的页面（UserDefaults 持久化）。
     @Published var hiddenPages: Set<String> = []
@@ -62,10 +69,12 @@ final class AppState: ObservableObject {
     // 顶部刘海：悬停展开指标与资源排行，箭头直接打开主窗口。
 
     @Published var islandEnabled = true
-    /// 菜单栏状态图标开关：与灵动岛至少保留一个后台入口。
+    /// 菜单栏状态图标开关。灵动岛始终保留，菜单栏图标可以单独关闭。
     @Published var menuBarIconVisible = true
     /// 至少保留一项；这里控制刘海中的常驻指标。
     @Published var islandItems: Set<IslandItem> = [.cpu, .memory, .network]
+    /// 灵动岛贴在屏幕顶边的位置：居中、靠左或靠右。
+    @Published var islandEdge: IslandEdge = .top
 
     func setIslandEnabled(_ enabled: Bool) {
         if !enabled && !menuBarIconVisible { setMenuBarIconVisible(true) }
@@ -77,6 +86,11 @@ final class AppState: ObservableObject {
         if !visible && !islandEnabled { setIslandEnabled(true) }
         menuBarIconVisible = visible
         UserDefaults.standard.set(visible, forKey: "SMMenuBarIconVisible")
+    }
+
+    func setIslandEdge(_ edge: IslandEdge) {
+        islandEdge = edge
+        UserDefaults.standard.set(edge.rawValue, forKey: "SMIslandEdge")
     }
 
     func setIslandItem(_ item: IslandItem, enabled: Bool) {
@@ -143,6 +157,15 @@ final class AppState: ObservableObject {
     @Published var isScanning = false
     @Published var cleanupOutcomeMood: NoriMood?
     @Published var cleanupFeedbackID = 0
+    /// Bumps once per finished user task so the title-bar mascot can celebrate or warn.
+    @Published var headerReactionID = 0
+    @Published var headerReactionMood: NoriMood = .success
+
+    func noteHeaderReaction(_ mood: NoriMood?) {
+        guard let mood, mood == .success || mood == .attention else { return }
+        headerReactionID += 1
+        headerReactionMood = mood
+    }
     @Published var isApplying = false
     @Published var cleanupScanComplete = true
     @Published var statusText: String
@@ -646,8 +669,10 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(Array(sanitizedHiddenPages), forKey: "SMHiddenPages")
         clipboardHistoryEnabled = UserDefaults.standard.object(forKey: "SMClipboardHistory") as? Bool ?? false
         screenshotHotKeyEnabled = UserDefaults.standard.object(forKey: "SMShotHotKey") as? Bool ?? true
-        islandEnabled = UserDefaults.standard.object(forKey: "SMIslandEnabled") as? Bool ?? true
+        islandEnabled = true
+        UserDefaults.standard.set(true, forKey: "SMIslandEnabled")
         menuBarIconVisible = UserDefaults.standard.object(forKey: "SMMenuBarIconVisible") as? Bool ?? true
+        islandEdge = IslandEdge(rawValue: UserDefaults.standard.string(forKey: "SMIslandEdge") ?? "") ?? .top
         let knownItems = Set(IslandItem.allCases.map(\.rawValue))
         let savedItems = Set(UserDefaults.standard.stringArray(forKey: "SMIslandItems") ?? []).intersection(knownItems)
         islandItems = savedItems.isEmpty
@@ -1013,6 +1038,7 @@ final class AppState: ObservableObject {
                 }
                 finishCleanupProgress()
                 isScanning = false
+                noteHeaderReaction(cleanupScanComplete ? .success : .attention)
                 let minutes = max(1, Int(cached.age / 60))
                 statusText = cleanupScanComplete
                     ? l10n.tf("status.cacheRestored", minutes)
@@ -1040,6 +1066,7 @@ final class AppState: ObservableObject {
             }
             finishCleanupProgress()
             isScanning = false
+            noteHeaderReaction(cleanupScanComplete ? .success : .attention)
 
             scan.results.filter { !$0.succeeded }.forEach { logFailure($0) }
             if combined.isEmpty {
@@ -1096,6 +1123,7 @@ final class AppState: ObservableObject {
             let inspected = await NativeCore.shared.inspectOptimize(tasks: requested)
             self.optimizeTasks = inspected
             self.isOptimizing = false
+            self.noteHeaderReaction(.success)
             let needed = inspected.filter(\.selectable).count
             self.optimizeStatus = self.l10n.tf("optimize.status.inspected", needed, self.optimizeSelectedCount)
         }
@@ -1161,6 +1189,7 @@ final class AppState: ObservableObject {
             self.isOptimizing = false
             let applied = tasks.filter { $0.state == .applied }.count
             let failed = tasks.filter { $0.state == .failed }.count
+            self.noteHeaderReaction(failed > 0 ? .attention : (applied > 0 ? .success : nil))
             self.optimizeStatus = self.l10n.tf("optimize.status.done", applied, failed)
             self.log(self.l10n.tf("optimize.log.done", applied, failed))
             for task in tasks where task.state != .pending {
@@ -1313,6 +1342,7 @@ final class AppState: ObservableObject {
                 timedOut: false)
             isScanning = false
             cleanupScanComplete = result.succeeded && runtime.succeeded
+            noteHeaderReaction(cleanupScanComplete ? .success : .attention)
             // 运行态保护交给执行前的重新评估。
             categories = Parsers.toolCategories(result.output)
                 .sorted(by: CleanupCategory.sizeDescending)
@@ -1354,6 +1384,7 @@ final class AppState: ObservableObject {
                 arguments: [NSUserName(), NSHomeDirectory()])
             systemScanning = false
             systemScanComplete = result.succeeded
+            noteHeaderReaction(result.succeeded ? .success : .attention)
             systemEntries = result.succeeded
                 ? Parsers.systemDataEntries(result.output)
                 : []
@@ -1463,6 +1494,7 @@ final class AppState: ObservableObject {
                             selectionDigest])
             try? FileManager.default.removeItem(at: selectionURL)
             systemApplying = false
+            noteHeaderReaction(result.succeeded ? .success : .attention)
             if !result.output.isEmpty { log(result.output) }
             logFailure(result, stdoutAlreadyLogged: true)
             let summary = Parsers.systemApplySummary(result.output)
@@ -1676,6 +1708,7 @@ final class AppState: ObservableObject {
     private func reportCleanupResult(_ result: CleanupExecutionResult,
                                      permanently: Bool) {
         cleanupOutcomeMood = NoriCleanupFeedback.mood(removed: result.removed, skipped: result.skipped, failed: result.failed)
+        noteHeaderReaction(NoriHeaderReaction.mood(removed: result.removed, skipped: result.skipped, failed: result.failed))
         cleanupFeedbackID += 1
         analyzeCache.clear()
         // 报告文案与执行器的实际动作一致：永久删除与移入废纸篓分开表述。
@@ -2300,8 +2333,9 @@ final class AppState: ObservableObject {
 
             let missing = apps.filter { uninstallPlans[$0.id] == nil }
             let batchSize = 4
+            var superseded = false
             for start in stride(from: 0, to: missing.count, by: batchSize) {
-                guard generation == uninstallInventoryGeneration else { break }
+                guard generation == uninstallInventoryGeneration else { superseded = true; break }
                 let end = min(start + batchSize, missing.count)
                 let batch = Array(missing[start..<end])
                 let plans = await withTaskGroup(
@@ -2318,7 +2352,7 @@ final class AppState: ObservableObject {
                     for await plan in group { output.append(plan) }
                     return output
                 }
-                guard generation == uninstallInventoryGeneration else { break }
+                guard generation == uninstallInventoryGeneration else { superseded = true; break }
                 var updatedPlans = uninstallPlans
                 for (id, plan) in plans {
                     if let plan { updatedPlans[id] = plan }
@@ -2327,6 +2361,7 @@ final class AppState: ObservableObject {
                 persistUninstallInventory()
             }
             isScanningApps = false
+            if !background && !superseded { noteHeaderReaction(.success) }
         }
     }
 
@@ -2457,6 +2492,7 @@ final class AppState: ObservableObject {
 
     private func finishUninstall(_ job: UninstallJob, succeeded: Bool, message: String) {
         uninstallQueue.finish(job.id, succeeded: succeeded, message: message)
+        noteHeaderReaction(succeeded ? .success : .attention)
         statusText = message
         log(message)
     }
@@ -2518,7 +2554,7 @@ final class AppState: ObservableObject {
 
     // MARK: - 开发环境
 
-    func scanDevEnv() {
+    func scanDevEnv(announce: Bool = true) {
         guard authorize(.developmentEnvironmentScan,
                         presentingPermissionCenter: true) else { return }
         guard !isBusy else { return }
@@ -2531,6 +2567,7 @@ final class AppState: ObservableObject {
                 "bin/app_env_scan.sh", extraEnvironment: scanEnvironment,
                 timeout: 180)
             isScanningEnv = false
+            if announce { noteHeaderReaction(result.succeeded ? .success : .attention) }
             devEnvEntries = Parsers.devEnvEntries(result.output)
             devEnvSelection.removeAll()
             let runtimeCount = devEnvEntries.filter { !$0.isManager }.count
@@ -2571,13 +2608,14 @@ final class AppState: ObservableObject {
                     self.logFailure(result, stdoutAlreadyLogged: true)
                     let summary = Parsers.applySummary(result.output)
                     let fullySucceeded = result.succeeded && summary.failed == 0
+                    self.noteHeaderReaction(fullySucceeded ? .success : .attention)
                     self.statusText = fullySucceeded
                         ? self.l10n.tf("status.envDone", summary.removed)
                         : self.l10n.tf("status.envPartial", summary.failed)
                     self.log(fullySucceeded
                         ? self.l10n.tf("log.envDone", summary.removed)
                         : self.l10n.tf("log.envPartial", summary.removed, summary.failed))
-                    self.scanDevEnv()
+                    self.scanDevEnv(announce: false)
                     // 环境删除可能让 PATH 条目/初始化块失效：重跑体检引导用户处理。
                     self.runConfigAudits(force: true)
                     self.log(self.l10n.t("log.envRcHint"))
@@ -2618,6 +2656,7 @@ final class AppState: ObservableObject {
                         "bin/app_gc_run.sh", arguments: [action.id],
                         timeout: 1200, onLine: self.streamLog)
                     self.gcRunningId = nil
+                    self.noteHeaderReaction(result.succeeded ? .success : .attention)
                     self.statusText = result.succeeded
                         ? self.l10n.t("gc.finished")
                         : self.l10n.t("gc.failed")
@@ -2705,6 +2744,9 @@ final class AppState: ObservableObject {
             // traversal as the cached inventory for later navigation.
             if !control.isCancelled { analyzeCache.store(report) }
             showAnalyzeReport(report)
+            noteHeaderReaction(NoriHeaderReaction.mood(
+                succeeded: report.error == nil && report.isPartial != true,
+                cancelled: control.isCancelled))
         }
     }
 
@@ -2762,6 +2804,7 @@ final class AppState: ObservableObject {
                     let result = await MoleEngine.shared.runPrivilegedBridge(
                         "bin/app_snapshots_thin.sh", arguments: [], timeout: 300)
                     self.isThinning = false
+                    self.noteHeaderReaction(result.succeeded ? .success : .attention)
                     if result.succeeded {
                         let names = result.output.components(separatedBy: "\n")
                             .map { $0.trimmingCharacters(in: .whitespaces) }

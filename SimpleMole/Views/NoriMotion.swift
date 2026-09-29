@@ -107,3 +107,16 @@ enum NoriCleanupFeedback {
         return removed > 0 ? .success : .idle
     }
 }
+
+/// Title-bar reactions are one-shot. Cancellation and a no-op stay quiet.
+enum NoriHeaderReaction {
+    static func mood(succeeded: Bool, cancelled: Bool = false) -> NoriMood? {
+        if cancelled { return nil }
+        return succeeded ? .success : .attention
+    }
+
+    static func mood(removed: Int, skipped: Int, failed: Int) -> NoriMood? {
+        let outcome = NoriCleanupFeedback.mood(removed: removed, skipped: skipped, failed: failed)
+        return outcome == .idle ? nil : outcome
+    }
+}

@@ -44,13 +44,6 @@ struct SystemDataView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(l10n.t("system.title"))
-                    .font(.system(size: 13, weight: .semibold))
-                Text(l10n.t("system.subtitle"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-            }
             Spacer()
             if state.systemHasResult {
                 Button {

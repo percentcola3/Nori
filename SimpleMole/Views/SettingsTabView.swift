@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 // MARK: - 设置面板（语言 + 灵动岛 + 工具 + 功能页显隐）
@@ -9,11 +8,13 @@ private struct SettingsSection<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.leading, 2)
+        VStack(alignment: .leading, spacing: title.isEmpty ? 0 : 9) {
+            if !title.isEmpty {
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 2)
+            }
             VStack(alignment: .leading, spacing: 0) {
                 content()
             }
@@ -64,30 +65,17 @@ struct SettingsTabView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text(l10n.t("settings.title"))
-                    .font(.system(size: 18, weight: .semibold))
+                pagesSection
                 languageSection
                 startupSection
-                SettingsSection(title: l10n.t("automation.menu")) {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], spacing: 12) {
-                        LiquidActionButton(id: "autoCleanup", title: l10n.t("auto.header"), symbol: "folder.badge.clock") {
-                            state.showAutoCleanupSheet = true
-                        }
-                        LiquidActionButton(id: "automation", title: l10n.t("automation.header"), symbol: "gearshape.2") {
-                            state.openAutomationSettings()
-                        }
-                        LiquidActionButton(id: "whitelist", title: l10n.t("header.whitelist"), symbol: "shield.lefthalf.filled") {
-                            state.showWhitelistSheet = true
-                        }
-                        LiquidActionButton(id: "permissions", title: l10n.t("permissions.title"), symbol: "lock.shield") {
-                            state.presentPermissionCenter()
-                        }
-                    }
-                    .padding(12)
-                }
+                screenshotSection
                 islandSection
-                toolsSection
-                pagesSection
+                maintenanceSection
+                SettingsSection(title: l10n.t("permissions.title")) {
+                    PermissionCenterView(state: state, embedded: true)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                }
             }
             .frame(maxWidth: 740, alignment: .leading)
             .padding(20)
@@ -105,7 +93,7 @@ struct SettingsTabView: View {
 
     private var startupSection: some View {
         SettingsSection(title: l10n.t("settings.startup")) {
-            SettingsRow(divider: true) {
+            SettingsRow {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle(l10n.t("settings.launchAtLogin"), isOn: Binding(
                         get: { loginItem.isRequested },
@@ -134,21 +122,6 @@ struct SettingsTabView: View {
                             .foregroundStyle(Color.warning)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                }
-            }
-            SettingsRow {
-                HStack(spacing: 12) {
-                    Text(l10n.t("settings.quit.hint"))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 8)
-                    Button {
-                        NSApp.terminate(nil)
-                    } label: {
-                        Label(l10n.t("settings.quit"), systemImage: "power")
-                    }
-                    .buttonStyle(DangerButtonStyle())
                 }
             }
         }
@@ -229,24 +202,29 @@ struct SettingsTabView: View {
                     .font(.system(size: 12))
             }
 
-            SettingsRow(divider: state.islandEnabled) {
-                Toggle(l10n.t("settings.island"), isOn: islandEnabledBinding)
-                    .toggleStyle(MoleSwitchToggleStyle())
-                    .controlSize(.small)
-                    .tint(Color.moleAccentText)
-                    .font(.system(size: 12))
+            SettingsRow(divider: true, vertical: 10) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(l10n.t("settings.island.edge"))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    Picker(l10n.t("settings.island.edge"), selection: islandEdgeBinding) {
+                        ForEach(AppState.IslandEdge.allCases) { edge in
+                            Text(l10n.t(edge.labelKey)).tag(edge)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
             }
 
-            if state.islandEnabled {
-                SettingsRow(divider: true, vertical: 10) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(l10n.t("island.items"))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.secondary)
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 94), spacing: 6)], spacing: 6) {
-                            ForEach(AppState.IslandItem.allCases) { item in
-                                islandItemChip(item)
-                            }
+            SettingsRow(divider: true, vertical: 10) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(l10n.t("island.items"))
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 94), spacing: 6)], spacing: 6) {
+                        ForEach(AppState.IslandItem.allCases) { item in
+                            islandItemChip(item)
                         }
                     }
                 }
@@ -297,10 +275,86 @@ struct SettingsTabView: View {
         .help(isLastRemaining ? l10n.t("settings.island.keepOne") : "")
     }
 
-    // MARK: 剪贴板与截图
+    // MARK: 截图
 
-    private var toolsSection: some View {
-        SettingsSection(title: l10n.t("settings.tools")) {
+    private var screenshotSection: some View {
+        SettingsSection(title: "") {
+            SettingsRow(divider: state.screenshotHotKeyRegistrationFailed) {
+                Toggle(l10n.t("shot.hotkey"), isOn: $state.screenshotHotKeyEnabled)
+                    .toggleStyle(MoleSwitchToggleStyle())
+                    .controlSize(.small)
+                    .tint(Color.moleAccentText)
+                    .font(.system(size: 12))
+            }
+            if state.screenshotHotKeyRegistrationFailed {
+                SettingsRow(vertical: 6) {
+                    Label(l10n.t("settings.screenshot.conflict"), systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Color.warning)
+                }
+            }
+        }
+    }
+
+    // MARK: 目录清理与定时清理
+
+    private var maintenanceSection: some View {
+        SettingsSection(title: "") {
+            SettingsRow(divider: true) {
+                actionRow(title: l10n.t("auto.header"),
+                          detail: l10n.t("auto.empty.subtitle"),
+                          symbol: "folder.badge.clock") {
+                    state.showAutoCleanupSheet = true
+                }
+            }
+            SettingsRow(divider: true) {
+                actionRow(title: l10n.t("automation.triggers"),
+                          detail: l10n.t("automation.subtitle"),
+                          symbol: "clock.badge.checkmark") {
+                    state.openAutomationSettings()
+                }
+            }
+            SettingsRow {
+                actionRow(title: l10n.t("header.whitelist"),
+                          detail: l10n.t("wl.subtitle"),
+                          symbol: "shield.lefthalf.filled") {
+                    state.showWhitelistSheet = true
+                }
+            }
+        }
+    }
+
+    private func actionRow(title: String, detail: String, symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.moleAccentText)
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.primary)
+                    Text(detail)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: 功能页显隐
+
+    private var pagesSection: some View {
+        SettingsSection(title: l10n.t("settings.pages")) {
             SettingsRow(divider: true) {
                 Toggle(l10n.t("clip.title"), isOn: $state.clipboardHistoryEnabled)
                     .toggleStyle(MoleSwitchToggleStyle())
@@ -336,41 +390,6 @@ struct SettingsTabView: View {
                     }
                 }
             }
-            SettingsRow(divider: true) {
-                Toggle(l10n.t("shot.hotkey"), isOn: $state.screenshotHotKeyEnabled)
-                    .toggleStyle(MoleSwitchToggleStyle())
-                    .controlSize(.small)
-                    .tint(Color.moleAccentText)
-                    .font(.system(size: 12))
-            }
-            if state.screenshotHotKeyRegistrationFailed {
-                SettingsRow(divider: true, vertical: 6) {
-                    Label(l10n.t("settings.screenshot.conflict"), systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Color.warning)
-                }
-            }
-            SettingsRow(divider: true, vertical: 10) {
-                HStack(spacing: 8) {
-                    Button(l10n.t("settings.screenshot.capture")) {
-                        DispatchQueue.main.async { state.takeScreenshot() }
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                }
-            }
-            SettingsRow(vertical: 6) {
-                Text(l10n.t("settings.tools.hint"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    // MARK: 功能页显隐
-
-    private var pagesSection: some View {
-        SettingsSection(title: l10n.t("settings.pages")) {
             SettingsRow(vertical: 6) {
                 ScrollView(.horizontal) {
                     HStack(spacing: 6) {
@@ -424,9 +443,9 @@ struct SettingsTabView: View {
         .help(isLastRemaining ? l10n.t("settings.pages.hint") : l10n.t(key.titleKey))
     }
 
-    private var islandEnabledBinding: Binding<Bool> {
-        Binding(get: { state.islandEnabled },
-                set: { state.setIslandEnabled($0) })
+    private var islandEdgeBinding: Binding<AppState.IslandEdge> {
+        Binding(get: { state.islandEdge },
+                set: { state.setIslandEdge($0) })
     }
 
     private var menuBarIconBinding: Binding<Bool> {

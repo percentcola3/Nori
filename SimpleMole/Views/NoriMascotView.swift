@@ -146,24 +146,32 @@ struct HeaderBrandIconView: View {
     var isSearching = false
     var searchSucceeded = false
     var isWorking = false
+    var reactionID = 0
+    var reactionMood: NoriMood = .success
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var gaze: CGSize = .zero
-    @State private var celebrationID = 0
-    @State private var celebrating = false
-    @State private var feedback = NoriScanFeedback()
+    @State private var playing = false
+    @State private var playedMood: NoriMood = .success
+    @State private var playID = 0
+    @State private var pulse = false
+    @State private var nudge: CGFloat = 0
 
-    private struct ScanState: Equatable {
-        let scanning: Bool
-        let succeeded: Bool
+    private var mood: NoriMood {
+        if playing { return playedMood }
+        if isSearching || isWorking { return .working }
+        return .idle
     }
-    private var scanState: ScanState { ScanState(scanning: isSearching, succeeded: searchSucceeded) }
 
     var body: some View {
-        NoriMascotView(mood: (isSearching || isWorking) ? .working : celebrating ? .success : .idle, size: size, gaze: gaze)
+        NoriMascotView(mood: mood, size: size, gaze: gaze)
+            .scaleEffect(pulse ? 1.18 : 1)
+            .offset(x: nudge)
+            .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.62), value: pulse)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.08), value: nudge)
             .contentShape(Rectangle())
             .allowsHitTesting(true)
             .onContinuousHover { phase in
-                guard !reduceMotion, !isSearching, !isWorking else { gaze = .zero; return }
+                guard !reduceMotion, !isSearching, !isWorking, !playing else { gaze = .zero; return }
                 switch phase {
                 case .active(let point):
                     gaze = CGSize(width: min(1, max(-1, (point.x / max(size, 1) - 0.5) * 2)),
@@ -171,20 +179,42 @@ struct HeaderBrandIconView: View {
                 case .ended: gaze = .zero
                 }
             }
-            .onAppear { _ = feedback.update(scanning: isSearching, succeeded: searchSucceeded) }
-            .onChange(of: scanState) { state in
+            .onAppear { _ = searchSucceeded }
+            .onChange(of: reactionID) { id in
+                guard id > 0, reactionMood == .success || reactionMood == .attention else { return }
                 gaze = .zero
-                celebrationID += 1
-                celebrating = feedback.update(scanning: state.scanning, succeeded: state.succeeded) && !reduceMotion
+                playedMood = reactionMood
+                playID = id
+                playing = !reduceMotion
+                pulse = false
+                nudge = 0
             }
             .onChange(of: reduceMotion) { reduced in
-                if reduced { celebrating = false; gaze = .zero }
+                if reduced { playing = false; pulse = false; nudge = 0; gaze = .zero }
             }
-            .task(id: celebrationID) {
-                guard celebrating else { return }
-                do { try await Task.sleep(nanoseconds: 1_500_000_000) }
-                catch { return }
-                celebrating = false
+            .task(id: playID) {
+                guard playing else { return }
+                do {
+                    if playedMood == .success {
+                        pulse = true
+                        try await Task.sleep(nanoseconds: 280_000_000)
+                        pulse = false
+                        try await Task.sleep(nanoseconds: 160_000_000)
+                        pulse = true
+                        try await Task.sleep(nanoseconds: 420_000_000)
+                        pulse = false
+                        try await Task.sleep(nanoseconds: 500_000_000)
+                    } else {
+                        for step in [CGFloat(-2.5), 2.5, -1.5, 1.5, 0] {
+                            nudge = step
+                            try await Task.sleep(nanoseconds: 90_000_000)
+                        }
+                        try await Task.sleep(nanoseconds: 280_000_000)
+                    }
+                } catch { return }
+                playing = false
+                nudge = 0
+                pulse = false
             }
             .accessibilityHidden(true)
     }

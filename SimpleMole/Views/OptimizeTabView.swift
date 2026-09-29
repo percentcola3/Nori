@@ -10,13 +10,6 @@ struct OptimizeTabView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(l10n.t("optimize.title"))
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(l10n.t("optimize.subtitle"))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                }
                 Spacer()
                 Button {
                     state.requestScanAccess(.optimize)
@@ -32,34 +25,39 @@ struct OptimizeTabView: View {
             .padding(.top, 14)
             .padding(.bottom, 8)
 
-            HStack(spacing: 6) {
-                if let mood = operationMood {
-                    NoriStatusAnimation(mood: mood, size: 76,
-                                        assetName: state.isOptimizing ? "nori-typing" : nil)
-                }
-                Text(state.optimizeHasPreview || state.isOptimizing
-                     ? state.optimizeStatus : l10n.t("optimize.empty.hint"))
+            if !state.isOptimizing && !state.optimizeHasPreview {
+                Text(l10n.t("optimize.empty.hint"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
 
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(sortedTasks) { task in
-                        taskRow(task)
-                    }
+            if state.isOptimizing {
+                VStack(spacing: 12) {
+                    NoriStatusAnimation(mood: .working, size: 156, assetName: "nori-typing")
+                    Text(state.optimizeStatus)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    ProgressView().controlSize(.small)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-            }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(sortedTasks) { task in
+                            taskRow(task)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                }
 
-            if state.optimizeHasPreview {
-                Divider()
-                actions
+                if state.optimizeHasPreview {
+                    Divider()
+                    actions
+                }
             }
         }
     }
@@ -78,16 +76,6 @@ struct OptimizeTabView: View {
         return state.optimizeTasks.enumerated()
             .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
             .map(\.element)
-    }
-
-    private var operationMood: NoriMood? {
-        if state.isOptimizing { return .working }
-        let tasks = state.optimizeTasks
-        guard tasks.contains(where: { $0.state != .pending }) else { return nil }
-        if tasks.contains(where: { $0.state == .failed || $0.state == .unavailable }) {
-            return .attention
-        }
-        return tasks.contains(where: { $0.state == .applied }) ? .success : .idle
     }
 
     private func taskRow(_ task: NativeCore.OptimizeTask) -> some View {

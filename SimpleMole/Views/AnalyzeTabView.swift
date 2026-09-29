@@ -84,12 +84,9 @@ struct AnalyzeTabView: View {
             .padding(.bottom, 8)
 
             if state.isAnalyzing {
-                VStack(spacing: 10) {
-                    NoriStatusAnimation(mood: .working, size: 172, assetName: "nori-analyzing")
+                VStack(spacing: 12) {
+                    NoriStatusAnimation(mood: .working, size: 156, assetName: "nori-analyzing")
                     ProgressView().controlSize(.small)
-                    Text(l10n.t("analyze.scanning"))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if state.analyzeEntries.isEmpty {

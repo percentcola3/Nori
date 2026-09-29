@@ -299,6 +299,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateStatusItem() }
             .store(in: &observables)
+        appState.$islandEdge
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateIslandPanel() }
+            .store(in: &observables)
         appState.$mainWindowVisible
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.updateIslandPanel() }
@@ -465,8 +469,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let screen = NSScreen.main else { return }
         let size = islandWindowSize
         // 所有屏幕均贴物理顶边；真实刘海的遮挡由内容安全区避让。
-        let origin = NSPoint(x: screen.frame.midX - size.width / 2,
-                             y: screen.frame.maxY - size.height)
+        // 左侧/右侧仍挂在顶边，只是改靠哪一端。
+        let x: CGFloat
+        switch appState.islandEdge {
+        case .left:
+            x = screen.frame.minX
+        case .right:
+            x = screen.frame.maxX - size.width
+        case .top:
+            x = screen.frame.midX - size.width / 2
+        }
+        let origin = NSPoint(x: x, y: screen.frame.maxY - size.height)
         islandPanel.setFrameOrigin(origin)
     }
 

@@ -87,9 +87,9 @@ struct CleanupTabView: View {
                     .help(state.cleanupDeferredPaths.prefix(12).joined(separator: "\n"))
             }
 
-            if !state.isCleanupScanning && !state.isApplying, let mood = state.cleanupOutcomeMood {
+            if !state.isCleanupScanning && !state.isApplying, state.cleanupOutcomeMood == .attention {
                 HStack(spacing: 12) {
-                    NoriStatusAnimation(mood: mood, size: 52)
+                    NoriStatusAnimation(mood: .attention, size: 52)
                         .id(state.cleanupFeedbackID)
                     Text(state.statusText)
                         .font(.system(size: 12, weight: .medium))
@@ -112,7 +112,9 @@ struct CleanupTabView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if state.categories.isEmpty {
                 VStack(spacing: 12) {
-                    if state.cleanupOutcomeMood == nil { NoriStatusAnimation(mood: .idle, size: 76) }
+                    if state.cleanupOutcomeMood != .attention {
+                        NoriStatusAnimation(mood: .idle, size: 120, assetName: "nori-coffee")
+                    }
                     quickCleanButton
                     Text(l10n.t("cleanup.empty.subtitle"))
                         .font(.system(size: 11))

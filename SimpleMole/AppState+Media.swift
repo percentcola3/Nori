@@ -153,6 +153,11 @@ extension AppState {
         if cancelled > 0 { parts.append(L10n.shared.tf("slim.summary.cancelled", cancelled)) }
         statusText = parts.joined(separator: " · ")
         analyzeStatus = statusText
+        if cancelled == requested {
+            noteHeaderReaction(nil)
+        } else {
+            noteHeaderReaction((failed > 0 || cancelled > 0) ? .attention : .success)
+        }
         log(statusText)
         applySlimOutcomes(slimmed)
     }

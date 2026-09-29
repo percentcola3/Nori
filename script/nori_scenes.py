@@ -1,22 +1,22 @@
 """Extra code-native SVG scenes. Props live here; Nori's approved body stays shared."""
 
-SCENE_LABELS = {'typing': '敲键盘', 'coffee': '喝咖啡', 'mirror': '照镜子'}
+SCENE_LABELS = {'typing': '键帽飞舞', 'analyzing': '键帽掉落', 'coffee': '喝咖啡', 'mirror': '照镜子'}
 SCENE_RULES = {
-    'typing': '.jelly{animation:nori-typeBody .56s ease-in-out infinite}.gaze{transform:translate(0,8px)}.eyelid{animation:blink 5s ease-in-out infinite}.hand-left{animation:nori-tap .28s ease-in-out infinite alternate}.hand-right{animation:nori-tap .28s ease-in-out -.28s infinite alternate}.key-hit{animation:nori-key .56s steps(1) infinite}.key-hit.second{animation-delay:-.28s}',
-    'coffee': '.jelly{animation:nori-sipBody 6s ease-in-out infinite}.eyelid{animation:nori-contented 6s ease-in-out infinite}.cup-lift{animation:nori-sip 6s ease-in-out infinite}.steam{animation:nori-steam 2.4s ease-out infinite}.steam.second{animation-delay:-1.2s}',
+    'typing': '.jelly{animation:breathe 6s ease-in-out infinite}.eyelid{animation:blink 5s ease-in-out infinite}.gaze{transform:translate(0,-3px)}.key-fly{animation:nori-keyFly 2.6s ease-in-out infinite}',
+    'analyzing': '.jelly{animation:breathe 6s ease-in-out infinite}.eyelid{animation:blink 4.6s ease-in-out infinite}.gaze{transform:translate(0,3px)}.key-drop{animation:nori-keyDrop 2.2s ease-in infinite}',
+    'coffee': '.jelly{animation:nori-sipBody 3.2s ease-in-out infinite}.eyelid{animation:nori-contented 3.2s ease-in-out infinite}.cup-lift{animation:nori-sip 3.2s ease-in-out infinite}.steam{animation:nori-steam 2.2s ease-out infinite}.steam.second{animation-delay:-1.1s}',
     'mirror': '.jelly{animation:nori-mirrorPose 6s ease-in-out infinite}.gaze{transform:translate(9px,0)}.eyelid{animation:blink 4.8s ease-in-out infinite}.mirror-reflection{animation:nori-reflect 6s ease-in-out infinite}.mirror-glint{animation:nori-glint 6s ease-in-out infinite}',
 }
 SCENE_CSS = '''
 @keyframes nori-orbit {to{transform:rotate(360deg)}}
 .orbit-spin{animation:nori-orbit 1.8s linear infinite;transform-origin:0 0}
-@keyframes nori-typeBody {0%,100%{transform:scale(1,1)}50%{transform:scale(1.025,.975)}}
-@keyframes nori-tap {from{transform:translateY(-4px) rotate(-3deg)}to{transform:translateY(5px) rotate(3deg)}}
-.hand-left{transform-origin:95px 182px}.hand-right{transform-origin:147px 182px}
-@keyframes nori-key {0%,49%{fill:#F2C66D}50%,100%{fill:#69C7DD}}
+@keyframes nori-keyFly {0%{opacity:0;transform:translate(0,10px) rotate(0deg)}12%,78%{opacity:1}100%{opacity:0;transform:translate(var(--dx),var(--dy)) rotate(var(--turn))}}
+@keyframes nori-keyDrop {0%{opacity:0;transform:translate(0,-42px) rotate(-8deg)}14%,76%{opacity:1}100%{opacity:0;transform:translate(var(--dx),64px) rotate(var(--turn))}}
+.key-fly,.key-drop{opacity:0}
 .cup-lift{transform-origin:184px 176px}
-@keyframes nori-sip {0%,16%,78%,100%{transform:translate(0,0) rotate(0deg)}34%,60%{transform:translate(-32px,-24px) rotate(-12deg)}68%{transform:translate(-12px,-8px) rotate(-4deg)}}
-@keyframes nori-sipBody {0%,18%,78%,100%{transform:rotate(0deg) scale(1)}38%,60%{transform:rotate(3deg) scale(1.025,.975)}}
-@keyframes nori-contented {0%,24%,70%,100%{transform:scaleY(1)}35%,60%{transform:scaleY(.12)}}
+@keyframes nori-sip {0%,22%,100%{transform:translate(0,0) rotate(0deg)}46%,62%{transform:translate(-14px,-10px) rotate(-8deg)}}
+@keyframes nori-sipBody {0%,22%,100%{transform:rotate(0deg) scale(1)}46%,62%{transform:rotate(2deg) scale(1.02,.98)}}
+@keyframes nori-contented {0%,30%,74%,100%{transform:scaleY(1)}44%,62%{transform:scaleY(.14)}}
 @keyframes nori-steam {0%{opacity:0;transform:translateY(3px)}25%{opacity:.6}100%{opacity:0;transform:translate(3px,-14px)}}
 @keyframes nori-mirrorPose {0%,15%,100%{transform:rotate(0deg)}38%{transform:rotate(4deg)}65%,80%{transform:rotate(-3deg)}}
 @keyframes nori-reflect {0%,15%,100%{transform:translate(0,0)}38%{transform:translate(-2px,1px)}65%,80%{transform:translate(2px,-1px)}}
@@ -41,15 +41,48 @@ def working_scene(figure, colors):
 <g clip-path="url(#nori-working-front)">{orbit}</g>'''
 
 
+_KEY_LEGENDS = (
+    'M-7 5L0-7L7 5M-4 1.2H4',
+    'M-6-1.5H6M-6 4.5H6',
+    'M0-6.5V6.5M-6.5 0H6.5',
+    'M-7 3H3V-6',
+)
+
+
+def _keycaps(items, klass, colors):
+    ink = f'#{colors["ink"]}'
+    parts = []
+    for index, (x, y, dx, dy, turn, delay, color) in enumerate(items):
+        fill = f'#{colors[color]}'
+        legend = _KEY_LEGENDS[index % len(_KEY_LEGENDS)]
+        parts.append(
+            f'<g transform="translate({x} {y})"><g class="{klass}" style="--dx:{dx}px;--dy:{dy}px;--turn:{turn}deg;animation-delay:{delay}s">'
+            f'<rect x="-18" y="-6" width="36" height="24" rx="7" fill="{ink}"/>'
+            f'<rect x="-18" y="-13" width="36" height="20" rx="7" fill="{fill}" stroke="{ink}" stroke-width="2.6"/>'
+            f'<path d="{legend}" fill="none" stroke="{ink}" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>'
+            f'</g></g>'
+        )
+    return ''.join(parts)
+
+
 def extra_scene(name, figure, colors, body, eyes):
     ink, blue, ice = (f'#{colors[c]}' for c in ['ink', 'ribbonBlue', 'body'])
-    if name == 'typing':
-        keys = ''.join(f'<rect x="{59+col*22}" y="{196+row*11}" width="16" height="6" rx="2" fill="{blue}" class="{"key-hit" if (row,col)==(0,2) else "key-hit second" if (row,col)==(1,4) else "key"}"/>' for row in range(2) for col in range(6))
-        return f'''<g transform="translate(15 16) scale(.8)">{figure}</g>
-<g aria-hidden="true"><path d="M54 186H201L217 225Q219 231 211 231H43Q35 231 38 224Z" fill="{ink}" stroke="{blue}" stroke-width="3" stroke-linejoin="round"/>
-{keys}<rect x="90" y="218" width="68" height="5" rx="2.5" fill="{blue}"/>
-<g class="hand-left"><ellipse cx="96" cy="182" rx="17" ry="10" fill="{ice}" stroke="{ink}" stroke-width="3"/></g>
-<g class="hand-right"><ellipse cx="148" cy="182" rx="17" ry="10" fill="{ice}" stroke="{ink}" stroke-width="3"/></g></g>'''
+    if name in ('typing', 'analyzing'):
+        flying = [
+            (46, 72, -22, -28, -10, 0, 'ribbonBlue'),
+            (128, 34, 0, -26, 8, -0.7, 'ribbonGold'),
+            (210, 70, 24, -24, 12, -1.4, 'ribbonLilac'),
+            (42, 148, -28, 4, -8, -2.0, 'body'),
+        ]
+        falling = [
+            (44, 36, -6, 0, 10, 0, 'ribbonBlue'),
+            (112, 22, 2, 0, -8, -0.55, 'ribbonGold'),
+            (178, 30, 4, 0, 12, -1.1, 'ribbonLilac'),
+            (214, 78, 10, 0, -10, -1.65, 'body'),
+        ]
+        klass = 'key-fly' if name == 'typing' else 'key-drop'
+        keys = _keycaps(flying if name == 'typing' else falling, klass, colors)
+        return f'<g transform="translate(28 40) scale(.74)">{figure}</g><g aria-hidden="true">{keys}</g>'
     if name == 'coffee':
         return f'''<g transform="translate(7 24) scale(.81)">{figure}</g>
 <g class="cup-lift" aria-hidden="true">
@@ -59,7 +92,6 @@ def extra_scene(name, figure, colors, body, eyes):
 <path d="M153 155H204V187Q204 201 191 201H167Q153 201 153 187Z" fill="{ice}" stroke="{ink}" stroke-width="3"/>
 <ellipse cx="178.5" cy="155" rx="25.5" ry="6" fill="{ink}" stroke="{blue}" stroke-width="3"/>
 <path d="M163 179H192" stroke="{blue}" stroke-width="5" stroke-linecap="round"/>
-<ellipse cx="151" cy="185" rx="13" ry="10" fill="{ice}" stroke="{ink}" stroke-width="3"/>
 </g>'''
     if name == 'mirror':
         return f'''<defs><clipPath id="nori-mirror-glass"><ellipse cx="203" cy="108" rx="31" ry="43"/></clipPath></defs>

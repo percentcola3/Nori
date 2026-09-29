@@ -47,7 +47,7 @@ styles += SCENE_CSS
 confetti = ''.join(f'<g transform="translate({x} {y})"><g class="ribbon" style="--dx:{dx}px;--dy:{dy}px;--turn:{turn}deg"><rect x="-3" y="-7" width="6" height="14" rx="2" fill="#{colors[color]}"/></g></g>' for x,y,dx,dy,turn,color in [
  (70,80,-46,-25,-120,'ribbonBlue'),(90,54,-37,-28,100,'ribbonGold'),(128,42,-12,-30,-80,'ribbonLilac'),(177,44,15,-30,110,'ribbonBlue'),(211,63,25,-30,-120,'ribbonGold'),(218,106,20,8,140,'ribbonLilac')])
 for name, rule in rules.items():
- css = styles + rule + '\n@media(prefers-reduced-motion:reduce){*{animation:none!important}.ribbon,.steam,.mirror-glint{display:none}}'
+ css = styles + rule + '\n@media(prefers-reduced-motion:reduce){*{animation:none!important}.ribbon,.steam,.mirror-glint,.key-fly,.key-drop{display:none}}'
  scene = working_scene(figure, colors) if name == 'working' else extra_scene(name, figure, colors, body, eyes)
  svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="nori-{name}-title">
 <title id="nori-{name}-title">Nori · {labels[name]}</title>
