@@ -3177,6 +3177,12 @@ test_shell_syntax
 if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
     bash "$ROOT_DIR/script/test_agents.sh" || fail "agent cleanup catalog, skills and MCP tests"
+    # Agent 专清按用户选择直接永久删除，不弹确认、不进废纸篓；运行态与身份守卫仍在执行器里。
+    /usr/bin/grep -Fq 'AgentCleanupExecutor.execute(requested, running: snapshot, home: home, permanent: true)' \
+        "$ROOT_DIR/SimpleMole/AppState+Agents.swift" || fail "agent cleanup no longer deletes permanently"
+    if /usr/bin/grep -Fq 'confirmation = Confirmation(' "$ROOT_DIR/SimpleMole/AppState+Agents.swift"; then
+        fail "agent cleanup asks for confirmation again"
+    fi
     bash "$ROOT_DIR/script/test_optimize.sh" || fail "optimize previews, evidence binding and admin bridge tests"
     bash "$ROOT_DIR/script/test_cleanup_refresh.sh" || fail "post-cleanup inventory refresh tests"
     bash "$ROOT_DIR/script/test_disk_analysis.sh" || fail "directory analysis tests"

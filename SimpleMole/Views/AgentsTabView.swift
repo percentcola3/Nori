@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// Agent 专清：按工具分组呈现可清理空间、Skills 与 MCP 配置体检。
-/// 与磁盘清理完全独立；所有删除移入废纸篓，MCP 配置只读。
+/// 与磁盘清理完全独立；勾选项直接永久删除，MCP 配置只读。
 struct AgentsTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared

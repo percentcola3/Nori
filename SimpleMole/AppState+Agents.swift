@@ -86,18 +86,7 @@ extension AppState {
             agentStatus = L10n.shared.t("cleanup.selectNone")
             return
         }
-        let reviewCount = selected.filter { $0.risk == .warning }.reduce(0) { $0 + $1.paths.count }
-        var message = L10n.shared.t("agents.confirm.msg")
-        if reviewCount > 0 {
-            message += "\n\n" + L10n.shared.tf("agents.confirm.review", reviewCount)
-        }
-        confirmation = Confirmation(
-            title: L10n.shared.tf("agents.confirm.title", count,
-                                  ByteFormat.format(selected.reduce(0) { $0 &+ $1.bytes })),
-            message: message,
-            confirmLabel: L10n.shared.t("confirm.apply.trash.ok")) { [weak self] in
-                self?.performAgentApply(selected)
-            }
+        performAgentApply(selected)
     }
 
     private func performAgentApply(_ requested: [CleanupCategory]) {
@@ -108,7 +97,7 @@ extension AppState {
             let snapshot = await captureRunningApplicationSnapshot()
             let home = NSHomeDirectory()
             let outcome = await Task.detached(priority: .utility) {
-                AgentCleanupExecutor.execute(requested, running: snapshot, home: home)
+                AgentCleanupExecutor.execute(requested, running: snapshot, home: home, permanent: true)
             }.value
             if !outcome.summary.messages.isEmpty {
                 log(outcome.summary.messages.joined(separator: "\n"))

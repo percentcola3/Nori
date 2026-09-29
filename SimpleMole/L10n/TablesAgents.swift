@@ -6,7 +6,7 @@ enum L10nAgentsTables {
     static let en: [String: String] = [
         "tab.agents": "AI Agents",
         "agents.title": "AI Agent Cleanup",
-        "agents.subtitle": "Caches, old versions and history left by coding agents. Everything goes to the Trash.",
+        "agents.subtitle": "Caches, old versions and history left by coding agents. Selected items are deleted permanently.",
         "agents.scan": "Scan agents",
         "agents.rescan": "Rescan",
         "agents.empty.hint": "Finds space used by Claude Code, Codex, Cursor, Copilot, Gemini, Grok, opencode and other agents, and checks their skills and MCP servers. Nothing is removed until you confirm.",
@@ -20,7 +20,7 @@ enum L10nAgentsTables {
         "agents.badge.showOnly": "Size only",
         "agents.group.reclaimable": "Reclaimable %@",
         "agents.skills.empty": "No skills installed.",
-        "agents.skills.hint": "Skills you select are moved to the Trash. Linked skills point to another folder and are shown for reference only.",
+        "agents.skills.hint": "Skills you select are deleted permanently. Linked skills point to another folder and are shown for reference only.",
         "agents.skills.shared": "Shared by several agents",
         "agents.skills.linked": "Link",
         "agents.mcp.empty": "No MCP servers configured.",
@@ -32,11 +32,8 @@ enum L10nAgentsTables {
         "agents.mcp.issue.secret": "Plaintext secret in %@ (%@). Prefer an environment variable.",
         "agents.mcp.issue.unreadable": "Configuration file could not be parsed.",
         "agents.selectSafe": "Select safe",
-        "agents.apply": "Move to Trash",
-        "agents.apply.withCount": "Move %ld items to Trash · %@",
-        "agents.confirm.title": "Move %ld items (%@) to the Trash?",
-        "agents.confirm.msg": "Items are moved to the Trash. Anything an agent is still using is skipped.",
-        "agents.confirm.review": "%ld selected items are history or session data. The agent keeps working without them, but that history will be gone after you empty the Trash.",
+        "agents.apply": "Delete",
+        "agents.apply.withCount": "Delete %ld items · %@",
         "agents.reason.rebuildable": "Rebuildable cache. Skipped while the app is running.",
         "agents.reason.oldVersion": "Old version not used by any launcher link; the active and newest versions are kept.",
         "agents.reason.review": "History or session data. The tool keeps working without it; your choice.",
@@ -78,7 +75,7 @@ enum L10nAgentsTables {
     static let zhHans: [String: String] = [
         "tab.agents": "Agent 专清",
         "agents.title": "AI Agent 专清",
-        "agents.subtitle": "编程 Agent 留下的缓存、旧版本和历史记录，删除一律移入废纸篓。",
+        "agents.subtitle": "编程 Agent 留下的缓存、旧版本和历史记录，勾选后直接永久删除。",
         "agents.scan": "扫描 Agent",
         "agents.rescan": "重新扫描",
         "agents.empty.hint": "找出 Claude Code、Codex、Cursor、Copilot、Gemini、Grok、opencode 等 Agent 占用的空间，并检查它们的 Skills 和 MCP 服务。确认之前不会删除任何内容。",
@@ -92,7 +89,7 @@ enum L10nAgentsTables {
         "agents.badge.showOnly": "仅显示",
         "agents.group.reclaimable": "可清理 %@",
         "agents.skills.empty": "没有安装 Skill。",
-        "agents.skills.hint": "勾选的 Skill 会移入废纸篓。链接类 Skill 指向其他目录，只作展示。",
+        "agents.skills.hint": "勾选的 Skill 会被直接永久删除。链接类 Skill 指向其他目录，只作展示。",
         "agents.skills.shared": "多个 Agent 共用",
         "agents.skills.linked": "链接",
         "agents.mcp.empty": "没有配置 MCP 服务。",
@@ -104,11 +101,8 @@ enum L10nAgentsTables {
         "agents.mcp.issue.secret": "%@ 中有明文密钥（%@），建议改用环境变量。",
         "agents.mcp.issue.unreadable": "配置文件无法解析。",
         "agents.selectSafe": "勾选安全项",
-        "agents.apply": "移入废纸篓",
-        "agents.apply.withCount": "移入废纸篓 %ld 项 · %@",
-        "agents.confirm.title": "将 %ld 项（%@）移入废纸篓？",
-        "agents.confirm.msg": "所选内容会移入废纸篓；Agent 仍在使用的内容会被跳过。",
-        "agents.confirm.review": "其中 %ld 项是历史或会话数据：Agent 没有它们也能正常工作，但清空废纸篓后这些记录就找不回了。",
+        "agents.apply": "删除",
+        "agents.apply.withCount": "删除 %ld 项 · %@",
         "agents.reason.rebuildable": "可再生缓存；应用运行时跳过。",
         "agents.reason.oldVersion": "没有被任何启动链接使用的旧版本；当前版本和最新版本会保留。",
         "agents.reason.review": "历史或会话数据：删除后工具照常可用，由你决定。",
@@ -150,7 +144,7 @@ enum L10nAgentsTables {
     static let zhHant: [String: String] = [
         "tab.agents": "Agent 專清",
         "agents.title": "AI Agent 專清",
-        "agents.subtitle": "程式 Agent 留下的快取、舊版本和歷史紀錄，刪除一律移到垃圾桶。",
+        "agents.subtitle": "程式 Agent 留下的快取、舊版本和歷史紀錄，勾選後直接永久刪除。",
         "agents.scan": "掃描 Agent",
         "agents.rescan": "重新掃描",
         "agents.empty.hint": "找出 Claude Code、Codex、Cursor、Copilot、Gemini、Grok、opencode 等 Agent 佔用的空間，並檢查它們的 Skills 和 MCP 服務。確認之前不會刪除任何內容。",
@@ -162,7 +156,7 @@ enum L10nAgentsTables {
         "agents.badge.showOnly": "僅顯示",
         "agents.group.reclaimable": "可清理 %@",
         "agents.skills.empty": "沒有安裝 Skill。",
-        "agents.skills.hint": "勾選的 Skill 會移到垃圾桶。連結類 Skill 指向其他目錄，只作展示。",
+        "agents.skills.hint": "勾選的 Skill 會被直接永久刪除。連結類 Skill 指向其他目錄，只作展示。",
         "agents.skills.shared": "多個 Agent 共用",
         "agents.skills.linked": "連結",
         "agents.mcp.empty": "沒有設定 MCP 服務。",
@@ -174,11 +168,8 @@ enum L10nAgentsTables {
         "agents.mcp.issue.secret": "%@ 中有明文金鑰（%@），建議改用環境變數。",
         "agents.mcp.issue.unreadable": "設定檔無法解析。",
         "agents.selectSafe": "勾選安全項",
-        "agents.apply": "移到垃圾桶",
-        "agents.apply.withCount": "移到垃圾桶 %ld 項 · %@",
-        "agents.confirm.title": "將 %ld 項（%@）移到垃圾桶？",
-        "agents.confirm.msg": "所選內容會移到垃圾桶；Agent 仍在使用的內容會被略過。",
-        "agents.confirm.review": "其中 %ld 項是歷史或工作階段資料：Agent 沒有它們也能正常運作，但清空垃圾桶後這些紀錄就找不回了。",
+        "agents.apply": "刪除",
+        "agents.apply.withCount": "刪除 %ld 項 · %@",
         "agents.reason.rebuildable": "可再生快取；應用程式執行時略過。",
         "agents.reason.oldVersion": "沒有被任何啟動連結使用的舊版本；目前版本和最新版本會保留。",
         "agents.reason.review": "歷史或工作階段資料：刪除後工具照常可用，由你決定。",
@@ -199,7 +190,7 @@ enum L10nAgentsTables {
         "agents.scan": "エージェントをスキャン",
         "agents.rescan": "再スキャン",
         "agents.selectSafe": "安全な項目を選択",
-        "agents.apply": "ゴミ箱に入れる"
+        "agents.apply": "削除"
     ]
 
     static let ko: [String: String] = [
@@ -208,7 +199,7 @@ enum L10nAgentsTables {
         "agents.scan": "에이전트 스캔",
         "agents.rescan": "다시 스캔",
         "agents.selectSafe": "안전 항목 선택",
-        "agents.apply": "휴지통으로 이동"
+        "agents.apply": "삭제"
     ]
 
     static let de: [String: String] = [
@@ -217,7 +208,7 @@ enum L10nAgentsTables {
         "agents.scan": "Agenten scannen",
         "agents.rescan": "Erneut scannen",
         "agents.selectSafe": "Sichere auswählen",
-        "agents.apply": "In den Papierkorb"
+        "agents.apply": "Löschen"
     ]
 
     static let fr: [String: String] = [
@@ -226,7 +217,7 @@ enum L10nAgentsTables {
         "agents.scan": "Analyser les agents",
         "agents.rescan": "Relancer",
         "agents.selectSafe": "Sélection sûre",
-        "agents.apply": "Placer dans la corbeille"
+        "agents.apply": "Supprimer"
     ]
 
     static let es: [String: String] = [
@@ -235,7 +226,7 @@ enum L10nAgentsTables {
         "agents.scan": "Analizar agentes",
         "agents.rescan": "Volver a analizar",
         "agents.selectSafe": "Seleccionar seguros",
-        "agents.apply": "Mover a la papelera"
+        "agents.apply": "Eliminar"
     ]
 
     static let pt: [String: String] = [
@@ -244,7 +235,7 @@ enum L10nAgentsTables {
         "agents.scan": "Analisar agentes",
         "agents.rescan": "Analisar de novo",
         "agents.selectSafe": "Selecionar seguros",
-        "agents.apply": "Mover para o Lixo"
+        "agents.apply": "Apagar"
     ]
 
     static let it: [String: String] = [
@@ -253,7 +244,7 @@ enum L10nAgentsTables {
         "agents.scan": "Analizza agenti",
         "agents.rescan": "Rianalizza",
         "agents.selectSafe": "Seleziona sicuri",
-        "agents.apply": "Sposta nel Cestino"
+        "agents.apply": "Elimina"
     ]
 
     static let ru: [String: String] = [
@@ -262,7 +253,7 @@ enum L10nAgentsTables {
         "agents.scan": "Сканировать агентов",
         "agents.rescan": "Пересканировать",
         "agents.selectSafe": "Выбрать безопасные",
-        "agents.apply": "Переместить в Корзину"
+        "agents.apply": "Удалить"
     ]
 
     static let tr: [String: String] = [
@@ -271,7 +262,7 @@ enum L10nAgentsTables {
         "agents.scan": "Ajanları tara",
         "agents.rescan": "Yeniden tara",
         "agents.selectSafe": "Güvenlileri seç",
-        "agents.apply": "Çöp Sepeti'ne taşı"
+        "agents.apply": "Sil"
     ]
 
     static func table(for language: AppLanguage) -> [String: String] {
