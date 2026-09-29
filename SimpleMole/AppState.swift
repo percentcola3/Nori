@@ -37,7 +37,7 @@ final class AppState: ObservableObject {
 
     /// 功能页标识：设置中可按需隐藏。
     enum PageKey: String, CaseIterable, Identifiable {
-        case cleanup, analyze, uninstall, optimize, devenv, processes, ports, traffic, images, clipboard, settings
+        case cleanup, agents, analyze, uninstall, optimize, devenv, processes, ports, traffic, images, clipboard, settings
         var id: String { rawValue }
         var titleKey: String { self == .settings ? "settings.title" : "tab.\(rawValue)" }
 
@@ -120,6 +120,21 @@ final class AppState: ObservableObject {
             selectedTab = min(selectedTab, max(0, visiblePages.count - 1))
         }
     }
+
+    // MARK: Agent 专清
+    // 独立于磁盘清理的清单：不写入 `categories`，也不进入快速清理与自动化。
+
+    @Published var agentCategories: [CleanupCategory] = []
+    @Published var agentGroups: [AgentGroupSummary] = []
+    @Published var agentSkills: [AgentSkill] = []
+    @Published var agentServers: [AgentMCPServer] = []
+    @Published var agentSelectedSkills: Set<String> = []
+    @Published var agentScanning = false
+    @Published var agentApplying = false
+    @Published var agentScanComplete = false
+    @Published var agentHasScanned = false
+    @Published var agentStatus = ""
+    @Published var agentOutcomeMood: NoriMood?
 
     // MARK: 清理
 
@@ -575,7 +590,7 @@ final class AppState: ObservableObject {
         case .quickOptimize: quickOptimize()
         case .optimize: runOptimize()
         case .developerToolsScan: scanDeveloperTools()
-        case .aiScan: scanAI()
+        case .aiScan: scanAgents()
         case .xcodeScan: scanXcode()
         case .slimScan: scanSlim()
         case .systemScan: scanSystemData()
@@ -612,6 +627,7 @@ final class AppState: ObservableObject {
             || gcRunningId != nil || netFixRunning || isAutoCleanupScanning
             || isSmartAutomationRunning
             || isOptimizing || systemScanning || systemApplying
+            || agentScanning || agentApplying
             || simulatorInventory.isDeleting
     }
 
@@ -709,6 +725,13 @@ final class AppState: ObservableObject {
                         // Keep the existing result/selection. Scanning starts
                         // only from the user's quick/deep scan actions.
                         break
+                    case .agents:
+                        // 首次进入时自动做一次只读扫描；之后保留结果与选择。
+                        self.permissionCenter.refresh()
+                        if !self.agentHasScanned, !self.isBusy,
+                           self.permissionCenter.fullDiskAccessGranted {
+                            self.scanAgents()
+                        }
                     case .analyze:
                         self.scanSnapshots()
                         self.permissionCenter.refresh()
@@ -1193,7 +1216,7 @@ final class AppState: ObservableObject {
             deferredPaths: coreScan.deferredPaths)
     }
 
-    private func captureRunningApplicationSnapshot() async -> RunningApplicationSnapshot {
+    func captureRunningApplicationSnapshot() async -> RunningApplicationSnapshot {
         let output = await Task.detached(priority: .utility) {
             SystemMetrics.processSnapshotText()
         }.value

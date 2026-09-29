@@ -3174,6 +3174,7 @@ printf 'Nori local regression tests\n'
 test_shell_syntax
 if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
+    bash "$ROOT_DIR/script/test_agents.sh" || fail "agent cleanup catalog, skills and MCP tests"
     bash "$ROOT_DIR/script/test_cleanup_refresh.sh" || fail "post-cleanup inventory refresh tests"
     bash "$ROOT_DIR/script/test_disk_analysis.sh" || fail "directory analysis tests"
     bash "$ROOT_DIR/script/test_login_item.sh" || fail "login item opt-in and system status tests"

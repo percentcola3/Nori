@@ -138,8 +138,10 @@ final class NativeCore: @unchecked Sendable {
                 let entries = broadRoots.contains(root.path) ? self.directChildren(of: root) : [root]
                 for entry in entries {
                     let path = entry.standardizedFileURL.path
+                    // AI Agent 的缓存、版本与会话只在 Agent 专清页呈现。
                     guard self.isAllowedCleanupPath(entry, home: home),
                           self.cleanupPathIsPhysical(entry, home: home),
+                          !CleanupRiskPolicy.isAgentOwnedPath(path, homeDirectory: home.path),
                           !self.matchesWhitelist(path, entries: whitelist) else { continue }
                     // A precise leaf replaces an overlapping broad parent before
                     // traversal. Never size or offer that parent for deletion.
@@ -379,14 +381,6 @@ final class NativeCore: @unchecked Sendable {
             guard !control.shouldStop, self.cleanupPathIsPhysical(url, home: home),
                   seen.insert(path).inserted else { return }
             roots.append((url, label, source, guardKind, retention))
-        }
-
-        // Reuse the audited AI list instead of invoking a second du-based
-        // scanner. Classification and apply routes remain policy-owned.
-        for path in CleanupRiskPolicy.aiCacheRoots(homeDirectory: home.path) {
-            let url = URL(fileURLWithPath: path)
-            add(url, url.deletingLastPathComponent().lastPathComponent + " · " + url.lastPathComponent,
-                .aiCache, .ide)
         }
 
         add(home.appendingPathComponent("Library/Caches", isDirectory: true),
@@ -781,10 +775,18 @@ final class NativeCore: @unchecked Sendable {
 
     /// Apply a previously confirmed deletion plan. Each item carries the
     /// identity captured at confirmation time; a changed identity is skipped.
+    ///
+    /// `verifiedTargets` only lifts the leaf name/extension block (sessions,
+    /// `*.sqlite`, …) for paths the Agent catalog re-derived at execution
+    /// time; every other check still applies. Paths in one `atomicFamilies`
+    /// entry (a SQLite file and its -wal/-shm/-journal) are removed together
+    /// or not at all.
     func applyCleanup(items: [DeletionPlan.Item], permanent: Bool,
                       homeDirectory: String = NSHomeDirectory(),
                       allowedRoots: [String] = [],
-                      allowApplicationBundle: Bool = false) -> ApplySummary {
+                      allowApplicationBundle: Bool = false,
+                      verifiedTargets: Set<String> = [],
+                      atomicFamilies: [[String]] = []) -> ApplySummary {
         let home = URL(fileURLWithPath: homeDirectory).standardizedFileURL.path
         let whitelist = loadWhitelist(homeDirectory: homeDirectory)
         let normalizedRoots = allowedRoots.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
@@ -803,8 +805,24 @@ final class NativeCore: @unchecked Sendable {
         let nonOverlapping = DeletionPlan.nonOverlappingPaths(items.map(\.record))
         let itemByRecord = Dictionary(items.map { ($0.record, $0) },
                                       uniquingKeysWith: { first, _ in first })
+        // 整族预检：任一成员被打开、身份变化或探测不可用，整族保留。
+        var blockedFamilyMembers = Set<String>()
+        for family in atomicFamilies where family.count > 1 {
+            let intact = family.allSatisfy { member in
+                guard let expected = itemByRecord[member]?.identity, !expected.isEmpty,
+                      let openFiles,
+                      DeletionPlan.identity(at: member) == expected else { return false }
+                return !openFiles.contains(URL(fileURLWithPath: member).standardizedFileURL.path)
+            }
+            if !intact { blockedFamilyMembers.formUnion(family) }
+        }
         for rawPath in nonOverlapping {
             let expectedIdentity = itemByRecord[rawPath]?.identity ?? ""
+            if blockedFamilyMembers.contains(rawPath) {
+                skipped += 1
+                messages.append("Skipped database family that is open or changed: \(rawPath)")
+                continue
+            }
             // 第一道：词法校验（绝对路径、无控制字符、无 "."/".." 分量）。
             guard DeletionPlan.isLexicallySafePath(rawPath) else {
                 skipped += 1
@@ -821,7 +839,8 @@ final class NativeCore: @unchecked Sendable {
                 continue
             }
             guard fileManager.fileExists(atPath: path), !isSymlink(url),
-                  !isProtectedCleanupItem(url, allowApplicationBundle: allowApplicationBundle),
+                  verifiedTargets.contains(rawPath)
+                    || !isProtectedCleanupItem(url, allowApplicationBundle: allowApplicationBundle),
                   !matchesWhitelist(path, entries: whitelist) else {
                 skipped += 1
                 continue

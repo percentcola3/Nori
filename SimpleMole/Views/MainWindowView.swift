@@ -188,6 +188,7 @@ private struct AnimatedTabContent: View {
         if tab < state.visiblePages.count {
             switch state.visiblePages[tab] {
             case .cleanup: CleanupTabView(state: state)
+            case .agents: AgentsTabView(state: state)
             case .analyze: AnalyzeTabView(state: state)
             case .uninstall: UninstallTabView(state: state)
             case .optimize: OptimizeTabView(state: state)

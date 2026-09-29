@@ -132,6 +132,9 @@ enum CleanupActivityGuard: String, Codable, CaseIterable, Hashable, Sendable {
     case ide
     /// IM/国民应用（Telegram、飞书、微信等）的缓存：应用退出前一律保护。
     case messenger
+    /// Agent 专清目录项：归属进程/应用记录在 `activityOwners`，归属者运行
+    /// 或进程表不可读时一律不执行；用户可选（Warning）项也只在这一守卫下可执行。
+    case aiAgent
     case unsupported
 }
 
@@ -198,6 +201,8 @@ struct CleanupCategory: Identifiable, Equatable {
     var retention: TimeInterval
     /// 稳定原因键，由 UI 层自行本地化。
     var reasonKey: String
+    /// `.aiAgent` 守卫的归属者：进程名或 Bundle ID，任一在运行即视为占用。
+    var activityOwners: [String] = []
 
     init(id: UUID = UUID(),
          name: String,

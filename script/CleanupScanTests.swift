@@ -77,14 +77,17 @@ struct CleanupScanTests {
 
         let quick = await NativeCore.shared.scanCleanup(homeDirectory: home.path)
         let quickPaths = quick.categories.flatMap(\.paths)
-        let cursor = quick.categories.filter { $0.name == "Cursor" }
-        expect(cursor.count == 1 && cursor[0].paths.count == 3, "Cursor cache leaves must share one policy-preserving group")
+        // AI Agent 的缓存与会话归 Agent 专清页，磁盘清理默认流程一律不收。
+        expect(!quickPaths.contains(where: {
+            CleanupRiskPolicy.isAgentOwnedPath($0, homeDirectory: home.path)
+        }), "agent-owned paths leaked into the default disk cleanup")
+        expect(!quick.categories.contains { $0.name == "Cursor" }, "Cursor caches must move to the Agent tab")
         expect(!quick.categories.contains { $0.name == "User Caches" }, "generic cache labels hide ownership")
         expect(quick.succeeded && quick.deferredPaths.isEmpty, "quick fixture did not complete")
         expect(quickPaths.contains(home.path + "/Library/Caches/com.example.ordinary"), "ordinary cache group lost")
         expect(quickPaths.contains(home.path + "/Library/Caches/com.example.second"), "sibling cache group lost")
-        expect(quickPaths.contains(home.path + "/Library/Caches/Codex/Default/Cache"), "AI cache missing")
-        expect(!quickPaths.contains(home.path + "/Library/Caches/Codex"), "AI profile parent offered")
+        expect(!quickPaths.contains(where: { $0.hasPrefix(home.path + "/Library/Caches/Codex") }),
+               "Codex caches must move to the Agent tab")
         expect(CleanupRiskPolicy.core(section: "Caches", path: home.path + "/Library/Caches/Codex",
             homeDirectory: home.path).risk == .protected, "empty-cache profile parent was not protected")
         expect(CleanupRiskPolicy.core(section: "Caches", path: home.path + "/Library/Caches/Codex/Default/Cookies",

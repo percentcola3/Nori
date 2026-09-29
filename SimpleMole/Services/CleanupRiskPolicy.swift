@@ -413,6 +413,36 @@ enum CleanupRiskPolicy {
         ]
     }
 
+    /// Agent 专清接管的根：磁盘清理默认流程不再发现、计量或推荐这些路径，
+    /// 它们只在 Agent 页按目录逐项呈现。与 `AgentCatalog` 的目录保持一致。
+    static func agentOwnedRoots(homeDirectory: String = NSHomeDirectory()) -> [String] {
+        let home = normalize(homeDirectory)
+        let caches = [
+            "Codex", "com.openai.codex", "com.todesktop.230313mzl4w4u92",
+            "com.todesktop.230313mzl4w4u92.ShipIt", "cursor-compile-cache", "copilot",
+            "com.anthropic.claudefordesktop", "com.anthropic.claudefordesktop.ShipIt",
+            "com.google.antigravity", "com.exafunction.windsurf"
+        ].map { home + "/Library/Caches/" + $0 }
+        let support = [
+            "Cursor", "Claude", "Codex", "Antigravity", "Devin", "Windsurf",
+            "Qoder", "Kiro", "Trae"
+        ].map { home + "/Library/Application Support/" + $0 }
+        let dotted = [
+            ".cache/opencode", ".cache/chrome-devtools-mcp", ".claude", ".codex", ".cursor",
+            ".grok", ".gemini", ".copilot", ".kimi", ".pi", ".factory",
+            ".local/share/opencode", ".local/share/claude", ".local/share/cursor-agent"
+        ].map { home + "/" + $0 }
+        return caches + support + dotted + [home + "/Library/Logs/com.openai.codex"]
+    }
+
+    static func isAgentOwnedPath(_ path: String,
+                                 homeDirectory: String = NSHomeDirectory()) -> Bool {
+        let normalized = normalize(path)
+        return agentOwnedRoots(homeDirectory: homeDirectory).contains {
+            normalized == $0 || isStrictDescendant(normalized, of: $0)
+        }
+    }
+
     static func xcode(kind: String,
                       path: String,
                       homeDirectory: String = NSHomeDirectory()) -> CleanupPolicyDescriptor {
@@ -619,7 +649,10 @@ enum CleanupRiskPolicy {
     static func reassess(_ category: CleanupCategory,
                          running snapshot: RunningApplicationSnapshot,
                          homeDirectory: String = NSHomeDirectory()) -> CleanupRiskAssessment {
-        guard category.risk == .safe else {
+        // Agent 用户可选项同样要在执行前复核归属者；风险保持 Warning，
+        // 只可能升级为 Protected，不会被降成 Safe。
+        let agentReview = category.risk == .warning && category.activityGuard == .aiAgent
+        guard category.risk == .safe || agentReview else {
             return .init(risk: category.risk, reasonKey: category.reasonKey)
         }
         guard category.activityGuard != .unsupported else {
@@ -634,7 +667,7 @@ enum CleanupRiskPolicy {
         if ownerIsRunning(for: category, snapshot: snapshot, homeDirectory: homeDirectory) {
             return .init(risk: .protected, reasonKey: "cleanup.risk.runningApplication")
         }
-        return .init(risk: .safe, reasonKey: category.reasonKey)
+        return .init(risk: category.risk, reasonKey: category.reasonKey)
     }
 
     /// 运行态保护按路径裁剪。分类和总容量始终保留在结果中；当前运行的
@@ -644,6 +677,14 @@ enum CleanupRiskPolicy {
         running snapshot: RunningApplicationSnapshot,
         homeDirectory: String = NSHomeDirectory()
     ) -> CleanupCategory? {
+        if category.activityGuard == .aiAgent, category.risk != .protected {
+            guard snapshot.isComplete,
+                  !ownerIsRunning(for: category, snapshot: snapshot,
+                                  homeDirectory: homeDirectory) else {
+                return category.clearingSelection()
+            }
+            return category
+        }
         guard category.risk == .safe else { return category }
         switch category.activityGuard {
         case .none, .openFile, .packageManager:
@@ -662,7 +703,7 @@ enum CleanupRiskPolicy {
                                  homeDirectory: homeDirectory) == false
             }
             return category.selectingPaths(selectable)
-        case .browser, .xcode, .simulator, .ide, .messenger:
+        case .browser, .xcode, .simulator, .ide, .messenger, .aiAgent:
             guard snapshot.isComplete else { return category.clearingSelection() }
             guard !ownerIsRunning(for: category, snapshot: snapshot,
                                   homeDirectory: homeDirectory) else {
@@ -681,7 +722,10 @@ enum CleanupRiskPolicy {
         case .manual:
             switch category.disposal {
             case .permanentDelete:
+                // Warning 文件删除只对带归属守卫的 Agent 目录项开放：
+                // 它们的归属者刚被复核过且未运行，其余 Warning 仍不可执行。
                 return assessment.risk == .safe
+                    || (category.activityGuard == .aiAgent && assessment.risk == .warning)
             case .command, .privileged, .transform:
                 return assessment.risk != .protected
             case .none:
@@ -791,6 +835,11 @@ enum CleanupRiskPolicy {
                                    bundles: ["com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92"],
                                    processes: ["Code", "Cursor", "Electron", "Antigravity",
                                                "Filo", "Claude", "Qoder"])
+        case .aiAgent:
+            // 空归属者是目录显式声明的：旧版本目录、Skill 等不绑定进程，
+            // 只由执行边界的打开文件快照把关（快照不可用时同样拒绝）。
+            return snapshotMatches(snapshot, bundles: category.activityOwners,
+                                   processes: category.activityOwners)
         }
     }
 
