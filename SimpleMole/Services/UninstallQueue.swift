@@ -85,8 +85,6 @@ struct UninstallQueue {
         return true
     }
 
-    mutating func dismissFinished() { jobs.removeAll { $0.state.isFinished } }
-
     private mutating func trimHistory() {
         let oldIDs = Set(jobs.filter { $0.state.isFinished }.dropLast(8).map(\.id))
         jobs.removeAll { oldIDs.contains($0.id) }

@@ -89,15 +89,11 @@ final class PermissionCenter: ObservableObject {
     }
 
     @Published private(set) var fullDiskAccessGranted = false
-    /// 系统视角的完全磁盘访问（子进程实时复检）。完全磁盘访问对"正在运行的
-    /// 进程"同样按进程缓存决定，系统设置里刚打开开关时，只有新进程能看到。
-    @Published private(set) var fullDiskLiveGranted: Bool?
-    /// 系统已授予完全磁盘访问，但当前进程仍被拒绝，需要重启应用。
+    /// 系统已授予完全磁盘访问（子进程实时复检），但当前进程仍被拒绝，需要重启应用。
+    /// 完全磁盘访问按进程缓存，系统设置里刚打开开关时只有新进程能看到。
     @Published private(set) var fullDiskNeedsRelaunch = false
     /// 当前进程视角的屏幕录制状态（进程内缓存，决定截图快捷键是否可用）。
     @Published private(set) var screenRecordingGranted = false
-    /// 系统视角的屏幕录制状态（子进程实时复检）。nil 表示尚未复检或复检失败。
-    @Published private(set) var screenRecordingLiveGranted: Bool?
     /// 系统已授权但当前进程仍缓存着旧结果，需要重启应用。
     @Published private(set) var screenRecordingNeedsRelaunch = false
     /// 已为当前签名请求过一次，系统不会再弹窗；若设置里开关是开的，说明记录已过期。
@@ -120,8 +116,6 @@ final class PermissionCenter: ObservableObject {
         defaults = .standard
         refresh()
     }
-
-    var hasConfiguredScanAccess: Bool { fullDiskAccessGranted }
 
     /// 签名身份不稳定时，授权会在每次重新构建后失效。
     var signingWarningNeeded: Bool { !signing.kind.isStable }
@@ -151,9 +145,6 @@ final class PermissionCenter: ObservableObject {
         }
         return fullDiskAccessGranted
     }
-
-    /// 任一权限"系统已授予、本进程未生效"，重启即可解决。
-    var relaunchUnlocksPermissions: Bool { fullDiskNeedsRelaunch || screenRecordingNeedsRelaunch }
 
     func reportDiskAccessNotDetected() {
         diskAuthorizationErrorKey = "permissions.disk.notDetected"
@@ -208,8 +199,6 @@ final class PermissionCenter: ObservableObject {
         screenRecordingGranted = screenInProcess
         fullDiskAccessGranted = diskInProcess
         if diskInProcess { diskAuthorizationErrorKey = nil }
-        screenRecordingLiveGranted = probe?.screenRecording
-        fullDiskLiveGranted = probe?.fullDiskAccess
         screenRecordingNeedsRelaunch = (probe?.screenRecording == true && !screenInProcess)
         fullDiskNeedsRelaunch = (probe?.fullDiskAccess == true && !diskInProcess)
         if probe?.screenRecording == true || screenInProcess { screenRecordingDecisionStale = false }
@@ -256,7 +245,6 @@ final class PermissionCenter: ObservableObject {
         guard ok else { return false }
         defaults.removeObject(forKey: requestedRequirementKey)
         screenRecordingDecisionStale = false
-        screenRecordingLiveGranted = nil
         _ = CGRequestScreenCaptureAccess()
         if let requirement = signing.requirement {
             defaults.set(requirement, forKey: requestedRequirementKey)
@@ -274,7 +262,6 @@ final class PermissionCenter: ObservableObject {
         let ok = await Self.runTCCReset(service: SettingsDestination.fullDisk.tccService)
         repairMessageKey = ok ? "permissions.repair.done" : "permissions.repair.failed"
         if ok {
-            fullDiskLiveGranted = nil
             fullDiskNeedsRelaunch = false
         }
         refresh()

@@ -223,26 +223,6 @@ enum CleanupRiskPolicy {
                                  reasonKey: "cleanup.risk.appLeftover")
     }
 
-    static func projectArtifact(risk: CleanupRisk = .warning,
-                                runtimeReasonKey: String? = nil) -> CleanupPolicyDescriptor {
-        if let runtimeReasonKey {
-            return protectedDescriptor(source: .projectArtifact,
-                                       reasonKey: runtimeReasonKey)
-        }
-        switch risk {
-        case .safe:
-            return .init(source: .projectArtifact, risk: .safe, disposal: .permanentDelete,
-                         applyRoute: .projectArtifactTrash, activityGuard: .none,
-                         reasonKey: "cleanup.risk.rebuildableDeveloperCache")
-        case .warning:
-            return warningDescriptor(source: .projectArtifact, route: .projectArtifactTrash,
-                                     reasonKey: "cleanup.risk.projectArtifact")
-        case .protected:
-            return protectedDescriptor(source: .projectArtifact,
-                                       reasonKey: "cleanup.risk.protectedContent")
-        }
-    }
-
     static func developerCache(path: String,
                                homeDirectory: String = NSHomeDirectory()) -> CleanupPolicyDescriptor {
         guard (path as NSString).isAbsolutePath else {
@@ -627,22 +607,10 @@ enum CleanupRiskPolicy {
             .map { $0.lowercased() }
     }
 
-    static func system() -> CleanupPolicyDescriptor {
-        .init(source: .system, risk: .warning, disposal: .privileged,
-              applyRoute: .systemPrivileged, activityGuard: .unsupported,
-              reasonKey: "cleanup.risk.system")
-    }
-
     static func tool() -> CleanupPolicyDescriptor {
         .init(source: .tool, risk: .warning, disposal: .command,
               applyRoute: .toolCommand, activityGuard: .unsupported,
               reasonKey: "cleanup.risk.ownerCommand")
-    }
-
-    static func slim() -> CleanupPolicyDescriptor {
-        .init(source: .slim, risk: .warning, disposal: .transform,
-              applyRoute: .imageTransform, activityGuard: .unsupported,
-              reasonKey: "cleanup.risk.transform")
     }
 
     /// 应用执行前使用新快照重判。风险只会保持或升高，不会在旧扫描上降级。
@@ -726,7 +694,7 @@ enum CleanupRiskPolicy {
                 // 它们的归属者刚被复核过且未运行，其余 Warning 仍不可执行。
                 return assessment.risk == .safe
                     || (category.activityGuard == .aiAgent && assessment.risk == .warning)
-            case .command, .privileged, .transform:
+            case .command:
                 return assessment.risk != .protected
             case .none:
                 return false

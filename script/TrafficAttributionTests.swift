@@ -30,13 +30,6 @@ struct TrafficAttributionTests {
         try expect(TrafficAttribution.exitKind(remote: "1.1.1.1:443", interface: "en0") == .direct,
                    "Physical route was missed")
 
-        let tcp = TrafficAttribution.flowKey(proto: "TCP", local: "192.0.2.1:1234", remote: "1.1.1.1:443")
-        try expect(tcp != TrafficAttribution.flowKey(proto: "UDP", local: "192.0.2.1:1234", remote: "1.1.1.1:443"),
-                   "TCP and UDP sources collided")
-        try expect(tcp != TrafficAttribution.flowKey(proto: "TCP", local: "192.0.2.1:1234", remote: "2.2.2.2:443"),
-                   "Different TUN destinations collided")
-        try expect(tcp == TrafficAttribution.socketKey(proto: "tcp", host: "::ffff:192.0.2.1", port: "1234") + "|1.1.1.1|443",
-                   "Socket tuple normalization failed")
-        print("Traffic attribution: app helpers, loopback, TUN tuples and unknown routes passed")
+        print("Traffic attribution: app helpers, loopback and unknown routes passed")
     }
 }

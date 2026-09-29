@@ -217,23 +217,6 @@ final class AutomationStore: ObservableObject {
     }
 
     @discardableResult
-    func replaceForTesting(_ replacement: [SmartTriggerRule]) -> Bool {
-        let next = replacement.map { rule in
-            var safeRule = rule
-            if !safeRule.isValid {
-                safeRule.isEnabled = false
-                safeRule.armedAt = nil
-            } else if safeRule.isEnabled && safeRule.armedAt == nil {
-                safeRule.armedAt = normalizedArmedAt(Date())
-            } else if !safeRule.isEnabled {
-                safeRule.armedAt = nil
-            }
-            return safeRule
-        }
-        return persist(next)
-    }
-
-    @discardableResult
     private func persist(_ next: [SmartTriggerRule],
                          publishOnFailure: Bool = false) -> Bool {
         do {

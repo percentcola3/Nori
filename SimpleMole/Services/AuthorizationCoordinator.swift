@@ -12,8 +12,6 @@ enum ProtectedOperation: Codable, Equatable {
     case optimize
     case developerToolsScan
     case aiScan
-    case xcodeScan
-    case slimScan
     case systemScan
     case installedAppsScan
     case uninstall(app: UninstallApp)

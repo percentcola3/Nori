@@ -192,19 +192,3 @@ extension String {
         return "Auto (follow system)"
     }
 }
-
-// MARK: - 视图辅助
-
-/// 放在任意视图上即可在语言切换时触发刷新。
-struct L10nObserver: ViewModifier {
-    @ObservedObject private var l10n = L10n.shared
-    func body(content: Content) -> some View { content }
-}
-
-extension View {
-    /// 订阅语言变化；同时在场景激活时重新解析系统语言（auto 模式）。
-    func localized() -> some View {
-        modifier(L10nObserver())
-            .onAppear { L10n.shared.refreshIfAuto() }
-    }
-}

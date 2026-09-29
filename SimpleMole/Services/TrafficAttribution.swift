@@ -19,12 +19,6 @@ enum TrafficAttribution {
         return normalizedHost(String(endpoint[..<colon]))
     }
 
-    static func remotePort(_ endpoint: String) -> String {
-        guard let colon = endpoint.lastIndex(of: ":"), colon < endpoint.index(before: endpoint.endIndex)
-        else { return "" }
-        return String(endpoint[endpoint.index(after: colon)...])
-    }
-
     static func normalizedHost(_ host: String) -> String {
         let host = host.lowercased()
         return host.hasPrefix("::ffff:") ? String(host.dropFirst(7)) : host
@@ -37,15 +31,6 @@ enum TrafficAttribution {
 
     static func isRoutableAddress(_ host: String) -> Bool {
         !host.isEmpty && host.allSatisfy { $0.isHexDigit || $0 == "." || $0 == ":" }
-    }
-
-    static func socketKey(proto: String, host: String, port: String) -> String {
-        "\(proto.lowercased())|\(normalizedHost(host))|\(port)"
-    }
-
-    static func flowKey(proto: String, local: String, remote: String) -> String {
-        socketKey(proto: proto, host: remoteHost(local), port: remotePort(local))
-            + "|\(remoteHost(remote))|\(remotePort(remote))"
     }
 
     static func exitKind(remote: String, interface: String?) -> TrafficExitKind {

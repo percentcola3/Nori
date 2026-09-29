@@ -199,8 +199,6 @@ final class AppState: ObservableObject {
     // MARK: 日志
 
     @Published var logLines: [String] = []
-    @Published var logUnread = 0
-    @Published var showLogDrawer = false
 
     // MARK: 进程与端口
 
@@ -242,8 +240,6 @@ final class AppState: ObservableObject {
     private let uninstallPresentationQueue = DispatchQueue(
         label: "com.nori.uninstall-presentation", qos: .userInitiated)
     private var isStoppingUninstallQueue = false
-    var isPreviewingUninstall: Bool { uninstallQueue.activeJob?.state == .preparing }
-    var isUninstalling: Bool { uninstallQueue.activeJob != nil }
 
     // MARK: 开发环境
 
@@ -368,8 +364,6 @@ final class AppState: ObservableObject {
     @Published var analyzePath: String = NSHomeDirectory()
     @Published var analyzeEntries: [AnalyzeEntry] = []
     @Published var analyzeSelection: Set<String> = []
-    @Published var analyzeAIItems: [AnalyzeAIItem] = []
-    @Published var analyzeAISelection: Set<String> = []
     @Published var analyzeTotalSize: UInt64 = 0
     @Published var analyzeLargeFiles: [AnalyzeReport.LargeFile] = []
     /// 磁盘分析的视图：目录浏览，或按大文件/图片/视频聚合的可瘦身清单。
@@ -407,19 +401,6 @@ final class AppState: ObservableObject {
         }.reduce(0) { $0 + $1.size }
     }
 
-    var analyzeAISelectedBytes: UInt64 {
-        analyzeAIItems.filter { analyzeAISelection.contains($0.path) }
-            .reduce(0) { $0 + $1.bytes }
-    }
-
-    var analyzeCombinedSelectedBytes: UInt64 {
-        analyzeSelectedBytes &+ analyzeAISelectedBytes
-    }
-
-    var analyzeCombinedSelectedCount: Int {
-        analyzeSelection.count + analyzeAISelection.count
-    }
-
     var dupSelectedPaths: [String] {
         dupGroups.flatMap { $0 }.filter {
             dupSelection.contains($0.path) && $0.canCleanDirectly
@@ -448,7 +429,6 @@ final class AppState: ObservableObject {
             self.startNextUninstallIfPossible()
         }
     }
-    @Published var slimRequest: ((String) -> Void)?
 
     // MARK: 剪贴板历史与截图（设置中可开关）
 
@@ -594,8 +574,6 @@ final class AppState: ObservableObject {
         case .optimize: runOptimize()
         case .developerToolsScan: scanDeveloperTools()
         case .aiScan: scanAgents()
-        case .xcodeScan: scanXcode()
-        case .slimScan: scanSlim()
         case .systemScan: scanSystemData()
         case .installedAppsScan: scanInstalledApps()
         case .uninstall(let app): previewUninstall(app)
@@ -942,7 +920,6 @@ final class AppState: ObservableObject {
         guard !trimmed.isEmpty else { return }
         logLines.append(trimmed)
         if logLines.count > 400 { logLines.removeFirst(logLines.count - 400) }
-        if !showLogDrawer { logUnread += 1 }
     }
 
     func log(_ text: String) {
@@ -1309,13 +1286,13 @@ final class AppState: ObservableObject {
         ).sorted(by: CleanupCategory.sizeDescending)
     }
 
-    /// 通用单脚本扫描（开发工具 / AI 垃圾 / 图片瘦身）。
-    private func scanSpecial(_ family: CleanupFamily, script: String,
-                             timeout: TimeInterval = 180) {
+    /// 开发工具扫描：包管理器卸载命令，Warning 项留给人工判断。
+    func scanDeveloperTools() {
+        guard authorize(.developerToolsScan, presentingPermissionCenter: true) else { return }
         guard !isBusy else { return }
         let scanEnvironment = fullDiskScanEnvironment
         guard scanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
-        self.family = family
+        family = .tools
         categories = []
         isScanning = true
         cleanupScanComplete = false
@@ -1323,8 +1300,8 @@ final class AppState: ObservableObject {
         log(l10n.t("log.scanningSafe"))
         Task {
             async let scanResult = MoleEngine.shared.runBridge(
-                script, extraEnvironment: scanEnvironment,
-                timeout: timeout, onLine: streamLog)
+                "bin/app_tool_scan.sh", extraEnvironment: scanEnvironment,
+                timeout: 180, onLine: streamLog)
             async let runtimeText = Task.detached(priority: .utility) {
                 SystemMetrics.processSnapshotText()
             }.value
@@ -1336,9 +1313,8 @@ final class AppState: ObservableObject {
                 timedOut: false)
             isScanning = false
             cleanupScanComplete = result.succeeded && runtime.succeeded
-            // 特殊家族（开发环境 / AI / 图片）保留 Warning 项供人工判断，
-            // Safe 项默认全选；运行态保护交给执行前的重新评估。
-            categories = Parsers.specialCategories(result.output, family: family)
+            // 运行态保护交给执行前的重新评估。
+            categories = Parsers.toolCategories(result.output)
                 .sorted(by: CleanupCategory.sizeDescending)
             if !cleanupScanComplete {
                 for index in categories.indices { categories[index].selected = false }
@@ -1360,31 +1336,6 @@ final class AppState: ObservableObject {
             }
             logFailure(runtime)
         }
-    }
-
-    func scanDeveloperTools() {
-        guard authorize(.developerToolsScan, presentingPermissionCenter: true) else { return }
-        scanSpecial(.tools, script: "bin/app_tool_scan.sh")
-    }
-
-    func scanAI() {
-        guard authorize(.aiScan, presentingPermissionCenter: true) else { return }
-        scanSpecial(.ai, script: "bin/app_ai_scan.sh", timeout: 600)
-    }
-
-    func scanXcode() {
-        guard authorize(.xcodeScan, presentingPermissionCenter: true) else { return }
-        scanSpecial(.xcode, script: "bin/app_xcode_scan.sh", timeout: 300)
-    }
-
-    func scanSlim() {
-        guard authorize(.slimScan, presentingPermissionCenter: true) else { return }
-        scanSpecial(.slim, script: "bin/app_slim_scan.sh")
-    }
-
-    func openSlimCleanup() {
-        jump(to: .cleanup)
-        scanSlim()
     }
 
     /// 系统数据页扫描：特权预览脚本输出分组 TSV，独立解析为本页清单。
@@ -1543,7 +1494,7 @@ final class AppState: ObservableObject {
                 self.isApplying = true
                 Task {
                     let result = await self.executeCleanupRoute(.installerTrash,
-                        categories: [selection], imageMode: nil, mode: .manual,
+                        categories: [selection], mode: .manual,
                         permanently: false)
                     self.installerCandidates = self.installerCandidates?.retainingPaths(
                         self.installerCandidates?.paths.filter { FileManager.default.fileExists(atPath: $0) } ?? [])
@@ -1577,47 +1528,23 @@ final class AppState: ObservableObject {
                 statusText = l10n.t("cleanup.selectNone")
                 return
             }
-            if applyFamily == .slim {
-                slimRequest = { [weak self] mode in
-                    self?.confirmApply(categories: selectedCategories, imageMode: mode,
-                                       family: applyFamily)
-                }
-                return
-            }
-            confirmApply(categories: selectedCategories, imageMode: nil, family: applyFamily)
+            confirmApply(categories: selectedCategories, family: applyFamily)
         }
     }
 
     private func confirmApply(categories selectedCategories: [CleanupCategory],
-                              imageMode: String?, family applyFamily: CleanupFamily) {
+                              family applyFamily: CleanupFamily) {
         let selectedCount = selectedCategories.reduce(0) { $0 + $1.paths.count }
         let actionTitle: String
         var message: String
         switch applyFamily {
-        case .clean, .purge:
-            // 磁盘清理与项目产物是永久删除：用独立的不可逆确认文案。
+        case .clean:
+            // 磁盘清理是永久删除：用独立的不可逆确认文案。
             actionTitle = l10n.t("confirm.cleanupPermanent.ok")
             message = l10n.t("confirm.cleanupPermanent.msg")
         case .tools:
             actionTitle = l10n.t("confirm.apply.tools.ok")
             message = l10n.t("confirm.apply.tools.msg")
-        case .slim:
-            let replacing = imageMode == "replace"
-            actionTitle = replacing
-                ? l10n.t("confirm.apply.slimReplace.ok")
-                : l10n.t("confirm.apply.slimCopy.ok")
-            message = replacing
-                ? l10n.t("confirm.apply.slimReplace.msg")
-                : l10n.t("confirm.apply.slimCopy.msg")
-        case .ai:
-            actionTitle = l10n.t("confirm.apply.trash.ok")
-            message = l10n.t("confirm.apply.ai.msg")
-        case .xcode:
-            actionTitle = l10n.t("confirm.apply.trash.ok")
-            message = l10n.t("confirm.xcode.msg")
-        default:
-            actionTitle = l10n.t("confirm.apply.trash.ok")
-            message = l10n.t("confirm.apply.trash.msg")
         }
         let warningCount = selectedCategories
             .filter { $0.risk == .warning }
@@ -1631,26 +1558,25 @@ final class AppState: ObservableObject {
                 : l10n.tf("confirm.apply.title", selectedCount),
             message: message,
             confirmLabel: actionTitle) { [weak self] in
-                self?.performApply(categories: selectedCategories, imageMode: imageMode,
+                self?.performApply(categories: selectedCategories,
                                    family: applyFamily, mode: .manual)
         }
     }
 
-    /// 永久删除的家族：清理页与项目产物（构建产物可本地重建）；安装包、
-    /// 卸载、分析选择项默认移入废纸篓。
-    private static let permanentFamilies: Set<CleanupFamily> = [.clean, .purge]
+    /// 永久删除的家族：清理页；安装包、卸载、分析选择项默认移入废纸篓。
+    private static let permanentFamilies: Set<CleanupFamily> = [.clean]
 
     /// 执行阶段再次读取进程表，并按每个类别自己的 route 分流。扫描来源不会再
     /// 因为 UI 合并展示而退化成通用删除入口。
     private func performApply(categories requested: [CleanupCategory],
-                              imageMode: String?, family applyFamily: CleanupFamily,
+                              family applyFamily: CleanupFamily,
                               mode: CleanupExecutionMode) {
         if uninstallQueue.activeJob != nil {
             guard pendingCleanup == nil else { return }
             cleanupQueued = true
             statusText = l10n.t("cleanup.queued")
             pendingCleanup = { [weak self] in
-                self?.performApply(categories: requested, imageMode: imageMode,
+                self?.performApply(categories: requested,
                                    family: applyFamily, mode: mode)
             }
             return
@@ -1721,7 +1647,7 @@ final class AppState: ObservableObject {
                 let started = Date()
                 log("cleanup route=\(route.rawValue) started paths=\(routeCategories.reduce(0) { $0 + $1.paths.count })")
                 let routeResult = await executeCleanupRoute(
-                    route, categories: routeCategories, imageMode: imageMode, mode: mode,
+                    route, categories: routeCategories, mode: mode,
                     permanently: Self.permanentFamilies.contains(applyFamily))
                 log(String(format: "cleanup route=%@ completed %.2fs", route.rawValue, Date().timeIntervalSince(started)))
                 executionResult.merge(routeResult)
@@ -1731,14 +1657,7 @@ final class AppState: ObservableObject {
             isApplying = false
             reportCleanupResult(executionResult,
                                 permanently: Self.permanentFamilies.contains(applyFamily))
-            switch applyFamily {
-            case .clean: break
-            case .slim: scanSlim()
-            case .tools: scanDeveloperTools()
-            case .ai: scanAI()
-            case .xcode: scanXcode()
-            default: break
-            }
+            if applyFamily == .tools { scanDeveloperTools() }
         }
     }
 
@@ -1770,31 +1689,26 @@ final class AppState: ObservableObject {
 
     private func executeCleanupRoute(_ route: CleanupApplyRoute,
                                      categories routeCategories: [CleanupCategory],
-                                     imageMode: String?,
                                      mode: CleanupExecutionMode,
                                      permanently: Bool = false) async
         -> CleanupExecutionResult {
         let preparedRecords = await Task.detached(priority: .utility) {
             let raw = routeCategories.flatMap(\.paths)
             switch route {
-            case .genericTrash, .installerTrash, .projectArtifactTrash,
-                 .developerCacheTrash, .aiTrash, .xcodeTrash:
+            case .genericTrash, .installerTrash, .developerCacheTrash, .aiTrash, .xcodeTrash:
                 return (raw.count, DeletionPlan.nonOverlappingPaths(raw))
-            default:
+            case .toolCommand, .none:
                 return (raw.count, raw)
             }
         }.value
         let records = preparedRecords.1
         let coalescedCount = max(0, preparedRecords.0 - records.count)
-        guard !records.isEmpty, let bridgeName = bridgeName(for: route) else {
-            return CleanupExecutionResult(
-                skipped: coalescedCount,
-                failed: records.count)
+        guard !records.isEmpty else {
+            return CleanupExecutionResult(skipped: coalescedCount)
         }
 
-        // Core cleanup routes are implemented by NativeCore. Specialized
-        // command routes (owner GC, image transforms, and privileged system
-        // operations) continue through their dedicated bridges.
+        let bridgeName: String
+        let stdinData: Data
         switch route {
         case .genericTrash, .developerCacheTrash, .aiTrash, .xcodeTrash:
             let applied = await Task.detached(priority: .utility) {
@@ -1814,27 +1728,9 @@ final class AppState: ObservableObject {
                 skipped: summary.skipped + coalescedCount + max(0, missing),
                 failed: summary.failed,
                 removedPaths: summary.removedPaths)
-        default:
-            break
-        }
-
-        let stdinData: Data? = await Task.detached(priority: .utility) {
-            switch route {
-            case .toolCommand:
-                var data = Data()
-                for record in records {
-                    data.append(contentsOf: record.utf8)
-                    data.append(0)
-                }
-                return data
-            case .imageTransform:
-                return DeletionPlan(records: records) { record in
-                    guard let separator = record.firstIndex(of: "|") else { return nil }
-                    let path = String(record[record.index(after: separator)...])
-                    return path.hasPrefix("/") ? path : nil
-                }.stdinData
-            case .genericTrash, .installerTrash, .projectArtifactTrash,
-                 .developerCacheTrash, .aiTrash, .xcodeTrash:
+        case .installerTrash:
+            bridgeName = "bin/app_installer_apply.sh"
+            stdinData = await Task.detached(priority: .utility) {
                 let items = routeCategories.flatMap { category in
                     category.paths.compactMap { path -> DeletionPlan.Item? in
                         guard let identity = category.pathIdentities[path] else { return nil }
@@ -1842,11 +1738,16 @@ final class AppState: ObservableObject {
                     }
                 }
                 return DeletionPlan(items: items).stdinData
-            case .systemPrivileged, .none:
-                return nil
+            }.value
+        case .toolCommand:
+            bridgeName = "bin/app_tool_apply.sh"
+            var data = Data()
+            for record in records {
+                data.append(contentsOf: record.utf8)
+                data.append(0)
             }
-        }.value
-        guard let stdinData else {
+            stdinData = data
+        case .none:
             return CleanupExecutionResult(skipped: coalescedCount, failed: records.count)
         }
 
@@ -1860,14 +1761,9 @@ final class AppState: ObservableObject {
             }
         }()]
         environment.merge(fullDiskScanEnvironment) { _, authorized in authorized }
-        switch route {
-        case .genericTrash, .installerTrash, .projectArtifactTrash,
-             .developerCacheTrash, .aiTrash, .xcodeTrash:
-            if permanently { environment["SIMPLEMOLE_DELETE_MODE"] = "permanent" }
-        default:
-            break
+        if route == .installerTrash, permanently {
+            environment["SIMPLEMOLE_DELETE_MODE"] = "permanent"
         }
-        if route == .imageTransform { environment["MOLE_IMAGE_MODE"] = imageMode ?? "copy" }
         let result = await MoleEngine.shared.runBridgeWithStdin(
             bridgeName, stdinData: stdinData, extraEnvironment: environment, timeout: 900)
         if !result.output.isEmpty { log(result.output) }
@@ -1879,20 +1775,6 @@ final class AppState: ObservableObject {
         }
         summary.skipped += coalescedCount
         return summary
-    }
-
-    private func bridgeName(for route: CleanupApplyRoute) -> String? {
-        switch route {
-        case .genericTrash: return "bin/app_apply.sh"
-        case .installerTrash: return "bin/app_installer_apply.sh"
-        case .projectArtifactTrash: return "bin/app_purge_apply.sh"
-        case .developerCacheTrash: return "bin/app_dev_apply.sh"
-        case .aiTrash: return "bin/app_ai_apply.sh"
-        case .xcodeTrash: return "bin/app_xcode_apply.sh"
-        case .toolCommand: return "bin/app_tool_apply.sh"
-        case .imageTransform: return "bin/app_slim_apply.sh"
-        case .systemPrivileged, .none: return nil
-        }
     }
 
     // MARK: - 进程与端口
@@ -2485,8 +2367,6 @@ final class AppState: ObservableObject {
         if !uninstallQueue.hasWork { scheduleUninstallInventoryRefresh(after: 1) }
     }
 
-    func dismissFinishedUninstalls() { uninstallQueue.dismissFinished() }
-
     func stopUninstallQueueForTermination() {
         isStoppingUninstallQueue = true
         pendingCleanup = nil
@@ -2804,8 +2684,6 @@ final class AppState: ObservableObject {
         analyzeMediaSummary = MediaSummary()
         slimSelection.removeAll()
         analyzeSelection.removeAll()
-        analyzeAISelection.removeAll()
-        analyzeAIItems = []
         dupGroups = []
         dupSelection.removeAll()
         analyzeStatus = l10n.t("analyze.scanning")
@@ -2832,8 +2710,6 @@ final class AppState: ObservableObject {
 
     private func showAnalyzeReport(_ report: AnalyzeReport) {
         analyzeSelection.removeAll()
-        analyzeAISelection.removeAll()
-        analyzeAIItems = []
         dupGroups = []
         dupSelection.removeAll()
         analyzeIsOverview = report.overview
@@ -3018,14 +2894,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    func toggleAnalyzeAISelection(_ item: AnalyzeAIItem) {
-        if analyzeAISelection.contains(item.path) {
-            analyzeAISelection.remove(item.path)
-        } else {
-            analyzeAISelection.insert(item.path)
-        }
-    }
-
     func revealAnalyzeEntry(_ entry: AnalyzeEntry) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.path)])
     }
@@ -3040,16 +2908,12 @@ final class AppState: ObservableObject {
         let paths = analyzeEntries.filter {
             analyzeSelection.contains($0.path) && $0.canCleanDirectly
         }.map(\.path)
-        let aiPaths = analyzeAIItems.filter {
-            analyzeAISelection.contains($0.path)
-        }.map(\.path)
-        guard !paths.isEmpty || !aiPaths.isEmpty else { return }
+        guard !paths.isEmpty else { return }
         let deletionPlan = DeletionPlan(paths: paths)
-        let aiDeletionPlan = DeletionPlan(paths: aiPaths)
-        let selectedCount = deletionPlan.items.count + aiDeletionPlan.items.count
+        let selectedCount = deletionPlan.items.count
         confirmation = Confirmation(
             title: l10n.tf("analyze.confirm.title", selectedCount),
-            message: l10n.tf("analyze.confirm.msg", ByteFormat.format(analyzeCombinedSelectedBytes)),
+            message: l10n.tf("analyze.confirm.msg", ByteFormat.format(analyzeSelectedBytes)),
             confirmLabel: l10n.t("confirm.apply.trash.ok")) { [weak self] in
                 guard let self else { return }
                 self.isApplying = true
@@ -3074,19 +2938,6 @@ final class AppState: ObservableObject {
                         skipped += summary.skipped
                         failed += summary.failed
                         allSucceeded = allSucceeded && summary.failed == 0 && summary.skipped == 0
-                    }
-                    if !aiDeletionPlan.items.isEmpty {
-                        let result = await MoleEngine.shared.runBridgeWithStdin(
-                            "bin/app_analyze_ai_apply.sh",
-                            stdinData: aiDeletionPlan.stdinData,
-                            extraEnvironment: self.fullDiskScanEnvironment,
-                            timeout: 900)
-                        if !result.output.isEmpty { self.log(result.output) }
-                        self.logFailure(result, stdoutAlreadyLogged: true)
-                        let summary = Parsers.applySummary(result.output)
-                        removed += summary.removed
-                        failed += summary.failed
-                        allSucceeded = allSucceeded && result.succeeded
                     }
                     self.isApplying = false
                     self.statusText = (allSucceeded && failed == 0)
@@ -3451,7 +3302,7 @@ final class AppState: ObservableObject {
                 guard currentSmartTrigger(matching: rule) != nil else { return false }
                 guard let categories = grouped[route] else { continue }
                 let result = await executeCleanupRoute(route, categories: categories,
-                                                       imageMode: nil, mode: .automatic)
+                                                       mode: .automatic)
                 failed += result.failed
             }
             CleanupCache.invalidate()

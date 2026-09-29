@@ -76,8 +76,6 @@ extension Color {
     static let onAccent = adaptive(light: srgb(EarthBluePalette.onAccentLight), dark: srgb(EarthBluePalette.onAccentDark))
 
     // 玻璃与表面
-    /// 品牌深蓝玻璃保留折射，提高着色强度以减轻后景造成的偏色。
-    static let glassTint = Color(nsColor: .forgeGlassTint)
     /// 减少透明度时的实底。
     static let glassOpaque = adaptive(light: srgb(EarthBluePalette.glassLight), dark: srgb(EarthBluePalette.glassDark))
     /// 卡片 / 行底色三级：中性白罩，避免给品牌深蓝叠加青色。
@@ -104,7 +102,6 @@ extension Color {
     static let moleAccent = accent
     static let moleAccentText = accentText
     static let moleOnAccent = onAccent
-    static let moleGlassBase = glassOpaque
 }
 
 extension Color {

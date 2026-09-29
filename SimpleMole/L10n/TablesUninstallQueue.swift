@@ -18,8 +18,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "Completed",
         "uninstall.queue.failed": "Failed · try again",
         "uninstall.queue.retry": "Retry",
-        "uninstall.queue.confirm": "After confirmation, requests are added to the queue and processed in order in the background. You can cancel queued requests; macOS may ask for administrator authorization separately.",
-        "uninstall.queue.add": "Add to uninstall queue",
         "uninstall.queue.permissionLost": "Disk access authorization is no longer available. Authorize again before adding this app.",
     ]
 
@@ -36,8 +34,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "已完成",
         "uninstall.queue.failed": "失败 · 可重试",
         "uninstall.queue.retry": "重试卸载",
-        "uninstall.queue.confirm": "确认后会加入队列，按顺序在后台处理。排队期间可以取消；需要管理员权限时，macOS 会单独请求授权。",
-        "uninstall.queue.add": "加入卸载队列",
         "uninstall.queue.permissionLost": "磁盘访问授权已失效，请重新授权后再添加此应用。",
     ]
 
@@ -51,8 +47,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "已完成",
         "uninstall.queue.failed": "失敗 · 可重試",
         "uninstall.queue.retry": "重試解除安裝",
-        "uninstall.queue.confirm": "確認後會加入佇列，依序在背景處理。排隊期間可以取消；需要管理員權限時，macOS 會另外要求授權。",
-        "uninstall.queue.add": "加入解除安裝佇列",
         "uninstall.queue.permissionLost": "磁碟存取授權已失效，請重新授權後再加入此應用程式。",
     ]
 
@@ -66,8 +60,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "完了",
         "uninstall.queue.failed": "失敗 · 再試行できます",
         "uninstall.queue.retry": "再試行",
-        "uninstall.queue.confirm": "確認後にキューへ追加し、順番にバックグラウンドで処理します。待機中は取り消せます。管理者権限が必要な場合は macOS が別途確認します。",
-        "uninstall.queue.add": "アンインストール待ち行列に追加",
         "uninstall.queue.permissionLost": "ディスクアクセスの許可が失効しました。もう一度許可してからアプリを追加してください。",
     ]
 
@@ -81,8 +73,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "완료",
         "uninstall.queue.failed": "실패 · 다시 시도",
         "uninstall.queue.retry": "다시 시도",
-        "uninstall.queue.confirm": "확인하면 대기열에 추가되어 순서대로 백그라운드에서 처리됩니다. 대기 중에는 취소할 수 있으며, 관리자 권한이 필요하면 macOS가 별도로 요청합니다.",
-        "uninstall.queue.add": "삭제 대기열에 추가",
         "uninstall.queue.permissionLost": "디스크 접근 권한이 만료되었습니다. 다시 허용한 후 앱을 추가하세요.",
     ]
 
@@ -96,8 +86,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "Abgeschlossen",
         "uninstall.queue.failed": "Fehlgeschlagen · erneut versuchen",
         "uninstall.queue.retry": "Erneut versuchen",
-        "uninstall.queue.confirm": "Nach der Bestätigung wird der Auftrag in die Warteschlange aufgenommen und im Hintergrund der Reihe nach ausgeführt. Wartende Aufträge können abgebrochen werden; macOS fragt Admin-Rechte bei Bedarf separat ab.",
-        "uninstall.queue.add": "Zur Deinstallationswarteschlange",
         "uninstall.queue.permissionLost": "Die Festplattenzugriffsfreigabe ist nicht mehr gültig. Erlaube den Zugriff erneut, bevor du diese App hinzufügst.",
     ]
 
@@ -111,8 +99,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "Terminé",
         "uninstall.queue.failed": "Échec · réessayer",
         "uninstall.queue.retry": "Réessayer",
-        "uninstall.queue.confirm": "Après confirmation, la demande rejoint la file et est traitée dans l’ordre en arrière-plan. Vous pouvez annuler une demande en attente ; macOS demandera séparément les droits administrateur si nécessaire.",
-        "uninstall.queue.add": "Ajouter à la file de désinstallation",
         "uninstall.queue.permissionLost": "L’autorisation d’accès au disque n’est plus valide. Autorisez-la à nouveau avant d’ajouter cette app.",
     ]
 
@@ -126,8 +112,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "Completado",
         "uninstall.queue.failed": "Error · reintentar",
         "uninstall.queue.retry": "Reintentar",
-        "uninstall.queue.confirm": "Tras confirmar, la solicitud entra en la cola y se procesa en orden en segundo plano. Puedes cancelar las solicitudes en espera; macOS pedirá autorización de administrador por separado si hace falta.",
-        "uninstall.queue.add": "Añadir a la cola de desinstalación",
         "uninstall.queue.permissionLost": "La autorización de acceso al disco ya no está disponible. Autorízala de nuevo antes de añadir esta app.",
     ]
 
@@ -141,8 +125,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "Concluído",
         "uninstall.queue.failed": "Falha · tentar novamente",
         "uninstall.queue.retry": "Tentar novamente",
-        "uninstall.queue.confirm": "Após a confirmação, o pedido entra na fila e é processado em ordem em segundo plano. Você pode cancelar pedidos em espera; o macOS solicitará autorização de administrador separadamente quando necessário.",
-        "uninstall.queue.add": "Adicionar à fila de desinstalação",
         "uninstall.queue.permissionLost": "A autorização de acesso ao disco não está mais disponível. Autorize novamente antes de adicionar este app.",
     ]
 
@@ -156,8 +138,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "Completato",
         "uninstall.queue.failed": "Operazione non riuscita · riprova",
         "uninstall.queue.retry": "Riprova",
-        "uninstall.queue.confirm": "Dopo la conferma, la richiesta viene aggiunta alla coda ed eseguita in ordine in background. Le richieste in attesa possono essere annullate; macOS chiederà separatamente l’autorizzazione di amministratore se necessaria.",
-        "uninstall.queue.add": "Aggiungi alla coda di disinstallazione",
         "uninstall.queue.permissionLost": "L’autorizzazione per l’accesso al disco non è più disponibile. Autorizza di nuovo prima di aggiungere questa app.",
     ]
 
@@ -171,8 +151,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "Завершено",
         "uninstall.queue.failed": "Ошибка · повторить",
         "uninstall.queue.retry": "Повторить",
-        "uninstall.queue.confirm": "После подтверждения запрос попадёт в очередь и будет обработан по порядку в фоне. Ожидающие запросы можно отменить; при необходимости macOS отдельно запросит права администратора.",
-        "uninstall.queue.add": "Добавить в очередь удаления",
         "uninstall.queue.permissionLost": "Разрешение на доступ к диску больше недоступно. Разрешите доступ снова перед добавлением приложения.",
     ]
 
@@ -186,8 +164,6 @@ enum L10nUninstallQueueTables {
         "uninstall.queue.succeeded": "Tamamlandı",
         "uninstall.queue.failed": "Başarısız · yeniden dene",
         "uninstall.queue.retry": "Yeniden dene",
-        "uninstall.queue.confirm": "Onaydan sonra istek kuyruğa eklenir ve arka planda sırayla işlenir. Bekleyen istekleri iptal edebilirsiniz; gerekirse macOS yönetici yetkisini ayrıca ister.",
-        "uninstall.queue.add": "Kaldırma kuyruğuna ekle",
         "uninstall.queue.permissionLost": "Disk erişimi yetkisi artık kullanılamıyor. Bu uygulamayı eklemeden önce yeniden izin verin.",
     ]
 

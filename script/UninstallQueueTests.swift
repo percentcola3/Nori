@@ -183,12 +183,6 @@ struct UninstallQueueTests {
         }
         expect(queue.jobs.count == 8 && queue.jobs.map(\.id) == Array(finishedIDs.suffix(8)),
                "only the latest eight finished jobs should be retained")
-        let active = queue.enqueue(app: app("Active"), plan: nil)!
-        _ = queue.startNext(blocked: false)
-        let pending = queue.enqueue(app: app("Waiting"), plan: nil)!
-        queue.dismissFinished()
-        expect(queue.jobs.map(\.id) == [active, pending],
-               "dismissing history must preserve both active and pending work")
         let restarted = UninstallQueue()
         expect(restarted.jobs.isEmpty && !restarted.hasWork,
                "a new instance must not resume prior destructive confirmations")

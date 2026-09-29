@@ -33,15 +33,4 @@ enum CleanupAgePolicy {
         guard evidence.timeIntervalSince(now) <= clockSkewTolerance else { return false }
         return now.timeIntervalSince(evidence) >= retention
     }
-
-    /// 扫描后、执行前的复核：单元在扫描之后重新变得活跃（或时间证据变得
-    /// 不可用）时，返回 false 以跳过该条目。
-    ///
-    /// `previousEvidence` 是扫描时看到的证据；执行前重新测得 `recheck`。
-    /// 若重测证据缺失（目录被移动、权限变化），同样跳过。
-    static func remainsStale(previous: Date?, recheck: Date?, now: Date = Date(),
-                             retention: TimeInterval) -> Bool {
-        guard let recheck else { return false }
-        return isStale(recheck, now: now, retention: retention)
-    }
 }

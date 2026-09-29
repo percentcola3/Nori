@@ -48,23 +48,12 @@ struct CleanupScanProgress: Equatable, Sendable {
         let raw = min(1, max(0, Double(completed) / Double(total)))
         return raw
     }
-
-    var countText: String? {
-        guard total > 0 else { return nil }
-        return "\(min(completed, total))/\(total)"
-    }
-
-    var detailCountText: String? {
-        guard detailTotal > 0 else { return nil }
-        return "\(min(detailCompleted, detailTotal))/\(detailTotal)"
-    }
 }
 
 enum CleanupSource: String, Codable, CaseIterable, Hashable, Sendable {
     case core
     case appLeftover
     case installer
-    case projectArtifact
     case developerCache
     case tool
     case aiSession
@@ -72,8 +61,6 @@ enum CleanupSource: String, Codable, CaseIterable, Hashable, Sendable {
     case aiModel
     case xcodeCache
     case xcodeArchive
-    case slim
-    case system
     case unknown
 }
 
@@ -90,8 +77,6 @@ enum CleanupRisk: String, Codable, CaseIterable, Hashable, Sendable {
 enum CleanupDisposal: String, Codable, CaseIterable, Hashable, Sendable {
     case permanentDelete
     case command
-    case privileged
-    case transform
     case none
 
     init(from decoder: Decoder) throws {
@@ -99,8 +84,6 @@ enum CleanupDisposal: String, Codable, CaseIterable, Hashable, Sendable {
         switch try container.decode(String.self) {
         case "permanentDelete", "trash": self = .permanentDelete
         case "command": self = .command
-        case "privileged": self = .privileged
-        case "transform": self = .transform
         default: self = .none
         }
     }
@@ -109,13 +92,10 @@ enum CleanupDisposal: String, Codable, CaseIterable, Hashable, Sendable {
 enum CleanupApplyRoute: String, Codable, CaseIterable, Hashable, Sendable {
     case genericTrash
     case installerTrash
-    case projectArtifactTrash
     case developerCacheTrash
     case aiTrash
     case xcodeTrash
     case toolCommand
-    case systemPrivileged
-    case imageTransform
     case none
 }
 
@@ -149,7 +129,7 @@ enum CleanupGroupBucket: String, Hashable, CaseIterable {
             return
         }
         switch category.source {
-        case .developerCache, .projectArtifact, .xcodeCache, .xcodeArchive, .tool:
+        case .developerCache, .xcodeCache, .xcodeArchive, .tool:
             self = .developer
         case .aiSession, .aiCache, .aiModel:
             self = .ai
@@ -494,7 +474,7 @@ struct SystemDataEntry: Identifiable, Equatable, Sendable {
 
 /// 当前清理结果所属的家族，决定确认文案与 apply 桥接脚本。
 enum CleanupFamily: String {
-    case clean, dev, tools, purge, slim, system, ai, xcode
+    case clean, tools
 }
 
 /// 官方 GC 命令（owner 命令面板条目）。
@@ -761,7 +741,6 @@ struct UninstallFile: Identifiable, Codable, Equatable, Sendable {
     let path: String
 
     var id: String { "\(label)\u{1F}\(path)" }
-    var needsPrivilege: Bool { label == "system" || label == "diag" }
     var informational: Bool { label == "review" || label == "manual" }
     var isAppBundle: Bool { label == "app" }
 
@@ -807,12 +786,6 @@ struct UninstallFile: Identifiable, Codable, Equatable, Sendable {
         }
         let suffix = String(remainder[separator...])
         return suffixes.contains { suffix == $0 || suffix.hasPrefix($0 + "/") }
-    }
-
-    /// 本地化展示名（slim/unknown 等未知键回退原文）。
-    var displayLabel: String {
-        let localized = L10n.shared.t("file.\(label)")
-        return localized == "file.\(label)" ? label : localized
     }
 }
 
@@ -981,36 +954,6 @@ struct AnalyzeEntry: Identifiable, Codable, Equatable {
         case lastAccess = "last_access"
     }
 
-    /// 客户端洞察：识别清理规则之外的可疑占用（日志、Source Map、内存快照等）。
-    var hintKind: String? {
-        let lower = name.lowercased()
-        if isDir {
-            let artifactDirs = ["node_modules", "target", "build", "dist", "out",
-                                ".gradle", ".next", ".nuxt", ".turbo", ".cache",
-                                "deriveddata", "cmake-build-debug", "cmake-build-release"]
-            if artifactDirs.contains(lower) { return "hint.artifact" }
-            if lower == "logs" || lower.hasSuffix(".logs") { return "hint.log" }
-            return nil
-        }
-        if lower.hasSuffix(".memgraph") || lower.hasSuffix(".heapdump")
-            || lower.hasSuffix(".alloc") || lower.hasSuffix(".hprof") {
-            return "hint.snapshot"
-        }
-        if lower.hasSuffix(".map") || lower.hasSuffix(".map.gz") || lower.hasSuffix(".js.map") {
-            return "hint.map"
-        }
-        if lower.hasSuffix(".log") || lower.contains(".log.") || lower.hasSuffix(".out") {
-            return "hint.log"
-        }
-        if lower.hasSuffix(".core") || lower.hasSuffix(".dump") || lower.hasSuffix(".crash") {
-            return "hint.dump"
-        }
-        if lower.hasSuffix(".trace") || lower.hasSuffix(".trace.zip") {
-            return "hint.trace"
-        }
-        return nil
-    }
-
     var handling: Handling {
         if isSystemManaged { return .systemReadOnly }
         if isApplicationBundle { return .application }
@@ -1098,23 +1041,6 @@ struct AnalyzeReport: Codable {
         case totalSize = "total_size"
         case totalFiles = "total_files"
     }
-}
-
-/// 磁盘分析中的用户管理 AI 内容。仅来自专用白名单扫描器，默认不选。
-struct AnalyzeAIItem: Identifiable, Equatable {
-    enum Kind: String {
-        case skill
-        case linkedSkill = "skill_link"
-        case mcpCache = "mcp_cache"
-    }
-
-    let bytes: UInt64
-    let kind: Kind
-    let name: String
-    let path: String
-
-    var id: String { path }
-    var isLinkedSkill: Bool { kind == .linkedSkill }
 }
 
 /// APFS 本地快照条目。
@@ -1232,7 +1158,6 @@ enum ByteFormat {
 extension Notification.Name {
     /// 截图完成（screencapture 输出文件就绪），携带图片 URL。
     static let smTakeScreenshot = Notification.Name("SMTakeScreenshot")
-    static let smOpenScreenshotEditor = Notification.Name("SMOpenScreenshotEditor")
     /// 光标离开灵动岛可见形状、窗口恢复鼠标穿透；之后不再有悬停事件送达。
     static let smIslandPointerExited = Notification.Name("SMIslandPointerExited")
 }

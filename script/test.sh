@@ -559,29 +559,15 @@ test_productivity_feature_contract() {
 
 test_scan_access_boundary() {
     local home="$TEST_ROOT/scan-access-home"
-    local stub_dir="$TEST_ROOT/scan-access-bin"
     local helper="$RUNTIME_DIR/bin/app_scan_access.sh"
     local safe_installer="$home/Public/safe.dmg"
     local protected_installer="$home/Downloads/protected.dmg"
-    local protected_image="$home/Pictures/protected.png"
-    local safe_ai="$home/.cache/puppeteer/cache.bin"
-    local codex_cache="$home/Library/Caches/Codex/Default/Cache"
-    local ai_session="$home/.claude/projects/session.jsonl"
-    local protected_ai="$home/Library/Application Support/Code/Cache/cache.bin"
-    local outside_ai="$TEST_ROOT/scan-access-outside"
-    local output="" rc=0
+    local output=""
 
     mkdir -p "$home/Public" "$home/Downloads" "$home/Desktop" "$home/Documents" \
-        "$home/Pictures" "$home/.cache/puppeteer" \
-        "$home/Library/Application Support/Code/Cache" "$codex_cache" \
-        "$(dirname "$ai_session")" "$stub_dir"
+        "$home/.cache"
     printf 'safe\n' > "$safe_installer"
     printf 'protected\n' > "$protected_installer"
-    /bin/dd if=/dev/zero of="$protected_image" bs=1048576 count=3 2>/dev/null
-    printf 'safe-ai\n' > "$safe_ai"
-    printf 'codex-cache\n' > "$codex_cache/cache.bin"
-    printf 'session\n' > "$ai_session"
-    printf 'protected-ai\n' > "$protected_ai"
 
     if env HOME="$home" bash -c 'source "$1"; nori_scan_path_allowed "$HOME/Documents"' \
         _ "$helper"; then
@@ -606,396 +592,11 @@ test_scan_access_boundary() {
     [[ "$output" == *"$protected_installer"* ]] || \
         fail "authorized installer scan did not include Downloads"
 
-    output=$(env HOME="$home" TMPDIR="$TEST_ROOT" \
-        bash "$RUNTIME_DIR/bin/app_slim_scan.sh") || \
-        fail "permission-filtered slim scan failed"
-    [[ -z "$output" ]] || fail "slim scan entered Pictures without authorization"
-
-    output=$(env HOME="$home" bash "$RUNTIME_DIR/bin/app_ai_scan.sh") || \
-        fail "permission-filtered AI scan failed"
-    [[ "$output" == *"${safe_ai%/*}"* ]] || fail "AI scan dropped an unprotected cache"
-    [[ "$output" == *"$codex_cache"* ]] || fail "AI scan dropped the Codex cache"
-    [[ "$output" == *"${ai_session%/*}"* ]] || fail "full AI scan dropped session inventory"
-    [[ "$output" != *"${protected_ai%/*}"* ]] || \
-        fail "AI scan entered another App's Application Support without authorization"
-    output=$(env HOME="$home" bash "$RUNTIME_DIR/bin/app_ai_scan.sh" --safe-only) || \
-        fail "safe-only AI scan failed"
-    [[ "$output" == *"$codex_cache"* ]] || fail "safe-only AI scan dropped the Codex cache"
-    [[ "$output" != *"${ai_session%/*}"* ]] || fail "safe-only AI scan exposed session history"
-    output=$(env HOME="$home" FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
-        bash "$RUNTIME_DIR/bin/app_ai_scan.sh") || fail "authorized AI scan failed"
-    [[ "$output" == *"${protected_ai%/*}"* ]] || \
-        fail "authorized AI scan did not include Application Support"
-
-    # Electron AI clients and their XDG caches expose only explicit,
-    # rebuildable leaves.
-    local antigravity_cache="$home/Library/Application Support/Antigravity/Cache"
-    local filo_cache="$home/Library/Application Support/Filo/production/Code Cache"
-    local claude_cache="$home/Library/Application Support/Claude/sentry"
-    local qoder_cache="$home/Library/Application Support/Qoder/CachedData"
-    local prisma_cache="$home/.cache/prisma"
-    local opencode_cache="$home/.cache/opencode"
-    mkdir -p "$antigravity_cache" "$filo_cache" "$claude_cache" \
-        "$qoder_cache" "$prisma_cache" "$opencode_cache"
-    printf 'antigravity\n' > "$antigravity_cache/item"
-    printf 'filo\n' > "$filo_cache/item"
-    printf 'claude\n' > "$claude_cache/item"
-    printf 'qoder\n' > "$qoder_cache/item"
-    printf 'prisma\n' > "$prisma_cache/item"
-    printf 'opencode\n' > "$opencode_cache/item"
-    output=$(env HOME="$home" FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
-        bash "$RUNTIME_DIR/bin/app_ai_scan.sh" --safe-only) || \
-        fail "safe-only AI scan failed for Electron/XDG cache leaves"
-    for expected in "$antigravity_cache" "$filo_cache" "$claude_cache" \
-        "$qoder_cache" "$prisma_cache" "$opencode_cache"; do
-        [[ "$output" == *"$expected"* ]] || \
-            fail "safe-only AI scan dropped cache leaf: $expected"
-    done
-
-    # A catalogued AI root that is redirected through a symlink must be
-    # omitted rather than sized through to the outside target.
-    mkdir -p "$outside_ai"
-    printf 'outside\n' > "$outside_ai/cache.bin"
-    rm -rf "$codex_cache"
-    ln -s "$outside_ai" "$codex_cache"
-    output=$(env HOME="$home" bash "$RUNTIME_DIR/bin/app_ai_scan.sh" --safe-only) || \
-        fail "safe-only AI scan failed on a symlinked root"
-    [[ "$output" != *"$codex_cache"* && "$output" != *"$outside_ai"* ]] || \
-        fail "AI scan followed a symlinked cache root"
-
-    for scanner in app_dup_scan.sh app_env_scan.sh app_installer_scan.sh \
-        app_purge_guard.sh app_purge_scan.sh \
-        app_slim_scan.sh; do
+    for scanner in app_dup_scan.sh app_env_scan.sh app_installer_scan.sh; do
         /usr/bin/grep -Fq 'app_scan_access.sh' "$ROOT_DIR/bridge/$scanner" || \
             fail "$scanner bypasses the shared protected-path boundary"
     done
-    /usr/bin/grep -Fq 'du -skP' "$ROOT_DIR/bridge/app_ai_scan.sh" || \
-        fail "AI scan does not use physical, non-following size accounting"
-    /usr/bin/grep -Fq 'Codex desktop cache' "$ROOT_DIR/bridge/app_ai_scan.sh" || \
-        fail "AI scan does not catalog the Codex desktop cache"
-    /usr/bin/grep -Fq -- '--safe-only' "$ROOT_DIR/bridge/app_ai_scan.sh" || \
-        fail "AI scan does not expose an explicit safe-only mode"
-    /usr/bin/grep -Fq 'simplemole_ai_path_is_physical' \
-        "$ROOT_DIR/bridge/app_ai_apply.sh" || \
-        fail "AI apply lacks the physical-path guard"
     pass "protected scan roots fail closed until Full Disk Access is verified"
-}
-
-test_xcode_scan_boundary() {
-    local home="$TEST_ROOT/xcode-scan-home"
-    local outside="$TEST_ROOT/xcode-scan-outside"
-    local derived="$home/Library/Developer/Xcode/DerivedData"
-    local module_cache="$home/Library/Caches/com.apple.dt.Xcode"
-    local output="" rc=0 identity="" plan="$TEST_ROOT/xcode-scan-plan"
-
-    mkdir -p "$derived/AppBuild" "$module_cache" "$outside"
-    printf 'derived-data\n' > "$derived/AppBuild/object.o"
-    printf 'outside\n' > "$outside/object.o"
-
-    output=$(env HOME="$home" USER="$(id -un)" LOGNAME="$(id -un)" \
-        TMPDIR="$TEST_ROOT" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        bash "$RUNTIME_DIR/bin/app_xcode_scan.sh") || \
-        fail "Xcode cache scan failed on a user-owned Developer root"
-    [[ "$output" == *"$derived"* ]] || \
-        fail "Xcode scan did not emit non-empty DerivedData"
-    [[ "$output" != *"$module_cache"* ]] || \
-        fail "Xcode scan emitted an empty module-cache row"
-
-    # DeviceSupport parity with Mole (MOLE_XCODE_DEVICE_SUPPORT_KEEP=2): the
-    # two newest versions by mtime stay, older ones are offered one row each,
-    # and the root itself never becomes a row. XCTestDevices is rebuildable.
-    local device_support="$home/Library/Developer/Xcode/iOS DeviceSupport"
-    local xctest="$home/Library/Developer/XCTestDevices"
-    local stale="$device_support/16.0 (20A362) arm64e"
-    local kept_old="$device_support/17.0 (21A329) arm64e"
-    local kept_new="$device_support/18.0 (22A3354) arm64e"
-    mkdir -p "$stale/Symbols" "$kept_old/Symbols" "$kept_new/Symbols" "$xctest/clone"
-    printf 'symbols\n' > "$stale/Symbols/libsystem.dylib"
-    printf 'symbols\n' > "$kept_old/Symbols/libsystem.dylib"
-    printf 'symbols\n' > "$kept_new/Symbols/libsystem.dylib"
-    printf 'clone\n' > "$xctest/clone/device.plist"
-    touch -t 202301010000 "$stale"
-    touch -t 202401010000 "$kept_old"
-    touch -t 202501010000 "$kept_new"
-    output=$(env HOME="$home" USER="$(id -un)" LOGNAME="$(id -un)" \
-        TMPDIR="$TEST_ROOT" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        bash "$RUNTIME_DIR/bin/app_xcode_scan.sh") || \
-        fail "Xcode cache scan failed with DeviceSupport versions present"
-    printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$stale" '$NF == p { f = 1 } END { exit !f }' || \
-        fail "Xcode scan did not offer the superseded DeviceSupport version: $output"
-    [[ "$output" != *"$kept_old"* && "$output" != *"$kept_new"* ]] || \
-        fail "Xcode scan offered one of the two newest DeviceSupport versions: $output"
-    if printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$device_support" '$NF == p { f = 1 } END { exit !f }'; then
-        fail "Xcode scan emitted the DeviceSupport root as a removable row"
-    fi
-    printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$xctest" '$NF == p && $2 == "clean" { f = 1 } END { exit !f }' || \
-        fail "Xcode scan did not offer XCTestDevices: $output"
-
-    # The apply bridge must refuse the DeviceSupport root even if a stale plan
-    # still names it; only version directories are removable.
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$device_support") || \
-        fail "DeviceSupport fixture has no filesystem identity"
-    printf '%s\0%s\0' "$device_support" "$identity" > "$plan"
-    set +e
-    output=$(env HOME="$home" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$TEST_ROOT/xcode-trash" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_xcode_apply.sh" < "$plan" 2>&1)
-    rc=$?
-    set -e
-    [[ "$rc" -eq 0 && -d "$kept_new/Symbols" && "$output" == *"skipped=1"* ]] || \
-        fail "Xcode apply accepted the DeviceSupport root: $output"
-
-    # A symlinked root must be omitted before du can follow it. This protects
-    # both the inventory and the later identity-bound delete plan.
-    rm -rf -- "$derived"
-    ln -s "$outside" "$derived"
-    output=$(env HOME="$home" USER="$(id -un)" LOGNAME="$(id -un)" \
-        TMPDIR="$TEST_ROOT" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        bash "$RUNTIME_DIR/bin/app_xcode_scan.sh") || \
-        fail "Xcode scan failed while ignoring a symlinked root"
-    [[ "$output" != *"$derived"* && "$output" != *"$outside"* ]] || \
-        fail "Xcode scan followed a symlinked cache root"
-
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$derived") || \
-        fail "Xcode symlink fixture has no filesystem identity"
-    printf '%s\0%s\0' "$derived" "$identity" > "$plan"
-    set +e
-    output=$(env HOME="$home" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$TEST_ROOT/xcode-trash" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_xcode_apply.sh" < "$plan" 2>&1)
-    rc=$?
-    set -e
-    [[ "$rc" -ne 0 && -L "$derived" && -e "$outside/object.o" && \
-        "$output" == *"failed=1"* ]] || \
-        fail "Xcode apply followed a symlinked cache root: $output"
-
-    /usr/bin/grep -Fq 'app_scan_access.sh' \
-        "$ROOT_DIR/bridge/app_xcode_scan.sh" || \
-        fail "Xcode scanner bypasses the shared protected-path boundary"
-    /usr/bin/grep -Fq 'xcode_scan_path_is_physical' \
-        "$ROOT_DIR/bridge/app_xcode_scan.sh" || \
-        fail "Xcode scanner lacks a physical-path guard"
-    /usr/bin/grep -Fq 'simplemole_xcode_path_is_physical' \
-        "$ROOT_DIR/bridge/app_xcode_apply.sh" || \
-        fail "Xcode apply lacks a physical-path guard"
-    /usr/bin/grep -Fq 'du -skP' "$ROOT_DIR/bridge/app_xcode_scan.sh" || \
-        fail "Xcode scanner does not use non-following size accounting"
-
-    pass "Xcode cache scan, zero-byte filtering and symlink boundary"
-}
-
-test_developer_scan_boundary() {
-    local home="$TEST_ROOT/developer-scan-home"
-    local outside="$TEST_ROOT/developer-scan-outside"
-    local output=""
-
-    /usr/bin/grep -Fq 'app_scan_access.sh' "$ROOT_DIR/bridge/app_dev_scan.sh" || \
-        fail "developer-cache scan bypasses the shared protected-path boundary"
-    /usr/bin/grep -Fq 'nori_scan_path_is_physical "$path"' \
-        "$ROOT_DIR/bridge/app_dev_scan.sh" || \
-        fail "developer-cache scan lacks the physical-path guard"
-    /usr/bin/grep -Fq 'nori_scan_path_is_physical "$candidate"' \
-        "$ROOT_DIR/bridge/app_dev_apply.sh" || \
-        fail "developer-cache apply lacks the physical-path guard"
-
-    mkdir -p "$home/.npm" "$home/.cache/pip" "$home/.config/mole" "$outside" \
-        "$home/.gradle/caches/build-cache-1" "$home/.gradle/caches/modules-2" \
-        "$home/.m2/repository/org" "$home/go/pkg/mod/cache/download" \
-        "$home/go/pkg/mod/github.com"
-    printf 'npm-cache\n' > "$home/.npm/index"
-    printf 'pip-cache\n' > "$home/.cache/pip/index"
-    printf 'build-cache\n' > "$home/.gradle/caches/build-cache-1/entry.bin"
-    printf 'module\n' > "$home/.gradle/caches/modules-2/entry.jar"
-    printf 'artifact\n' > "$home/.m2/repository/org/artifact.jar"
-    printf 'zip\n' > "$home/go/pkg/mod/cache/download/mod.zip"
-    printf 'source\n' > "$home/go/pkg/mod/github.com/source.go"
-    # Without a user whitelist Mole's convenience defaults protect
-    # ~/.gradle/caches/*; a saved (even comment-only) file replaces them.
-    output=$(env HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-        XDG_CACHE_HOME="$home/.cache" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-        bash "$RUNTIME_DIR/bin/app_dev_scan.sh") || \
-        fail "developer-cache scan failed with Mole's default whitelist"
-    [[ "$output" != *"build-cache-1"* ]] || \
-        fail "developer-cache scan ignored Mole's default Gradle whitelist: $output"
-    printf '# saved by the user\n' > "$home/.config/mole/whitelist"
-    output=$(env HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-        XDG_CACHE_HOME="$home/.cache" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-        bash "$RUNTIME_DIR/bin/app_dev_scan.sh") || \
-        fail "developer-cache scan failed on ordinary user caches"
-    [[ "$output" == *$'\t'$home/.npm* ]] || \
-        fail "developer-cache scan dropped an ordinary npm cache: $output"
-    [[ "$output" == *$'\t'$home/.cache/pip* ]] || \
-        fail "developer-cache scan dropped an ordinary pip cache: $output"
-    # Mole parity: Gradle offers only build-cache-* children, never the caches
-    # root or the modules-2 dependency store; Go offers the download cache
-    # while the extracted module tree is left to `go clean -modcache`; the
-    # Maven repository stays visible for review (the policy keeps it Warning).
-    printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$home/.gradle/caches/build-cache-1" \
-        '$NF == p { f = 1 } END { exit !f }' || \
-        fail "developer-cache scan did not offer the Gradle build cache: $output"
-    [[ "$output" != *"modules-2"* ]] || \
-        fail "developer-cache scan offered the Gradle module cache: $output"
-    if printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$home/.gradle/caches" \
-        '$NF == p { f = 1 } END { exit !f }'; then
-        fail "developer-cache scan offered the whole Gradle caches root: $output"
-    fi
-    printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$home/go/pkg/mod/cache" \
-        '$NF == p { f = 1 } END { exit !f }' || \
-        fail "developer-cache scan did not offer the Go download cache: $output"
-    if printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$home/go/pkg/mod" \
-        '$NF == p { f = 1 } END { exit !f }'; then
-        fail "developer-cache scan offered the extracted Go module tree: $output"
-    fi
-    printf '%s\n' "$output" | /usr/bin/awk -F'\t' -v p="$home/.m2/repository" \
-        '$NF == p { f = 1 } END { exit !f }' || \
-        fail "developer-cache scan hid the Maven repository from review: $output"
-
-    # The apply bridge refuses dependency stores and the Gradle caches root
-    # even when a plan names them, while a build-cache-* child is accepted.
-    local plan="$TEST_ROOT/developer-scan-plan" identity="" rc=0 target=""
-    for target in "$home/.m2/repository" "$home/.gradle/caches" "$home/go/pkg/mod"; do
-        identity=$(/usr/bin/stat -f '%d:%i:%m' "$target") || \
-            fail "developer fixture has no filesystem identity: $target"
-        printf '%s\0%s\0' "$target" "$identity" > "$plan"
-        set +e
-        output=$(env HOME="$home" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-            MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$TEST_ROOT/developer-trash" \
-            MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-            bash "$RUNTIME_DIR/bin/app_dev_apply.sh" < "$plan" 2>&1)
-        rc=$?
-        set -e
-        [[ "$rc" -ne 0 && -d "$target" && "$output" == *"failed=1"* ]] || \
-            fail "developer-cache apply accepted a dependency store ($target): $output"
-    done
-    target="$home/.gradle/caches/build-cache-1"
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
-    printf '%s\0%s\0' "$target" "$identity" > "$plan"
-    output=$(env HOME="$home" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$TEST_ROOT/developer-trash" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_dev_apply.sh" < "$plan" 2>&1) || \
-        fail "developer-cache apply rejected the Gradle build cache: $output"
-    [[ ! -e "$target" && -e "$home/.gradle/caches/modules-2/entry.jar" && \
-        "$output" == *"removed=1"* ]] || \
-        fail "developer-cache apply did not remove only the Gradle build cache: $output"
-
-    # A configured cache root redirected through a symlink must be omitted;
-    # neither the link nor its outside target may reach the size inventory.
-    rm -rf "$home/.npm"
-    printf 'outside-cache\n' > "$outside/index"
-    ln -s "$outside" "$home/.npm"
-    output=$(env HOME="$home" XDG_CONFIG_HOME="$home/.config" \
-        XDG_CACHE_HOME="$home/.cache" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-        bash "$RUNTIME_DIR/bin/app_dev_scan.sh") || \
-        fail "developer-cache scan failed on a redirected cache root"
-    [[ "$output" != *"$home/.npm"* && "$output" != *"$outside"* ]] || \
-        fail "developer-cache scan followed a symlinked cache root: $output"
-
-    # The shared helper rejects the same redirected path independently of the
-    # scanner, so future bridges cannot accidentally re-enable traversal.
-    if env HOME="$home" bash -c 'source "$1"; nori_scan_path_is_physical "$HOME/.npm"' \
-        _ "$RUNTIME_DIR/bin/app_scan_access.sh"; then
-        fail "physical-path helper accepted a symlinked developer cache"
-    fi
-    pass "developer-cache scan and apply physical-path boundary"
-}
-
-test_analyze_ai_inventory() {
-    local home="$TEST_ROOT/analyze-ai-home"
-    local trash="$TEST_ROOT/analyze-ai-trash"
-    local plan="$TEST_ROOT/analyze-ai-plan"
-    local skill="$home/.codex/skills/custom"
-    local system_skill="$home/.codex/skills/.system"
-    local shared_source="$home/shared/source-skill"
-    local shared_link="$home/.agents/skills/shared"
-    local mcp_cache="$home/.cache/devin/cli/mcp"
-    local config="$home/.codex/config.toml"
-    local output="" identity="" rc=0
-
-    mkdir -p "$skill" "$system_skill" "$shared_source" \
-        "${shared_link%/*}" "$mcp_cache" "${config%/*}" \
-        "$home/.config/mole" "$trash"
-    printf '%s\n' '# custom skill' > "$skill/SKILL.md"
-    printf '%s\n' '# built in' > "$system_skill/SKILL.md"
-    printf '%s\n' '# shared skill' > "$shared_source/SKILL.md"
-    printf '%s\n' 'cache' > "$mcp_cache/data"
-    printf '%s\n' '[mcp_servers.secret]' > "$config"
-    ln -s "$shared_source" "$shared_link"
-
-    set +e
-    output=$(env HOME="$home" bash "$RUNTIME_DIR/bin/app_analyze_ai_inventory.sh" 2>&1)
-    rc=$?
-    set -e
-    assert_status 77 "$rc" "AI inventory did not require the verified FDA capability"
-
-    output=$(env HOME="$home" FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
-        bash "$RUNTIME_DIR/bin/app_analyze_ai_inventory.sh") || \
-        fail "authorized AI Skill/MCP inventory failed"
-    [[ "$output" == *$'\tskill\tCodex · custom\t'* ]] || \
-        fail "AI inventory did not emit a user Skill: $output"
-    [[ "$output" == *$'\tskill_link\tAgents · shared\t'* ]] || \
-        fail "AI inventory did not preserve a shared Skill link: $output"
-    [[ "$output" == *$'\tmcp_cache\tDevin MCP cache\t'* ]] || \
-        fail "AI inventory did not emit a known MCP cache: $output"
-    [[ "$output" != *"$system_skill"* && "$output" != *"$config"* ]] || \
-        fail "AI inventory exposed a built-in Skill or shared MCP configuration"
-
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$skill")
-    printf '%s\0%s\0' "$skill" "$identity" > "$plan"
-    output=$(env HOME="$home" FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
-        MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 MOLE_TEST_PROCESS_STATE=idle \
-        MOLE_TEST_TRASH_DIR="$trash" MO_TIMEOUT_INITIALIZED=1 \
-        MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_analyze_ai_apply.sh" < "$plan") || \
-        fail "manual AI Skill cleanup rejected an approved current identity"
-    [[ ! -e "$skill" && "$output" == *"removed=1"* ]] || \
-        fail "manual AI Skill cleanup did not move the selected Skill to Trash: $output"
-
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$shared_link")
-    printf '%s\0%s\0' "$shared_link" "$identity" > "$plan"
-    output=$(env HOME="$home" FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
-        MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 MOLE_TEST_PROCESS_STATE=idle \
-        MOLE_TEST_TRASH_DIR="$trash" MO_TIMEOUT_INITIALIZED=1 \
-        MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_analyze_ai_apply.sh" < "$plan") || \
-        fail "manual shared Skill cleanup rejected a leaf symlink"
-    [[ ! -L "$shared_link" && -f "$shared_source/SKILL.md" ]] || \
-        fail "shared Skill cleanup removed the link target instead of only the selected link"
-
-    for target in "$system_skill" "$config"; do
-        identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
-        printf '%s\0%s\0' "$target" "$identity" > "$plan"
-        set +e
-        output=$(env HOME="$home" FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
-            MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 MOLE_TEST_PROCESS_STATE=idle \
-            MOLE_TEST_TRASH_DIR="$trash" MO_TIMEOUT_INITIALIZED=1 \
-            MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-            bash "$RUNTIME_DIR/bin/app_analyze_ai_apply.sh" < "$plan" 2>&1)
-        rc=$?
-        set -e
-        [[ "$rc" -ne 0 && -e "$target" ]] || \
-            fail "AI inventory cleanup accepted protected/config path: $target"
-    done
-
-    mkdir -p "$home/.claude/skills/automatic"
-    printf '%s\n' '# manual only' > "$home/.claude/skills/automatic/SKILL.md"
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$home/.claude/skills/automatic")
-    printf '%s\0%s\0' "$home/.claude/skills/automatic" "$identity" > "$plan"
-    set +e
-    output=$(env HOME="$home" FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
-        SIMPLEMOLE_EXECUTION_MODE=quickClean MOLE_TEST_MODE=1 \
-        MOLE_TEST_NO_AUTH=1 MOLE_TEST_PROCESS_STATE=idle \
-        MOLE_TEST_TRASH_DIR="$trash" MO_TIMEOUT_INITIALIZED=1 \
-        MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_analyze_ai_apply.sh" < "$plan" 2>&1)
-    rc=$?
-    set -e
-    [[ "$rc" -ne 0 && -f "$home/.claude/skills/automatic/SKILL.md" ]] || \
-        fail "Quick Clean was allowed to remove a manually managed AI Skill"
-
-    pass "AI Skill and MCP inventory selection, Trash and path safety"
 }
 
 test_system_preview_protocol() {
@@ -2028,20 +1629,6 @@ test_packaged_apply_layout() {
     output=$(env HOME="$home" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
         MOLE_TEST_TRASH_DIR="$TEST_ROOT/layout-trash" \
         MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_dev_apply.sh" < /dev/null) || \
-        fail "packaged dev apply could not load Mole libraries"
-    [[ "$output" == *"failed=0"* ]] || fail "unexpected dev apply result: $output"
-
-    output=$(env HOME="$home" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_TRASH_DIR="$TEST_ROOT/layout-trash" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_purge_apply.sh" < /dev/null) || \
-        fail "packaged purge apply could not load Mole libraries"
-    [[ "$output" == *"failed=0"* ]] || fail "unexpected purge apply result: $output"
-
-    output=$(env HOME="$home" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_TRASH_DIR="$TEST_ROOT/layout-trash" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
         bash "$RUNTIME_DIR/bin/app_installer_apply.sh" < /dev/null) || \
         fail "packaged installer apply could not load Mole libraries"
     [[ "$output" == *"failed=0"* ]] || fail "unexpected installer apply result: $output"
@@ -2052,228 +1639,6 @@ stale_identity_for() {
     local identity
     identity=$(/usr/bin/stat -f '%d:%i:%m' "$1") || return 1
     printf '%s:%s\n' "${identity%:*}" "$(( ${identity##*:} + 1 ))"
-}
-
-assert_special_stale_identity_rejected() {
-    local script="$1"
-    local record="$2"
-    local target="$3"
-    local label="$4"
-    local plan="$TEST_ROOT/special-plan"
-    local identity output rc
-    identity=$(stale_identity_for "$target") || fail "$label fixture has no identity"
-    printf '%s\0%s\0' "$record" "$identity" > "$plan"
-
-    set +e
-    output=$(env HOME="$SPECIAL_HOME" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_TRASH_DIR="$SPECIAL_TRASH" MOLE_DELETE_LOG="$TEST_ROOT/special-deletions.log" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/$script" < "$plan" 2>&1)
-    rc=$?
-    set -e
-
-    [[ "$rc" -ne 0 ]] || fail "$label accepted a stale identity"
-    [[ -e "$target" || -L "$target" ]] || fail "$label removed a stale-identity target"
-    [[ "$output" == *"failed=1"* ]] || fail "$label did not report identity failure: $output"
-}
-
-test_special_apply_identity_binding() {
-    SPECIAL_HOME="$TEST_ROOT/special-home"
-    SPECIAL_TRASH="$TEST_ROOT/special-trash"
-    export SPECIAL_HOME SPECIAL_TRASH
-    local plan="$TEST_ROOT/special-plan"
-    local target identity output
-    mkdir -p "$SPECIAL_HOME/.config/mole" "$SPECIAL_TRASH"
-
-    # Current identities still reach the final Mole deletion sink.
-    target="$SPECIAL_HOME/.npm"
-    mkdir -p "$target"
-    printf 'cache\n' > "$target/item"
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
-    printf '%s\0%s\0' "$target" "$identity" > "$plan"
-    output=$(env HOME="$SPECIAL_HOME" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_TRASH_DIR="$SPECIAL_TRASH" MOLE_DELETE_LOG="$TEST_ROOT/special-deletions.log" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_dev_apply.sh" < "$plan") || \
-        fail "dev cleanup rejected a current identity"
-    [[ ! -e "$target" && "$output" == *"removed=1"* ]] || \
-        fail "dev cleanup did not remove the identity-bound target: $output"
-
-    mkdir -p "$SPECIAL_HOME/.npm"
-    printf 'single guard\n' > "$SPECIAL_HOME/.npm/item"
-    assert_single_final_runtime_guard "$SPECIAL_HOME" app_dev_apply.sh \
-        "$SPECIAL_HOME/.npm" "developer cleanup"
-
-    # Quick/automatic specialized routes recursively enforce the same hard
-    # model/session boundary as the generic cleanup sink.
-    mkdir -p "$target/sessions"
-    printf 'session\n' > "$target/sessions/current.json"
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
-    printf '%s\0%s\0' "$target" "$identity" > "$plan"
-    set +e
-    output=$(env HOME="$SPECIAL_HOME" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        SIMPLEMOLE_EXECUTION_MODE=quickClean MOLE_TEST_PROCESS_STATE=idle \
-        MOLE_TEST_TRASH_DIR="$SPECIAL_TRASH" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_dev_apply.sh" < "$plan" 2>&1)
-    rc=$?
-    set -e
-    [[ "$rc" -ne 0 && -e "$target/sessions/current.json" ]] || \
-        fail "Quick Clean developer route accepted nested session content: $output"
-
-    # Final bridges recheck the owning process immediately before deletion.
-    mkdir -p "$target"
-    printf 'active cache\n' > "$target/item"
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
-    printf '%s\0%s\0' "$target" "$identity" > "$plan"
-    set +e
-    output=$(env HOME="$SPECIAL_HOME" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_PROCESS_STATE=active MOLE_TEST_TRASH_DIR="$SPECIAL_TRASH" \
-        MOLE_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_dev_apply.sh" < "$plan" 2>&1)
-    rc=$?
-    set -e
-    [[ "$rc" -ne 0 && -e "$target/item" && "$output" == *"failed=1"* ]] || \
-        fail "dev cleanup ignored an active owner: $output"
-
-    # Developer scan also routes known reverse-DNS app caches through this
-    # bridge, so those paths need the same owner-specific final recheck.
-    target="$SPECIAL_HOME/Library/Caches/com.openai.chat"
-    mkdir -p "$target"
-    printf 'active app cache\n' > "$target/item"
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
-    printf '%s\0%s\0' "$target" "$identity" > "$plan"
-    set +e
-    output=$(env HOME="$SPECIAL_HOME" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_PROCESS_STATE=active MOLE_TEST_TRASH_DIR="$SPECIAL_TRASH" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_dev_apply.sh" < "$plan" 2>&1)
-    rc=$?
-    set -e
-    [[ "$rc" -ne 0 && -e "$target/item" && "$output" == *"failed=1"* ]] || \
-        fail "dev cleanup ignored an active reverse-DNS cache owner: $output"
-
-    # Every specialized bridge must reject the same path with a stale identity.
-    assert_special_stale_identity_rejected \
-        app_dev_apply.sh "$SPECIAL_HOME/.npm" "$SPECIAL_HOME/.npm" "dev cleanup"
-
-    mkdir -p "$SPECIAL_HOME/.claude/statsig"
-    assert_special_stale_identity_rejected \
-        app_ai_apply.sh "$SPECIAL_HOME/.claude/statsig" \
-        "$SPECIAL_HOME/.claude/statsig" "AI cleanup"
-
-    # Codex Desktop's audited Chromium leaf is an explicit AI-safe route; the
-    # surrounding profile contains durable browser state and stays excluded.
-    target="$SPECIAL_HOME/Library/Caches/Codex/Default/Cache"
-    mkdir -p "$target"
-    printf 'codex cache\n' > "$target/item"
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
-    printf '%s\0%s\0' "$target" "$identity" > "$plan"
-    output=$(env HOME="$SPECIAL_HOME" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$SPECIAL_TRASH" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_ai_apply.sh" < "$plan") || \
-        fail "AI cleanup rejected the allowlisted Codex cache"
-    [[ ! -e "$target" && "$output" == *"removed=1"* ]] || \
-        fail "AI cleanup did not remove the allowlisted Codex cache: $output"
-
-    # The expanded Electron/XDG leaves must use the same identity-bound apply
-    # route, including a path with a space in its name.
-    local ai_leaf
-    for ai_leaf in \
-        "$SPECIAL_HOME/Library/Application Support/Antigravity/Cache" \
-        "$SPECIAL_HOME/Library/Application Support/Filo/production/Code Cache" \
-        "$SPECIAL_HOME/Library/Application Support/Claude/sentry" \
-        "$SPECIAL_HOME/Library/Application Support/Qoder/CachedData" \
-        "$SPECIAL_HOME/.cache/prisma" "$SPECIAL_HOME/.cache/opencode"; do
-        mkdir -p "$ai_leaf"
-        printf 'ai cache\n' > "$ai_leaf/item"
-        identity=$(/usr/bin/stat -f '%d:%i:%m' "$ai_leaf")
-        printf '%s\0%s\0' "$ai_leaf" "$identity" > "$plan"
-        output=$(env HOME="$SPECIAL_HOME" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-            MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$SPECIAL_TRASH" \
-            MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-            bash "$RUNTIME_DIR/bin/app_ai_apply.sh" < "$plan") || \
-            fail "AI cleanup rejected expanded cache leaf: $ai_leaf"
-        [[ ! -e "$ai_leaf" && "$output" == *"removed=1"* ]] || \
-            fail "AI cleanup did not remove expanded cache leaf: $ai_leaf ($output)"
-    done
-
-    # The same allowlist must not become a symlink escape hatch.
-    local ai_outside="$TEST_ROOT/special-ai-outside"
-    mkdir -p "$ai_outside"
-    printf 'outside\n' > "$ai_outside/item"
-    ln -s "$ai_outside" "$target"
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
-    printf '%s\0%s\0' "$target" "$identity" > "$plan"
-    set +e
-    output=$(env HOME="$SPECIAL_HOME" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$SPECIAL_TRASH" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_ai_apply.sh" < "$plan" 2>&1)
-    rc=$?
-    set -e
-    [[ "$rc" -ne 0 && -L "$target" && -e "$ai_outside/item" && \
-        "$output" == *"failed=1"* ]] || \
-        fail "AI cleanup followed a symlinked Codex cache root: $output"
-
-    mkdir -p "$SPECIAL_HOME/.claude/statsig"
-    printf 'single guard\n' > "$SPECIAL_HOME/.claude/statsig/item"
-    assert_single_final_runtime_guard "$SPECIAL_HOME" app_ai_apply.sh \
-        "$SPECIAL_HOME/.claude/statsig" "AI cleanup"
-
-    target="$SPECIAL_HOME/.codex/sessions/current"
-    mkdir -p "$target"
-    printf 'conversation\n' > "$target/session.jsonl"
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
-    printf '%s\0%s\0' "$target" "$identity" > "$plan"
-    output=$(env HOME="$SPECIAL_HOME" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$SPECIAL_TRASH" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_ai_apply.sh" < "$plan") || \
-        fail "AI cleanup failed while refusing session history"
-    [[ -e "$target/session.jsonl" && "$output" == *"skipped=1"* ]] || \
-        fail "AI cleanup accepted session history: $output"
-
-    target="$SPECIAL_HOME/.gemini/tmp"
-    mkdir -p "$target"
-    printf 'gemini session\n' > "$target/history.jsonl"
-    identity=$(/usr/bin/stat -f '%d:%i:%m' "$target")
-    printf '%s\0%s\0' "$target" "$identity" > "$plan"
-    set +e
-    output=$(env HOME="$SPECIAL_HOME" MOLE_TEST_MODE=1 MOLE_TEST_NO_AUTH=1 \
-        MOLE_TEST_PROCESS_STATE=idle MOLE_TEST_TRASH_DIR="$SPECIAL_TRASH" \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_ai_apply.sh" < "$plan" 2>&1)
-    rc=$?
-    set -e
-    [[ "$rc" -ne 0 && -e "$target/history.jsonl" && "$output" == *"failed=1"* ]] || \
-        fail "AI cleanup accepted Gemini temporary session data: $output"
-
-    mkdir -p "$SPECIAL_HOME/Library/Developer/Xcode/DerivedData/AppBuild"
-    assert_special_stale_identity_rejected \
-        app_xcode_apply.sh "$SPECIAL_HOME/Library/Developer/Xcode/DerivedData/AppBuild" \
-        "$SPECIAL_HOME/Library/Developer/Xcode/DerivedData/AppBuild" "Xcode cleanup"
-
-    mkdir -p "$SPECIAL_HOME/Library/Developer/Xcode/DerivedData/SingleGuard"
-    printf 'single guard\n' > \
-        "$SPECIAL_HOME/Library/Developer/Xcode/DerivedData/SingleGuard/item"
-    assert_single_final_runtime_guard "$SPECIAL_HOME" app_xcode_apply.sh \
-        "$SPECIAL_HOME/Library/Developer/Xcode/DerivedData/SingleGuard" "Xcode cleanup"
-
-    mkdir -p "$SPECIAL_HOME/Code/project/node_modules"
-    printf '%s\n' "$SPECIAL_HOME/Code" > "$SPECIAL_HOME/.config/mole/purge_paths"
-    assert_special_stale_identity_rejected \
-        app_purge_apply.sh "$SPECIAL_HOME/Code/project/node_modules" \
-        "$SPECIAL_HOME/Code/project/node_modules" "project purge"
-
-    mkdir -p "$SPECIAL_HOME/Pictures"
-    printf 'image\n' > "$SPECIAL_HOME/Pictures/stale.png"
-    assert_special_stale_identity_rejected \
-        app_slim_apply.sh "duplicate|$SPECIAL_HOME/Pictures/stale.png" \
-        "$SPECIAL_HOME/Pictures/stale.png" "image slimming"
-
-    pass "specialized cleanup path and identity binding"
 }
 
 test_uninstall_space_breakdown() {
@@ -2325,7 +1690,7 @@ test_uninstall_space_breakdown() {
         fail "native uninstall does not build an exact related-file plan"
 
     local key copy_count
-    for key in uninstall.action uninstall.space.cache uninstall.space.data uninstall.space.total uninstall.loading; do
+    for key in uninstall.action uninstall.space.cache uninstall.space.data uninstall.loading; do
         copy_count=$(/usr/bin/grep -h "\"$key\":" \
             "$ROOT_DIR"/SimpleMole/L10n/Tables*.swift | /usr/bin/wc -l | tr -d ' ')
         [[ "$copy_count" == "12" ]] || \
@@ -2508,49 +1873,6 @@ test_cleanup_process_probe_batching() {
     state=0
     MOLE_TEST_MODE=0 simplemole_path_open_state "$candidate" || state=$?
     [[ "$state" -eq 2 ]] || fail "cleanup path guard did not fail closed on lsof error"
-
-    # AI cleanup must inspect the selected cache subtree, not merely ask
-    # whether any known AI/IDE process exists.  An unrelated active process
-    # (simulated by pgrep below) must not suppress an idle cache; an open file
-    # underneath that cache must still fail closed.
-    local ai_home="$TEST_ROOT/ai-guard-home"
-    local ai_target="$ai_home/.claude/statsig"
-    local ai_trash="$TEST_ROOT/ai-guard-trash"
-    local ai_plan="$TEST_ROOT/ai-guard-plan"
-    local ai_log="$TEST_ROOT/ai-guard-deletions.log"
-    local ai_output="" ai_identity="" ai_rc=0
-    mkdir -p "$ai_target" "$ai_trash"
-    printf 'cache\n' > "$ai_target/item"
-    ai_identity=$(/usr/bin/stat -f '%d:%i:%m' "$ai_target")
-    printf '%s\0%s\0' "$ai_target" "$ai_identity" > "$ai_plan"
-    printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$stub_dir/pgrep"
-    chmod +x "$stub_dir/pgrep"
-    export SM_TEST_LSOF_ERROR=0
-    export SM_TEST_OPEN_ROOT="$TEST_ROOT/unrelated-ai-cache"
-    ai_output=$(env HOME="$ai_home" PATH="$stub_dir:/usr/bin:/bin:/usr/sbin:/sbin" \
-        MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=1 MOLE_TEST_TRASH_DIR="$ai_trash" \
-        MOLE_DELETE_LOG="$ai_log" MO_TIMEOUT_INITIALIZED=1 \
-        MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_ai_apply.sh" < "$ai_plan") || \
-        fail "AI cleanup let an unrelated active process block an idle cache: $ai_output"
-    [[ ! -e "$ai_target" && "$ai_output" == *"removed=1"* ]] || \
-        fail "AI cleanup did not remove an idle cache with an unrelated process active: $ai_output"
-
-    mkdir -p "$ai_target"
-    printf 'active cache\n' > "$ai_target/item"
-    ai_identity=$(/usr/bin/stat -f '%d:%i:%m' "$ai_target")
-    printf '%s\0%s\0' "$ai_target" "$ai_identity" > "$ai_plan"
-    export SM_TEST_OPEN_ROOT="$ai_target"
-    set +e
-    ai_output=$(env HOME="$ai_home" PATH="$stub_dir:/usr/bin:/bin:/usr/sbin:/sbin" \
-        MOLE_TEST_MODE=0 MOLE_TEST_NO_AUTH=1 MOLE_TEST_TRASH_DIR="$ai_trash" \
-        MOLE_DELETE_LOG="$ai_log" MO_TIMEOUT_INITIALIZED=1 \
-        MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_ai_apply.sh" < "$ai_plan" 2>&1)
-    ai_rc=$?
-    set -e
-    [[ "$ai_rc" -ne 0 && -e "$ai_target/item" && "$ai_output" == *"failed=1"* ]] || \
-        fail "AI cleanup ignored an open file in the selected cache: $ai_output"
 
     PATH="$previous_path"
     unset SM_TEST_LSOF_ARGS SM_TEST_UNRELATED SM_TEST_OPEN_ROOT SM_TEST_LSOF_ERROR
@@ -2956,35 +2278,6 @@ test_owner_managed_runtimes_readonly() {
     pass "owner-managed runtimes are read-only at scan and apply"
 }
 
-test_slim_scan_exclusivity() {
-    local home="$TEST_ROOT/slim-home"
-    local first="$home/Pictures/first image.png"
-    local second="$home/Pictures/second image.png"
-    local output
-    mkdir -p "$home/Pictures" "$home/Desktop" "$home/Downloads"
-    dd if=/dev/zero of="$first" bs=1048576 count=3 >/dev/null 2>&1
-    cp "$first" "$second"
-
-    output=$(env HOME="$home" TMPDIR="$TEST_ROOT" FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
-        MO_TIMEOUT_INITIALIZED=1 MO_TIMEOUT_BIN= MO_TIMEOUT_PERL_BIN= \
-        bash "$RUNTIME_DIR/bin/app_slim_scan.sh") || fail "slim scan failed"
-    printf '%s\n' "$output" | awk -F '\t' '
-        NF >= 3 {
-            separator = index($3, "|")
-            if (separator == 0) next
-            operation = substr($3, 1, separator - 1)
-            path = substr($3, separator + 1)
-            if (operation == "duplicate") { duplicate[path] = 1; duplicate_count++ }
-            if (operation == "compress") { compress[path] = 1; compress_count++ }
-        }
-        END {
-            if (duplicate_count != 1 || compress_count != 1) exit 2
-            for (path in duplicate) if (compress[path]) exit 3
-        }
-    ' || fail "slim scan scheduled duplicate and compress for the same path"
-    pass "slim scan action exclusivity"
-}
-
 test_auto_cleanup_planner() {
     if [[ "${SM_TEST_SKIP_SWIFT:-0}" == "1" ]]; then
         printf 'ok - Auto-cleanup planner tests skipped (SM_TEST_SKIP_SWIFT=1)\n'
@@ -3195,9 +2488,6 @@ test_productivity_feature_contract
 stage_bridge_runtime
 test_timeout_fallback
 test_scan_access_boundary
-test_xcode_scan_boundary
-test_developer_scan_boundary
-test_analyze_ai_inventory
 test_system_preview_protocol
 test_signing_policy_contract
 test_local_signing_identity
@@ -3214,7 +2504,6 @@ test_identity_bound_apply
 test_auto_cleanup_apply
 test_installer_apply
 test_packaged_apply_layout
-test_special_apply_identity_binding
 test_uninstall_space_breakdown
 test_native_cask_uninstall_contract
 test_uninstall_queue
@@ -3229,7 +2518,6 @@ fi
 test_dev_env_current_version_lock
 test_nvm_delete_time_guard
 test_owner_managed_runtimes_readonly
-test_slim_scan_exclusivity
 test_auto_cleanup_planner
 test_cleanup_risk_policy
 test_cleanup_execution_accounting

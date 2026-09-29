@@ -92,7 +92,7 @@ struct AnalyzeTabView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if state.analyzeEntries.isEmpty && state.analyzeAIItems.isEmpty {
+            } else if state.analyzeEntries.isEmpty {
                 EmptyStateView(symbol: "chart.bar.doc.horizontal",
                                title: l10n.t("analyze.status.empty"),
                                subtitle: l10n.t("analyze.empty.subtitle"))
@@ -145,10 +145,10 @@ struct AnalyzeTabView: View {
             }
 
             if state.analyzeMode != .directories && !state.isAnalyzing
-                && (!state.analyzeEntries.isEmpty || !state.analyzeAIItems.isEmpty) {
+                && !state.analyzeEntries.isEmpty {
                 Divider()
                 slimFooter
-            } else if !state.analyzeEntries.isEmpty || !state.analyzeAIItems.isEmpty {
+            } else if !state.analyzeEntries.isEmpty {
                 Divider()
                 HStack {
                     if let footerText {
@@ -171,7 +171,7 @@ struct AnalyzeTabView: View {
                         Label(l10n.t("analyze.apply"), systemImage: "trash.fill")
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    .disabled((state.analyzeSelection.isEmpty && state.analyzeAISelection.isEmpty)
+                    .disabled(state.analyzeSelection.isEmpty
                               || state.isBusy)
                 }
                 .padding(.horizontal, 16)
@@ -265,11 +265,9 @@ struct AnalyzeTabView: View {
         if !state.dupSelection.isEmpty {
             return l10n.tf("analyze.dup.selected", state.dupSelection.count)
         }
-        if state.analyzeSelection.isEmpty {
-            if state.analyzeAISelection.isEmpty { return nil }
-        }
-        return l10n.tf("analyze.selected", state.analyzeCombinedSelectedCount,
-                       ByteFormat.format(state.analyzeCombinedSelectedBytes))
+        guard !state.analyzeSelection.isEmpty else { return nil }
+        return l10n.tf("analyze.selected", state.analyzeSelection.count,
+                       ByteFormat.format(state.analyzeSelectedBytes))
     }
 
     /// 重复文件分组区：每组一张卡片，成员行可勾选删除。

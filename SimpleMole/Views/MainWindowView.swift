@@ -65,15 +65,6 @@ struct MainWindowView: View {
         } message: { accepted in
             Text(accepted.message)
         }
-        .confirmationDialog(l10n.t("confirm.slimChoice.title"),
-                            isPresented: slimBinding,
-                            titleVisibility: .visible) {
-            Button(l10n.t("confirm.slimChoice.replace")) { runSlim("replace") }
-            Button(l10n.t("confirm.slimChoice.copy")) { runSlim("copy") }
-            Button(l10n.t("common.cancel"), role: .cancel) { state.slimRequest = nil }
-        } message: {
-            Text(l10n.t("confirm.slimChoice.msg"))
-        }
     }
 
     private var titleBarRow: some View {
@@ -139,19 +130,6 @@ struct MainWindowView: View {
     private var confirmationBinding: Binding<Bool> {
         Binding(get: { state.confirmation != nil },
                 set: { if !$0 { state.confirmation = nil } })
-    }
-
-    private var slimBinding: Binding<Bool> {
-        Binding(get: { state.slimRequest != nil },
-                set: { if !$0 { state.slimRequest = nil } })
-    }
-
-    /// 先关闭弹窗再异步执行确认动作，保证动作里再弹出的下一层确认框能正常呈现。
-
-    private func runSlim(_ mode: String) {
-        let request = state.slimRequest
-        state.slimRequest = nil
-        DispatchQueue.main.async { request?(mode) }
     }
 }
 

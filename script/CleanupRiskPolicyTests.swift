@@ -17,14 +17,12 @@ struct CleanupRiskPolicyTests {
         try testCoreClassification(home: policyHome)
         try testSourceMappings(home: policyHome)
         try testRuntimeReassessment(home: policyHome)
-        try testRecommendedTrash(fixture: fixture)
         try testPathSelection()
         try testLongTailMerging(home: policyHome)
         try testAgePolicyBoundaries()
         try testDisposalDecoding()
         try testMessengerOwnerScoping(home: policyHome)
         try testAnalyzeEntrySafety()
-        try testAnalyzeAIItems()
         try testDevEnvRelatedPackages()
         try testAutomationProtection(home: policyHome)
         try testCacheRoundTrip(fixture: fixture)
@@ -222,22 +220,6 @@ struct CleanupRiskPolicyTests {
         try expect(loginData.risk == .protected,
                    "browser login database was not Protected")
 
-        let parserHome = NSHomeDirectory()
-        let parserSafePath = parserHome + "/Library/Caches/com.example.tool/cache.db"
-        let parserWarningPath = parserHome + "/Library/Preferences/com.example.tool.plist"
-        let preview = """
-        === User essentials ===
-        \(parserSafePath)  # 2 MB
-        \(parserWarningPath)  # 1 KB
-        """
-        let categories = Parsers.previewCategories(preview)
-        try expect(categories.count == 2, "mixed core section was not split by risk")
-        try expect(Set(categories.map(\.risk)) == Set([.safe, .warning]),
-                   "split core section lost risk values")
-        try expect(categories.first(where: { $0.risk == .safe })?.selected == true,
-                   "Safe core category was not selected by default")
-        try expect(categories.first(where: { $0.risk == .warning })?.selected == false,
-                   "Warning core category was selected by default")
     }
 
     private static func testSourceMappings(home: String) throws {
@@ -249,12 +231,10 @@ struct CleanupRiskPolicyTests {
                    "installer mapping is not Warning/Trash/installer route")
 
         let leftoverPath = home + "/Library/Application Support/GhostApp"
-        let leftover = try unwrap(
-            Parsers.orphanedAppCategories("4096\tGhostApp\tcom.example.ghost\t\(leftoverPath)").first,
-            "app leftover category")
+        let leftover = CleanupRiskPolicy.appLeftover(
+            path: leftoverPath, bundleIdentifier: "com.example.ghost", homeDirectory: home)
         try expect(leftover.source == .appLeftover && leftover.risk == .warning &&
-                   leftover.disposal == .permanentDelete && leftover.applyRoute == .genericTrash &&
-                   leftover.selected == false,
+                   leftover.disposal == .permanentDelete && leftover.applyRoute == .genericTrash,
                    "app leftovers were not manual-only Warning/Trash")
         let leftoverCache = CleanupRiskPolicy.appLeftover(
             path: home + "/Library/Caches/com.example.ghost",
@@ -278,28 +258,19 @@ struct CleanupRiskPolicyTests {
                 "orphan login/session state was incorrectly marked Safe")
         }
 
-        let projectPath = home + "/Code/App/node_modules"
-        let project = try unwrap(Parsers.specialCategories("42\t\(projectPath)", family: .purge).first,
-                                 "project category")
-        try expect(project.source == .projectArtifact && project.risk == .warning &&
-                   project.applyRoute == .projectArtifactTrash,
-                   "project mapping is not Warning/project route")
-
         let npmPath = NSHomeDirectory() + "/.npm/_cacache"
-        let developer = try unwrap(
-            Parsers.specialCategories("42\tnpm cache\t\(npmPath)", family: .dev).first,
-            "developer category")
+        let developer = CleanupRiskPolicy.developerCache(path: npmPath)
         try expect(developer.source == .developerCache && developer.risk == .safe &&
                    developer.activityGuard == .openFile &&
                    developer.applyRoute == .developerCacheTrash,
                    "explicit developer cache did not receive its guarded Safe route")
 
-        let session = try unwrap(
-            Parsers.specialCategories("1\tsession\tCodex sessions\t\(home)/.codex/sessions",
-                                      family: .ai).first, "AI session")
-        let model = try unwrap(
-            Parsers.specialCategories("1\tmodel\tModels\t\(home)/.ollama/models",
-                                      family: .ai).first, "AI model")
+        let session = CleanupRiskPolicy.ai(
+            kind: "session", path: home + "/.local/share/agent/sessions", homeDirectory: home)
+        let codexSessions = CleanupRiskPolicy.ai(
+            kind: "session", path: home + "/.codex/sessions", homeDirectory: home)
+        let model = CleanupRiskPolicy.ai(
+            kind: "model", path: home + "/.ollama/models", homeDirectory: home)
         let geminiTemp = CleanupRiskPolicy.ai(
             kind: "cache", path: home + "/.gemini/tmp", homeDirectory: home)
         let codexCache = CleanupRiskPolicy.ai(
@@ -307,10 +278,12 @@ struct CleanupRiskPolicyTests {
             homeDirectory: home)
         let codexProfile = CleanupRiskPolicy.ai(
             kind: "cache", path: home + "/Library/Caches/Codex", homeDirectory: home)
-        try expect(session.source == .aiSession && session.risk == .warning && !session.selected,
+        try expect(session.source == .aiSession && session.risk == .warning,
                    "AI session was not manual-only Warning")
+        try expect(codexSessions.risk == .protected && codexSessions.disposal == .none,
+                   "Codex sessions escaped the protected-content boundary")
         try expect(model.source == .aiModel && model.risk == .protected &&
-                   model.disposal == .none && !model.selected,
+                   model.disposal == .none,
                    "AI model was not Protected")
         try expect(geminiTemp.risk == .protected && geminiTemp.disposal == .none,
                    "Gemini temporary state disagrees with the protected-content boundary")
@@ -370,26 +343,16 @@ struct CleanupRiskPolicyTests {
         }
 
         let xcodeHome = NSHomeDirectory()
-        let derived = try unwrap(
-            Parsers.specialCategories("1\tclean\tDerivedData\t\(xcodeHome)/Library/Developer/Xcode/DerivedData",
-                                      family: .xcode).first, "DerivedData")
-        let archive = try unwrap(
-            Parsers.specialCategories("1\tkeep\tArchives\t\(xcodeHome)/Library/Developer/Xcode/Archives",
-                                      family: .xcode).first, "Xcode archive")
+        let derived = CleanupRiskPolicy.xcode(
+            kind: "clean", path: xcodeHome + "/Library/Developer/Xcode/DerivedData")
+        let archive = CleanupRiskPolicy.xcode(
+            kind: "keep", path: xcodeHome + "/Library/Developer/Xcode/Archives")
         try expect(derived.risk == .safe && derived.activityGuard == .xcode &&
                    derived.applyRoute == .xcodeTrash,
                    "DerivedData was not guarded Safe")
         try expect(archive.source == .xcodeArchive && archive.risk == .protected &&
                    archive.applyRoute == .none,
                    "Xcode Archives were not Protected")
-
-        let systemPreview = "=== System ===\n/Library/Logs/example.log  # 1 KB\n"
-        let system = try unwrap(
-            Parsers.filteredPreviewCategories(systemPreview, allowedPrefixes: ["/Library/Logs/"]).first,
-            "system category")
-        try expect(system.risk == .warning && system.disposal == .privileged &&
-                   system.applyRoute == .systemPrivileged,
-                   "system mapping is not Warning/privileged")
 
         try expect(CleanupRiskPolicy.developerCache(path: "relative/cache",
                                                     homeDirectory: home).risk == .protected,
@@ -478,40 +441,6 @@ struct CleanupRiskPolicyTests {
                    "manual owner command was rejected with filesystem warnings")
     }
 
-    private static func testRecommendedTrash(fixture: URL) throws {
-        let home = fixture.appendingPathComponent("trash-home", isDirectory: true)
-        let trash = home.appendingPathComponent(".Trash", isDirectory: true)
-        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
-        let old = trash.appendingPathComponent("old-recording.mov")
-        let recent = trash.appendingPathComponent("recent.txt")
-        let oldApp = trash.appendingPathComponent("Old.app", isDirectory: true)
-        try Data("old".utf8).write(to: old)
-        try Data("recent".utf8).write(to: recent)
-        try FileManager.default.createDirectory(at: oldApp, withIntermediateDirectories: true)
-
-        let now = Date(timeIntervalSince1970: 2_000_000_000)
-        let oldDate = now.addingTimeInterval(-45 * 86_400)
-        try FileManager.default.setAttributes([.modificationDate: oldDate],
-                                              ofItemAtPath: old.path)
-        try FileManager.default.setAttributes([.modificationDate: oldDate],
-                                              ofItemAtPath: oldApp.path)
-        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-86_400)],
-                                              ofItemAtPath: recent.path)
-
-        let preview = """
-        === User essentials ===
-        \(old.path)  # 4 KB
-        \(recent.path)  # 4 KB
-        \(oldApp.path)  # 4 KB
-        """
-        let categories = Parsers.previewCategories(
-            preview, homeDirectory: home.path, now: now, trashMinimumAgeDays: 30)
-        let safe = CleanupCategory.safeCleanupCandidates(from: categories)
-        try expect(safe.count == 1 &&
-                   safe[0].paths == [old.standardizedFileURL.path] && safe[0].bytes > 0,
-                   "recommended Trash policy did not keep only the old ordinary item: \(safe.map { ($0.name, $0.paths, $0.bytes) })")
-    }
-
     private static func testAutomationProtection(home: String) throws {
         for path in [
             home + "/.codex/sessions",
@@ -567,9 +496,9 @@ struct CleanupRiskPolicyTests {
             reasonKey: "cleanup.risk.rebuildableCache")
         let warning = CleanupCategory(
             name: "node_modules", paths: ["/tmp/node_modules"], bytes: 999,
-            pathBytes: ["/tmp/node_modules": 999], source: .projectArtifact,
-            risk: .warning, disposal: .permanentDelete, applyRoute: .projectArtifactTrash,
-            activityGuard: .unsupported, reasonKey: "cleanup.risk.projectArtifact")
+            pathBytes: ["/tmp/node_modules": 999], source: .developerCache,
+            risk: .warning, disposal: .permanentDelete, applyRoute: .developerCacheTrash,
+            activityGuard: .unsupported, reasonKey: "cleanup.risk.unverifiedDeveloperCache")
         let candidates = CleanupCategory.safeCleanupCandidates(from: [warning, safeWithZero])
         try expect(candidates.count == 1 && candidates[0].paths == [second, first]
                    && candidates[0].bytes == 5,
@@ -613,24 +542,6 @@ struct CleanupRiskPolicyTests {
         try expect(ordered.map(\.handling) == [
             .systemReadOnly, .application, .appData, .browse, .directCleanup
         ], "disk analysis was not sorted by descending size")
-    }
-
-    private static func testAnalyzeAIItems() throws {
-        let text = """
-        12\tskill\tCodex · small\t/Users/test/.codex/skills/small
-        4096\tmcp_cache\tnpx MCP cache\t/Users/test/.npm/_npx/abc
-        24\tskill_link\tAgents · shared\t/Users/test/.agents/skills/shared
-        0\tskill\tEmpty\t/Users/test/.codex/skills/empty
-        999\tunknown\tUnknown\t/Users/test/unknown
-        2\tskill\tDuplicate\t/Users/test/.codex/skills/small
-        """
-        let items = Parsers.analyzeAIItems(text)
-        try expect(items.map(\.bytes) == [4_096, 24, 12],
-                   "AI inventory did not filter invalid/0B rows or sort by size")
-        try expect(items.map(\.kind) == [.mcpCache, .linkedSkill, .skill],
-                   "AI inventory kinds were not preserved")
-        try expect(Set(items.map(\.path)).count == items.count,
-                   "AI inventory did not deduplicate physical selections by path")
     }
 
     private static func testDevEnvRelatedPackages() throws {
@@ -972,10 +883,6 @@ struct CleanupRiskPolicyTests {
             accessed: now.addingTimeInterval(-10))
         try expect(combined != nil && !CleanupAgePolicy.isStale(combined, now: now, retention: retention),
                "a fresh access inside an old tree must keep the unit active")
-        // 执行前复核：重测证据缺失 → 跳过。
-        try expect(!CleanupAgePolicy.remainsStale(previous: now.addingTimeInterval(-retention * 2),
-                                              recheck: nil, now: now, retention: retention),
-               "missing re-check evidence must skip the entry")
     }
 
 
