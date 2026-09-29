@@ -1200,4 +1200,6 @@ extension Notification.Name {
     /// 截图完成（screencapture 输出文件就绪），携带图片 URL。
     static let smTakeScreenshot = Notification.Name("SMTakeScreenshot")
     static let smOpenScreenshotEditor = Notification.Name("SMOpenScreenshotEditor")
+    /// 光标离开灵动岛可见形状、窗口恢复鼠标穿透；之后不再有悬停事件送达。
+    static let smIslandPointerExited = Notification.Name("SMIslandPointerExited")
 }

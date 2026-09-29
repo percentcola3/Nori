@@ -252,6 +252,12 @@ test_island_contract() {
     fi
     /usr/bin/grep -Fq 'override func acceptsFirstMouse' "$ROOT_DIR/SimpleMole/Views/IslandWindow.swift" || \
         fail "island first-click support is missing"
+    # 未显式设置 ignoresMouseEvents 时，窗口服务器按全透明的窗口缓冲区判定穿透，
+    # 灵动岛上的点击会整片投给下方窗口（悬停可用、点击无效）。
+    /usr/bin/grep -Fq 'panel.ignoresMouseEvents = true' "$app_delegate" || \
+        fail "island panel leaves mouse pass-through to the window server's alpha test"
+    /usr/bin/grep -Fq 'panel.ignoresMouseEvents = !inside' "$app_delegate" || \
+        fail "island panel does not accept clicks while the cursor is over its visible shape"
     /usr/bin/grep -Fq 'struct NotchShape: Shape' "$ROOT_DIR/SimpleMole/Views/IslandWindow.swift" || \
         fail "island notch shape is missing"
     /usr/bin/grep -Fq 'safeTop: islandSafeTop' "$app_delegate" || \
@@ -262,24 +268,40 @@ test_island_contract() {
         fail "island advanced action does not open main panel"
     /usr/bin/grep -Fq 'y: screen.frame.maxY - size.height' "$app_delegate" || \
         fail "island is not anchored to the physical screen top"
+    # 表面从物理顶边起画：刘海屏上若先垫一段 safeTop 空白，手柄就成了挂在
+    # 刘海下沿的一条细条，肩角翘在刘海底边而不是屏幕顶边。
+    if /usr/bin/grep -Fq 'Color.clear.frame(height: safeTop)' "$island"; then
+        fail "island surface starts below the hardware notch instead of the screen top"
+    fi
+    /usr/bin/grep -Fq '.padding(.top, safeTop)' "$island" || \
+        fail "island content does not avoid the hardware notch"
     # 刘海手柄与展开面板共享玻璃材质：不允许实底黑 curtain 盖住玻璃。
-    /usr/bin/grep -Fq 'Color.islandHandleVeil' "$ROOT_DIR/SimpleMole/Views/LiquidPresentation.swift" || \
+    /usr/bin/grep -Fq 'shape.fill(Color.islandHandleVeil)' \
+        "$ROOT_DIR/SimpleMole/Views/LiquidPresentation.swift" || \
         fail "collapsed handle no longer shares the expanded panel's glass material"
     if /usr/bin/grep -Fq 'Color.black' "$ROOT_DIR/SimpleMole/Views/LiquidPresentation.swift"; then
-        fail "island collapsed handle still paints an opaque black curtain"
+        fail "island paints an opaque black curtain over the glass"
     fi
     # 屏幕指标瞬断时沿用上次值，禁止回落默认值重建（刘海位置漂移）。
     /usr/bin/grep -Fq 'return islandPanelSafeTop ?? 0' "$app_delegate" || \
         fail "island safe-top flaps to 0 during screen/activation transitions"
-    /usr/bin/grep -Fq 'return islandPanelCollapsedWidth ?? IslandLayout.handleWidth' "$app_delegate" || \
+    /usr/bin/grep -Fq 'return islandPanelCollapsedWidth ?? IslandLayout.virtualNotchWidth' "$app_delegate" || \
         fail "island collapsed width flaps to the default during screen transitions"
+    # 无刘海屏按 codenotch 画虚拟刘海：与菜单栏齐平，不挂下沿细条。
+    /usr/bin/grep -Fq 'screen.frame.maxY - screen.visibleFrame.maxY' "$app_delegate" || \
+        fail "virtual notch height does not follow the menu bar on notchless screens"
+    /usr/bin/grep -Fq 'safeTop + (hardwareNotch ? IslandLayout.notchLipHeight : 0)' "$island" || \
+        fail "virtual notch hangs a lip below the menu bar"
     # 激活策略切换后下一拍再抬升主窗口：同拍 activate 会被忽略（点更多只回到桌面）。
     /usr/bin/grep -Fq 'raiseMainWindowAfterPolicyChange()' "$app_delegate" || \
         fail "main window is not re-raised after the activation-policy change settles"
     # 主窗口跟随光标所在屏；屏幕重排后搁浅在不可见屏上的窗口要被救回，
     # 否则表现为"点更多没有任何面板出现"（窗口开在了另一块屏上）。
-    /usr/bin/grep -Fq 'restoreMainWindowToCursorScreen(force: createdWindow)' "$app_delegate" || \
+    /usr/bin/grep -Fq 'restoreMainWindow(to: targetScreen ?? cursorScreen, force: createdWindow)' "$app_delegate" || \
         fail "main window placement never follows the cursor's screen"
+    # 从灵动岛点"更多"：主窗口开在灵动岛所在的屏上。
+    /usr/bin/grep -Fq 'self?.showMainWindow(on: islandScreen)' "$app_delegate" || \
+        fail "island advanced action does not open the main panel on the island's screen"
     if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
         bash "$ROOT_DIR/script/test_island_window.sh" || fail "island window hit testing"
         bash "$ROOT_DIR/script/test_island_resources.sh" || fail "island resource policy"

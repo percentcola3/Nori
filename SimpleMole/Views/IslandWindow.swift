@@ -44,10 +44,18 @@ final class IslandHostingView<Content: View>: NSHostingView<Content> {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         // hitTest 参数属于父视图坐标；SwiftUI 几何区域属于本地翻转坐标。
-        let localPoint = convert(point, from: superview)
-        guard islandHitFrame.contains(localPoint),
-              islandHitShape.path(in: islandHitFrame).contains(localPoint) else { return nil }
+        guard islandContains(convert(point, from: superview)) else { return nil }
         return super.hitTest(point)
+    }
+
+    /// 光标（屏幕坐标）是否落在灵动岛可见形状内；窗口据此切换鼠标穿透。
+    func containsScreenPoint(_ screenPoint: NSPoint) -> Bool {
+        guard let window else { return false }
+        return islandContains(convert(window.convertPoint(fromScreen: screenPoint), from: nil))
+    }
+
+    private func islandContains(_ localPoint: NSPoint) -> Bool {
+        islandHitFrame.contains(localPoint) && islandHitShape.path(in: islandHitFrame).contains(localPoint)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

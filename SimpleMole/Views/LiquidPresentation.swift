@@ -96,19 +96,20 @@ struct IslandLiquidSurface: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
+    private var handleVeil: some View {
+        shape.fill(Color.islandHandleVeil)
+            .opacity(isExpanded ? 0 : 1)
+            .allowsHitTesting(false)
+    }
+
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *), !reduceTransparency {
             // 玻璃必须直接承载内容（content.glassEffect），不能作为 background
             // sibling 垫在内容后面——玻璃合成层会把上方内容反向遮挡成毛玻璃
-            // （同类坑见 Components.swift 原生分段控件的注释）。收起态只叠一层
-            // 半透明暗纱加深一档：与展开面板共享同一玻璃质感与色调，
-            // 不再用实底黑盖住玻璃（否则手柄与面板的材质割裂）。
+            // （同类坑见 Components.swift 原生分段控件的注释）。收起态只叠
+            // 半透明暗纱，与展开面板共享同一玻璃质感。
             content
-                .background {
-                    shape.fill(Color.islandHandleVeil)
-                        .opacity(isExpanded ? 0 : 1)
-                        .allowsHitTesting(false)
-                }
+                .background { handleVeil }
                 .glassEffect(Glass.regular.tint(Color.islandGlassTint), in: shape)
                 .clipShape(shape)
                 .contentShape(shape)
@@ -120,9 +121,7 @@ struct IslandLiquidSurface: ViewModifier {
                     } else {
                         ZStack {
                             shape.fill(.ultraThinMaterial)
-                            shape.fill(Color.islandHandleVeil)
-                                .opacity(isExpanded ? 0 : 1)
-                                .allowsHitTesting(false)
+                            handleVeil
                         }
                     }
                 }

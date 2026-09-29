@@ -24,9 +24,20 @@ struct IslandWindowTests {
         precondition(!hits(NSPoint(x: 129, y: 10)), "Invisible hit slop must not expand the handle")
         precondition(!hits(NSPoint(x: 131, y: 19)), "Transparent rounded corner must not hit")
         precondition(!hits(NSPoint(x: 184, y: 640)), "Transparent bottom must not hit")
-        host.islandHitFrame = NSRect(x: 148, y: 32, width: 72, height: 8)
-        precondition(!hits(NSPoint(x: 184, y: 20)), "Hardware notch safe-area spacer must not hit")
-        precondition(hits(NSPoint(x: 184, y: 36)), "Visible strip below the hardware notch must hit")
+        // 刘海屏：表面从物理顶边盖住 32pt 硬件刘海，并向下延出 8pt。
+        host.islandHitFrame = NSRect(x: 88, y: 0, width: 193, height: 40)
+        host.islandHitShape = NotchShape(bottomRadius: 9, shoulderRadius: 4)
+        precondition(hits(NSPoint(x: 184, y: 20)), "Surface covering the hardware notch must hit")
+        precondition(hits(NSPoint(x: 184, y: 36)), "Lip below the hardware notch must hit")
+        precondition(!hits(NSPoint(x: 93, y: 39.5)), "Notch lip corners must stay rounded")
+        host.islandHitShape = NotchShape(bottomRadius: 5, shoulderRadius: 4)
+        // Mouse pass-through routing uses screen coordinates (bottom-left origin).
+        host.islandHitFrame = NSRect(x: 130, y: 0, width: 108, height: 20)
+        let windowTop = panel.frame.maxY
+        precondition(host.containsScreenPoint(NSPoint(x: panel.frame.minX + 184, y: windowTop - 10)),
+                     "Cursor over the visible island must stop mouse pass-through")
+        precondition(!host.containsScreenPoint(NSPoint(x: panel.frame.minX + 184, y: windowTop - 300)),
+                     "Transparent window margin must keep passing clicks to windows below")
         host.islandHitFrame = NSRect(x: 14, y: 0, width: 340, height: 112)
         precondition(hits(NSPoint(x: 320, y: 56)), "Expanded details button must hit")
         host.islandHitFrame.size.height = 580
@@ -80,6 +91,11 @@ struct IslandWindowTests {
             .path(in: CGRect(x: 0, y: 0, width: 72, height: 8))
         precondition(collapsed.contains(CGPoint(x: 0.5, y: 0.05)), "Collapsed shoulder must meet the top edge")
         precondition(!collapsed.contains(CGPoint(x: 3, y: 7.5)), "Collapsed bottom must retain visible rounding")
+        let notch = NotchShape(bottomRadius: 9, shoulderRadius: 4)
+            .path(in: CGRect(x: 0, y: 0, width: 193, height: 40))
+        precondition(notch.contains(CGPoint(x: 0.5, y: 0.05)), "Notch shoulder must meet the screen top edge")
+        precondition(notch.contains(CGPoint(x: 4.5, y: 20)), "Notch body must cover the hardware notch edge")
+        precondition(!notch.contains(CGPoint(x: 5, y: 39.5)), "Notch lip must round its bottom corners")
         print("Island window: coordinates, native More hit/action, first click, pressed feedback and notch geometry passed")
     }
 }

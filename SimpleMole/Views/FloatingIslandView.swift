@@ -3,9 +3,11 @@ import SwiftUI
 
 enum IslandLayout {
     static let panelWidth: CGFloat = 300
-    static let handleWidth: CGFloat = 72
-    static let handleHeight: CGFloat = 12
-    static let notchHandleHeight: CGFloat = 8
+    /// 无刘海屏的虚拟刘海宽度，与 MacBook 硬件刘海（约 185pt）加 8pt 边一致。
+    static let virtualNotchWidth: CGFloat = 193
+    /// 硬件刘海是实黑遮挡，玻璃必须在刘海下沿再露出这一截才看得见手柄。
+    static let notchLipHeight: CGFloat = 8
+    static let notchBottomRadius: CGFloat = 9
     static let metricsHeight: CGFloat = 76
     static let detailBudget: CGFloat = 340
     static let windowMargin: CGFloat = 14
@@ -34,8 +36,10 @@ extension AppState.IslandItem {
 struct FloatingIslandView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
+    /// 刘海屏为硬件刘海高度，无刘海屏为菜单栏高度（虚拟刘海）。
     var safeTop: CGFloat = 0
-    var collapsedWidth: CGFloat = IslandLayout.handleWidth
+    var hardwareNotch = false
+    var collapsedWidth: CGFloat = IslandLayout.virtualNotchWidth
     var onOpenMain: () -> Void
     var onHitFrameChange: (CGRect, NotchShape) -> Void
     var onExpandedChange: (Bool) -> Void = { _ in }
@@ -67,7 +71,8 @@ struct FloatingIslandView: View {
         reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)
     }
     private var visibleShape: NotchShape {
-        NotchShape(bottomRadius: expanded ? 20 : 5, shoulderRadius: expanded ? 10 : 4)
+        NotchShape(bottomRadius: expanded ? 20 : IslandLayout.notchBottomRadius,
+                   shoulderRadius: expanded ? 10 : 4)
     }
 
     var body: some View {
@@ -76,11 +81,13 @@ struct FloatingIslandView: View {
 
     private var islandBody: some View {
         VStack(spacing: 0) {
-            Color.clear.frame(height: safeTop).allowsHitTesting(false)
             // Keep one surface alive: animate its bounds and shoulder geometry,
             // rather than cross-fading two unrelated backgrounds.
+            // 表面从物理顶边起画并盖住硬件刘海，肩角才能与屏幕顶边相接；
+            // 内容自身按 safeTop 下移避让刘海。
             ZStack(alignment: .top) {
                 expandedPanel
+                    .padding(.top, safeTop)
                     .fixedSize(horizontal: false, vertical: true)
                     .background {
                         GeometryReader { geo in
@@ -97,7 +104,7 @@ struct FloatingIslandView: View {
                     .accessibilityHidden(expanded)
             }
             .frame(width: expanded ? IslandLayout.panelWidth : collapsedWidth,
-                   height: expanded ? expandedHeight : handleHeight,
+                   height: expanded ? expandedHeight : collapsedHeight,
                    alignment: .top)
             .modifier(IslandLiquidSurface(shape: visibleShape, isExpanded: expanded))
             .onPreferenceChange(IslandExpandedHeightKey.self) { height in
@@ -142,6 +149,9 @@ struct FloatingIslandView: View {
         .environment(\.colorScheme, .dark)
         .onChange(of: focusedResource) { resource in
             if let resource { selectResource(resource) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .smIslandPointerExited)) { _ in
+            handleHover(false)
         }
         .onChange(of: state.islandCleaningResource) { resource in
             if resource == nil, feedbackPinned {
@@ -193,8 +203,9 @@ struct FloatingIslandView: View {
         .frame(width: IslandLayout.panelWidth)
     }
 
-    private var handleHeight: CGFloat {
-        safeTop > 0 ? IslandLayout.notchHandleHeight : IslandLayout.handleHeight
+    /// 虚拟刘海本身就是可见玻璃，不需要下沿，收起高度与菜单栏齐平。
+    private var collapsedHeight: CGFloat {
+        safeTop + (hardwareNotch ? IslandLayout.notchLipHeight : 0)
     }
 
     private var collapsedHandle: some View {
@@ -202,8 +213,8 @@ struct FloatingIslandView: View {
             Capsule()
                 .fill(Color.islandHandleGrip)
                 .frame(width: 18, height: 2)
-                .frame(width: collapsedWidth,
-                       height: handleHeight)
+                .padding(.bottom, 3)
+                .frame(width: collapsedWidth, height: collapsedHeight, alignment: .bottom)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -14,9 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // 灵动岛：codenotch 式顶部刘海悬浮窗。
     private var islandPanel: NSPanel?
     private var islandHosting: IslandHostingView<FloatingIslandView>?
+    private var islandPanelHardwareNotch: Bool?
     private var islandPanelSafeTop: CGFloat?
     private var islandPanelCollapsedWidth: CGFloat?
     private var islandExpanded = false
+    private var islandMouseMonitors: [Any] = []
+    private var islandRoutingTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenu()
@@ -70,6 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autoCleanupTimer?.invalidate()
         runtimeTimer?.invalidate()
         HotKeyCenter.shared.unregister()
+        islandMouseMonitors.forEach(NSEvent.removeMonitor)
+        islandMouseMonitors.removeAll()
+        islandRoutingTimer?.invalidate()
         MosaicCache.shared.clear()
         appState.trafficMonitor.flushHistoryForTermination()
         appState.stopUninstallQueueForTermination()
@@ -311,6 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // 屏幕参数（刘海带宽/外接屏）变化时重建视图锚定参数。
         if islandPanel == nil
+            || islandPanelHardwareNotch != islandHardwareNotch
             || islandPanelSafeTop != islandSafeTop
             || islandPanelCollapsedWidth != islandCollapsedWidth {
             createIslandPanel()
@@ -344,9 +351,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.becomesKeyOnlyIfNeeded = true
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        // 必须显式设置：未设置时窗口服务器按窗口缓冲区透明度判定点击穿透，
+        // 而灵动岛内容画在独立图层上、窗口缓冲区全透明，点击会整片落到下方窗口。
+        // 默认穿透，光标进入可见形状时由 updateIslandMouseRouting 接管。
+        panel.ignoresMouseEvents = true
         let hosting = IslandHostingView(rootView: FloatingIslandView(
             state: appState,
             safeTop: islandSafeTop,
+            hardwareNotch: islandHardwareNotch,
             collapsedWidth: islandCollapsedWidth,
             onOpenMain: { [weak self] in self?.openMainFromIsland() },
             onHitFrameChange: { [weak self] frame, shape in
@@ -354,6 +366,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // 多次上报乱序，命中区域可能停在旧值。
                 self?.islandHosting?.islandHitFrame = frame
                 self?.islandHosting?.islandHitShape = shape
+                self?.updateIslandMouseRouting()
             },
             onExpandedChange: { [weak self] expanded in
                 self?.islandExpanded = expanded
@@ -361,34 +374,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         islandHosting = hosting
         islandPanel = panel
         panel.contentView = hosting
+        islandPanelHardwareNotch = islandHardwareNotch
         islandPanelSafeTop = islandSafeTop
         islandPanelCollapsedWidth = islandCollapsedWidth
+        installIslandMouseRouting()
+    }
+
+    /// 光标移动时切换灵动岛的鼠标穿透：在可见形状内接收点击与悬停，
+    /// 形状外穿透给下方窗口，透明窗口边距不会吞掉点击。
+    /// 本地监视器在事件分发前执行，离开形状的那一次移动仍会送达 SwiftUI 悬停。
+    /// 穿透期间窗口收不到任何鼠标事件，只靠事件监视器会漏掉进入；定时器兜底。
+    private func installIslandMouseRouting() {
+        guard islandMouseMonitors.isEmpty else { return }
+        islandRoutingTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateIslandMouseRouting() }
+        }
+        islandRoutingTimer?.tolerance = 0.02
+        let mask: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged]
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateIslandMouseRouting() }
+        }) {
+            islandMouseMonitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.updateIslandMouseRouting() }
+            return event
+        }) {
+            islandMouseMonitors.append(local)
+        }
+    }
+
+    private func updateIslandMouseRouting() {
+        guard let panel = islandPanel, let hosting = islandHosting,
+              panel.isVisible || !panel.ignoresMouseEvents else { return }
+        let inside = panel.isVisible && hosting.containsScreenPoint(NSEvent.mouseLocation)
+        guard panel.ignoresMouseEvents == inside else { return }
+        panel.ignoresMouseEvents = !inside
+        if !inside {
+            NotificationCenter.default.post(name: .smIslandPointerExited, object: nil)
+        }
     }
 
     private func openMainFromIsland() {
+        // 点击发生在灵动岛所在的屏：主窗口就开在这块屏上，而不是按光标推断。
+        let islandScreen = islandPanel?.screen
         // End nonactivating-panel event tracking before activating a regular
         // window. Otherwise the floating panel can retain the key-window focus.
         islandPanel?.orderOut(nil)
         islandExpanded = false
         DispatchQueue.main.async { [weak self] in
-            self?.showMainWindow()
+            self?.showMainWindow(on: islandScreen)
         }
     }
 
     /// 屏幕指标在 Space/激活策略切换的瞬间可能暂时读不到（NSScreen.main 为 nil、
     /// 辅助区缺失）。此时沿用上次的值，绝不能回落到 0/默认宽度重建面板——
     /// 那会让刘海位置和宽度跳变（"位置漂移"）。
+    private var islandHardwareNotch: Bool {
+        guard let screen = NSScreen.main else { return islandPanelHardwareNotch ?? false }
+        return screen.safeAreaInsets.top > 0
+    }
+
+    /// 刘海屏取硬件刘海高度；无刘海屏按 codenotch 的虚拟刘海取菜单栏高度，
+    /// 菜单栏自动隐藏时 visibleFrame 顶部没有缺口，改用系统状态栏厚度。
     private var islandSafeTop: CGFloat {
         guard let screen = NSScreen.main else { return islandPanelSafeTop ?? 0 }
-        return screen.safeAreaInsets.top
+        if screen.safeAreaInsets.top > 0 { return screen.safeAreaInsets.top }
+        let menuBar = screen.frame.maxY - screen.visibleFrame.maxY
+        return menuBar > 0 ? menuBar : NSStatusBar.system.thickness
     }
 
     private var islandCollapsedWidth: CGFloat {
-        guard let screen = NSScreen.main,
-              let left = screen.auxiliaryTopLeftArea,
+        guard let screen = NSScreen.main else {
+            return islandPanelCollapsedWidth ?? IslandLayout.virtualNotchWidth
+        }
+        guard let left = screen.auxiliaryTopLeftArea,
               let right = screen.auxiliaryTopRightArea
-        else { return islandPanelCollapsedWidth ?? IslandLayout.handleWidth }
-        return max(IslandLayout.handleWidth, right.minX - left.maxX + 8)
+        else { return IslandLayout.virtualNotchWidth }
+        return right.minX - left.maxX + 8
     }
 
     private var islandWindowSize: NSSize {
@@ -409,7 +472,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 主窗口
 
-    func showMainWindow() {
+    func showMainWindow(on targetScreen: NSScreen? = nil) {
         if NSApp.activationPolicy() != .regular {
             NSApp.setActivationPolicy(.regular)
         }
@@ -433,7 +496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mainWindow = window
             createdWindow = true
         }
-        restoreMainWindowToCursorScreen(force: createdWindow)
+        restoreMainWindow(to: targetScreen ?? cursorScreen, force: createdWindow)
         mainWindow?.deminiaturize(nil)
         mainWindow?.makeKeyAndOrderFront(nil)
         if appState.visiblePages.indices.contains(appState.selectedTab),
@@ -452,8 +515,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return NSScreen.screens.first { NSPointInRect(mouse, $0.frame) } ?? NSScreen.main
     }
 
-    private func restoreMainWindowToCursorScreen(force: Bool = false) {
-        guard let window = mainWindow, let screen = cursorScreen else { return }
+    private func restoreMainWindow(to screen: NSScreen?, force: Bool = false) {
+        guard let window = mainWindow, let screen else { return }
         if !force {
             let center = NSPoint(x: window.frame.midX, y: window.frame.midY)
             let hosting = NSScreen.screens.first { NSPointInRect(center, $0.frame) }
