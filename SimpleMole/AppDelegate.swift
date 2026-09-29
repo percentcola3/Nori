@@ -350,10 +350,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             collapsedWidth: islandCollapsedWidth,
             onOpenMain: { [weak self] in self?.openMainFromIsland() },
             onHitFrameChange: { [weak self] frame, shape in
-                DispatchQueue.main.async {
-                    self?.islandHosting?.islandHitFrame = frame
-                    self?.islandHosting?.islandHitShape = shape
-                }
+                // 同步赋值：SwiftUI 回调本就在主线程；async 跳一拍会让同一时刻的
+                // 多次上报乱序，命中区域可能停在旧值。
+                self?.islandHosting?.islandHitFrame = frame
+                self?.islandHosting?.islandHitShape = shape
             },
             onExpandedChange: { [weak self] expanded in
                 self?.islandExpanded = expanded
@@ -375,14 +375,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 屏幕指标在 Space/激活策略切换的瞬间可能暂时读不到（NSScreen.main 为 nil、
+    /// 辅助区缺失）。此时沿用上次的值，绝不能回落到 0/默认宽度重建面板——
+    /// 那会让刘海位置和宽度跳变（"位置漂移"）。
     private var islandSafeTop: CGFloat {
-        NSScreen.main?.safeAreaInsets.top ?? 0
+        guard let screen = NSScreen.main else { return islandPanelSafeTop ?? 0 }
+        return screen.safeAreaInsets.top
     }
 
     private var islandCollapsedWidth: CGFloat {
         guard let screen = NSScreen.main,
               let left = screen.auxiliaryTopLeftArea,
-              let right = screen.auxiliaryTopRightArea else { return IslandLayout.handleWidth }
+              let right = screen.auxiliaryTopRightArea
+        else { return islandPanelCollapsedWidth ?? IslandLayout.handleWidth }
         return max(IslandLayout.handleWidth, right.minX - left.maxX + 8)
     }
 
@@ -405,7 +410,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - 主窗口
 
     func showMainWindow() {
-        NSApp.setActivationPolicy(.regular)
+        if NSApp.activationPolicy() != .regular {
+            NSApp.setActivationPolicy(.regular)
+        }
+        var createdWindow = false
         if mainWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 940, height: 720),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -421,17 +429,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // 系统标题文字由 SwiftUI 头部替代。
             window.title = ""
             window.contentView = NSHostingView(rootView: MainWindowView(state: appState))
-            window.center()
             observeMainWindow(window)
             mainWindow = window
+            createdWindow = true
         }
+        restoreMainWindowToCursorScreen(force: createdWindow)
         mainWindow?.deminiaturize(nil)
         mainWindow?.makeKeyAndOrderFront(nil)
         if appState.visiblePages.indices.contains(appState.selectedTab),
            appState.visiblePages[appState.selectedTab] == .traffic {
             appState.trafficMonitor.setPageVisible(true)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        raiseMainWindowAfterPolicyChange()
+    }
+
+    /// 主窗口必须出现在用户当前所在的屏幕：从灵动岛/菜单栏/程序坞唤起时，
+    /// 光标在哪块屏，窗口就落在哪块屏。窗口只在首次创建时定位一次，
+    /// 屏幕重排（合盖接外接屏、改排列）后可能搁浅在一块已经看不见的屏
+    /// 上——直接 makeKeyAndOrderFront 的外在表现就是"点了没反应"。
+    private var cursorScreen: NSScreen? {
+        let mouse = NSEvent.mouseLocation
+        return NSScreen.screens.first { NSPointInRect(mouse, $0.frame) } ?? NSScreen.main
+    }
+
+    private func restoreMainWindowToCursorScreen(force: Bool = false) {
+        guard let window = mainWindow, let screen = cursorScreen else { return }
+        if !force {
+            let center = NSPoint(x: window.frame.midX, y: window.frame.midY)
+            let hosting = NSScreen.screens.first { NSPointInRect(center, $0.frame) }
+            let visibleSomewhere = NSScreen.screens.contains { $0.frame.intersects(window.frame) }
+            if hosting == screen, visibleSomewhere { return }
+        }
+        let size = window.frame.size
+        let visible = screen.visibleFrame
+        window.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2,
+                                      y: visible.midY - size.height / 2))
+    }
+
+    /// 激活策略切换需要跑一轮 runloop 才生效；同一拍里的 activate 会被系统
+    /// 忽略——表现是从灵动岛点"更多"后切到了空白桌面，主窗口却没有出现。
+    /// 下一拍再抬一次窗口并激活，确保窗口真实可见。
+    private func raiseMainWindowAfterPolicyChange() {
+        DispatchQueue.main.async { [weak self] in
+            self?.mainWindow?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     private func observeMainWindow(_ window: NSWindow) {

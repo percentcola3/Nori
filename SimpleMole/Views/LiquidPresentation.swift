@@ -93,7 +93,6 @@ struct LiquidActionButton: View {
 struct IslandLiquidSurface: ViewModifier {
     let shape: NotchShape
     var isExpanded = true
-    var hasHardwareNotch = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -101,11 +100,12 @@ struct IslandLiquidSurface: ViewModifier {
         if #available(macOS 26.0, *), !reduceTransparency {
             // 玻璃必须直接承载内容（content.glassEffect），不能作为 background
             // sibling 垫在内容后面——玻璃合成层会把上方内容反向遮挡成毛玻璃
-            // （同类坑见 Components.swift 原生分段控件的注释）。收起态实底
-            // curtain 画在内容之下、玻璃之上：盖住玻璃与镜面高光，展开时淡出。
+            // （同类坑见 Components.swift 原生分段控件的注释）。收起态只叠一层
+            // 半透明暗纱加深一档：与展开面板共享同一玻璃质感与色调，
+            // 不再用实底黑盖住玻璃（否则手柄与面板的材质割裂）。
             content
                 .background {
-                    shape.fill(hasHardwareNotch ? Color.black : Color.islandHandleBackground)
+                    shape.fill(Color.islandHandleVeil)
                         .opacity(isExpanded ? 0 : 1)
                         .allowsHitTesting(false)
                 }
@@ -115,12 +115,15 @@ struct IslandLiquidSurface: ViewModifier {
         } else {
             content
                 .background {
-                    if !isExpanded {
-                        shape.fill(hasHardwareNotch ? Color.black : Color.islandHandleBackground)
-                    } else if reduceTransparency {
+                    if reduceTransparency {
                         shape.fill(Color.glassOpaque)
                     } else {
-                        shape.fill(.ultraThinMaterial)
+                        ZStack {
+                            shape.fill(.ultraThinMaterial)
+                            shape.fill(Color.islandHandleVeil)
+                                .opacity(isExpanded ? 0 : 1)
+                                .allowsHitTesting(false)
+                        }
                     }
                 }
                 .clipShape(shape)

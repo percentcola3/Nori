@@ -111,7 +111,9 @@ extension Color {
     /// 折叠句柄上的短横线提示。
     static let islandGlassTint = Color(nsColor: srgb(EarthBluePalette.tintDark, 0.28))
     static let islandHandleGrip = Color.white.opacity(0.55)
-    static let islandHandleBackground = Color(nsColor: srgb(EarthBluePalette.glassDark))
+    /// 折叠手柄的暗色纱罩：半透明，叠在玻璃上加深一档，
+    /// 与展开面板保持同一材质观感（不再用实底黑遮住玻璃）。
+    static let islandHandleVeil = Color.black.opacity(0.30)
 }
 
 extension NSColor {

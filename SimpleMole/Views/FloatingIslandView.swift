@@ -99,8 +99,7 @@ struct FloatingIslandView: View {
             .frame(width: expanded ? IslandLayout.panelWidth : collapsedWidth,
                    height: expanded ? expandedHeight : handleHeight,
                    alignment: .top)
-            .modifier(IslandLiquidSurface(shape: visibleShape,
-                                          isExpanded: expanded, hasHardwareNotch: safeTop > 0))
+            .modifier(IslandLiquidSurface(shape: visibleShape, isExpanded: expanded))
             .onPreferenceChange(IslandExpandedHeightKey.self) { height in
                 if height > 0 { expandedHeight = height }
             }
@@ -113,11 +112,15 @@ struct FloatingIslandView: View {
                             visibleSize = geo.size
                             onHitFrameChange(frame, visibleShape)
                         }
+                        // 命中区域只信几何变化这一条通道：frame 的值在形变提交后
+                        // 直接取到最终布局。绝不能再挂 onChange(of: expanded) 补报——
+                        // 那个闭包捕获的是形变前的旧几何，且与 frame 通知同一拍到达，
+                        // 会把展开后的命中区覆盖回折叠手柄矩形，展开面板上的所有
+                        // 点击（更多/一键优化）都会被窗口判定"此处不存在"而穿透。
                         .onChange(of: frame) {
                             visibleSize = geo.size
                             onHitFrameChange($0, visibleShape)
                         }
-                        .onChange(of: expanded) { _ in onHitFrameChange(frame, visibleShape) }
                 }
                 .allowsHitTesting(false)
             }

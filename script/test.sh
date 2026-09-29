@@ -240,6 +240,12 @@ test_island_contract() {
         fail "island hit frame is not reported in the root coordinate space (buttons become unclickable)"
     /usr/bin/grep -Fq 'coordinateSpace(name: IslandLayout.hitSpaceName)' "$island" || \
         fail "island root coordinate space is not declared"
+    # 命中区只能由几何变化通道上报：onChange(of: expanded) 补报捕获的是形变前
+    # 旧几何，且与 frame 通知同拍到达会把展开后的命中区覆盖回折叠手柄——
+    # 表现为展开面板上的点击（更多/优化）全部穿透到桌面。
+    if /usr/bin/grep -Fq 'onChange(of: expanded) { _ in onHitFrameChange' "$island"; then
+        fail "island hit frame is re-reported from the stale expanded-flag handler"
+    fi
     # codenotch 式深色胶囊不画投影：面板底层不允许再出现阴影层。
     if /usr/bin/grep -Fq '.shadow(' "$island"; then
         fail "island draws a shadow layer under the panel"
@@ -256,6 +262,24 @@ test_island_contract() {
         fail "island advanced action does not open main panel"
     /usr/bin/grep -Fq 'y: screen.frame.maxY - size.height' "$app_delegate" || \
         fail "island is not anchored to the physical screen top"
+    # 刘海手柄与展开面板共享玻璃材质：不允许实底黑 curtain 盖住玻璃。
+    /usr/bin/grep -Fq 'Color.islandHandleVeil' "$ROOT_DIR/SimpleMole/Views/LiquidPresentation.swift" || \
+        fail "collapsed handle no longer shares the expanded panel's glass material"
+    if /usr/bin/grep -Fq 'Color.black' "$ROOT_DIR/SimpleMole/Views/LiquidPresentation.swift"; then
+        fail "island collapsed handle still paints an opaque black curtain"
+    fi
+    # 屏幕指标瞬断时沿用上次值，禁止回落默认值重建（刘海位置漂移）。
+    /usr/bin/grep -Fq 'return islandPanelSafeTop ?? 0' "$app_delegate" || \
+        fail "island safe-top flaps to 0 during screen/activation transitions"
+    /usr/bin/grep -Fq 'return islandPanelCollapsedWidth ?? IslandLayout.handleWidth' "$app_delegate" || \
+        fail "island collapsed width flaps to the default during screen transitions"
+    # 激活策略切换后下一拍再抬升主窗口：同拍 activate 会被忽略（点更多只回到桌面）。
+    /usr/bin/grep -Fq 'raiseMainWindowAfterPolicyChange()' "$app_delegate" || \
+        fail "main window is not re-raised after the activation-policy change settles"
+    # 主窗口跟随光标所在屏；屏幕重排后搁浅在不可见屏上的窗口要被救回，
+    # 否则表现为"点更多没有任何面板出现"（窗口开在了另一块屏上）。
+    /usr/bin/grep -Fq 'restoreMainWindowToCursorScreen(force: createdWindow)' "$app_delegate" || \
+        fail "main window placement never follows the cursor's screen"
     if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
         bash "$ROOT_DIR/script/test_island_window.sh" || fail "island window hit testing"
         bash "$ROOT_DIR/script/test_island_resources.sh" || fail "island resource policy"
