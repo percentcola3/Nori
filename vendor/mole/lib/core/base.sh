@@ -1285,6 +1285,7 @@ update_progress_if_needed() {
     local total="$2"
     local last_update_var="$3" # Name of variable holding last update time
     local interval="${4:-2}"   # Default: update every 2 seconds
+    [[ "$last_update_var" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 1
 
     # Get current time
     local current_time
@@ -1292,8 +1293,9 @@ update_progress_if_needed() {
 
     # Get last update time from variable
     local last_time
-    # eval: indirect read by name; bash 3.2 has no nameref (declare -n)
-    eval "last_time=\${$last_update_var:-0}"
+    # Indirect read by name without eval: ${!name} never parses as code
+    # (bash 3.2 has no nameref).
+    last_time="${!last_update_var:-0}"
     [[ "$last_time" =~ ^[0-9]+$ ]] || last_time=0
 
     # Check if enough time has elapsed
@@ -1303,8 +1305,9 @@ update_progress_if_needed() {
         start_section_spinner "Scanning items... $completed/$total"
 
         # Update the last_update_time variable
-        # eval: indirect write by name; bash 3.2 has no nameref
-        eval "$last_update_var=$current_time"
+        # Indirect write by name without eval: printf -v never parses the
+        # target name as code.
+        printf -v "$last_update_var" '%s' "$current_time"
         return 0
     fi
 

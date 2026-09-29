@@ -101,8 +101,10 @@ build_regex_var() {
             regex="$regex|$p"
         fi
     done
-    # eval: indirect write by name; bash 3.2 has no nameref
-    eval "$var_name=\"\$regex\""
+    # Indirect write by name without eval: printf -v never parses the target
+    # name as code (bash 3.2 has no nameref).
+    [[ "$var_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || return 0
+    printf -v "$var_name" '%s' "$regex"
 }
 
 # Lazy-loaded regex (only built when needed)
