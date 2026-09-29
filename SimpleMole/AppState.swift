@@ -1097,19 +1097,62 @@ final class AppState: ObservableObject {
         scanCleanup(force: true, mode: .quick)
     }
 
-    /// Run the system-maintenance catalog through the native implementation.
-    /// The user confirms once; each task reports its own result and failures do
-    /// not prevent the remaining independent checks from running.
+    var optimizeSelectedCount: Int {
+        optimizeTasks.filter { $0.selected && $0.selectable }.count
+    }
+
+    var optimizeHasPreview: Bool { optimizeTasks.contains { $0.preview != nil } }
+
+    /// Read-only pass: every task reports whether it is needed and what it
+    /// would change. Needed tasks are preselected unless they erase history.
     func runOptimize() {
         guard authorize(.optimize, presentingPermissionCenter: true) else { return }
         guard !isBusy else {
             optimizeStatus = l10n.t("optimize.status.busy")
             return
         }
+        isOptimizing = true
+        optimizeStatus = l10n.t("optimize.status.inspecting")
+        let requested = optimizeTasks
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let inspected = await NativeCore.shared.inspectOptimize(tasks: requested)
+            self.optimizeTasks = inspected
+            self.isOptimizing = false
+            let needed = inspected.filter(\.selectable).count
+            self.optimizeStatus = self.l10n.tf("optimize.status.inspected", needed, self.optimizeSelectedCount)
+        }
+    }
+
+    func toggleOptimizeTask(_ id: String) {
+        guard !isOptimizing, let index = optimizeTasks.firstIndex(where: { $0.id == id }),
+              optimizeTasks[index].selectable else { return }
+        optimizeTasks[index].selected.toggle()
+    }
+
+    func selectRecommendedOptimize() {
+        guard !isOptimizing else { return }
+        for index in optimizeTasks.indices {
+            optimizeTasks[index].selected = optimizeTasks[index].selectable && optimizeTasks[index].defaultOn
+        }
+    }
+
+    func clearOptimizeSelection() {
+        guard !isOptimizing else { return }
+        for index in optimizeTasks.indices { optimizeTasks[index].selected = false }
+    }
+
+    /// The user confirms once; each selected task reports its own result and
+    /// failures do not prevent the remaining independent tasks from running.
+    func applySelectedOptimize() {
+        guard authorize(.optimize, presentingPermissionCenter: true) else { return }
+        guard !isBusy, optimizeSelectedCount > 0 else { return }
+        let admin = NativeCore.shared.selectedAdminTasks(optimizeTasks)
         confirmation = Confirmation(
             title: l10n.t("optimize.confirm.title"),
-            message: l10n.t("optimize.confirm.message"),
-            confirmLabel: l10n.t("optimize.run")) { [weak self] in
+            message: l10n.tf(admin.isEmpty ? "optimize.confirm.selected" : "optimize.confirm.selectedAdmin",
+                             optimizeSelectedCount, admin.count),
+            confirmLabel: l10n.t("optimize.runSelected")) { [weak self] in
                 self?.performOptimize()
             }
     }
@@ -1120,15 +1163,32 @@ final class AppState: ObservableObject {
         optimizeStatus = l10n.t("optimize.status.running")
         log(l10n.t("optimize.log.start"))
         let requested = optimizeTasks
+        let admin = NativeCore.shared.selectedAdminTasks(requested)
+        let testMode = ProcessInfo.processInfo.environment["MOLE_TEST_NO_AUTH"] == "1"
+            || ProcessInfo.processInfo.environment["MOLE_TEST_MODE"] == "1"
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let report = await NativeCore.shared.runOptimize(tasks: requested)
-            self.optimizeTasks = report.tasks
+            var tasks = await NativeCore.shared.runOptimize(tasks: requested).tasks
+            if !admin.isEmpty {
+                if testMode {
+                    tasks = NativeCore.mergeAdminResults("", succeeded: false, requested: admin, into: tasks)
+                } else {
+                    let result = await MoleEngine.shared.runPrivilegedBridge(
+                        "bin/app_optimize_admin.sh", arguments: [String(getuid())] + admin, timeout: 1800)
+                    tasks = NativeCore.mergeAdminResults(result.output, succeeded: result.succeeded,
+                                                         requested: admin, into: tasks)
+                    if !result.succeeded { self.logFailure(result) }
+                }
+            }
+            self.optimizeTasks = tasks
             self.isOptimizing = false
-            let applied = report.tasks.filter { $0.state == .applied }.count
-            let failed = report.tasks.filter { $0.state == .failed }.count
+            let applied = tasks.filter { $0.state == .applied }.count
+            let failed = tasks.filter { $0.state == .failed }.count
             self.optimizeStatus = self.l10n.tf("optimize.status.done", applied, failed)
             self.log(self.l10n.tf("optimize.log.done", applied, failed))
+            for task in tasks where task.state != .pending {
+                self.log("\(task.title): \(task.message)")
+            }
         }
     }
 

@@ -73,11 +73,44 @@ final class NativeCore: @unchecked Sendable {
             case failed
         }
 
+        /// `admin` 任务统一走一次提权桥接；`report` 任务只读，永远不可勾选执行。
+        enum Kind: String, Sendable {
+            case action
+            case admin
+            case report
+        }
+
+        /// 执行前的只读预检：是否需要、将改动什么。
+        struct Preview: Equatable, Sendable {
+            enum Need: String, Sendable {
+                case needed
+                case clean
+                case blocked
+                case unavailable
+            }
+
+            let need: Need
+            let summary: String
+            var items: [String] = []
+            /// 执行时唯一允许作用的证据（`identity<TAB>path`、bundle ID、偏好键等）。
+            var plan: [String] = []
+        }
+
         let id: String
         let title: String
         let detail: String
+        var kind: Kind = .action
+        /// 预检发现需要时是否默认勾选。清除历史记录类任务保持不勾选。
+        var defaultOn = true
+        var selected = false
+        var preview: Preview?
         var state: State = .pending
         var message: String = ""
+
+        var selectable: Bool {
+            guard kind != .report, let preview else { return false }
+            return preview.need == .needed
+        }
     }
 
     struct OptimizeReport: Sendable {
@@ -86,7 +119,7 @@ final class NativeCore: @unchecked Sendable {
     }
 
     private static let cleanupLogger = Logger(subsystem: "com.nori.app", category: "cleanup")
-    private let fileManager = FileManager.default
+    let fileManager = FileManager.default
     private let sizeKeys: Set<URLResourceKey> = [
         .isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey,
         .fileAllocatedSizeKey, .totalFileAllocatedSizeKey, .fileSizeKey
@@ -1398,243 +1431,13 @@ final class NativeCore: @unchecked Sendable {
 
     // MARK: Optimize
 
-    func initialOptimizeTasks() -> [OptimizeTask] {
-        [
-            OptimizeTask(id: "dns", title: "DNS cache", detail: "Flush the macOS resolver cache."),
-            OptimizeTask(id: "quicklook", title: "Quick Look cache", detail: "Refresh Quick Look thumbnails."),
-            OptimizeTask(id: "iconservices", title: "Icon services", detail: "Refresh Finder icon cache."),
-            OptimizeTask(id: "launchservices", title: "LaunchServices", detail: "Rebuild app and document associations."),
-            OptimizeTask(id: "saved-state", title: "Saved application state", detail: "Remove saved states older than 30 days."),
-            OptimizeTask(id: "broken-configs", title: "Broken preferences", detail: "Move corrupt third-party preference files to Trash; Apple and login settings are never touched."),
-            OptimizeTask(id: "network-stack", title: "Network stack", detail: "Refresh routing and ARP state when administrator access is available."),
-            OptimizeTask(id: "finder-dsstore", title: "Network .DS_Store", detail: "Prevent Finder metadata files on network volumes."),
-            OptimizeTask(id: "legacy-overrides", title: "Legacy overrides", detail: "Remove old App Nap and disk-image verification overrides."),
-            OptimizeTask(id: "sqlite-vacuum", title: "SQLite databases", detail: "Vacuum supported databases after their owners are closed."),
-            OptimizeTask(id: "spotlight", title: "Spotlight index", detail: "Check indexing status; no rebuild without explicit admin approval."),
-            OptimizeTask(id: "spotlight-orphans", title: "Spotlight orphan rules", detail: "Review stale search rules without changing the index."),
-            OptimizeTask(id: "periodic", title: "Periodic maintenance", detail: "Run daily, weekly and monthly maintenance when macOS permits it."),
-            OptimizeTask(id: "permissions", title: "User permissions", detail: "Check user directory permissions without changing ownership blindly."),
-            OptimizeTask(id: "shared-file-list", title: "Shared file lists", detail: "Refresh Finder recent items and favorites services."),
-            OptimizeTask(id: "disk-verify", title: "Disk health", detail: "Verify the filesystem only after explicit administrator approval."),
-            OptimizeTask(id: "login-items", title: "Login items", detail: "Audit login items for broken references."),
-            OptimizeTask(id: "quarantine", title: "Quarantine database", detail: "Clear the download quarantine history; files and Gatekeeper checks are unaffected."),
-            OptimizeTask(id: "launch-agents", title: "Launch agents", detail: "Unload and trash user launch agents whose program no longer exists."),
-            OptimizeTask(id: "notifications", title: "Notifications", detail: "Inspect notification database size without deleting messages."),
-            OptimizeTask(id: "coreduet", title: "Usage data", detail: "Inspect usage databases without removing history.")
-        ]
-    }
-
-    func runOptimize(tasks: [OptimizeTask]) async -> OptimizeReport {
-        await Task.detached(priority: .utility) { [self] in
-            var output = tasks
-            for index in output.indices {
-                let task = output[index]
-                if self.isOptimizeWhitelisted(task, homeDirectory: NSHomeDirectory()) {
-                    output[index].state = .unchanged
-                    output[index].message = "Skipped by whitelist."
-                    continue
-                }
-                switch task.id {
-                case "dns":
-                    // mDNSResponder runs as root, so the HUP only succeeds in an
-                    // administrator session. Report that honestly instead of
-                    // marking the whole task failed when the cache itself was
-                    // flushed.
-                    let flushed = self.runCommand("/usr/bin/dscacheutil", ["-flushcache"])
-                    let restarted = flushed && self.runCommand("/usr/bin/killall", ["-HUP", "mDNSResponder"])
-                    if restarted {
-                        output[index].state = .applied
-                        output[index].message = "DNS cache flushed."
-                    } else if flushed {
-                        output[index].state = .unavailable
-                        output[index].message = "Directory Service cache flushed; restarting mDNSResponder needs administrator access (sudo killall -HUP mDNSResponder)."
-                    } else {
-                        output[index].state = .failed
-                        output[index].message = "Could not flush DNS cache."
-                    }
-                case "quicklook":
-                    let ok = self.runCommand("/usr/bin/qlmanage", ["-r", "cache"])
-                    output[index].state = ok ? .applied : .failed
-                    output[index].message = ok ? "Quick Look cache refreshed." : "Quick Look refresh failed."
-                case "iconservices":
-                    let ok = self.runCommand("/usr/bin/killall", ["-u", NSUserName(), "iconservicesagent"])
-                    output[index].state = ok ? .applied : .unchanged
-                    output[index].message = ok
-                        ? "Finder icon service restarted."
-                        : "Icon service was not running; no change was needed."
-                case "launchservices":
-                    let executable = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-                    guard self.fileManager.isExecutableFile(atPath: executable) else {
-                        output[index].state = .unavailable
-                        output[index].message = "lsregister is unavailable on this macOS version."
-                        continue
-                    }
-                    // Same sequence as Mole: garbage-collect stale entries, then
-                    // re-register without `-kill`, which would drop every app the
-                    // user registered by hand. Falls back to user + local domains
-                    // when the system domain refuses without administrator access.
-                    _ = self.runCommand(executable, ["-gc"])
-                    let full = self.runCommand(executable,
-                                               ["-r", "-f", "-domain", "local", "-domain", "user", "-domain", "system"])
-                    let partial = full || self.runCommand(executable,
-                                                          ["-r", "-f", "-domain", "local", "-domain", "user"])
-                    output[index].state = partial ? .applied : .failed
-                    output[index].message = full
-                        ? "LaunchServices database rebuilt."
-                        : partial ? "LaunchServices rebuilt for user and local domains."
-                        : "LaunchServices rebuild failed."
-                case "saved-state":
-                    let root = URL(fileURLWithPath: NSHomeDirectory())
-                        .appendingPathComponent("Library/Saved Application State", isDirectory: true)
-                    let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60)
-                    let whitelist = self.loadWhitelist(homeDirectory: NSHomeDirectory())
-                    var removed = 0
-                    var failed = 0
-                    for item in self.directChildren(of: root) {
-                        guard !self.isSymlink(item),
-                              !self.matchesWhitelist(item.path, entries: whitelist),
-                              let values = try? item.resourceValues(forKeys: [.contentModificationDateKey]),
-                              let date = values.contentModificationDate, date < cutoff else { continue }
-                        do { try self.fileManager.trashItem(at: item, resultingItemURL: nil); removed += 1 }
-                        catch { failed += 1 }
-                    }
-                    if failed > 0 {
-                        output[index].state = removed > 0 ? .applied : .failed
-                        output[index].message = "Moved \(removed) saved state(s) to Trash; \(failed) could not be moved."
-                    } else {
-                        output[index].state = removed > 0 ? .applied : .unchanged
-                        output[index].message = removed > 0
-                            ? "Moved \(removed) saved state(s) older than 30 days to Trash."
-                            : "No old saved states found."
-                    }
-                case "finder-dsstore":
-                    let first = self.runCommand("/usr/bin/defaults", ["write", "com.apple.desktopservices", "DSDontWriteNetworkStores", "-bool", "TRUE"])
-                    let second = self.runCommand("/usr/bin/defaults", ["write", "com.apple.desktopservices", "DSDontWriteUSBStores", "-bool", "TRUE"])
-                    output[index].state = first && second ? .applied : .failed
-                    output[index].message = first && second
-                        ? "Finder will stop writing .DS_Store on network and USB volumes."
-                        : "Could not update Finder metadata preferences."
-                case "legacy-overrides":
-                    let overrides: [(String, String)] = [
-                        ("-g", "NSAppSleepDisabled"),
-                        ("com.apple.frameworks.diskimages", "skip-verify"),
-                        ("com.apple.frameworks.diskimages", "skip-verify-locked"),
-                        ("com.apple.frameworks.diskimages", "skip-verify-remote")
-                    ]
-                    var removed = 0
-                    var failed = 0
-                    for (domain, key) in overrides {
-                        guard let value = self.runCommandOutput("/usr/bin/defaults", ["read", domain, key]) else {
-                            continue
-                        }
-                        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                        guard normalized == "1" || normalized == "true" || normalized == "yes" else {
-                            continue
-                        }
-                        if self.runCommand("/usr/bin/defaults", ["delete", domain, key]) {
-                            removed += 1
-                        } else {
-                            failed += 1
-                        }
-                    }
-                    if failed > 0 {
-                        output[index].state = .failed
-                        output[index].message = "Some legacy overrides could not be removed."
-                    } else if removed > 0 {
-                        output[index].state = .applied
-                        output[index].message = "Removed \(removed) legacy override(s)."
-                    } else {
-                        output[index].state = .unchanged
-                        output[index].message = "No legacy overrides found."
-                    }
-                case "shared-file-list":
-                    let ok = self.runCommand("/usr/bin/killall", ["sharedfilelistd"])
-                    output[index].state = ok ? .applied : .unchanged
-                    output[index].message = ok
-                        ? "Shared file list service restarted."
-                        : "Shared file list service was not running."
-                case "spotlight":
-                    let status = self.runCommandOutput("/usr/bin/mdutil", ["-s", NSHomeDirectory()])
-                    output[index].state = status == nil ? .unavailable : .unchanged
-                    output[index].message = status.map {
-                        "Index status checked: \($0.trimmingCharacters(in: .whitespacesAndNewlines))"
-                    } ?? "Spotlight status is unavailable on this macOS version."
-                case "broken-configs":
-                    let result = self.repairBrokenPreferences(homeDirectory: NSHomeDirectory())
-                    if result.failed > 0 {
-                        output[index].state = result.repaired > 0 ? .applied : .failed
-                        output[index].message = "Moved \(result.repaired) corrupt preference file(s) to Trash; \(result.failed) could not be moved."
-                    } else if result.repaired > 0 {
-                        output[index].state = .applied
-                        output[index].message = result.partial
-                            ? "Moved \(result.repaired) corrupt preference file(s) to Trash; the check stopped early, run again to finish."
-                            : "Moved \(result.repaired) corrupt preference file(s) to Trash."
-                    } else {
-                        output[index].state = .unchanged
-                        output[index].message = result.partial
-                            ? "No corrupt preference file found before the time limit."
-                            : "All third-party preference files are valid."
-                    }
-                case "spotlight-orphans":
-                    output[index].state = .unchanged
-                    output[index].message = "Orphan rules are review-only in the native optimizer."
-                case "sqlite-vacuum":
-                    output[index].state = .unavailable
-                    output[index].message = "Database vacuum is deferred until an app-specific safe route is selected."
-                case "network-stack":
-                    output[index].state = .unavailable
-                    output[index].message = "Refreshing routes requires explicit administrator approval."
-                case "periodic":
-                    output[index].state = .unavailable
-                    output[index].message = "Periodic maintenance requires an administrator session."
-                case "permissions":
-                    output[index].state = .unchanged
-                    output[index].message = "Permission audit is read-only in the native optimizer."
-                case "disk-verify":
-                    output[index].state = .unavailable
-                    output[index].message = "Disk verification is opt-in and requires administrator approval."
-                case "login-items":
-                    output[index].state = .unchanged
-                    output[index].message = "Login items are available for review in System Settings."
-                case "quarantine":
-                    let result = self.clearQuarantineEvents(homeDirectory: NSHomeDirectory())
-                    output[index].state = result.state
-                    output[index].message = result.message
-                case "launch-agents":
-                    let result = self.removeBrokenLaunchAgents(homeDirectory: NSHomeDirectory())
-                    if result.failed > 0 {
-                        output[index].state = result.removed > 0 ? .applied : .failed
-                        output[index].message = "Removed \(result.removed) broken launch agent(s); \(result.failed) could not be moved to Trash."
-                    } else if result.removed > 0 {
-                        output[index].state = .applied
-                        output[index].message = "Unloaded and moved \(result.removed) broken launch agent(s) to Trash."
-                    } else {
-                        output[index].state = .unchanged
-                        output[index].message = result.scanned == 0
-                            ? "No user launch agents installed."
-                            : "All \(result.scanned) user launch agent(s) point to existing programs."
-                    }
-                case "notifications":
-                    output[index].state = .unchanged
-                    output[index].message = "Notification history is left untouched."
-                case "coreduet":
-                    output[index].state = .unchanged
-                    output[index].message = "Usage history is left untouched."
-                default:
-                    output[index].state = .unavailable
-                    output[index].message = "Unknown task."
-                }
-            }
-            return OptimizeReport(tasks: output, finishedAt: Date())
-        }.value
-    }
-
     // MARK: Optimize helpers
 
-    private struct PreferenceRepairResult {
+    struct PreferenceRepairResult {
         var repaired = 0
         var failed = 0
         var partial = false
+        var corrupt: [String] = []
     }
 
     /// Native port of Mole's `repair_broken_preferences`: lint third-party
@@ -1643,7 +1446,7 @@ final class NativeCore: @unchecked Sendable {
     /// and `loginwindow.plist` are never candidates, whitelisted paths are
     /// skipped, and the pass stops after 15 seconds so a huge preference
     /// folder cannot stall the optimizer.
-    private func repairBrokenPreferences(homeDirectory: String) -> PreferenceRepairResult {
+    func repairBrokenPreferences(homeDirectory: String, dryRun: Bool = false) -> PreferenceRepairResult {
         var result = PreferenceRepairResult()
         let preferences = URL(fileURLWithPath: homeDirectory)
             .appendingPathComponent("Library/Preferences", isDirectory: true)
@@ -1688,6 +1491,8 @@ final class NativeCore: @unchecked Sendable {
                 guard Date() < deadline else { result.partial = true; break }
                 guard fileManager.isReadableFile(atPath: url.path),
                       !runCommand("/usr/bin/plutil", ["-lint", "-s", url.path]) else { continue }
+                result.corrupt.append(url.path)
+                if dryRun { continue }
                 do {
                     try fileManager.trashItem(at: url, resultingItemURL: nil)
                     result.repaired += 1
@@ -1699,45 +1504,61 @@ final class NativeCore: @unchecked Sendable {
         return result
     }
 
-    private struct LaunchAgentResult {
-        var scanned = 0
-        var removed = 0
-        var failed = 0
+    struct BrokenLaunchAgent: Sendable {
+        let plist: String
+        let program: String
     }
 
-    /// Native port of Mole's `clean_broken_launch_agents`: a user launch agent
-    /// is broken when its `Program` / `ProgramArguments[0]` is an absolute path
-    /// that no longer exists on a mounted volume. Broken agents are unloaded
-    /// with launchctl and moved to Trash. Corrupt plists and relative program
-    /// paths are left alone because their state cannot be proven.
-    private func removeBrokenLaunchAgents(homeDirectory: String) -> LaunchAgentResult {
-        var result = LaunchAgentResult()
+    /// Mole's `opt_launch_agents_cleanup` contract: a user launch agent is
+    /// broken when its `Program` / `ProgramArguments[0]` is an absolute path
+    /// missing from a mounted volume. The optimizer only reports them; the
+    /// plist may belong to an updater that restores its helper later.
+    func brokenLaunchAgents(homeDirectory: String) -> (scanned: Int, broken: [BrokenLaunchAgent]) {
         let agents = URL(fileURLWithPath: homeDirectory)
             .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
-        guard isDirectory(agents) else { return result }
-        let whitelist = loadWhitelist(homeDirectory: homeDirectory)
-        for plist in directChildren(of: agents) {
+        guard isDirectory(agents) else { return (0, []) }
+        var scanned = 0
+        var broken: [BrokenLaunchAgent] = []
+        for plist in directChildren(of: agents).sorted(by: { $0.path < $1.path }) {
             guard plist.pathExtension == "plist", !isSymlink(plist),
                   (try? plist.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
                 continue
             }
-            result.scanned += 1
-            guard !matchesWhitelist(plist.path, entries: whitelist),
-                  let program = launchAgentProgram(plist), program.hasPrefix("/"),
+            scanned += 1
+            guard let program = launchAgentProgram(plist), program.hasPrefix("/"),
                   !fileManager.fileExists(atPath: program),
                   launchAgentVolumeIsMounted(program) else { continue }
-            _ = runCommand("/bin/launchctl", ["unload", plist.path])
-            do {
-                try fileManager.trashItem(at: plist, resultingItemURL: nil)
-                result.removed += 1
-            } catch {
-                result.failed += 1
-            }
+            broken.append(.init(plist: plist.path, program: program))
         }
-        return result
+        return (scanned, broken)
     }
 
-    private func launchAgentProgram(_ plist: URL) -> String? {
+    /// Trash sink for optimizer-owned file targets (old saved states, corrupt
+    /// shared file lists). Each target must still sit directly under its
+    /// expected parent, be a physical entry, and keep its planned identity.
+    func trashOptimizeTargets(_ targets: [(path: String, identity: String)],
+                              parent: String) -> (removed: Int, failed: Int) {
+        var removed = 0
+        var failed = 0
+        let parentPath = URL(fileURLWithPath: parent).standardizedFileURL.path
+        for target in targets {
+            let url = URL(fileURLWithPath: target.path).standardizedFileURL
+            guard url.path.hasPrefix(parentPath + "/"), !isSymlink(url),
+                  DeletionPlan.identity(at: url.path) == target.identity else {
+                failed += 1
+                continue
+            }
+            do {
+                try fileManager.trashItem(at: url, resultingItemURL: nil)
+                removed += 1
+            } catch {
+                failed += 1
+            }
+        }
+        return (removed, failed)
+    }
+
+    func launchAgentProgram(_ plist: URL) -> String? {
         guard let data = try? Data(contentsOf: plist),
               let object = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
               let dictionary = object as? [String: Any] else { return nil }
@@ -1751,7 +1572,7 @@ final class NativeCore: @unchecked Sendable {
 
     /// An agent whose program lives on an unmounted external volume is not
     /// broken, only offline; skip it like Mole does.
-    private func launchAgentVolumeIsMounted(_ path: String) -> Bool {
+    func launchAgentVolumeIsMounted(_ path: String) -> Bool {
         guard path.hasPrefix("/Volumes/") else { return true }
         let components = path.split(separator: "/", omittingEmptySubsequences: true)
         guard components.count >= 2 else { return true }
@@ -1762,7 +1583,7 @@ final class NativeCore: @unchecked Sendable {
     /// `LSQuarantineEvent` table so LaunchServices stops tracking every
     /// download ever opened. Files and their quarantine xattrs are untouched,
     /// so Gatekeeper behaviour does not change.
-    private func clearQuarantineEvents(homeDirectory: String) -> (state: OptimizeTask.State, message: String) {
+    func clearQuarantineEvents(homeDirectory: String) -> (state: OptimizeTask.State, message: String) {
         let database = URL(fileURLWithPath: homeDirectory)
             .appendingPathComponent("Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2")
         guard fileManager.fileExists(atPath: database.path) else {
@@ -1788,12 +1609,12 @@ final class NativeCore: @unchecked Sendable {
 
     // MARK: Filesystem helpers
 
-    private func directChildren(of directory: URL) -> [URL] {
+    func directChildren(of directory: URL) -> [URL] {
         guard let names = try? fileManager.contentsOfDirectory(atPath: directory.path) else { return [] }
         return names.map { directory.appendingPathComponent($0) }
     }
 
-    private func isSymlink(_ url: URL) -> Bool {
+    func isSymlink(_ url: URL) -> Bool {
         (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true
     }
 
@@ -1801,12 +1622,12 @@ final class NativeCore: @unchecked Sendable {
         measureTree(url).bytes
     }
 
-    private func fileSize(_ url: URL) -> UInt64 {
+    func fileSize(_ url: URL) -> UInt64 {
         guard let values = try? url.resourceValues(forKeys: sizeKeys) else { return 0 }
         return UInt64(values.totalFileAllocatedSize ?? values.fileAllocatedSize ?? values.fileSize ?? 0)
     }
 
-    private func isDirectory(_ url: URL) -> Bool {
+    func isDirectory(_ url: URL) -> Bool {
         (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
     }
 
@@ -1836,7 +1657,7 @@ final class NativeCore: @unchecked Sendable {
     /// shell globs (`*`, `?`, `[...]`), comments, and no `..` traversal. A file
     /// written by `mo clean --whitelist` therefore protects the native route
     /// exactly like it protects the CLI and the bridge scripts.
-    private func loadWhitelist(homeDirectory: String) -> [String] {
+    func loadWhitelist(homeDirectory: String) -> [String] {
         let home = URL(fileURLWithPath: homeDirectory).standardizedFileURL.path
         let url = URL(fileURLWithPath: homeDirectory)
             .appendingPathComponent(".config/mole/whitelist")
@@ -1909,7 +1730,7 @@ final class NativeCore: @unchecked Sendable {
     /// Mirror of Mole's `is_path_whitelisted`: exact or glob match, a target
     /// that is an ancestor of a whitelisted path (so the protected child is
     /// never removed with its parent), and descendants of a literal entry.
-    private func matchesWhitelist(_ path: String, entries: [String]) -> Bool {
+    func matchesWhitelist(_ path: String, entries: [String]) -> Bool {
         var target = path
         while target.contains("//") { target = target.replacingOccurrences(of: "//", with: "/") }
         if target.count > 1, target.hasSuffix("/") { target.removeLast() }
@@ -2029,7 +1850,7 @@ final class NativeCore: @unchecked Sendable {
         return FileIdentity(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino))
     }
 
-    private func runCommand(_ executable: String, _ arguments: [String]) -> Bool {
+    func runCommand(_ executable: String, _ arguments: [String]) -> Bool {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -2044,7 +1865,7 @@ final class NativeCore: @unchecked Sendable {
         }
     }
 
-    private func runCommandOutput(_ executable: String, _ arguments: [String]) -> String? {
+    func runCommandOutput(_ executable: String, _ arguments: [String]) -> String? {
         guard fileManager.isExecutableFile(atPath: executable) else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -2067,7 +1888,7 @@ final class NativeCore: @unchecked Sendable {
         return text
     }
 
-    private func isOptimizeWhitelisted(_ task: OptimizeTask, homeDirectory: String) -> Bool {
+    func isOptimizeWhitelisted(_ task: OptimizeTask, homeDirectory: String) -> Bool {
         let url = URL(fileURLWithPath: homeDirectory)
             .appendingPathComponent(".config/mole/whitelist")
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return false }
