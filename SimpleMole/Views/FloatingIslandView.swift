@@ -8,6 +8,10 @@ enum IslandLayout {
     /// 硬件刘海是实黑遮挡，玻璃必须在刘海下沿再露出这一截才看得见手柄。
     static let notchLipHeight: CGFloat = 8
     static let notchBottomRadius: CGFloat = 9
+    /// 无刘海屏折叠时只挂一个顶边句柄，不再画整块菜单栏高度的虚拟刘海。
+    static let handleWidth: CGFloat = 64
+    static let handleHeight: CGFloat = 12
+    static let handleBottomRadius: CGFloat = 6
     static let metricsHeight: CGFloat = 76
     static let detailBudget: CGFloat = 340
     static let windowMargin: CGFloat = 14
@@ -71,8 +75,10 @@ struct FloatingIslandView: View {
         reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)
     }
     private var visibleShape: NotchShape {
-        NotchShape(bottomRadius: expanded ? 20 : IslandLayout.notchBottomRadius,
-                   shoulderRadius: expanded ? 10 : 4)
+        if expanded { return NotchShape(bottomRadius: 20, shoulderRadius: 10) }
+        return NotchShape(bottomRadius: hardwareNotch ? IslandLayout.notchBottomRadius
+                                                      : IslandLayout.handleBottomRadius,
+                          shoulderRadius: 4)
     }
 
     var body: some View {
@@ -103,7 +109,7 @@ struct FloatingIslandView: View {
                     .allowsHitTesting(!expanded)
                     .accessibilityHidden(expanded)
             }
-            .frame(width: expanded ? IslandLayout.panelWidth : collapsedWidth,
+            .frame(width: expanded ? IslandLayout.panelWidth : collapsedSurfaceWidth,
                    height: expanded ? expandedHeight : collapsedHeight,
                    alignment: .top)
             .modifier(IslandLiquidSurface(shape: visibleShape, isExpanded: expanded))
@@ -203,9 +209,13 @@ struct FloatingIslandView: View {
         .frame(width: IslandLayout.panelWidth)
     }
 
-    /// 虚拟刘海本身就是可见玻璃，不需要下沿，收起高度与菜单栏齐平。
+    /// 刘海屏：玻璃包住硬件刘海并在下沿露出一截；无刘海屏：只有顶边句柄。
     private var collapsedHeight: CGFloat {
-        safeTop + (hardwareNotch ? IslandLayout.notchLipHeight : 0)
+        hardwareNotch ? safeTop + IslandLayout.notchLipHeight : IslandLayout.handleHeight
+    }
+
+    private var collapsedSurfaceWidth: CGFloat {
+        hardwareNotch ? collapsedWidth : IslandLayout.handleWidth
     }
 
     private var collapsedHandle: some View {
@@ -214,7 +224,7 @@ struct FloatingIslandView: View {
                 .fill(Color.islandHandleGrip)
                 .frame(width: 18, height: 2)
                 .padding(.bottom, 3)
-                .frame(width: collapsedWidth, height: collapsedHeight, alignment: .bottom)
+                .frame(width: collapsedSurfaceWidth, height: collapsedHeight, alignment: .bottom)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

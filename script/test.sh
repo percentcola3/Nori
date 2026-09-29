@@ -287,11 +287,13 @@ test_island_contract() {
         fail "island safe-top flaps to 0 during screen/activation transitions"
     /usr/bin/grep -Fq 'return islandPanelCollapsedWidth ?? IslandLayout.virtualNotchWidth' "$app_delegate" || \
         fail "island collapsed width flaps to the default during screen transitions"
-    # 无刘海屏按 codenotch 画虚拟刘海：与菜单栏齐平，不挂下沿细条。
+    # 无刘海屏折叠时只挂顶边句柄，不画整块菜单栏高度的虚拟刘海；展开内容仍避让菜单栏。
     /usr/bin/grep -Fq 'screen.frame.maxY - screen.visibleFrame.maxY' "$app_delegate" || \
-        fail "virtual notch height does not follow the menu bar on notchless screens"
-    /usr/bin/grep -Fq 'safeTop + (hardwareNotch ? IslandLayout.notchLipHeight : 0)' "$island" || \
-        fail "virtual notch hangs a lip below the menu bar"
+        fail "expanded island does not clear the menu bar on notchless screens"
+    /usr/bin/grep -Fq 'hardwareNotch ? safeTop + IslandLayout.notchLipHeight : IslandLayout.handleHeight' "$island" || \
+        fail "notchless screens draw a full virtual notch instead of a handle"
+    /usr/bin/grep -Fq 'hardwareNotch ? collapsedWidth : IslandLayout.handleWidth' "$island" || \
+        fail "notchless collapsed island is wider than a handle"
     # 激活策略切换后下一拍再抬升主窗口：同拍 activate 会被忽略（点更多只回到桌面）。
     /usr/bin/grep -Fq 'raiseMainWindowAfterPolicyChange()' "$app_delegate" || \
         fail "main window is not re-raised after the activation-policy change settles"
