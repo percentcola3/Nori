@@ -96,7 +96,13 @@ struct AnalyzeTabView: View {
                 EmptyStateView(symbol: "chart.bar.doc.horizontal",
                                title: l10n.t("analyze.status.empty"),
                                subtitle: l10n.t("analyze.empty.subtitle"))
+            } else if state.analyzeMode != .directories {
+                AnalyzeModePicker(state: state)
+                    .padding(.bottom, 8)
+                SlimCandidateListView(state: state)
             } else {
+                AnalyzeModePicker(state: state)
+                    .padding(.bottom, 4)
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(state.analyzeEntries) { entry in
@@ -138,7 +144,11 @@ struct AnalyzeTabView: View {
                 }
             }
 
-            if !state.analyzeEntries.isEmpty || !state.analyzeAIItems.isEmpty {
+            if state.analyzeMode != .directories && !state.isAnalyzing
+                && (!state.analyzeEntries.isEmpty || !state.analyzeAIItems.isEmpty) {
+                Divider()
+                slimFooter
+            } else if !state.analyzeEntries.isEmpty || !state.analyzeAIItems.isEmpty {
                 Divider()
                 HStack {
                     if let footerText {
@@ -168,6 +178,9 @@ struct AnalyzeTabView: View {
                 .padding(.vertical, 10)
             }
         }
+        .sheet(isPresented: $state.showSlimSheet) {
+            SlimOptionsSheet(state: state)
+        }
         .sheet(item: $autoCleanIntent) { intent in
             AutoCleanupIntentSheet(state: state, intent: intent) {
                 autoCleanIntent = nil
@@ -187,6 +200,40 @@ struct AnalyzeTabView: View {
         } else {
             state.scanAnalyze(force: true)
         }
+    }
+
+    private var slimFooter: some View {
+        HStack(spacing: 8) {
+            if let progress = state.slimProgress {
+                ProgressView(value: progress.fraction ?? 0)
+                    .progressViewStyle(.linear)
+                    .frame(width: 80)
+                    .opacity(progress.fraction == nil ? 0.35 : 1)
+                Text(l10n.tf("slim.progress", progress.index, progress.total, progress.name))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer()
+                Button(l10n.t("common.cancel")) { state.cancelSlim() }
+                    .buttonStyle(SecondaryButtonStyle())
+            } else {
+                Text(state.slimSelection.isEmpty
+                     ? l10n.t("slim.footer.hint")
+                     : l10n.tf("slim.footer.selected", state.slimSelectedCandidates.count,
+                               ByteFormat.format(state.slimSelectedBytes)))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button { state.requestSlim() } label: {
+                    Label(l10n.t("slim.action"), systemImage: "arrow.down.right.and.arrow.up.left")
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .disabled(state.slimSelectedCandidates.isEmpty || state.isBusy)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     private var snapshotsSection: some View {

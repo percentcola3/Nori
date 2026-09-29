@@ -673,13 +673,36 @@ struct NetmonRoute: Equatable, Sendable {
     let interface: String
 }
 
-/// 图片清单条目。
-struct ImageItem: Identifiable {
-    let bytes: UInt64
-    let width: Int
-    let height: Int
+enum MediaKind: String, Codable, CaseIterable {
+    case image, video
+}
+
+/// 磁盘分析中可瘦身的图片/视频文件（只收用户自己管理的位置）。
+struct MediaFile: Codable, Identifiable, Equatable {
+    let name: String
     let path: String
+    let size: UInt64
+    let kind: MediaKind
     var id: String { path }
+}
+
+struct MediaSummary: Codable, Equatable {
+    var imageCount = 0
+    var imageBytes: UInt64 = 0
+    var videoCount = 0
+    var videoBytes: UInt64 = 0
+
+    mutating func add(_ kind: MediaKind, bytes: UInt64) {
+        switch kind {
+        case .image: imageCount += 1; imageBytes += bytes
+        case .video: videoCount += 1; videoBytes += bytes
+        }
+    }
+
+    mutating func merge(_ other: MediaSummary) {
+        imageCount += other.imageCount; imageBytes += other.imageBytes
+        videoCount += other.videoCount; videoBytes += other.videoBytes
+    }
 }
 
 /// 原生应用扫描生成的卸载清单条目。
@@ -1058,6 +1081,10 @@ struct AnalyzeReport: Codable {
     /// In-memory directory index from the same traversal; not serialized.
     var directoryReports: [String: AnalyzeReport]? = nil
 
+    /// Same traversal's image/video index: top files per kind plus full totals.
+    var media: [MediaFile]? = nil
+    var mediaSummary: MediaSummary? = nil
+
     struct LargeFile: Codable {
         let name: String
         let path: String
@@ -1065,7 +1092,8 @@ struct AnalyzeReport: Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case path, overview, entries, isPartial, error
+        case path, overview, entries, isPartial, error, media
+        case mediaSummary = "media_summary"
         case largeFiles = "large_files"
         case totalSize = "total_size"
         case totalFiles = "total_files"

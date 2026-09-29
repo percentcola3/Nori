@@ -611,23 +611,6 @@ test_scan_access_boundary() {
         fail "permission-filtered slim scan failed"
     [[ -z "$output" ]] || fail "slim scan entered Pictures without authorization"
 
-    printf '%s\n' '#!/bin/bash' 'printf "%s\n" "$MOLE_TEST_IMAGE_PATH"' > "$stub_dir/mdfind"
-    chmod +x "$stub_dir/mdfind"
-    set +e
-    output=$(env HOME="$home" PATH="$stub_dir:$PATH" MOLE_TEST_IMAGE_PATH="$protected_image" \
-        bash "$RUNTIME_DIR/bin/app_image_scan.sh" "$home" 20 2>&1)
-    rc=$?
-    set -e
-    assert_status 77 "$rc" "whole-Home image scan did not fail closed"
-    [[ "$output" == *"Full Disk Access is required"* ]] || \
-        fail "whole-Home image scan did not explain its permission failure"
-    output=$(env HOME="$home" PATH="$stub_dir:$PATH" MOLE_TEST_IMAGE_PATH="$protected_image" \
-        FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
-        bash "$RUNTIME_DIR/bin/app_image_scan.sh" "$home" 20) || \
-        fail "authorized image inventory failed"
-    [[ "$output" == *"$protected_image"* ]] || \
-        fail "authorized image inventory did not include protected content"
-
     output=$(env HOME="$home" bash "$RUNTIME_DIR/bin/app_ai_scan.sh") || \
         fail "permission-filtered AI scan failed"
     [[ "$output" == *"${safe_ai%/*}"* ]] || fail "AI scan dropped an unprotected cache"
@@ -3186,6 +3169,17 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_optimize.sh" || fail "optimize previews, evidence binding and admin bridge tests"
     bash "$ROOT_DIR/script/test_cleanup_refresh.sh" || fail "post-cleanup inventory refresh tests"
     bash "$ROOT_DIR/script/test_disk_analysis.sh" || fail "directory analysis tests"
+    bash "$ROOT_DIR/script/test_media.sh" || fail "file slimming tests"
+    # 瘦身只删除自己的临时输出；原件只能经注入的 Trash 离开原位。
+    media_slimmer="$ROOT_DIR/SimpleMole/Services/MediaSlimmer.swift"
+    [[ "$(/usr/bin/grep -c 'removeItem(' "$media_slimmer")" -eq \
+        "$(( $(/usr/bin/grep -c 'removeItem(at: temp)' "$media_slimmer") + 1 ))" ]] || \
+        fail "media slimming removes something other than its own temporary output"
+    /usr/bin/grep -Fq 'name.hasPrefix(".") && name.contains(".nori-slim-\(token)")' "$media_slimmer" || \
+        fail "media slimming temp cleanup is not bound to its own token"
+    if /usr/bin/grep -Fq 'case images' "$ROOT_DIR/SimpleMole/AppState.swift"; then
+        fail "the standalone image tab came back; image slimming lives in disk analysis"
+    fi
     bash "$ROOT_DIR/script/test_login_item.sh" || fail "login item opt-in and system status tests"
     bash "$ROOT_DIR/script/test_uninstall_residue.sh" || fail "uninstall residue discovery and result tests"
 fi

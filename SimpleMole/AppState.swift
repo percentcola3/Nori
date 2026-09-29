@@ -37,7 +37,7 @@ final class AppState: ObservableObject {
 
     /// 功能页标识：设置中可按需隐藏。
     enum PageKey: String, CaseIterable, Identifiable {
-        case cleanup, agents, analyze, uninstall, optimize, devenv, processes, ports, traffic, images, clipboard, settings
+        case cleanup, agents, analyze, uninstall, optimize, devenv, processes, ports, traffic, clipboard, settings
         var id: String { rawValue }
         var titleKey: String { self == .settings ? "settings.title" : "tab.\(rawValue)" }
 
@@ -229,13 +229,6 @@ final class AppState: ObservableObject {
     private var automaticProcessCleanupSucceeded = 0
     private var automaticProcessCleanupTokens: Set<String> = []
 
-    // MARK: 图片
-
-    @Published var images: [ImageItem] = []
-    @Published var imageTotal = 0
-    @Published var imageStatus: String
-    @Published var isScanningImages = false
-
     // MARK: 应用卸载
 
     @Published var installedApps: [UninstallApp] = []
@@ -379,11 +372,21 @@ final class AppState: ObservableObject {
     @Published var analyzeAISelection: Set<String> = []
     @Published var analyzeTotalSize: UInt64 = 0
     @Published var analyzeLargeFiles: [AnalyzeReport.LargeFile] = []
+    /// 磁盘分析的视图：目录浏览，或按大文件/图片/视频聚合的可瘦身清单。
+    @Published var analyzeMode: AnalyzeMode = .directories
+    @Published var analyzeMedia: [MediaFile] = []
+    @Published var analyzeMediaSummary = MediaSummary()
+    @Published var slimSelection: Set<String> = []
+    @Published var slimOptions = SlimOptions()
+    @Published var showSlimSheet = false
+    @Published var isSlimming = false
+    @Published var slimProgress: SlimProgress?
+    var slimTask: Task<Void, Never>?
     @Published var isAnalyzing = false
     @Published var analyzeIsOverview = false
     /// 当前展示的是第一层“快速分析”结果（个人目录 + 既知缓存 + 保存位置）。
     @Published var analyzeStatus: String
-    private var analyzeCache = DiskAnalysisCache()
+    var analyzeCache = DiskAnalysisCache()
     private var analyzeHasScanned = false
     private var analyzeScanControl: CleanupScanControl?
 
@@ -594,7 +597,6 @@ final class AppState: ObservableObject {
         case .xcodeScan: scanXcode()
         case .slimScan: scanSlim()
         case .systemScan: scanSystemData()
-        case .imageScan: scanImages()
         case .installedAppsScan: scanInstalledApps()
         case .uninstall(let app): previewUninstall(app)
         case .developmentEnvironmentScan: scanDevEnv()
@@ -621,7 +623,7 @@ final class AppState: ObservableObject {
     }
 
     var isBusyExcludingUninstall: Bool {
-        isScanning || isApplying || isScanningImages
+        isScanning || isApplying || isSlimming
             || isScanningEnv
             || isAnalyzing || isThinning || isScanningDups
             || gcRunningId != nil || netFixRunning || isAutoCleanupScanning
@@ -677,7 +679,6 @@ final class AppState: ObservableObject {
         statusText = L10n.shared.t("status.ready")
         processStatus = L10n.shared.t("proc.status.apps") // 会在首次刷新时替换为带数量文案
         portStatus = L10n.shared.t("ports.status.none")
-        imageStatus = L10n.shared.t("img.status.none")
         appListStatus = L10n.shared.t("uninstall.status.none")
         devEnvStatus = L10n.shared.t("devenv.status.empty")
         analyzeStatus = L10n.shared.t("analyze.status.empty")
@@ -773,7 +774,6 @@ final class AppState: ObservableObject {
                 self.statusText = self.l10n.t("status.ready")
                 self.processStatus = self.l10n.t("proc.status.none")
                 self.portStatus = self.l10n.t("ports.status.none")
-                if !self.isScanningImages { self.imageStatus = self.l10n.t("img.status.none") }
                 if !self.isScanningApps {
                     self.appListStatus = self.installedApps.isEmpty
                         ? self.l10n.t("uninstall.status.none")
@@ -2353,36 +2353,6 @@ final class AppState: ObservableObject {
             }
     }
 
-    // MARK: - 图片
-
-    func scanImages() {
-        guard authorize(.imageScan, presentingPermissionCenter: true) else { return }
-        guard !isBusy else { return }
-        let scanEnvironment = fullDiskScanEnvironment
-        guard scanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
-        isScanningImages = true
-        imageStatus = l10n.t("img.status.scanning")
-        Task {
-            let result = await MoleEngine.shared.runBridge(
-                "bin/app_image_scan.sh", arguments: [NSHomeDirectory(), "500"],
-                extraEnvironment: scanEnvironment, timeout: 120)
-            isScanningImages = false
-            let items = Parsers.imageItems(result.output)
-            imageTotal = items.count
-            images = Array(items.prefix(90))
-            imageStatus = items.isEmpty
-                ? l10n.t("img.status.none")
-                : (items.count > images.count
-                    ? l10n.tf("img.status.capped", items.count, images.count)
-                    : l10n.tf("img.status.found", items.count))
-            logFailure(result)
-        }
-    }
-
-    func revealImage(_ item: ImageItem) {
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)])
-    }
-
     // MARK: - 应用卸载
 
     func uninstallPlan(for app: UninstallApp) -> UninstallPlan? {
@@ -2830,6 +2800,9 @@ final class AppState: ObservableObject {
         analyzeEntries = []
         analyzeTotalSize = 0
         analyzeLargeFiles = []
+        analyzeMedia = []
+        analyzeMediaSummary = MediaSummary()
+        slimSelection.removeAll()
         analyzeSelection.removeAll()
         analyzeAISelection.removeAll()
         analyzeAIItems = []
@@ -2872,6 +2845,9 @@ final class AppState: ObservableObject {
             .sorted(by: AnalyzeEntry.analysisOrder)
         analyzeTotalSize = report.totalSize
         analyzeLargeFiles = report.largeFiles ?? []
+        analyzeMedia = report.media ?? []
+        analyzeMediaSummary = report.mediaSummary ?? MediaSummary()
+        slimSelection.removeAll()
         if let error = report.error {
             analyzeStatus = error
         } else {

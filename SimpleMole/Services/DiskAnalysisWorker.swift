@@ -16,9 +16,23 @@ enum DiskAnalysisWorker {
         var files = 0
         var partial = false
         var largeFiles: [AnalyzeReport.LargeFile] = []
+        var media: [MediaFile] = []
+        var mediaSummary = MediaSummary()
+    }
+
+    /// Keep the largest files per kind; trimming lazily keeps appends cheap.
+    static func trimMedia(_ list: inout [MediaFile], slack: Int = 1) {
+        let cap = MediaSlimPolicy.perKindCap
+        guard list.count > cap * slack else { return }
+        var trimmed: [MediaFile] = []
+        for kind in MediaKind.allCases {
+            trimmed += list.filter { $0.kind == kind }.sorted { $0.size > $1.size }.prefix(cap)
+        }
+        list = trimmed.sorted { $0.size > $1.size }
     }
 
     static func scan(_ path: String, control: CleanupScanControl,
+                     home: String = NSHomeDirectory(),
                      progress: ((AnalyzeReport) -> Void)? = nil) -> AnalyzeReport {
         let root = URL(fileURLWithPath: path).standardizedFileURL
         var report = AnalyzeReport(path: root.path, overview: root.path == "/", entries: [],
@@ -41,15 +55,22 @@ enum DiskAnalysisWorker {
         var totalFiles = 0
         var largeFiles: [AnalyzeReport.LargeFile] = []
         var directoryReports: [String: AnalyzeReport] = [:]
+        var media: [MediaFile] = []
+        var mediaSummary = MediaSummary()
         var incomplete = false
         var lastProgress = -Double.infinity
 
         func snapshot(partial: Bool) -> AnalyzeReport {
-            AnalyzeReport(path: root.path, overview: root.path == "/",
-                          entries: rows.sorted(by: AnalyzeEntry.analysisOrder),
-                          largeFiles: largeFiles.sorted { $0.size > $1.size },
-                          totalSize: rootBytes + rows.reduce(0) { $0 + $1.size },
-                          totalFiles: totalFiles, isPartial: partial)
+            var trimmed = media
+            trimMedia(&trimmed)
+            var report = AnalyzeReport(path: root.path, overview: root.path == "/",
+                                       entries: rows.sorted(by: AnalyzeEntry.analysisOrder),
+                                       largeFiles: largeFiles.sorted { $0.size > $1.size },
+                                       totalSize: rootBytes + rows.reduce(0) { $0 + $1.size },
+                                       totalFiles: totalFiles, isPartial: partial)
+            report.media = trimmed.sorted { $0.size > $1.size }
+            report.mediaSummary = mediaSummary
+            return report
         }
 
         for child in children {
@@ -68,13 +89,22 @@ enum DiskAnalysisWorker {
                 stack[stack.count - 1].partial = stack.last!.partial || row.isPartial == true
             }
             func finishDirectory(interrupted: Bool = false) {
-                guard let directory = stack.popLast() else { return }
+                guard var directory = stack.popLast() else { return }
                 let partial = interrupted || directory.partial
-                directoryReports[directory.path] = AnalyzeReport(
+                trimMedia(&directory.media)
+                var directoryReport = AnalyzeReport(
                     path: directory.path, overview: false,
                     entries: directory.entries.sorted(by: AnalyzeEntry.analysisOrder),
                     largeFiles: directory.largeFiles, totalSize: directory.bytes, totalFiles: directory.files,
                     isPartial: partial)
+                directoryReport.media = directory.media.sorted { $0.size > $1.size }
+                directoryReport.mediaSummary = directory.mediaSummary
+                directoryReports[directory.path] = directoryReport
+                if !stack.isEmpty {
+                    stack[stack.count - 1].media.append(contentsOf: directory.media)
+                    trimMedia(&stack[stack.count - 1].media, slack: 4)
+                    stack[stack.count - 1].mediaSummary.merge(directory.mediaSummary)
+                }
                 append(AnalyzeEntry(name: URL(fileURLWithPath: directory.path).lastPathComponent,
                                     path: directory.path, size: directory.bytes, isDir: true,
                                     cleanable: false, isPartial: partial), files: directory.files)
@@ -140,6 +170,20 @@ enum DiskAnalysisWorker {
                                 append(AnalyzeEntry(name: itemName, path: itemPath, size: allocated,
                                                     isDir: false, cleanable: false, isPartial: false),
                                        files: Int32(item.fts_info) == FTS_F ? 1 : 0)
+                            }
+                            if Int32(item.fts_info) == FTS_F,
+                               let kind = MediaSlimPolicy.kind(forPath: itemName),
+                               allocated >= MediaSlimPolicy.minimumBytes(for: kind),
+                               MediaSlimPolicy.isEligible(itemPath, home: home) {
+                                let file = MediaFile(name: itemName, path: itemPath, size: allocated, kind: kind)
+                                mediaSummary.add(kind, bytes: allocated)
+                                media.append(file)
+                                trimMedia(&media, slack: 4)
+                                if !stack.isEmpty {
+                                    stack[stack.count - 1].media.append(file)
+                                    trimMedia(&stack[stack.count - 1].media, slack: 4)
+                                    stack[stack.count - 1].mediaSummary.add(kind, bytes: allocated)
+                                }
                             }
                             if Int32(item.fts_info) == FTS_F {
                                 totalFiles += 1

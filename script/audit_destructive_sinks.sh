@@ -3,7 +3,8 @@
 # 规则：
 # 1. Swift 侧的底层删除调用（removeItem/trashItem/unlink/unlinkat/rmdir）
 #    只允许出现在白名单文件里。NativeCore 是用户数据的唯一删除漏斗；
-#    其余白名单文件只清理应用自建的临时/缓存文件。
+#    其余白名单文件只清理应用自建的临时/缓存文件；MediaSlimmer 只删自己的
+#    .nori-slim- 临时输出，被替换的原件一律移入废纸篓。
 # 2. bridge 脚本：mole_delete 必须显式传入身份参数（第三个参数）；rm -rf
 #    只允许作用于引号包裹的变量（脚本自建目录），字面量路径一律拒绝。
 set -euo pipefail
@@ -21,7 +22,7 @@ swift_allowed() {
     case "$1" in
         SimpleMole/Services/NativeCore.swift|SimpleMole/AppState.swift|\
 SimpleMole/Services/ScreenShotService.swift|SimpleMole/Services/MoleEngine.swift|\
-SimpleMole/Services/CleanupCache.swift) return 0 ;;
+SimpleMole/Services/CleanupCache.swift|SimpleMole/Services/MediaSlimmer.swift) return 0 ;;
         *) return 1 ;;
     esac
 }

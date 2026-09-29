@@ -196,7 +196,6 @@ private struct AnimatedTabContent: View {
             case .processes: ProcessesTabView(state: state)
             case .ports: PortsTabView(state: state)
             case .traffic: TrafficTabView(state: state)
-            case .images: ImagesTabView(state: state)
             case .clipboard: ClipboardHistoryTabView(manager: state.clipboardManager)
             case .settings: SettingsTabView(state: state)
             }

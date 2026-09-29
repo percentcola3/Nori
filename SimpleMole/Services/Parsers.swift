@@ -410,19 +410,6 @@ enum Parsers {
         return (removed, failed)
     }
 
-    /// 解析图片清单 TSV：`bytes\twidth\theight\tpath`。
-    static func imageItems(_ text: String) -> [ImageItem] {
-        var items: [ImageItem] = []
-        for line in text.components(separatedBy: "\n") {
-            let parts = line.components(separatedBy: "\t")
-            guard parts.count >= 4 else { continue }
-            items.append(ImageItem(bytes: UInt64(parts[0]) ?? 0,
-                                   width: Int(parts[1]) ?? 0,
-                                   height: Int(parts[2]) ?? 0,
-                                   path: parts[3]))
-        }
-        return items
-    }
 
     /// 解析开发环境 TSV：`bytes\tkind\tname\tpath`。同一路径出现多次时
     /// 保留 current 记录（nvm 默认版本会与 family 扫描重复）。
