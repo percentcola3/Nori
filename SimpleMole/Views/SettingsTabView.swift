@@ -307,13 +307,6 @@ struct SettingsTabView: View {
                     state.showAutoCleanupSheet = true
                 }
             }
-            SettingsRow(divider: true) {
-                actionRow(title: l10n.t("automation.triggers"),
-                          detail: l10n.t("automation.subtitle"),
-                          symbol: "clock.badge.checkmark") {
-                    state.openAutomationSettings()
-                }
-            }
             SettingsRow {
                 actionRow(title: l10n.t("header.whitelist"),
                           detail: l10n.t("wl.subtitle"),
@@ -355,51 +348,13 @@ struct SettingsTabView: View {
 
     private var pagesSection: some View {
         SettingsSection(title: l10n.t("settings.pages")) {
-            SettingsRow(divider: true) {
-                Toggle(l10n.t("clip.title"), isOn: $state.clipboardHistoryEnabled)
-                    .toggleStyle(MoleSwitchToggleStyle())
-                    .controlSize(.small)
-                    .tint(Color.moleAccentText)
-                    .font(.system(size: 12))
-            }
-            if state.clipboardHistoryEnabled {
-                SettingsRow(divider: true, vertical: 6) {
-                    Stepper(value: clipboardCapacityBinding, in: 10...500, step: 10) {
-                        HStack {
-                            Text(l10n.t("settings.clipboard.capacity"))
-                            Spacer()
-                            Text("\(state.clipboardManager.capacity)")
-                                .monospacedDigit()
-                                .foregroundStyle(Color.moleAccentText)
-                        }
-                        .font(.system(size: 10.5))
+            SettingsRow(vertical: 8) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], spacing: 6) {
+                    ForEach(AppState.PageKey.configurableCases) { key in
+                        pageChip(key)
                     }
-                    .controlSize(.small)
+                    clipboardChip
                 }
-                SettingsRow(divider: true, vertical: 6) {
-                    HStack {
-                        Text(l10n.tf("settings.clipboard.count", state.clipboardManager.entries.count))
-                            .font(.system(size: 10.5))
-                            .foregroundStyle(.tertiary)
-                        Spacer()
-                        Button(l10n.t("clip.clearUnpinned")) {
-                            state.clipboardManager.clearUnpinned()
-                        }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(state.clipboardManager.unpinnedCount == 0)
-                    }
-                }
-            }
-            SettingsRow(vertical: 6) {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 6) {
-                        ForEach(AppState.PageKey.configurableCases) { key in
-                            pageChip(key)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-                .scrollIndicators(.hidden)
             }
             SettingsRow(vertical: 6) {
                 Text(l10n.t("settings.pages.hint"))
@@ -410,6 +365,25 @@ struct SettingsTabView: View {
         }
     }
 
+    /// 功能页标签：激活用品牌色淡染 + 描边 + 加粗表达，不加对号。
+    private func chipLabel(_ title: String, isActive: Bool) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: isActive ? .semibold : .regular))
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity)
+            .frame(height: 27)
+            .foregroundStyle(isActive ? Color.moleAccentText : Color.secondary)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isActive ? Color.moleAccent.opacity(0.15) : Color.surface2))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isActive ? Color.moleAccentText.opacity(0.30) : Color.hairline,
+                                  lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
     private func pageChip(_ key: AppState.PageKey) -> some View {
         let isSelected = !state.hiddenPages.contains(key.rawValue)
         let isLastRemaining = isSelected && AppState.PageKey.configurableCases.filter {
@@ -418,29 +392,26 @@ struct SettingsTabView: View {
         return Button {
             state.setPageVisible(key, !isSelected)
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .frame(width: 8)
-                    .opacity(isSelected ? 1 : 0)
-                    .accessibilityHidden(true)
-                Text(l10n.t(key.titleKey))
-                    .font(.system(size: 11, weight: .medium))
-                    .lineLimit(1)
-            }
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 7)
-            .frame(height: 28)
-            .foregroundStyle(isSelected ? Color.onAccent : Color.secondary)
-            .background(Capsule().fill(isSelected ? Color.accent : Color.surface2))
-            .overlay(Capsule().strokeBorder(isSelected ? Color.accentText.opacity(0.3) : Color.hairline,
-                                           lineWidth: 1).allowsHitTesting(false))
-            .contentShape(Capsule())
+            chipLabel(l10n.t(key.titleKey), isActive: isSelected)
         }
         .buttonStyle(MolePlainButtonStyle())
         .disabled(isLastRemaining)
+        .opacity(isLastRemaining ? 0.55 : 1)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .help(isLastRemaining ? l10n.t("settings.pages.hint") : l10n.t(key.titleKey))
+    }
+
+    /// 剪贴板历史与其他功能页同样以标签激活；开关本身负责启停剪贴板监听。
+    private var clipboardChip: some View {
+        Button {
+            if reduceMotion { state.clipboardHistoryEnabled.toggle() }
+            else { withAnimation(MoleMotion.panel) { state.clipboardHistoryEnabled.toggle() } }
+        } label: {
+            chipLabel(l10n.t("clip.title"), isActive: state.clipboardHistoryEnabled)
+        }
+        .buttonStyle(MolePlainButtonStyle())
+        .accessibilityAddTraits(state.clipboardHistoryEnabled ? .isSelected : [])
+        .help(l10n.t("clip.title"))
     }
 
     private var islandEdgeBinding: Binding<AppState.IslandEdge> {
@@ -451,11 +422,5 @@ struct SettingsTabView: View {
     private var menuBarIconBinding: Binding<Bool> {
         Binding(get: { state.menuBarIconVisible },
                 set: { state.setMenuBarIconVisible($0) })
-    }
-
-    private var clipboardCapacityBinding: Binding<Int> {
-        Binding(
-            get: { state.clipboardManager.capacity },
-            set: { state.clipboardManager.updateCapacity($0) })
     }
 }

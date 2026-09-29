@@ -26,7 +26,6 @@ struct CleanupRiskPolicyTests {
         try testDevEnvRelatedPackages()
         try testAutomationProtection(home: policyHome)
         try testCacheRoundTrip(fixture: fixture)
-        try testSystemDataParsing()
         try testNetmonParsing()
         try testCacheMapPolicy(home: policyHome)
         try testMoleParity(home: policyHome)
@@ -604,45 +603,6 @@ struct CleanupRiskPolicyTests {
         try Data(json.utf8).write(to: cacheURL, options: .atomic)
         try expect(CleanupCache.restore(from: cacheURL) == nil,
                    "old cache version was restored without risk metadata")
-    }
-
-    private static func testSystemDataParsing() throws {
-        let text = [
-            "entry\t2048\tlogs\tsafe\tsystem.log\t21d · /Library/Logs\t/Library/Logs/system.log",
-            "entry\t4096\tcaches\tsafe\tcom.example.cache\t34d · /Library/Caches\t/Library/Caches/com.example.cache",
-            "entry\t8192\tupdates\treview\t90252\t40d · /Library/Updates\t/Library/Updates/90252",
-            // 协议外的行必须整行丢弃：未知分组、未知风险、相对路径、零字节、列数不足。
-            "entry\t1024\tbogus\tsafe\tx\ty\t/not/absolute/actually",
-            "entry\t1024\tlogs\tprotected\tx\ty\t/Library/Logs/x.log",
-            "entry\t0\tlogs\tsafe\tzero\tz\t/Library/Logs/zero.log",
-            "entry\t1024\tlogs\tsafe\tshort\t/Library/Logs/short.log",
-            "garbage line",
-        ].joined(separator: "\n")
-        let entries = Parsers.systemDataEntries(text)
-        try expect(entries.count == 3, "valid system rows were dropped or invalid rows accepted")
-        try expect(entries[0].group == .logs && entries[0].risk == .safe
-                   && entries[0].bytes == 2048 && entries[0].name == "system.log",
-                   "log row was parsed incorrectly")
-        try expect(entries[2].group == .updates && entries[2].risk == .warning,
-                   "update row did not keep its review risk")
-        try expect(entries.allSatisfy { ($0.path as NSString).isAbsolutePath },
-                   "non-absolute system path was accepted")
-        // Safe 行默认勾选，Review 行默认不勾选。
-        try expect(entries[0].selected && entries[1].selected && !entries[2].selected,
-                   "default selection did not follow the risk badge")
-        // 同一路径重复时保留容量最大的一条。
-        let duplicate = "entry\t512\tlogs\tsafe\tdup\td\t/Library/Logs/dup.log\n"
-            + "entry\t1024\tlogs\tsafe\tdup\td\t/Library/Logs/dup.log\n"
-        let deduped = Parsers.systemDataEntries(duplicate)
-        try expect(deduped.count == 1 && deduped[0].bytes == 1024,
-                   "duplicate system path did not keep the largest measurement")
-
-        let summary = Parsers.systemApplySummary(
-            "removed=2\nskipped=1\nfailed=0\nremoved_bytes=6144\n")
-        try expect(summary.removed == 2 && summary.failed == 0 && summary.removedBytes == 6144,
-                   "system apply summary was parsed incorrectly")
-        try expect(Parsers.systemDataEntries("").isEmpty,
-                   "empty system preview produced entries")
     }
 
     private static func testNetmonParsing() throws {

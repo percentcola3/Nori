@@ -11,7 +11,6 @@ struct MainWindowView: View {
     private var activeDialog: String? {
         if state.showPermissionCenter { return "permissions" }
         if state.showAutoCleanupSheet { return "autoCleanup" }
-        if state.showAutomationSettings { return "automation" }
         if state.showWhitelistSheet { return "whitelist" }
         return nil
     }
@@ -99,12 +98,6 @@ struct MainWindowView: View {
         case "permissions": PermissionCenterView(state: state)
         case "autoCleanup": AutoCleanupRulesView(state: state)
         case "whitelist": WhitelistSheet(state: state)
-        case "automation":
-            AutomationSettingsView(
-                automations: state.smartAutomation,
-                canMutate: !state.isBusy,
-                onClose: { state.showAutomationSettings = false })
-                .frame(width: 700, height: 560)
         default: EmptyView()
         }
     }
@@ -112,7 +105,6 @@ struct MainWindowView: View {
     private func dismissDialog() {
         if state.showPermissionCenter { state.cancelPermissionCenter() }
         else if state.showAutoCleanupSheet { state.showAutoCleanupSheet = false }
-        else if state.showAutomationSettings { state.showAutomationSettings = false }
         else { state.showWhitelistSheet = false }
     }
 

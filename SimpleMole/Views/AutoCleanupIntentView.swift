@@ -48,21 +48,24 @@ struct AutoCleanupIntentSheet: View {
 
             Divider()
 
-            HStack(spacing: 8) {
-                Text(l10n.t("auto.policy.label"))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
-                Picker(l10n.t("auto.policy.label"), selection: $policy) {
-                    Text(l10n.t("auto.policy.sizeLimit"))
-                        .tag(AutoCleanupPolicy.sizeLimit)
-                    Text(l10n.t("auto.policy.retentionDays"))
-                        .tag(AutoCleanupPolicy.retentionDays)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(l10n.t("auto.policy.label"))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Picker(l10n.t("auto.policy.label"), selection: $policy) {
+                        Text(l10n.t("auto.policy.sizeLimit"))
+                            .tag(AutoCleanupPolicy.sizeLimit)
+                        Text(l10n.t("auto.policy.retentionDays"))
+                            .tag(AutoCleanupPolicy.retentionDays)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 210)
+                    Spacer(minLength: 0)
                 }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .frame(width: 210)
                 policyValueEditor
-                Spacer(minLength: 4)
+                    .fixedSize()
             }
 
             Label {

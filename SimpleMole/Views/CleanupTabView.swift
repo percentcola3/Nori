@@ -11,8 +11,6 @@ struct CleanupTabView: View {
     /// 从可再生缓存行发起的自动清理规则创建。
     @State private var autoCleanIntent: AutoCleanupIntent?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// 系统数据（root 拥有的日志/报告/缓存）从清理页下钻，不再占顶级 Tab。
-    @State private var showSystemData = false
 
     private var collapsedGroups: Set<CleanupGroupBucket> {
         userCollapsed ?? defaultCollapsedGroups
@@ -50,13 +48,6 @@ struct CleanupTabView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button {
-                    showSystemData = true
-                } label: {
-                    Label(l10n.t("cleanup.systemData.open"), systemImage: "shield.checkered")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .help(l10n.t("system.subtitle"))
                 Button { state.requestScanAccess(.deepCleanupScan) } label: {
                     Text(l10n.t("cleanup.scan.deep"))
                 }
@@ -70,11 +61,6 @@ struct CleanupTabView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 8)
-            // 与 autoCleanIntent 的 sheet 分开挂节点，避免多 sheet 同节点失联。
-            .sheet(isPresented: $showSystemData) {
-                SystemDataView(state: state)
-                    .frame(minWidth: 720, minHeight: 540)
-            }
 
             if !state.isCleanupScanning && !state.cleanupDeferredPaths.isEmpty {
                 Label(l10n.tf("cleanup.scan.deferred", state.cleanupDeferredPaths.count),

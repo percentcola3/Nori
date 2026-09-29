@@ -599,40 +599,6 @@ test_scan_access_boundary() {
     pass "protected scan roots fail closed until Full Disk Access is verified"
 }
 
-test_system_preview_protocol() {
-    local fixture_root="$TEST_ROOT/system-preview-fixture"
-    local fixtures="$TEST_ROOT/system-preview-fixtures.sh"
-    local output="" line lines=0
-
-    mkdir -p "$fixture_root/logs" "$fixture_root/reports"
-    printf 'old log\n' > "$fixture_root/logs/old.log"
-    printf 'report\n' > "$fixture_root/reports/crash.report"
-    /usr/bin/touch -t 202001010000 \
-        "$fixture_root/logs/old.log" "$fixture_root/reports/crash.report"
-    cat > "$fixtures" <<EOF
-scan_file_group logs safe 0 "" "$fixture_root/logs"
-scan_file_group reports safe 0 "" "$fixture_root/reports"
-scan_entry_group caches safe 0 "$fixture_root/logs"
-EOF
-
-    # "&& break" 作为 emit_sorted 循环体最后一条语句会把循环状态置 1，
-    # 函数返回后在 set -e 下杀死脚本：提权扫描授权后永远拿不到结果。
-    output=$(env SM_SYSTEM_PREVIEW_FIXTURES="$fixtures" \
-        SM_SYSTEM_PREVIEW_MAX_ROWS=400 TMPDIR="$TEST_ROOT" \
-        bash "$RUNTIME_DIR/bin/app_system_preview.sh" "$(id -un)" "$HOME") || \
-        fail "system preview exited non-zero with under-cap fixture rows"
-    while IFS= read -r line; do
-        lines=$((lines + 1))
-        [[ "$line" == entry$'\t'* ]] || fail "system preview emitted a malformed line"
-    done <<< "$output"
-    [[ "$lines" -ge 2 ]] || fail "system preview dropped fixture rows"
-
-    output=$(env TMPDIR="$TEST_ROOT" \
-        bash "$RUNTIME_DIR/bin/app_system_preview.sh" "$(id -un)" "$HOME") || \
-        fail "system preview failed on the machine's real roots"
-    pass "system preview protocol survives under-cap groups"
-}
-
 test_signing_policy_contract() {
     local package_script="$ROOT_DIR/script/package_dmg.sh"
     /usr/bin/grep -Fq 'SM_ALLOW_ADHOC' "$ROOT_DIR/script/build.sh" || \
@@ -2343,13 +2309,6 @@ test_inventory_components() {
     pass "simulator and Docker inventory safety contracts"
 }
 
-test_scheduled_automation() {
-    if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
-        bash "$ROOT_DIR/script/test_scheduled_automation.sh" || fail "scheduled automation tests"
-    fi
-    pass "scheduled automation and retired-rule migration"
-}
-
 test_cleanup_execution_accounting() {
     local apply_source installer_source
     apply_source=$(sed -n '/private func performApply(/,/private func reportCleanupResult/p' \
@@ -2488,7 +2447,6 @@ test_productivity_feature_contract
 stage_bridge_runtime
 test_timeout_fallback
 test_scan_access_boundary
-test_system_preview_protocol
 test_signing_policy_contract
 test_local_signing_identity
 bash "$ROOT_DIR/script/test_release_identity.sh" || fail "fixed release identity provisioning"
@@ -2522,7 +2480,6 @@ test_auto_cleanup_planner
 test_cleanup_risk_policy
 test_cleanup_execution_accounting
 test_inventory_components
-test_scheduled_automation
 test_clipboard_history
 test_swift
 printf 'All %d checks passed.\n' "$PASSED"

@@ -44,12 +44,4 @@ cleanup_tab=$(/usr/bin/awk '
 /usr/bin/grep -Fq 'if mode == .quick && scan.cacheable { CleanupCache.save(scan.categories) }' \
     "$APP_STATE" || fail "successful manual scans are no longer cached"
 
-# 系统数据已从顶级 Tab 降级为清理页下钻入口：保留两条不变量——
-# 入口仍由清理页承载，且该表面只显示自己的扫描进度。
-/usr/bin/grep -Fq 'SystemDataView(state: state)' "$CLEANUP_VIEW" || \
-    fail "cleanup tab no longer hosts the system data entry"
-if /usr/bin/grep -Fq 'state.statusText' "$ROOT_DIR/SimpleMole/Views/SystemDataView.swift"; then
-    fail "system data still displays unrelated cleanup progress"
-fi
-
 printf 'PASS: cleanup is manual; tab activation preserves results; pending authorization still resumes\n'

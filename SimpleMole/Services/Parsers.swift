@@ -2,59 +2,6 @@ import Foundation
 
 /// 解析引擎与桥接脚本的文本输出。
 enum Parsers {
-    /// 解析系统数据预览 TSV：`entry\tbytes\tgroup\trisk\tname\tdetail\tpath`。
-    /// 桥接协议的 risk token 是 safe/review；review 在 UI 侧映射为 Warning。
-    /// 列数、分组、风险标记或绝对路径不合法的行直接丢弃；同一物理路径
-    /// 只保留最大的一条（预览分组互斥，重复行意味着协议异常）。
-    static func systemDataEntries(_ text: String) -> [SystemDataEntry] {
-        var byPath: [String: SystemDataEntry] = [:]
-        var order: [String] = []
-        for line in text.components(separatedBy: "\n") {
-            let parts = line.components(separatedBy: "\t")
-            guard parts.count == 7, parts[0] == "entry",
-                  let bytes = UInt64(parts[1]), bytes > 0,
-                  let group = SystemDataGroupKind(rawValue: parts[2]),
-                  !parts[4].isEmpty,
-                  (parts[6] as NSString).isAbsolutePath else { continue }
-            let risk: CleanupRisk
-            switch parts[3] {
-            case "safe": risk = .safe
-            case "review": risk = .warning
-            default: continue
-            }
-            let entry = SystemDataEntry(id: UUID(), group: group, risk: risk,
-                                         name: parts[4], detail: parts[5],
-                                         path: parts[6], bytes: bytes,
-                                         selected: risk == .safe)
-            if let existing = byPath[entry.path] {
-                if existing.bytes >= entry.bytes { continue }
-                byPath[entry.path] = entry
-            } else {
-                order.append(entry.path)
-                byPath[entry.path] = entry
-            }
-        }
-        return order.compactMap { byPath[$0] }
-    }
-
-    /// 解析系统清理执行的摘要：`removed=/failed=/removed_bytes=`。
-    static func systemApplySummary(_ text: String) -> (removed: Int, failed: Int, removedBytes: UInt64) {
-        var removed = 0
-        var failed = 0
-        var removedBytes: UInt64 = 0
-        for line in text.components(separatedBy: "\n") {
-            let parts = line.split(separator: "=", maxSplits: 1)
-            guard parts.count == 2 else { continue }
-            switch parts[0] {
-            case "removed": removed = Int(parts[1]) ?? removed
-            case "failed": failed = Int(parts[1]) ?? failed
-            case "removed_bytes": removedBytes = UInt64(parts[1]) ?? removedBytes
-            default: break
-            }
-        }
-        return (removed, failed, removedBytes)
-    }
-
     /// 解析开发工具扫描 TSV：`bytes\tname\tpath`。
     static func toolCategories(_ text: String) -> [CleanupCategory] {
         text.components(separatedBy: "\n").compactMap { line in

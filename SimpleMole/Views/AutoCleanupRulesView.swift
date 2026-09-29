@@ -197,6 +197,7 @@ private struct AutoCleanupRuleRow: View {
                 .disabled(state.isBusy)
 
                 policyValueEditor
+                    .fixedSize()
 
                 Spacer(minLength: 6)
 

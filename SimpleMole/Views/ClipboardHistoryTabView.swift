@@ -35,6 +35,12 @@ struct ClipboardHistoryTabView: View {
         }
     }
 
+    private var capacityBinding: Binding<Int> {
+        Binding(
+            get: { manager.capacity },
+            set: { manager.updateCapacity($0) })
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             HStack(spacing: 12) {
@@ -57,6 +63,20 @@ struct ClipboardHistoryTabView: View {
                 .layoutPriority(1)
 
                 Spacer()
+
+                Stepper(value: capacityBinding, in: 10...500, step: 10) {
+                    HStack(spacing: 5) {
+                        Text(l10n.t("clip.capacity"))
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                        Text("\(manager.capacity)")
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(Color.moleAccentText)
+                    }
+                }
+                .controlSize(.small)
+                .fixedSize()
+                .help(l10n.t("settings.clipboard.capacity"))
 
                 Button {
                     manager.clearUnpinned()

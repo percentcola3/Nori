@@ -191,28 +191,6 @@ final class AppState: ObservableObject {
     @Published var cleanupQueued = false
     private var pendingCleanup: (() -> Void)?
 
-    @Published var systemEntries: [SystemDataEntry] = []
-    @Published var systemScanning = false
-    @Published var systemApplying = false
-    @Published var systemStatus = L10n.shared.t("system.scan")
-    @Published var systemScanComplete = false
-    /// 本次会话通过系统数据页实际回收的字节数（由执行脚本回报）。
-    @Published var systemSessionReclaimed: UInt64 = 0
-
-    var systemHasResult: Bool { systemScanComplete || !systemEntries.isEmpty }
-
-    var systemFoundBytes: UInt64 {
-        systemEntries.reduce(0) { $0 &+ $1.bytes }
-    }
-
-    var systemSelectedCount: Int {
-        systemEntries.filter(\.selected).count
-    }
-
-    var systemSelectedBytes: UInt64 {
-        systemEntries.filter(\.selected).reduce(0) { $0 &+ $1.bytes }
-    }
-
     // MARK: 系统优化
 
     @Published var optimizeTasks: [NativeCore.OptimizeTask] = NativeCore.shared.initialOptimizeTasks()
@@ -288,12 +266,6 @@ final class AppState: ObservableObject {
     // MARK: 流量监控
 
     let trafficMonitor = TrafficMonitorStore()
-
-    // MARK: 定时自动化
-
-    let smartAutomation = AutomationStore()
-    @Published var showAutomationSettings = false
-    @Published var isSmartAutomationRunning = false
 
     // MARK: 自动目录清理
 
@@ -597,14 +569,12 @@ final class AppState: ObservableObject {
         case .optimize: runOptimize()
         case .developerToolsScan: scanDeveloperTools()
         case .aiScan: scanAgents()
-        case .systemScan: scanSystemData()
         case .installedAppsScan: scanInstalledApps()
         case .uninstall(let app): previewUninstall(app)
         case .developmentEnvironmentScan: scanDevEnv()
         case .diskOverview(let force): scanDiskOverview(force: force)
         case .diskAnalyze(let path): scanAnalyze(path)
         case .duplicateScan: scanDuplicates()
-        case .openAutomationSettings: openAutomationSettings()
         case .previewAutoCleanup(let ruleID): previewAutoCleanup(ruleID)
         case .runAutoCleanup(let ruleID): runAutoCleanupNow(ruleID)
         }
@@ -628,8 +598,7 @@ final class AppState: ObservableObject {
             || isScanningEnv
             || isAnalyzing || isThinning || isScanningDups
             || gcRunningId != nil || netFixRunning || isAutoCleanupScanning
-            || isSmartAutomationRunning
-            || isOptimizing || systemScanning || systemApplying
+            || isOptimizing
             || agentScanning || agentApplying
             || simulatorInventory.isDeleting
     }
@@ -927,7 +896,6 @@ final class AppState: ObservableObject {
         showPermissionCenter = false
         showAutoCleanupSheet = false
         showWhitelistSheet = false
-        showAutomationSettings = false
     }
 
     // MARK: - 指标
@@ -1365,151 +1333,6 @@ final class AppState: ObservableObject {
                 logFailure(result)
             }
             logFailure(runtime)
-        }
-    }
-
-    /// 系统数据页扫描：特权预览脚本输出分组 TSV，独立解析为本页清单。
-    /// 每次扫描都会请求一次管理员授权；页面激活不会自动触发。
-    func scanSystemData() {
-        guard authorize(.systemScan, presentingPermissionCenter: true) else { return }
-        guard !isBusy else { return }
-        systemScanning = true
-        systemScanComplete = false
-        systemEntries = []
-        systemStatus = l10n.t("status.systemScanning")
-        log(l10n.t("log.systemScan"))
-        Task {
-            let result = await MoleEngine.shared.runPrivilegedBridge(
-                "bin/app_system_preview.sh",
-                arguments: [NSUserName(), NSHomeDirectory()])
-            systemScanning = false
-            systemScanComplete = result.succeeded
-            noteHeaderReaction(result.succeeded ? .success : .attention)
-            systemEntries = result.succeeded
-                ? Parsers.systemDataEntries(result.output)
-                : []
-            if systemEntries.isEmpty {
-                // 空结果与失败必须区分：失败复用同一条空态文案会让用户
-                // 以为扫描成功却什么都没找到。
-                if result.succeeded {
-                    systemStatus = l10n.t("status.systemEmpty")
-                    log(l10n.t("log.systemScanEmpty"))
-                } else {
-                    systemStatus = l10n.t("status.systemFailed")
-                    log(l10n.t("log.systemScanAbort"))
-                    logFailure(result)
-                }
-            } else {
-                systemStatus = l10n.t("status.systemDone")
-                log(l10n.t("log.systemScanDone"))
-            }
-        }
-    }
-
-    func toggleSystemEntry(_ id: UUID) {
-        guard !isBusy,
-              let index = systemEntries.firstIndex(where: { $0.id == id }) else { return }
-        systemEntries[index].selected.toggle()
-    }
-
-    /// 一键勾选全部 Safe 项并清掉 Review 项的勾选。
-    func selectSafeSystemEntries() {
-        guard !isBusy else { return }
-        for index in systemEntries.indices {
-            systemEntries[index].selected = systemEntries[index].risk == .safe
-        }
-    }
-
-    func revealSystemEntry(_ path: String) {
-        NSWorkspace.shared.activateFileViewerSelecting(
-            [URL(fileURLWithPath: path)])
-    }
-
-    /// 单行删除：同一特权执行管道，独立确认文案。
-    func deleteSystemEntry(_ entry: SystemDataEntry) {
-        guard !isBusy else { return }
-        confirmation = Confirmation(
-            title: l10n.t("confirm.systemSingle.title"),
-            message: l10n.t("confirm.systemSingle.msg"),
-            confirmLabel: l10n.t("confirm.systemSingle.ok")) { [weak self] in
-                self?.performSystemCleanup(paths: [entry.path])
-            }
-    }
-
-    /// 系统数据页的批量清理入口。
-    func applySystemCleanup() {
-        guard !isBusy, systemScanComplete else { return }
-        let selected = systemEntries.filter(\.selected)
-        guard !selected.isEmpty else {
-            systemStatus = l10n.t("cleanup.selectNone")
-            return
-        }
-        confirmation = Confirmation(
-            title: l10n.tf("confirm.system.title", selected.count),
-            message: l10n.t("confirm.system.msg"),
-            confirmLabel: l10n.t("confirm.system.ok")) { [weak self] in
-                guard let self else { return }
-                self.performSystemCleanup(paths: selected.map(\.path))
-            }
-    }
-
-    /// 特权执行：NUL 计划 + SHA-256 摘要，成功后按磁盘实况收敛清单，
-    /// 不自动重扫（避免再次弹出管理员授权）。
-    private func performSystemCleanup(paths: [String]) {
-        var selectionData = Data()
-        for path in paths {
-            selectionData.append(contentsOf: path.utf8)
-            selectionData.append(0)
-            // The privileged route receives the same object identity that was
-            // visible in the preview.  It must reject a replaced log file
-            // instead of trusting the pathname.
-            let identity = DeletionPlan.identity(at: path) ?? ""
-            selectionData.append(contentsOf: identity.utf8)
-            selectionData.append(0)
-        }
-        let selectionDigest = SHA256.hash(data: selectionData)
-            .map { String(format: "%02x", $0) }
-            .joined()
-        let selectionURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("sm-system-selection-\(UUID().uuidString).plan")
-        do {
-            try selectionData.write(to: selectionURL, options: .atomic)
-            try FileManager.default.setAttributes(
-                [.posixPermissions: NSNumber(value: 0o600)],
-                ofItemAtPath: selectionURL.path)
-        } catch {
-            try? FileManager.default.removeItem(at: selectionURL)
-            systemStatus = l10n.t("status.systemPartial")
-            log(l10n.t("log.systemApplyPartial"))
-            log(error.localizedDescription)
-            return
-        }
-        systemApplying = true
-        systemStatus = l10n.t("status.systemCleaning")
-        log(l10n.t("log.systemApply"))
-        Task {
-            let result = await MoleEngine.shared.runPrivilegedBridge(
-                "bin/app_system_apply.sh",
-                arguments: [NSUserName(), NSHomeDirectory(), selectionURL.path,
-                            selectionDigest])
-            try? FileManager.default.removeItem(at: selectionURL)
-            systemApplying = false
-            noteHeaderReaction(result.succeeded ? .success : .attention)
-            if !result.output.isEmpty { log(result.output) }
-            logFailure(result, stdoutAlreadyLogged: true)
-            let summary = Parsers.systemApplySummary(result.output)
-            systemSessionReclaimed &+= summary.removedBytes
-            // 只移除磁盘上确实消失的行；被身份/所有权/白名单复核拦下的行
-            // 保留在清单里等用户重新审视。
-            systemEntries = systemEntries.filter {
-                FileManager.default.fileExists(atPath: $0.path)
-            }
-            systemStatus = result.succeeded
-                ? l10n.t("status.systemApplyDone")
-                : l10n.t("status.systemPartial")
-            log(result.succeeded
-                ? l10n.t("log.systemApplyDone")
-                : l10n.t("log.systemApplyPartial"))
         }
     }
 
@@ -2671,11 +2494,6 @@ final class AppState: ObservableObject {
 
     // MARK: - 磁盘分析
 
-    func openAutomationSettings() {
-        guard authorize(.openAutomationSettings, presentingPermissionCenter: true) else { return }
-        showAutomationSettings = true
-    }
-
     /// Explicit root scope uses the same traversal as custom directories.
     func scanDiskOverview(force: Bool = false) {
         guard authorize(.diskOverview(force: force),
@@ -3209,7 +3027,7 @@ final class AppState: ObservableObject {
     func runScheduledAutoCleanup(force: Bool = false) {
         let hasScheduledWork = autoCleanupRules.contains {
             $0.isEnabled && $0.isSafetyAuthorized
-        } || smartAutomation.triggers.contains { $0.isEnabled && $0.isValid }
+        }
         guard hasScheduledWork else {
             cancelAutomationRetry()
             return
@@ -3237,15 +3055,11 @@ final class AppState: ObservableObject {
         }
         cancelAutomationRetry()
         let rules = autoCleanupRules.filter { $0.isEnabled && $0.isSafetyAuthorized }
-        guard !rules.isEmpty else {
-            runScheduledSmartTriggers()
-            return
-        }
+        guard !rules.isEmpty else { return }
         let defaults = UserDefaults.standard
         let lastCheck = defaults.object(forKey: Self.autoCleanupLastCheckKey) as? Date
         if !force, let lastCheck,
            Date().timeIntervalSince(lastCheck) < Self.autoCleanupMinimumInterval {
-            runScheduledSmartTriggers()
             return
         }
         defaults.set(Date(), forKey: Self.autoCleanupLastCheckKey)
@@ -3281,83 +3095,7 @@ final class AppState: ObservableObject {
             autoCleanupStatus = failures == 0
                 ? l10n.tf("auto.status.done", removed, ByteFormat.format(reclaimed))
                 : l10n.tf("auto.status.partial", removed, failures)
-            runScheduledSmartTriggers()
         }
-    }
-
-    /// 固定类型的智能触发器调度。规则只能指向三个内建动作，持久化模型没有
-    /// script/command/arguments 字段；每个动作仍要通过对应的 Safe 执行闸门。
-    func runScheduledSmartTriggers() {
-        guard !isBusy else {
-            scheduleAutomationRetry()
-            return
-        }
-        cancelAutomationRetry()
-        let rules = smartAutomation.triggers.filter { $0.isEnabled && $0.isValid }
-        guard !rules.isEmpty else { return }
-
-        isSmartAutomationRunning = true
-        Task {
-            let context = SmartTriggerContext()
-            let due = SmartTriggerEvaluator.dueRules(rules, context: context)
-            for snapshot in due {
-                guard let current = currentSmartTrigger(matching: snapshot),
-                      SmartTriggerEvaluator.evaluate(current, context: context).shouldRun else {
-                    continue
-                }
-                if await executeSmartTrigger(current) {
-                    if !smartAutomation.markFired(id: current.id),
-                       let error = smartAutomation.lastError {
-                        log(error)
-                    }
-                    log(l10n.tf("automation.log.fired", current.name))
-                } else {
-                    log(l10n.tf("automation.log.refused", current.name))
-                }
-            }
-            isSmartAutomationRunning = false
-        }
-    }
-
-    private func executeSmartTrigger(_ rule: SmartTriggerRule) async -> Bool {
-        guard currentSmartTrigger(matching: rule) != nil else { return false }
-        switch rule.action {
-        case .quickCleanSafe:
-            let scan = await unifiedCleanupScan()
-            guard scan.allSucceeded else {
-                scan.results.forEach { logFailure($0) }
-                return false
-            }
-            // 扫描结束到真正执行之间应用可能刚好启动。自动化在删除前重新读取
-            // 一次完整运行态，并从静态扫描结果重新判定，避免使用过期快照。
-            let freshSnapshot = await captureRunningApplicationSnapshot()
-            guard freshSnapshot.isComplete else { return false }
-            let safeCategories = protectRunningApplications(
-                in: scan.categories, snapshot: freshSnapshot).filter {
-                    CleanupRiskPolicy.isEligible(
-                        $0, mode: .automatic, running: freshSnapshot)
-                }
-            guard currentSmartTrigger(matching: rule) != nil else { return false }
-            guard !safeCategories.isEmpty else { return true }
-            var failed = 0
-            let grouped = Dictionary(grouping: safeCategories, by: \.applyRoute)
-            for route in CleanupApplyRoute.allCases {
-                guard currentSmartTrigger(matching: rule) != nil else { return false }
-                guard let categories = grouped[route] else { continue }
-                let result = await executeCleanupRoute(route, categories: categories,
-                                                       mode: .automatic)
-                failed += result.failed
-            }
-            CleanupCache.invalidate()
-            return failed == 0
-
-        }
-    }
-
-    private func currentSmartTrigger(matching snapshot: SmartTriggerRule) -> SmartTriggerRule? {
-        guard let current = smartAutomation.triggers.first(where: { $0.id == snapshot.id }),
-              current.isEnabled, current.isValid, current == snapshot else { return nil }
-        return current
     }
 
     private func scheduleAutomationRetry() {

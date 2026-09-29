@@ -442,36 +442,6 @@ struct CleanupCategory: Identifiable, Equatable {
     }
 }
 
-/// 系统数据页的固定分组：root 拥有的日志、报告与缓存。
-enum SystemDataGroupKind: String, CaseIterable, Codable, Sendable {
-    case logs, reports, power, caches, updates
-
-    var titleKey: String { "system.group.\(rawValue)" }
-
-    var symbol: String {
-        switch self {
-        case .logs: return "doc.text"
-        case .reports: return "waveform.path.ecg"
-        case .power: return "bolt"
-        case .caches: return "internaldrive"
-        case .updates: return "arrow.down.circle"
-        }
-    }
-}
-
-/// 系统数据页的单行清单项：路径独立勾选，风险徽章独立展示。
-/// risk 只有 safe / warning(review)；执行边界仍由特权脚本复核。
-struct SystemDataEntry: Identifiable, Equatable, Sendable {
-    let id: UUID
-    let group: SystemDataGroupKind
-    let risk: CleanupRisk
-    let name: String
-    let detail: String
-    let path: String
-    let bytes: UInt64
-    var selected: Bool
-}
-
 /// 当前清理结果所属的家族，决定确认文案与 apply 桥接脚本。
 enum CleanupFamily: String {
     case clean, tools
