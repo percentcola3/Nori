@@ -10,22 +10,41 @@ struct AnalyzeTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 10) {
+            // 标题、当前状态与扫描操作共用一行；状态与提示按剩余宽度截断。
+            HStack(alignment: .center, spacing: 8) {
                 if state.analyzePath != "/" {
                     Button { state.analyzeGoUp() } label: {
                         Label(l10n.t("analyze.up"), systemImage: "chevron.left")
                     }
                     .buttonStyle(SecondaryButtonStyle())
                     .labelStyle(.iconOnly)
-                    .help(l10n.t("analyze.up"))
                     .disabled(state.isBusy)
                 }
                 Text(scopeTitle)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .help(state.analyzePath)
-                Spacer()
+                    .layoutPriority(1)
+                if state.isAnalyzing { ProgressView().controlSize(.mini) }
+                Text(state.analyzeStatus)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 8)
+                Button { state.scanDuplicates() } label: {
+                    Label(l10n.t("duplicates.entry"), systemImage: "square.on.square.dashed")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .labelStyle(.iconOnly)
+                .controlSize(.small)
+                .disabled(state.isBusy)
+                if state.analyzeMode == .directories {
+                    Text(l10n.t("analyze.directory.hint"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
                 Menu {
                     Button { state.scanAnalyze(NSHomeDirectory()) } label: {
                         Label(l10n.t("analyze.scope.user"), systemImage: "person.crop.circle")
@@ -53,53 +72,42 @@ struct AnalyzeTabView: View {
             }
             .padding(.horizontal, 16)
             .padding(.top, 14)
-            .padding(.bottom, 6)
+            .padding(.bottom, 8)
             .onAppear { state.scanUserSpace() }
 
-            HStack(spacing: 6) {
-                if state.isAnalyzing { ProgressView().controlSize(.mini) }
-                Text(state.analyzeStatus)
-                    .font(.system(size: 11))
+            if state.isAnalyzing, !state.analyzeCurrentPath.isEmpty {
+                Text(state.analyzeCurrentPath)
+                    .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(.secondary)
-                Spacer()
-                if state.isScanningDups {
-                    ProgressView().controlSize(.mini)
-                    Text(l10n.t("common.scanning"))
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                } else if !state.analyzeLargeFiles.isEmpty {
-                    Button { state.scanDuplicates() } label: {
-                        Label(l10n.t("analyze.dupScan"), systemImage: "square.on.square.dashed")
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .labelStyle(.iconOnly)
-                    .help(l10n.t("analyze.dupScan"))
-                    .controlSize(.small)
-                }
-                Text(l10n.t("analyze.directory.hint"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 6)
             }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
 
-            if state.isAnalyzing {
+            if state.isAnalyzing && state.analyzeEntries.isEmpty {
                 VStack(spacing: 12) {
                     NoriStatusAnimation(mood: .working, size: 156, assetName: "nori-analyzing")
                     ProgressView().controlSize(.small)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else if state.analyzeEntries.isEmpty {
                 EmptyStateView(symbol: "chart.bar.doc.horizontal",
                                title: l10n.t("analyze.status.empty"),
                                subtitle: l10n.t("analyze.empty.subtitle"))
-            } else if state.analyzeMode != .directories {
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
+            } else if !state.isAnalyzing && state.analyzeMode != .directories {
                 AnalyzeModePicker(state: state)
                     .padding(.bottom, 8)
                 SlimCandidateListView(state: state)
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
-                AnalyzeModePicker(state: state)
-                    .padding(.bottom, 4)
+                if !state.isAnalyzing {
+                    AnalyzeModePicker(state: state)
+                        .padding(.bottom, 4)
+                }
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         ForEach(state.analyzeEntries) { entry in
@@ -126,26 +134,24 @@ struct AnalyzeTabView: View {
                             .disabled(state.isBusy)
                             .transition(.molePanelReveal)
                         }
-                        if !state.dupGroups.isEmpty {
-                            duplicatesSection
-                        }
-                        if state.snapshotsScanned {
+                        if state.snapshotsScanned && !state.isAnalyzing {
                             snapshotsSection
                         }
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    // 分析结果增量到达/排序变化时的液态流动：按路径集合触发。
-                    .animation(reduceMotion ? nil : MoleMotion.panel,
+                    // 扫描中频繁更新大小与排序，避免逐帧追赶尚未稳定的结果。
+                    .animation(reduceMotion || state.isAnalyzing ? nil : MoleMotion.panel,
                                value: state.analyzeEntries.map(\.path))
                 }
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             }
 
             if state.analyzeMode != .directories && !state.isAnalyzing
                 && !state.analyzeEntries.isEmpty {
                 Divider()
                 slimFooter
-            } else if !state.analyzeEntries.isEmpty {
+            } else if !state.isAnalyzing && !state.analyzeEntries.isEmpty {
                 Divider()
                 HStack {
                     if let footerText {
@@ -154,16 +160,6 @@ struct AnalyzeTabView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if !state.dupSelection.isEmpty {
-                        Button { state.deleteDuplicates() } label: {
-                            Label(l10n.t("analyze.dupDelete"),
-                                  systemImage: "trash.fill")
-                        }
-                        .buttonStyle(DangerButtonStyle())
-                        .labelStyle(.iconOnly)
-                        .help(l10n.t("analyze.dupDelete"))
-                        .disabled(state.isBusy)
-                    }
                     Button { state.applyAnalyzeCleanup() } label: {
                         Label(l10n.t("analyze.apply"), systemImage: "trash.fill")
                     }
@@ -175,6 +171,9 @@ struct AnalyzeTabView: View {
                 .padding(.vertical, 10)
             }
         }
+        .sheet(isPresented: $state.showDuplicateFiles) {
+            DuplicateFilesView(state: state)
+        }
         .sheet(isPresented: $state.showSlimSheet) {
             SlimOptionsSheet(state: state)
         }
@@ -183,6 +182,9 @@ struct AnalyzeTabView: View {
                 autoCleanIntent = nil
             }
         }
+        // 分析中 → 结果/空态 的整块互换走弹簧过渡。
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isAnalyzing)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.analyzeEntries.isEmpty)
     }
 
     private var scopeTitle: String {
@@ -259,65 +261,11 @@ struct AnalyzeTabView: View {
     }
 
     private var footerText: String? {
-        if !state.dupSelection.isEmpty {
-            return l10n.tf("analyze.dup.selected", state.dupSelection.count)
-        }
         guard !state.analyzeSelection.isEmpty else { return nil }
         return l10n.tf("analyze.selected", state.analyzeSelection.count,
                        ByteFormat.format(state.analyzeSelectedBytes))
     }
 
-    /// 重复文件分组区：每组一张卡片，成员行可勾选删除。
-    private var duplicatesSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(l10n.t("analyze.dup.hint"))
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 10)
-            ForEach(state.dupGroups.indices, id: \.self) { groupIndex in
-                let members = state.dupGroups[groupIndex]
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(l10n.tf("analyze.dup.group", members.count,
-                                 ByteFormat.format(members.first?.size ?? 0)))
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    ForEach(members) { member in
-                        let isSelected = state.dupSelection.contains(member.path)
-                        Button { state.toggleDupSelection(member) } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: isSelected
-                                      ? "checkmark.circle.fill" : "circle")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(isSelected
-                                        ? AnyShapeStyle(Color.moleAccentText) : AnyShapeStyle(.tertiary))
-                                    .frame(width: 18)
-                                Text(member.path)
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                Spacer()
-                                Text(ByteFormat.format(member.size))
-                                    .font(.system(size: 10).monospacedDigit())
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(MoleSelectableRowButtonStyle(
-                            isSelected: isSelected,
-                            cornerRadius: 6,
-                            horizontalPadding: 10,
-                            verticalPadding: 4))
-                    }
-                }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
-                .overlay(RoundedRectangle(cornerRadius: 9)
-                    .strokeBorder(.separator.opacity(0.4), lineWidth: 1))
-            }
-        }
-    }
 }
 
 private struct AnalyzeRowView: View {

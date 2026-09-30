@@ -33,6 +33,7 @@ enum DiskAnalysisWorker {
 
     static func scan(_ path: String, control: CleanupScanControl,
                      home: String = NSHomeDirectory(),
+                     progressInterval: TimeInterval = 0.15,
                      progress: ((AnalyzeReport) -> Void)? = nil) -> AnalyzeReport {
         let root = URL(fileURLWithPath: path).standardizedFileURL
         var report = AnalyzeReport(path: root.path, overview: root.path == "/", entries: [],
@@ -60,16 +61,20 @@ enum DiskAnalysisWorker {
         var incomplete = false
         var lastProgress = -Double.infinity
 
-        func snapshot(partial: Bool) -> AnalyzeReport {
+        func snapshot(partial: Bool, currentEntry: AnalyzeEntry? = nil,
+                      currentPath: String? = nil) -> AnalyzeReport {
             var trimmed = media
             trimMedia(&trimmed)
+            var entries = rows
+            if let currentEntry { entries.append(currentEntry) }
             var report = AnalyzeReport(path: root.path, overview: root.path == "/",
-                                       entries: rows.sorted(by: AnalyzeEntry.analysisOrder),
+                                       entries: entries.sorted(by: AnalyzeEntry.analysisOrder),
                                        largeFiles: largeFiles.sorted { $0.size > $1.size },
-                                       totalSize: rootBytes + rows.reduce(0) { $0 + $1.size },
+                                       totalSize: rootBytes + entries.reduce(0) { $0 + $1.size },
                                        totalFiles: totalFiles, isPartial: partial)
             report.media = trimmed.sorted { $0.size > $1.size }
             report.mediaSummary = mediaSummary
+            report.currentPath = currentPath
             return report
         }
 
@@ -81,6 +86,19 @@ enum DiskAnalysisWorker {
             var bytes: UInt64 = 0
             var partial = !available
             var stack: [Directory] = []
+            func publishProgress(at path: String) {
+                guard let progress else { return }
+                let now = ProcessInfo.processInfo.systemUptime
+                guard now - lastProgress >= progressInterval else { return }
+                lastProgress = now
+                // Include the active subtree's measured bytes. Waiting for its
+                // final FTS_DP can leave a large Library/developer tree silent
+                // for minutes even though files are still being visited.
+                let current = AnalyzeEntry(name: child.lastPathComponent, path: child.path,
+                                           size: bytes, isDir: directory, cleanable: false,
+                                           isPartial: true)
+                progress(snapshot(partial: true, currentEntry: current, currentPath: path))
+            }
             func append(_ row: AnalyzeEntry, files: Int) {
                 guard !stack.isEmpty else { return }
                 stack[stack.count - 1].entries.append(row)
@@ -116,6 +134,7 @@ enum DiskAnalysisWorker {
                     }
                 }
             }
+            publishProgress(at: child.path)
             if available, let name = strdup(child.path) {
                 defer { free(name) }
                 var paths: [UnsafeMutablePointer<CChar>?] = [name, nil]
@@ -206,6 +225,7 @@ enum DiskAnalysisWorker {
                             }
                         default: break
                         }
+                        publishProgress(at: itemPath)
                     }
                 } else { partial = true }
             } else { partial = true }
@@ -217,9 +237,9 @@ enum DiskAnalysisWorker {
                                      isPartial: partial))
             incomplete = incomplete || partial
             let now = ProcessInfo.processInfo.systemUptime
-            if now - lastProgress >= 0.15 {
+            if now - lastProgress >= progressInterval {
                 lastProgress = now
-                progress?(snapshot(partial: true))
+                progress?(snapshot(partial: true, currentPath: child.path))
             }
         }
         var result = snapshot(partial: incomplete || control.isCancelled)

@@ -55,7 +55,6 @@ struct DockerDetailsView: View {
             }
             .buttonStyle(SecondaryButtonStyle())
             .labelStyle(.iconOnly)
-            .help(l10n.t("common.rescan"))
             .disabled(store.phase == .loading)
             Button(l10n.t("common.close")) { dismiss() }
                 .buttonStyle(SecondaryButtonStyle())

@@ -133,6 +133,59 @@ struct DiskAnalysisTests {
         let partial = DiskAnalysisWorker.scan(root.path, control: cancel) { _ in cancel.cancel() }
         expect(partial.isPartial == true && partial.entries.count < report.entries.count,
                "cancel must stop traversal and mark the total as a lower bound")
+
+        // One large top-level child must publish measured progress before it
+        // finishes, and cancellation from that progress must stop inside it.
+        let progressRoot = fixture.appendingPathComponent("progress").standardizedFileURL
+        let onlyChild = progressRoot.appendingPathComponent("only-child")
+        try fm.createDirectory(at: onlyChild, withIntermediateDirectories: true)
+        for index in 0..<256 {
+            try Data(repeating: 1, count: 4096)
+                .write(to: onlyChild.appendingPathComponent("file-\(index)"))
+        }
+        let midScanCancel = CleanupScanControl(mode: .deep)
+        var progressBytes: [UInt64] = []
+        var currentPath: String?
+        let interrupted = DiskAnalysisWorker.scan(
+            progressRoot.path, control: midScanCancel, progressInterval: 0
+        ) { update in
+            progressBytes.append(update.totalSize)
+            expect(update.entries.count == 1 && update.entries[0].path == onlyChild.path,
+                   "progress must include the active immediate child exactly once")
+            expect(update.isPartial == true, "in-flight totals must remain lower bounds")
+            if (update.totalFiles ?? 0) >= 32 && !midScanCancel.isCancelled {
+                currentPath = update.currentPath
+                expect(update.entries[0].isPartial == true && update.entries[0].size > 0,
+                       "active subtree must show measured bytes without claiming completion")
+                midScanCancel.cancel()
+            }
+        }
+        expect(interrupted.totalFiles == 32 && interrupted.isPartial == true,
+               "cancel must take effect before the first large top-level child completes")
+        expect(currentPath?.hasPrefix(onlyChild.path + "/") == true,
+               "progress must identify the item being visited inside the subtree")
+        expect(zip(progressBytes, progressBytes.dropFirst()).allSatisfy { $0 <= $1 },
+               "measured bytes must not decrease between progress updates")
+        let completeProgress = DiskAnalysisWorker.scan(
+            progressRoot.path, control: CleanupScanControl(mode: .deep), progressInterval: 0
+        ) { update in
+            expect(update.entries.count == 1,
+                   "completing a subtree must not duplicate its in-flight row")
+        }
+        expect(completeProgress.totalFiles == 256 && completeProgress.isPartial == false,
+               "incremental progress must preserve final totals and completion")
+        expect(completeProgress.currentPath == nil,
+               "a finished report must not retain a currently scanning path")
+
+        let ties = [
+            AnalyzeEntry(name: "file10", path: "/tmp/file10", size: 4096, isDir: false),
+            AnalyzeEntry(name: "file2", path: "/System/file2", size: 4096, isDir: false),
+            AnalyzeEntry(name: "file2", path: "/Applications/file2", size: 4096, isDir: false)
+        ].sorted(by: AnalyzeEntry.analysisOrder)
+        expect(ties.map(\.path) == ["/Applications/file2", "/System/file2", "/tmp/file10"],
+               "equal-size ordering must be natural and deterministic without path safety classification")
+        expect(ties[1].canCleanDirectly == false,
+               "cheaper display sorting must not weaken system-file cleanup protection")
         let missing = DiskAnalysisWorker.scan(fixture.appendingPathComponent("missing").path,
                                               control: CleanupScanControl(mode: .deep))
         expect(missing.isPartial == true && missing.error != nil, "unreadable root must not report a complete zero")
@@ -140,6 +193,6 @@ struct DiskAnalysisTests {
         let decoded = try JSONDecoder().decode(AnalyzeEntry.self, from: legacy)
         expect(decoded.isPartial == nil,
                "old analysis records must remain decodable")
-        print("PASS: directory hierarchy, all children, descending allocated size, hardlinks, symlinks, sparse files, cancellation, errors, unreadable sibling attribution and cached navigation without filesystem access")
+        print("PASS: directory hierarchy, allocated size, hardlinks, symlinks, sparse files, in-subtree progress/cancellation, deterministic sorting, cleanup protection, errors and cached navigation")
     }
 }

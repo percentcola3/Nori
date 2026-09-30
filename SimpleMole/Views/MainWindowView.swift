@@ -24,7 +24,6 @@ struct MainWindowView: View {
             ZStack {
                 VStack(spacing: 0) {
                     titleBarRow
-                    metricBar
                     Divider()
                     PillPicker(items: tabs, selection: $state.selectedTab)
                         .padding(.top, 8)
@@ -81,10 +80,7 @@ struct MainWindowView: View {
             } label: {
                 Label(l10n.t("settings.quit"), systemImage: "power")
             }
-            .buttonStyle(.plain)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(Color.warning)
-            .help(l10n.t("settings.quit.hint"))
+            .buttonStyle(DangerButtonStyle(tint: Color.warning))
         }
         .frame(height: 28)
         .padding(.horizontal, 10)
@@ -106,25 +102,6 @@ struct MainWindowView: View {
         if state.showPermissionCenter { state.cancelPermissionCenter() }
         else if state.showAutoCleanupSheet { state.showAutoCleanupSheet = false }
         else { state.showWhitelistSheet = false }
-    }
-
-    private var metricBar: some View {
-        MetricBar(items: [
-            .init(title: l10n.t("metric.cleanable"), symbol: "trash",
-                  value: state.selectedCount > 0 ? ByteFormat.format(state.selectedBytes) : l10n.t("metric.pending")),
-            .init(title: l10n.t("metric.memory"), symbol: "memorychip",
-                  value: String(format: "%.0f%%", state.metrics.memoryPercent),
-                  progress: state.metrics.memoryPercent / 100),
-            .init(title: l10n.t("metric.disk"), symbol: "internaldrive",
-                  value: state.metrics.diskFreeBytes > 0 ? ByteFormat.format(state.metrics.diskFreeBytes) : "--",
-                  progress: state.metrics.diskUsedPercent / 100),
-            .init(title: l10n.t("metric.network"), symbol: "network",
-                  value: String(format: "↓%.1f ↑%.1f", state.metrics.networkRxMBps, state.metrics.networkTxMBps),
-                  sparkline: state.networkHistory),
-        ])
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
     }
 
     // MARK: 弹窗绑定
@@ -190,12 +167,12 @@ private struct AnimatedTabContent: View {
 
         return .asymmetric(
             insertion: .modifier(
-                active: TabPageMotion(x: direction * 28, opacity: 0),
-                identity: TabPageMotion(x: 0, opacity: 1)
+                active: TabPageMotion(x: direction * 34, opacity: 0, scale: 0.985),
+                identity: TabPageMotion(x: 0, opacity: 1, scale: 1)
             ),
             removal: .modifier(
-                active: TabPageMotion(x: -direction * 18, opacity: 0),
-                identity: TabPageMotion(x: 0, opacity: 1)
+                active: TabPageMotion(x: -direction * 22, opacity: 0, scale: 0.99),
+                identity: TabPageMotion(x: 0, opacity: 1, scale: 1)
             )
         )
     }
@@ -204,9 +181,11 @@ private struct AnimatedTabContent: View {
         guard next != presentedTab else { return }
         let nextDirection: CGFloat = next > presentedTab ? 1 : -1
 
+        // 与 MoleMotion.panel 同族的弹簧：高阻尼只留极轻的收尾回弹，
+        // timingCurve 的匀减速段在这种全页位移上会显得机械。
         let animation: Animation = reduceMotion
             ? .easeOut(duration: 0.12)
-            : .timingCurve(0.20, 0.78, 0.20, 1, duration: 0.40)
+            : .spring(response: 0.40, dampingFraction: 0.86, blendDuration: 0.10)
         withAnimation(animation) {
             direction = nextDirection
             presentedTab = next
@@ -217,9 +196,11 @@ private struct AnimatedTabContent: View {
 private struct TabPageMotion: ViewModifier {
     let x: CGFloat
     let opacity: Double
+    let scale: CGFloat
 
     func body(content: Content) -> some View {
         content
+            .scaleEffect(scale)
             .offset(x: x)
             .opacity(opacity)
     }

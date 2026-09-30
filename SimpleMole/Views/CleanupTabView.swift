@@ -23,7 +23,7 @@ struct CleanupTabView: View {
     }
 
     private func toggleCollapsed(_ kind: CleanupGroupBucket) {
-        withAnimation(MoleMotion.panel) {
+        withAnimation(reduceMotion ? nil : MoleMotion.panel) {
             var next = collapsedGroups
             if next.contains(kind) { next.remove(kind) } else { next.insert(kind) }
             userCollapsed = next
@@ -52,7 +52,6 @@ struct CleanupTabView: View {
                     Text(l10n.t("cleanup.scan.deep"))
                 }
                 .buttonStyle(SecondaryButtonStyle())
-                .help(l10n.t("cleanup.scan.deep.hint"))
                 .disabled(state.isBusyExcludingUninstall || state.cleanupQueued)
                 if state.isCleanupScanning || !state.categories.isEmpty {
                     quickCleanButton
@@ -70,7 +69,6 @@ struct CleanupTabView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20)
                     .padding(.bottom, 8)
-                    .help(state.cleanupDeferredPaths.prefix(12).joined(separator: "\n"))
             }
 
             if !state.isCleanupScanning && !state.isApplying, state.cleanupOutcomeMood == .attention {
@@ -93,9 +91,11 @@ struct CleanupTabView: View {
                     ProgressView().controlSize(.small)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else if state.isCleanupScanning {
                 CleanupScanProgressView(state: state)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else if state.categories.isEmpty {
                 VStack(spacing: 12) {
                     if state.cleanupOutcomeMood != .attention {
@@ -109,6 +109,7 @@ struct CleanupTabView: View {
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
@@ -134,6 +135,7 @@ struct CleanupTabView: View {
                                     .transition(.molePanelReveal)
                                 }
                             }
+                            .clipped()
                             .transition(.molePanelReveal)
                         }
                     }
@@ -143,6 +145,7 @@ struct CleanupTabView: View {
                     .animation(reduceMotion ? nil : MoleMotion.panel,
                                value: state.categories.map(\.id))
                 }
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             }
 
             if !state.isCleanupScanning, let installers = state.installerCandidates {
@@ -166,6 +169,10 @@ struct CleanupTabView: View {
                 autoCleanIntent = nil
             }
         }
+        // 扫描中 → 结果/空态 的整块互换走弹簧过渡，而不是硬切。
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isApplying)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isCleanupScanning)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.categories.isEmpty)
     }
 
     private var quickCleanButton: some View {
@@ -192,7 +199,6 @@ struct CleanupTabView: View {
             .disabled(state.categories.isEmpty || !state.cleanupScanComplete
                 || state.isApplying)
             .labelStyle(.iconOnly)
-            .help(l10n.t("common.selectAll"))
             Button {
                 for index in state.categories.indices { state.categories[index].selected = false }
             } label: {
@@ -201,7 +207,6 @@ struct CleanupTabView: View {
             .buttonStyle(SecondaryButtonStyle())
             .disabled(state.categories.isEmpty || state.isApplying)
             .labelStyle(.iconOnly)
-            .help(l10n.t("common.deselectAll"))
             if state.cleanupScanComplete && !state.categories.isEmpty {
                 HStack(spacing: 5) {
                     RiskBadge(risk: .safe)
@@ -222,7 +227,6 @@ struct CleanupTabView: View {
                 Label(applyLabel, systemImage: "trash.fill")
             }
             .buttonStyle(PrimaryButtonStyle())
-            .help(applyLabel)
             .disabled(state.selectedCount == 0 || state.isBusyExcludingUninstall || state.cleanupQueued || !state.cleanupScanComplete)
         }
         .padding(.horizontal, 16)
@@ -293,8 +297,6 @@ struct CleanupTabView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
-            .help(collapsedGroups.contains(group.kind) ? l10n.t("cleanup.expand")
-                  : l10n.t("cleanup.collapse"))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -497,7 +499,6 @@ struct CategoryRowView: View {
                             .font(.system(size: 10, weight: .semibold))
                     }
                     .buttonStyle(MoleIconButtonStyle(size: 22))
-                    .help(l10n.t("auto.entry.create"))
                     .disabled(!selectionEnabled)
                 }
                 Button {

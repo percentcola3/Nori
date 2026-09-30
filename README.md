@@ -23,6 +23,7 @@ Nori 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、磁盘�
 | --- | --- | --- |
 | 硬盘清理 | 快速扫描常用缓存，深度扫描补充更多应用目录与历史残留；只展示 Safe 垃圾，归入缓存、卸载残留、废纸篓、开发者缓存、AI 缓存五个可折叠大类（默认只展开最大分组），支持分类/子项勾选；同一分组内小于 100MB 的长尾小项自动合并为「其他」。开发者缓存与构建产物默认按 **7 天未活跃**门槛推荐（活跃条目保留可见、默认不勾选），支持 npm/Yarn/pip/Gradle 等自定义缓存位置。Safe 垃圾默认全部勾选，一键清理**永久删除**所选；执行前会用最新进程快照与年龄证据重新评估，运行中或重新活跃的路径自动跳过并计入「已跳过」 | `NativeCore.scanCleanup/applyCleanup` + `CleanupScanWorker` + `CleanupAgePolicy`；AI/Xcode 缓存共用原生统计 |
 | 磁盘分析 | 统一扫描范围：用户空间（默认当前用户主目录）、根目录、自定义目录；支持取消、逐层浏览和缓存复用，避免符号链接循环与硬链接重复计量 | `NativeCore.scanAnalyze` + `DiskAnalysisWorker` |
+| 重复文件 / 相似图片 | 从磁盘分析页打开，单独选择多个普通文件目录；精确重复采用大小、采样、完整 SHA-256 分级检测，不限于大文件列表；相似静态图片按感知特征分组，展示尺寸、参考清晰度并支持原图预览。默认不勾选，每组至少保留一份，移入废纸篓前复核选中项和保留项 | `DuplicateScanner` + `SimilarImageScanner` + `DuplicateDeletionPlan` + `NativeCore.applyCleanup` |
 | 应用卸载 | 列出 `/Applications`、用户 Applications 和 Setapp 应用；按 Bundle ID 精确生成缓存、日志和需复核数据明细，应用本体与关联路径在串行队列中逐项复验身份后移入废纸篓 | `NativeCore.scanInstalledApps` + `NativeCore.uninstallPlan/applyUninstall` |
 | 系统优化 | 刷新 DNS、Quick Look、LaunchServices，清理 30 天以前的保存状态，并只读检查 Spotlight 状态；每项独立显示 applied/unchanged/unavailable/failed | `NativeCore.runOptimize` |
 | 状态监控 | 菜单栏和主窗口实时显示 CPU、内存、磁盘容量与读写、网络速率；可读取电池电量/健康/循环次数，灵动岛的内存榜也走原生进程快照 | `SystemMetrics.sample` + IOKit / Mach / sysctl / statfs / getifaddrs |
@@ -33,6 +34,8 @@ Nori 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、磁盘�
 | 白名单 | `~/.config/mole/whitelist` 的 GUI 维护，clean / purge / 全部桥接清理共用 | `load_mole_whitelist` / `is_path_whitelisted` |
 
 卸载残留采用“证据优先”策略：应用仍在废纸篓时，用它的 Bundle ID 精确反查对应的用户缓存和日志；应用已经被手动删除且废纸篓也已清空时，不凭目录名猜测归属，而把可疑的大目录留给“磁盘分析”或后续深度审查。这样首屏可以保持快速，也不会把仍被其他应用使用的同名目录当成垃圾。
+
+重复扫描跳过应用包、图库、用户 Library、隐藏及受管理目录、符号链接和未下载的云文件。可比较导出到普通目录的 IM 附件，不扫描或改写微信内部数据。相似分组只供人工判断，不证明内容相同；移入废纸篓不立即释放空间，文件大小合计也不代表 APFS 克隆或快照存在时的实际释放量。
 
 快速扫描先按预设路径发现缓存，完成风险分类、白名单过滤和路径去重后，再以最多 8 个工作线程统计实际磁盘占用。文件遍历预算为整体 45 秒、单目录 8 秒；遇到慢目录时保留已完成的结果，并提示尚未统计完的目录数。预算在遍历间检查，底层文件系统阻塞时可能超出预算，不承诺所有机器都在固定时间内完成。
 

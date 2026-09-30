@@ -974,10 +974,11 @@ struct AnalyzeEntry: Identifiable, Codable, Equatable {
 
     static func analysisOrder(_ lhs: AnalyzeEntry, _ rhs: AnalyzeEntry) -> Bool {
         if lhs.size != rhs.size { return lhs.size > rhs.size }
-        if lhs.handling.rawValue != rhs.handling.rawValue {
-            return lhs.handling.rawValue < rhs.handling.rawValue
-        }
-        return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        // Sorting runs for every directory. Keep filesystem-backed safety
+        // classification out of this hot path; canCleanDirectly still gates selection.
+        let nameOrder = lhs.name.localizedStandardCompare(rhs.name)
+        if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+        return lhs.path < rhs.path
     }
 }
 
@@ -991,6 +992,8 @@ struct AnalyzeReport: Codable {
     let totalFiles: Int?
     var isPartial: Bool? = nil
     var error: String? = nil
+    /// Current traversal location for live progress; not serialized.
+    var currentPath: String? = nil
     /// In-memory directory index from the same traversal; not serialized.
     var directoryReports: [String: AnalyzeReport]? = nil
 

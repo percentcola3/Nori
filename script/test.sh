@@ -2410,6 +2410,9 @@ test_swift() {
 printf 'Nori local regression tests\n'
 test_shell_syntax
 if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
+    bash "$ROOT_DIR/script/test_duplicates.sh" || fail "exact duplicate scanning tests"
+    bash "$ROOT_DIR/script/test_duplicate_deletion.sh" || fail "duplicate deletion safety tests"
+    bash "$ROOT_DIR/script/test_similar_images.sh" || fail "similar image grouping tests"
     bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
     bash "$ROOT_DIR/script/test_agents.sh" || fail "agent cleanup catalog, skills and MCP tests"
     # Agent 专清按用户选择直接永久删除，不弹确认、不进废纸篓；运行态与身份守卫仍在执行器里。

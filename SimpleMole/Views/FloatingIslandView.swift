@@ -14,6 +14,9 @@ enum IslandLayout {
     static let handleBottomRadius: CGFloat = 6
     static let metricsHeight: CGFloat = 76
     static let detailBudget: CGFloat = 340
+    /// 无刘海屏展开态的顶部内边距：没有硬件刘海需要避让，只保留一个
+    /// 折叠手柄高度的呼吸空间，避免展开后顶部出现菜单栏高度的空白带。
+    static let nonNotchExpandedTopInset: CGFloat = 12
     static let windowMargin: CGFloat = 14
     static let hitSpaceName = "islandRoot"
 }
@@ -66,6 +69,12 @@ struct FloatingIslandView: View {
     @State private var ringReveal: CGFloat = 1
     @State private var ringReplay: Task<Void, Never>?
 
+    /// 刘海屏内容必须避开硬件刘海（safeTop 原值）；无刘海屏的菜单栏高度
+    /// 没有实际遮挡，展开内容只留一个手柄高度的顶部空间。
+    private var expandedTopInset: CGFloat {
+        hardwareNotch ? safeTop : IslandLayout.nonNotchExpandedTopInset
+    }
+
     private var motion: Animation? {
         reduceMotion ? nil : .spring(response: 0.52, dampingFraction: 0.8)
     }
@@ -93,7 +102,7 @@ struct FloatingIslandView: View {
             // 内容自身按 safeTop 下移避让刘海。
             ZStack(alignment: .top) {
                 expandedPanel
-                    .padding(.top, safeTop)
+                    .padding(.top, expandedTopInset)
                     .fixedSize(horizontal: false, vertical: true)
                     .background {
                         GeometryReader { geo in
@@ -272,7 +281,6 @@ struct FloatingIslandView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .help(l10n.t("island.advanced"))
             .onHover {
                 moreHovered = $0
                 if $0 {
@@ -292,7 +300,6 @@ struct FloatingIslandView: View {
                 .buttonStyle(IslandResourceButtonStyle())
                 .disabled(state.islandCleaningResource != nil)
                 .focused($focusedResource, equals: resource)
-                .help(l10n.t("island.clean.hint"))
                 .accessibilityLabel(l10n.t(item.labelKey) + " · " + l10n.t("island.clean"))
                 .accessibilityValue(valueText(item))
                 .accessibilityAddTraits(selectedResource == resource ? .isSelected : [])
@@ -313,7 +320,6 @@ struct FloatingIslandView: View {
                 }
         } else {
             ring(item)
-                .help(l10n.t(item.labelKey) + " " + valueText(item))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(l10n.t(item.labelKey))
                 .accessibilityValue(valueText(item))
@@ -435,7 +441,6 @@ struct FloatingIslandView: View {
                     .disabled(!state.canCloseIslandApp(row) || state.islandClosingPIDs.contains(row.pid)
                               || state.islandCleaningResource != nil)
                     .accessibilityLabel(l10n.tf("island.quit", row.name))
-                    .help(l10n.t("island.quit.hint"))
                 }
                 .font(.system(size: 11))
                 .frame(height: 29)

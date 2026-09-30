@@ -54,7 +54,6 @@ struct SimulatorDevicesView: View {
             }
             .buttonStyle(SecondaryButtonStyle())
             .labelStyle(.iconOnly)
-            .help(l10n.t("common.rescan"))
             .disabled(store.phase == .loading || store.isDeleting)
             Button(l10n.t("common.close")) { dismiss() }
                 .buttonStyle(SecondaryButtonStyle())

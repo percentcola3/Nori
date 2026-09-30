@@ -44,7 +44,6 @@ struct AutoCleanupRulesView: View {
             }
             .buttonStyle(PrimaryButtonStyle())
             .labelStyle(.iconOnly)
-            .help(l10n.t("auto.addDirectory"))
             .disabled(state.isBusy)
 
             Button {
@@ -55,7 +54,6 @@ struct AutoCleanupRulesView: View {
                     .foregroundStyle(.tertiary)
             }
             .buttonStyle(.plain)
-            .help(l10n.t("auto.close"))
             .accessibilityLabel(l10n.t("auto.close"))
             .keyboardShortcut(.cancelAction)
         }
@@ -88,7 +86,7 @@ struct AutoCleanupRulesView: View {
     private var content: some View {
         if state.autoCleanupRules.isEmpty {
             EmptyStateView(
-                symbol: "folder.badge.clock",
+                symbol: "calendar.badge.clock",
                 title: l10n.t("auto.empty.title"),
                 subtitle: l10n.t("auto.empty.subtitle")
             )
@@ -224,7 +222,6 @@ private struct AutoCleanupRuleRow: View {
             }
             .toggleStyle(.checkbox)
             .disabled(state.isBusy)
-            .help(l10n.t("auto.regenerable.help"))
         }
     }
 
@@ -254,7 +251,6 @@ private struct AutoCleanupRuleRow: View {
                 .labelsHidden()
                 .fixedSize()
             }
-            .help(l10n.t("auto.sizeLimit.help"))
             .disabled(state.isBusy)
         } else {
             HStack(spacing: 4) {
@@ -279,7 +275,6 @@ private struct AutoCleanupRuleRow: View {
                 .labelsHidden()
                 .fixedSize()
             }
-            .help(l10n.t("auto.retention.help"))
             .disabled(state.isBusy)
         }
     }

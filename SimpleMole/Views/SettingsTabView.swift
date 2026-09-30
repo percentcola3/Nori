@@ -20,6 +20,7 @@ private struct SettingsSection<Content: View>: View {
             }
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .clipped()
             .background(
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .fill(Color.surface1)
@@ -272,7 +273,6 @@ struct SettingsTabView: View {
         }
         .buttonStyle(.plain)
         .disabled(isLastRemaining)
-        .help(isLastRemaining ? l10n.t("settings.island.keepOne") : "")
     }
 
     // MARK: 截图
@@ -303,7 +303,7 @@ struct SettingsTabView: View {
             SettingsRow(divider: true) {
                 actionRow(title: l10n.t("auto.header"),
                           detail: l10n.t("auto.empty.subtitle"),
-                          symbol: "folder.badge.clock") {
+                          symbol: "calendar.badge.clock") {
                     state.showAutoCleanupSheet = true
                 }
             }
@@ -398,7 +398,6 @@ struct SettingsTabView: View {
         .disabled(isLastRemaining)
         .opacity(isLastRemaining ? 0.55 : 1)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .help(isLastRemaining ? l10n.t("settings.pages.hint") : l10n.t(key.titleKey))
     }
 
     /// 剪贴板历史与其他功能页同样以标签激活；开关本身负责启停剪贴板监听。
@@ -411,7 +410,6 @@ struct SettingsTabView: View {
         }
         .buttonStyle(MolePlainButtonStyle())
         .accessibilityAddTraits(state.clipboardHistoryEnabled ? .isSelected : [])
-        .help(l10n.t("clip.title"))
     }
 
     private var islandEdgeBinding: Binding<AppState.IslandEdge> {

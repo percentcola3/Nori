@@ -12,27 +12,40 @@ struct AgentsTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
             if state.agentScanning || state.agentApplying {
+                header
                 VStack(spacing: 12) {
                     NoriStatusAnimation(mood: .working, size: 156)
                     Text(state.agentStatus).font(.system(size: 12))
                     ProgressView().controlSize(.small)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else if !state.agentHasScanned {
+                header
                 emptyState
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
                 if showsAgentNotice { statusRow }
-                PillPicker(items: [l10n.t("agents.section.space"),
-                                   l10n.tf("agents.section.skills", state.agentSkills.count),
-                                   l10n.tf("agents.section.mcp", state.agentServers.count)],
-                           selection: $section)
-                    .padding(.bottom, 6)
+                // 分区胶囊与重扫按钮共用一行，省出独立工具栏。
+                HStack(alignment: .center, spacing: 10) {
+                    PillPicker(items: [l10n.t("agents.section.space"),
+                                       l10n.tf("agents.section.skills", state.agentSkills.count),
+                                       l10n.tf("agents.section.mcp", state.agentServers.count)],
+                               selection: $section)
+                    Spacer()
+                    scanButton
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .padding(.bottom, 6)
                 switch section {
                 case 1: skillsList
+                    .transition(reduceMotion ? .opacity : .moleStateSwap)
                 case 2: mcpList
+                    .transition(reduceMotion ? .opacity : .moleStateSwap)
                 default: spaceList
+                    .transition(reduceMotion ? .opacity : .moleStateSwap)
                 }
                 if section != 2 {
                     Divider()
@@ -40,19 +53,28 @@ struct AgentsTabView: View {
                 }
             }
         }
+        // 扫描中 → 结果/空态、分区列表切换走弹簧过渡。
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.agentScanning)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.agentApplying)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.agentHasScanned)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: section)
     }
 
     // MARK: 头部
 
+    private var scanButton: some View {
+        Button { state.requestScanAccess(.aiScan) } label: {
+            Label(state.agentHasScanned ? l10n.t("agents.rescan") : l10n.t("agents.scan"),
+                  systemImage: "sparkle.magnifyingglass")
+        }
+        .buttonStyle(PrimaryButtonStyle())
+        .disabled(state.isBusy)
+    }
+
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
             Spacer()
-            Button { state.requestScanAccess(.aiScan) } label: {
-                Label(state.agentHasScanned ? l10n.t("agents.rescan") : l10n.t("agents.scan"),
-                      systemImage: "sparkle.magnifyingglass")
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .disabled(state.isBusy)
+            scanButton
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
@@ -123,6 +145,7 @@ struct AgentsTabView: View {
                                     .transition(.molePanelReveal)
                                 }
                             }
+                            .clipped()
                         }
                     }
                     .padding(.horizontal, 16)
@@ -351,7 +374,6 @@ struct AgentsTabView: View {
                     Image(systemName: "folder").font(.system(size: 10))
                 }
                 .buttonStyle(MoleIconButtonStyle(size: 20))
-                .help(abbreviate(server.configPath))
             }
             if !server.endpoint.isEmpty {
                 Text(server.endpoint)
@@ -393,7 +415,6 @@ struct AgentsTabView: View {
             }
             .buttonStyle(SecondaryButtonStyle())
             .labelStyle(.iconOnly)
-            .help(l10n.t("common.deselectAll"))
             .disabled(state.isBusy)
             Spacer()
             Button { state.applyAgentCleanup() } label: {

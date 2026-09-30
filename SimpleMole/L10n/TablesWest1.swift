@@ -16,11 +16,6 @@ extension L10nTables {
         "header.language": "언어",
         "language.auto": "자동 (시스템 따르기)",
 
-        "metric.cleanable": "정리 가능",
-        "metric.memory": "메모리",
-        "metric.disk": "디스크 여유",
-        "metric.network": "네트워크",
-        "metric.pending": "미스캔",
 
         "common.more": "더보기",
         "common.cancel": "취소",
@@ -245,11 +240,6 @@ extension L10nTables {
         "header.language": "Sprache",
         "language.auto": "Automatisch (System)",
 
-        "metric.cleanable": "Bereinigbar",
-        "metric.memory": "Arbeitsspeicher",
-        "metric.disk": "Freier Speicher",
-        "metric.network": "Netzwerk",
-        "metric.pending": "Nicht gescannt",
 
         "common.more": "Mehr",
         "common.cancel": "Abbrechen",
@@ -474,11 +464,6 @@ extension L10nTables {
         "header.language": "Langue",
         "language.auto": "Auto (suivre le système)",
 
-        "metric.cleanable": "Nettoyable",
-        "metric.memory": "Mémoire",
-        "metric.disk": "Disque libre",
-        "metric.network": "Réseau",
-        "metric.pending": "Non scanné",
 
         "common.more": "Plus",
         "common.cancel": "Annuler",

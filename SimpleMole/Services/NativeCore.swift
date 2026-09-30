@@ -819,7 +819,8 @@ final class NativeCore: @unchecked Sendable {
                       allowedRoots: [String] = [],
                       allowApplicationBundle: Bool = false,
                       verifiedTargets: Set<String> = [],
-                      atomicFamilies: [[String]] = []) -> ApplySummary {
+                      atomicFamilies: [[String]] = [],
+                      finalValidation: ((String) -> Bool)? = nil) -> ApplySummary {
         let home = URL(fileURLWithPath: homeDirectory).standardizedFileURL.path
         let whitelist = loadWhitelist(homeDirectory: homeDirectory)
         let normalizedRoots = allowedRoots.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
@@ -898,6 +899,14 @@ final class NativeCore: @unchecked Sendable {
             guard !openFiles.contains(where: { $0 == path || $0.hasPrefix(path + "/") }) else {
                 skipped += 1
                 messages.append("Skipped while the path is open: \(path)")
+                continue
+            }
+
+            // Content-dependent plans (duplicates / similar images) must still
+            // hold after the potentially slow runtime probes, at the Trash edge.
+            if let finalValidation, !finalValidation(path) {
+                skipped += 1
+                messages.append("Skipped because final content validation failed: \(path)")
                 continue
             }
 

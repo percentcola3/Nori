@@ -5,6 +5,7 @@ struct TrafficTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var store: TrafficMonitorStore
     @ObservedObject private var l10n = L10n.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var detailApp: TrafficAppSelection?
 
     init(state: AppState) {
@@ -45,13 +46,26 @@ struct TrafficTabView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 10)
 
+            // 会话信息与排序控件共用一行。
             HStack(spacing: 8) {
                 Text(l10n.tf("netmon.session.started", store.sessionStartedAt.formatted(date: .abbreviated, time: .shortened))
                      + (store.historySaveFailed ? "" : " · " + l10n.t("netmon.history.saved")))
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                Spacer()
+                    .truncationMode(.tail)
+                Spacer(minLength: 8)
+                Picker(l10n.t("netmon.sort.title"), selection: $store.sortOrder) {
+                    ForEach(TrafficSortOrder.allCases, id: \.rawValue) { order in
+                        Text(l10n.t(order.titleKey)).tag(order)
+                    }
+                }
+                .pickerStyle(.menu)
+                .controlSize(.small)
+                .fixedSize()
+                Text(l10n.t("netmon.sort.descending"))
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
@@ -65,28 +79,14 @@ struct TrafficTabView: View {
                     .padding(.bottom, 8)
             }
 
-            HStack(spacing: 8) {
-                Picker(l10n.t("netmon.sort.title"), selection: $store.sortOrder) {
-                    ForEach(TrafficSortOrder.allCases, id: \.rawValue) { order in
-                        Text(l10n.t(order.titleKey)).tag(order)
-                    }
-                }
-                .pickerStyle(.menu)
-                .controlSize(.small)
-                .fixedSize()
-                Text(l10n.t("netmon.sort.descending"))
-                    .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 6)
             if store.rows.isEmpty {
                 EmptyStateView(symbol: "antenna.radiowaves.left.and.right",
                                title: l10n.t("netmon.empty.title"),
                                subtitle: l10n.t("netmon.empty.subtitle"))
+                    .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
                 appList
+                    .transition(reduceMotion ? .opacity : .moleStateSwap)
             }
 
             Text(l10n.t("netmon.footnote"))
@@ -99,6 +99,8 @@ struct TrafficTabView: View {
             TrafficAppDetailSheet(store: store, appKey: selection.id)
                 .frame(minWidth: 680, minHeight: 460)
         }
+        // 首条采样到达时从空态切换到应用列表走弹簧过渡。
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: store.rows.isEmpty)
         .onAppear { store.setPageVisible(true) }
         .onDisappear { store.setPageVisible(false) }
     }

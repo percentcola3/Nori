@@ -375,6 +375,7 @@ final class AppState: ObservableObject {
     @Published var analyzeIsOverview = false
     /// 当前展示的是第一层“快速分析”结果（个人目录 + 既知缓存 + 保存位置）。
     @Published var analyzeStatus: String
+    @Published var analyzeCurrentPath = ""
     var analyzeCache = DiskAnalysisCache()
     private var analyzeHasScanned = false
     private var analyzeScanControl: CleanupScanControl?
@@ -385,21 +386,24 @@ final class AppState: ObservableObject {
     @Published var snapshotsScanned = false
     @Published var isThinning = false
 
-    // 大文件重复检测
-    @Published var dupGroups: [[AnalyzeEntry]] = []
-    @Published var dupSelection: Set<String> = []
-    @Published var isScanningDups = false
+    // 用户指定目录的精确重复文件 / 相似图片。
+    @Published var showDuplicateFiles = false
+    @Published var duplicateRoots: [String] = []
+    @Published var duplicateMode: DuplicateMode = .exact
+    @Published var duplicateGroups: [DuplicateFileGroup] = []
+    @Published var duplicateSelection: Set<String> = []
+    @Published var isScanningDuplicates = false
+    @Published var isDeletingDuplicates = false
+    @Published var duplicateStatus = ""
+    @Published var duplicateCoverage = ""
+    @Published var duplicateScanFinished = false
+    var duplicateScanControl: DuplicateScanControl?
+    var duplicateScannedRoots: [String] = []
 
     var analyzeSelectedBytes: UInt64 {
         analyzeEntries.filter {
             analyzeSelection.contains($0.path) && $0.canCleanDirectly
         }.reduce(0) { $0 + $1.size }
-    }
-
-    var dupSelectedPaths: [String] {
-        dupGroups.flatMap { $0 }.filter {
-            dupSelection.contains($0.path) && $0.canCleanDirectly
-        }.map(\.path)
     }
 
     // MARK: 白名单
@@ -596,7 +600,7 @@ final class AppState: ObservableObject {
     var isBusyExcludingUninstall: Bool {
         isScanning || isApplying || isSlimming
             || isScanningEnv
-            || isAnalyzing || isThinning || isScanningDups
+            || isAnalyzing || isThinning || isScanningDuplicates || isDeletingDuplicates
             || gcRunningId != nil || netFixRunning || isAutoCleanupScanning
             || isOptimizing
             || agentScanning || agentApplying
@@ -2534,6 +2538,7 @@ final class AppState: ObservableObject {
             return
         }
         isAnalyzing = true
+        analyzeCurrentPath = ""
         analyzeEntries = []
         analyzeTotalSize = 0
         analyzeLargeFiles = []
@@ -2541,8 +2546,6 @@ final class AppState: ObservableObject {
         analyzeMediaSummary = MediaSummary()
         slimSelection.removeAll()
         analyzeSelection.removeAll()
-        dupGroups = []
-        dupSelection.removeAll()
         analyzeStatus = l10n.t("analyze.scanning")
         let control = CleanupScanControl(mode: .deep)
         analyzeScanControl = control
@@ -2554,8 +2557,11 @@ final class AppState: ObservableObject {
                         guard let self, self.analyzeScanControl === control else { return }
                         self.analyzeEntries = report.entries
                         self.analyzeTotalSize = report.totalSize
+                        self.analyzeCurrentPath = report.currentPath ?? ""
+                        self.analyzeStatus = "\(self.l10n.t("common.scanning")) · ≥ \(ByteFormat.format(report.totalSize))"
                     }
                 })
+            guard analyzeScanControl === control else { return }
             analyzeScanControl = nil
             isAnalyzing = false
             // Keep the partial result visible, but do not reuse an interrupted
@@ -2569,9 +2575,8 @@ final class AppState: ObservableObject {
     }
 
     private func showAnalyzeReport(_ report: AnalyzeReport) {
+        analyzeCurrentPath = ""
         analyzeSelection.removeAll()
-        dupGroups = []
-        dupSelection.removeAll()
         analyzeIsOverview = report.overview
         analyzePath = report.path
         // 0 字节且统计完整的条目没有信息量：隐藏它们让列表聚焦真实占用；
@@ -2648,84 +2653,11 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: 大文件重复检测
-
-    /// 对当前目录分析结果中的大文件做内容指纹聚类。
+    /// 授权入口只打开目录选择；用户显式开始后再扫描。
     func scanDuplicates() {
+        guard !isBusy else { return }
         guard authorize(.duplicateScan, presentingPermissionCenter: true) else { return }
-        guard !isBusy else { return }
-        let scanEnvironment = fullDiskScanEnvironment
-        guard scanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
-        let paths = analyzeLargeFiles.map(\.path)
-        guard !paths.isEmpty else {
-            log(l10n.t("log.dupNeedScan"))
-            return
-        }
-        isScanningDups = true
-        dupGroups = []
-        dupSelection.removeAll()
-        log(l10n.tf("log.dupScan", paths.count))
-        Task {
-            var stdinData = Data()
-            for path in paths {
-                stdinData.append(contentsOf: Array(path.utf8))
-                stdinData.append(0)
-            }
-            let result = await MoleEngine.shared.runBridgeWithStdin(
-                "bin/app_dup_scan.sh", stdinData: stdinData,
-                extraEnvironment: scanEnvironment, timeout: 1800)
-            isScanningDups = false
-            dupGroups = Parsers.duplicateGroups(result.output)
-            if dupGroups.isEmpty {
-                if result.succeeded { log(l10n.t("analyze.dup.empty")) }
-                else { logFailure(result) }
-            } else {
-                let count = dupGroups.reduce(0) { $0 + $1.count }
-                log(l10n.tf("log.dupFound", dupGroups.count, count))
-            }
-        }
-    }
-
-    func toggleDupSelection(_ entry: AnalyzeEntry) {
-        guard entry.canCleanDirectly else { return }
-        if dupSelection.contains(entry.path) {
-            dupSelection.remove(entry.path)
-        } else {
-            dupSelection.insert(entry.path)
-        }
-    }
-
-    /// 删除勾选的重复副本（经 app_apply.sh 安全管道，废纸篓可恢复）。
-    func deleteDuplicates() {
-        guard !isBusy else { return }
-        let paths = dupSelectedPaths
-        guard !paths.isEmpty else { return }
-        let bytes = dupGroups.flatMap { $0 }
-            .filter { dupSelection.contains($0.path) }
-            .reduce(UInt64(0)) { $0 + $1.size }
-        let deletionPlan = DeletionPlan(paths: paths)
-        confirmation = Confirmation(
-            title: l10n.tf("analyze.confirm.title", paths.count),
-            message: l10n.tf("analyze.confirm.msg", ByteFormat.format(bytes)),
-            confirmLabel: l10n.t("analyze.dupDelete")) { [weak self] in
-                guard let self else { return }
-                self.isApplying = true
-                self.statusText = self.l10n.tf("status.processing", paths.count)
-                self.log(self.l10n.tf("log.pipeline", paths.count, "app_apply.sh"))
-                Task {
-                    let result = await MoleEngine.shared.runBridgeWithStdin(
-                        "bin/app_apply.sh", stdinData: deletionPlan.stdinData, timeout: 900)
-                    self.isApplying = false
-                    if !result.output.isEmpty { self.log(result.output) }
-                    self.logFailure(result, stdoutAlreadyLogged: true)
-                    let summary = Parsers.applySummary(result.output)
-                    self.statusText = (result.succeeded && summary.failed == 0)
-                        ? self.l10n.tf("status.cleanupDone", summary.removed)
-                        : self.l10n.tf("status.cleanupPartial", summary.removed, summary.failed)
-                    self.dupGroups = []
-                    self.dupSelection.removeAll()
-                }
-            }
+        showDuplicateFiles = true
     }
 
     /// 返回上级目录（根目录不再上跳）。

@@ -5,6 +5,7 @@ TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-scan-build.XXXXXX")"
 FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/.cleanup-scan-fixture.XXXXXX")"
 trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 swiftc -O -target "$(uname -m)-apple-macos13.0" \
+    -module-cache-path "$TEST_DIR/module-cache" \
     -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \

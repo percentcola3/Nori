@@ -5,11 +5,18 @@ import SwiftUI
 struct DevEnvTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .center) {
-                Spacer()
+            // 状态文本与工具栏共用一行：状态居左，操作按钮靠右。
+            HStack(alignment: .center, spacing: 8) {
+                Text(state.devEnvStatus)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 12)
                 Menu {
                     Button {
                         state.showSimulatorDevices = true
@@ -40,35 +47,27 @@ struct DevEnvTabView: View {
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .labelStyle(.iconOnly)
-                .help(l10n.t("devenv.manageCli"))
                 .disabled(state.isBusy)
             }
             .padding(.horizontal, 16)
             .padding(.top, 14)
-            .padding(.bottom, 6)
+            .padding(.bottom, 8)
             .sheet(isPresented: $state.showSimulatorDevices) {
                 SimulatorDevicesView(store: state.simulatorInventory,
                                      canMutate: !state.isBusy)
             }
-
-            HStack(spacing: 6) {
-                Text(state.devEnvStatus)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
             .sheet(isPresented: $state.showDockerDetails) {
                 DockerDetailsView(store: state.dockerInventory)
             }
 
             if state.isScanningEnv {
                 NoriScanActivity(text: state.devEnvStatus, assetName: "nori-typing")
+                    .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else if state.devEnvEntries.isEmpty && state.gcActions.isEmpty {
                 EmptyStateView(symbol: "cpu",
                                title: state.isScanningEnv ? l10n.t("devenv.status.scanning") : l10n.t("devenv.status.empty"),
                                subtitle: state.isScanningEnv ? nil : l10n.t("devenv.empty.subtitle"))
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
@@ -196,7 +195,6 @@ struct DevEnvTabView: View {
                                             .buttonStyle(SecondaryButtonStyle())
                                             .controlSize(.small)
                                             .labelStyle(.iconOnly)
-                                            .help(l10n.t("audit.open"))
                                         }
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 6)
@@ -237,7 +235,6 @@ struct DevEnvTabView: View {
                                                 .buttonStyle(SecondaryButtonStyle())
                                                 .controlSize(.small)
                                                 .labelStyle(.iconOnly)
-                                                .help(l10n.t("audit.fixProxy"))
                                             }
                                         }
                                         .padding(.horizontal, 12)
@@ -266,7 +263,6 @@ struct DevEnvTabView: View {
                                             .buttonStyle(SecondaryButtonStyle())
                                             .controlSize(.small)
                                             .labelStyle(.iconOnly)
-                                            .help(l10n.t("audit.open"))
                                         }
                                         .padding(.horizontal, 12)
                                         .padding(.vertical, 6)
@@ -320,13 +316,14 @@ struct DevEnvTabView: View {
                     }
                     .buttonStyle(PrimaryButtonStyle())
                     .labelStyle(.iconOnly)
-                    .help(l10n.t("devenv.apply"))
                     .disabled(state.devEnvSelection.isEmpty || state.isBusy)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
             }
         }
+        // 扫描中 → 环境列表/空态 的整块互换走弹簧过渡。
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isScanningEnv)
     }
 
     private var nodePackageGcActions: [GcAction] {
@@ -421,7 +418,6 @@ private struct GcActionRowView: View {
                     .controlSize(.small)
                     .disabled(anyRunning)
                     .labelStyle(.iconOnly)
-                    .help(l10n.t("gc.run"))
             }
         }
         .padding(.horizontal, 12)
@@ -485,7 +481,6 @@ private struct DevEnvRowView: View {
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(.quaternary))
-                        .help(entry.relatedPath ?? "")
                 }
                 SizeBadge(text: ByteFormat.format(entry.bytes), prominent: isSelected)
             }
@@ -585,7 +580,6 @@ struct WhitelistSheet: View {
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .labelStyle(.iconOnly)
-                .help(l10n.t("wl.add"))
                 .disabled(!newPath.trimmingCharacters(in: .whitespaces).hasPrefix("/"))
             }
             .padding(16)

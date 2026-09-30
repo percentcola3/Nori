@@ -144,13 +144,11 @@ private struct SlimCandidateRow: View {
             }
             .buttonStyle(MoleSelectableRowButtonStyle(isSelected: isSelected, verticalPadding: 5))
             .disabled(disabled || !candidate.eligible)
-            .help(candidate.eligible ? candidate.path : l10n.t("slim.readonly.help"))
 
             Button(action: onReveal) {
                 Image(systemName: "folder")
             }
             .buttonStyle(MoleIconButtonStyle(isActive: false, tint: .secondary, size: 24))
-            .help(l10n.t("common.reveal"))
         }
     }
 

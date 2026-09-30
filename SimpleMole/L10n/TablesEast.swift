@@ -16,11 +16,6 @@ extension L10nTables {
         "header.language": "語言",
         "language.auto": "自動（跟隨系統）",
 
-        "metric.cleanable": "可清理",
-        "metric.memory": "記憶體",
-        "metric.disk": "磁碟剩餘",
-        "metric.network": "網路",
-        "metric.pending": "待掃描",
 
         "common.more": "更多",
         "common.cancel": "取消",
@@ -246,11 +241,6 @@ extension L10nTables {
         "header.language": "言語",
         "language.auto": "自動（システムに従う）",
 
-        "metric.cleanable": "削除可能",
-        "metric.memory": "メモリ",
-        "metric.disk": "空きディスク",
-        "metric.network": "ネットワーク",
-        "metric.pending": "未スキャン",
 
         "common.more": "その他",
         "common.cancel": "キャンセル",

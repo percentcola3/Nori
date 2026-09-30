@@ -16,11 +16,6 @@ extension L10nTables {
         "header.language": "Idioma",
         "language.auto": "Automático (según el sistema)",
 
-        "metric.cleanable": "Limpiable",
-        "metric.memory": "Memoria",
-        "metric.disk": "Disco libre",
-        "metric.network": "Red",
-        "metric.pending": "Sin escanear",
 
         "common.more": "Más",
         "common.cancel": "Cancelar",
@@ -245,11 +240,6 @@ extension L10nTables {
         "header.language": "Idioma",
         "language.auto": "Automático (seguir o sistema)",
 
-        "metric.cleanable": "Limpável",
-        "metric.memory": "Memória",
-        "metric.disk": "Disco livre",
-        "metric.network": "Rede",
-        "metric.pending": "Não escaneado",
 
         "common.more": "Mais",
         "common.cancel": "Cancelar",
@@ -474,11 +464,6 @@ extension L10nTables {
         "header.language": "Lingua",
         "language.auto": "Automatico (segui il sistema)",
 
-        "metric.cleanable": "Ripulibile",
-        "metric.memory": "Memoria",
-        "metric.disk": "Disco libero",
-        "metric.network": "Rete",
-        "metric.pending": "Non scansionato",
 
         "common.more": "Altro",
         "common.cancel": "Annulla",
@@ -703,11 +688,6 @@ extension L10nTables {
         "header.language": "Язык",
         "language.auto": "Автоматически (как в системе)",
 
-        "metric.cleanable": "Можно очистить",
-        "metric.memory": "Память",
-        "metric.disk": "Свободно на диске",
-        "metric.network": "Сеть",
-        "metric.pending": "Без сканирования",
 
         "common.more": "Ещё",
         "common.cancel": "Отмена",
@@ -932,11 +912,6 @@ extension L10nTables {
         "header.language": "Dil",
         "language.auto": "Otomatik (sisteme göre)",
 
-        "metric.cleanable": "Temizlenebilir",
-        "metric.memory": "Bellek",
-        "metric.disk": "Boş disk",
-        "metric.network": "Ağ",
-        "metric.pending": "Taranmadı",
 
         "common.more": "Daha fazla",
         "common.cancel": "İptal",

@@ -76,7 +76,6 @@ struct ClipboardHistoryTabView: View {
                 }
                 .controlSize(.small)
                 .fixedSize()
-                .help(l10n.t("settings.clipboard.capacity"))
 
                 Button {
                     manager.clearUnpinned()
@@ -186,7 +185,6 @@ private struct ClipboardHistoryCard: View {
                 .buttonStyle(ClipboardIconButtonStyle(
                     tint: entry.isPinned ? Color.moleAccentText : Color.secondary
                 ))
-                .help(l10n.t(entry.isPinned ? "clip.unpin" : "clip.pin"))
             }
 
             content
@@ -211,7 +209,6 @@ private struct ClipboardHistoryCard: View {
                     Image(systemName: "trash")
                 }
                 .buttonStyle(ClipboardIconButtonStyle(tint: .secondary))
-                .help(l10n.t("clip.delete"))
             }
         }
         .padding(12)

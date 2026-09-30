@@ -113,7 +113,6 @@ struct AutoCleanupIntentSheet: View {
                     .foregroundStyle(.tertiary)
             }
             .buttonStyle(.plain)
-            .help(l10n.t("auto.close"))
         }
     }
 
@@ -134,7 +133,6 @@ struct AutoCleanupIntentSheet: View {
                     .labelsHidden()
                     .fixedSize()
             }
-            .help(l10n.t("auto.sizeLimit.help"))
         } else {
             HStack(spacing: 4) {
                 TextField(l10n.t("auto.retention.input"), value: $retentionDays,
@@ -150,7 +148,6 @@ struct AutoCleanupIntentSheet: View {
                     .labelsHidden()
                     .fixedSize()
             }
-            .help(l10n.t("auto.retention.help"))
         }
     }
 

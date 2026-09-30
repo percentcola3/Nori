@@ -18,11 +18,6 @@ enum L10nTables {
         "language.auto": "Auto (follow system)",
 
         // 指标卡
-        "metric.cleanable": "Cleanable",
-        "metric.memory": "Memory",
-        "metric.disk": "Disk Free",
-        "metric.network": "Network",
-        "metric.pending": "Not scanned",
 
         // 通用
         "common.more": "More",
@@ -330,11 +325,6 @@ enum L10nTables {
         "header.language": "语言",
         "language.auto": "自动（跟随系统）",
 
-        "metric.cleanable": "可清理",
-        "metric.memory": "内存",
-        "metric.disk": "磁盘剩余",
-        "metric.network": "网络",
-        "metric.pending": "待扫描",
 
         "common.more": "更多",
         "common.cancel": "取消",

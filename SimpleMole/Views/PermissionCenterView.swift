@@ -131,7 +131,6 @@ struct PermissionCenterView: View {
             }
             .buttonStyle(.plain)
             .background(Circle().fill(Color.surface2))
-            .help(l10n.t("common.close"))
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
@@ -160,9 +159,6 @@ struct PermissionCenterView: View {
             .buttonStyle(PrimaryButtonStyle())
             .disabled(isWaitingForDiskAccess)
             .opacity(isWaitingForDiskAccess ? 0.50 : 1)
-            .help(isWaitingForDiskAccess
-                  ? l10n.t("permissions.continue.requiresDiskAccess")
-                  : "")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
@@ -536,7 +532,6 @@ private struct ConditionalDragModifier: ViewModifier {
             content
                 .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .onDrag(provider)
-                .help(help ?? "")
         } else {
             content
         }

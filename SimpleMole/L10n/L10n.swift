@@ -167,7 +167,10 @@ final class L10n: ObservableObject {
         let withOptimize = withAgents.merging(L10nOptimizeTables.table(for: language)) {
             _, featureValue in featureValue
         }
-        return withOptimize.merging(L10nMediaTables.table(for: language)) {
+        let withMedia = withOptimize.merging(L10nMediaTables.table(for: language)) {
+            _, featureValue in featureValue
+        }
+        return withMedia.merging(L10nDuplicatesTables.table(for: language)) {
             _, featureValue in featureValue
         }
     }

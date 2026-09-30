@@ -24,12 +24,20 @@ enum MoleMotion {
 }
 
 extension AnyTransition {
-    /// 普通行内区块的轻量揭示；独立弹窗使用 LiquidPresentation 的原生玻璃过渡。
+    /// 行内展开由父容器插值高度，内容只淡入淡出。
+    /// 避免向上平移时穿过标题；父容器需裁剪收缩期间的淡出内容。
     static var molePanelReveal: AnyTransition {
-        let reveal = AnyTransition.opacity
-            .combined(with: .move(edge: .top))
-            .combined(with: .scale(scale: 0.985, anchor: .top))
-        return .asymmetric(insertion: reveal, removal: reveal)
+        .opacity
+    }
+
+    /// 页面级状态互换（扫描中 ↔ 结果/空态）：进场内容轻微上浮淡入，
+    /// 离场仅淡出。行程刻意小于 tab 切换，两层动效不叠加。
+    /// 需配合根视图的 `.animation(MoleMotion.panel, value: 驱动状态)` 生效。
+    static var moleStateSwap: AnyTransition {
+        .asymmetric(
+            insertion: .opacity.combined(with: .offset(y: 10)),
+            removal: .opacity
+        )
     }
 
 }
@@ -134,14 +142,19 @@ struct SecondaryButtonStyle: ButtonStyle {
 }
 
 struct DangerButtonStyle: ButtonStyle {
+    /// 覆盖默认的 danger 着色，供非红色但同样需要警示表面的入口（如标题栏退出）。
+    var tint: Color? = nil
+
+    private var base: Color { tint ?? Color.danger }
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(Color.danger)
+            .foregroundStyle(base)
             .padding(.horizontal, 10)
             .frame(height: 24)
-            .background(Capsule().fill(Color.danger.opacity(configuration.isPressed ? 0.10 : 0.06)))
-            .overlay(Capsule().strokeBorder(Color.danger.opacity(0.35), lineWidth: 1))
+            .background(Capsule().fill(base.opacity(configuration.isPressed ? 0.10 : 0.06)))
+            .overlay(Capsule().strokeBorder(base.opacity(0.35), lineWidth: 1))
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
     }
 }
@@ -596,102 +609,6 @@ private struct GooeySelectionSurface: View, Animatable {
             abs(lhs.midY - rhs.midY) < 0.5 &&
             abs(lhs.width - rhs.width) < 0.5 &&
             abs(lhs.height - rhs.height) < 0.5
-    }
-}
-
-// MARK: - 紧凑指标条（两行式：标签行 + 数值行，清晰且省纵向空间）
-
-struct MetricBar: View {
-    struct Item {
-        let title: String
-        let symbol: String
-        let value: String
-        var progress: Double?
-        var sparkline: [Double]?
-    }
-
-    let items: [Item]
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(items.indices, id: \.self) { index in
-                CompactMetricItem(item: items[index])
-                if index < items.count - 1 {
-                    Divider().frame(height: 28)
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 56)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
-    }
-}
-
-private struct CompactMetricItem: View {
-    let item: MetricBar.Item
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 5) {
-                Image(systemName: item.symbol)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.moleAccentText)
-                Text(item.title)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                if let sparkline = item.sparkline, !sparkline.isEmpty {
-                    Sparkline(data: sparkline)
-                        .frame(width: 42, height: 12)
-                } else if let progress = item.progress {
-                    ProgressBar(value: progress)
-                        .frame(width: 42, height: 4)
-                }
-            }
-            Text(item.value)
-                .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .minimumScaleFactor(0.75)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 6)
-    }
-}
-
-struct ProgressBar: View {
-    let value: Double
-
-    var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
-                Capsule()
-                    .fill(Color.moleAccent)
-                    .frame(width: max(4, proxy.size.width * min(1, max(0, value))))
-            }
-        }
-    }
-}
-
-struct Sparkline: View {
-    let data: [Double]
-
-    var body: some View {
-        GeometryReader { proxy in
-            let maxValue = max(data.max() ?? 1, 0.001)
-            Path { path in
-                for (index, sample) in data.enumerated() {
-                    let x = proxy.size.width * CGFloat(index) / CGFloat(max(1, data.count - 1))
-                    let y = proxy.size.height * (1 - CGFloat(sample / maxValue) * 0.9)
-                    if index == 0 { path.move(to: CGPoint(x: x, y: y)) }
-                    else { path.addLine(to: CGPoint(x: x, y: y)) }
-                }
-            }
-            .stroke(Color.moleAccent, style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
-        }
     }
 }
 

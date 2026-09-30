@@ -5,6 +5,7 @@ import SwiftUI
 struct ProcessesTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded: Set<Int32> = []
 
     var body: some View {
@@ -80,7 +81,6 @@ struct ProcessesTabView: View {
                 .pickerStyle(.menu)
                 .labelsHidden()
                 .frame(width: 112)
-                .help(l10n.t("proc.sort"))
             }
             Spacer()
             Toggle(l10n.t("proc.advanced"), isOn: $state.advancedProcesses)
@@ -191,7 +191,6 @@ struct ProcessesTabView: View {
                 ProcessSparkline(values: state.processCPUHistory(group.id),
                                  tint: group.totalCPU >= 50 ? Color.warning : Color.accent)
                     .frame(width: 64, height: 20)
-                    .help(l10n.t("proc.trend"))
                 ProcessMetric(label: "CPU",
                               value: String(format: "%.1f%%", group.totalCPU),
                               isElevated: group.totalCPU >= 50)
@@ -233,10 +232,11 @@ struct ProcessesTabView: View {
                 .padding(.vertical, 4)
             }
         }
+        .clipped()
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.hairline, lineWidth: 1)
             .allowsHitTesting(false))
-        .animation(MoleMotion.panel, value: isExpanded)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: isExpanded)
     }
 
     private func feedbackKey(_ feedback: AppState.ProcessQuitFeedback) -> String {
@@ -263,7 +263,6 @@ struct ProcessesTabView: View {
         }
         .buttonStyle(SecondaryButtonStyle(tint: needsForce ? .danger : .accentText))
         .disabled(waiting)
-        .help(l10n.t(needsForce ? "proc.force.message" : "proc.quit.help"))
     }
 
     private func childRow(_ child: ProcessRow) -> some View {

@@ -458,9 +458,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return right.minX - left.maxX + 8
     }
 
+    /// 展开内容的顶部避让高度：刘海屏必须包住硬件刘海（islandSafeTop），
+    /// 无刘海屏没有实际遮挡，只保留一个手柄高度的顶部空间。
+    private var islandExpandedTopInset: CGFloat {
+        islandHardwareNotch ? islandSafeTop : IslandLayout.nonNotchExpandedTopInset
+    }
+
     private var islandWindowSize: NSSize {
         NSSize(width: max(IslandLayout.panelWidth, islandCollapsedWidth) + IslandLayout.windowMargin * 2,
-               height: ceil(islandSafeTop) + IslandLayout.metricsHeight
+               height: ceil(islandExpandedTopInset) + IslandLayout.metricsHeight
                    + IslandLayout.detailBudget + IslandLayout.windowMargin)
     }
 

@@ -5,12 +5,22 @@ import SwiftUI
 struct OptimizeTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 10) {
-                Spacer()
+                if !state.isOptimizing && !state.optimizeHasPreview {
+                    // 未扫描时提示与按钮共用一行，省出独立提示行。
+                    Text(l10n.t("optimize.empty.hint"))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: 320, alignment: .leading)
+                }
+                Spacer(minLength: 10)
                 Button {
                     state.requestScanAccess(.optimize)
                 } label: {
@@ -25,15 +35,6 @@ struct OptimizeTabView: View {
             .padding(.top, 14)
             .padding(.bottom, 8)
 
-            if !state.isOptimizing && !state.optimizeHasPreview {
-                Text(l10n.t("optimize.empty.hint"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-            }
-
             if state.isOptimizing {
                 VStack(spacing: 12) {
                     NoriStatusAnimation(mood: .working, size: 156, assetName: "nori-typing")
@@ -43,6 +44,7 @@ struct OptimizeTabView: View {
                     ProgressView().controlSize(.small)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 8) {
@@ -53,6 +55,7 @@ struct OptimizeTabView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
                 }
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
 
                 if state.optimizeHasPreview {
                     Divider()
@@ -60,6 +63,8 @@ struct OptimizeTabView: View {
                 }
             }
         }
+        // 体检中 → 任务列表 的整块互换走弹簧过渡。
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isOptimizing)
     }
 
     /// 需要处理的排前面，其次需留意，再是无需处理/不可用；同档保持目录顺序。
@@ -187,7 +192,6 @@ struct OptimizeTabView: View {
             }
             .buttonStyle(SecondaryButtonStyle())
             .labelStyle(.iconOnly)
-            .help(l10n.t("optimize.clearSelection"))
             .disabled(state.isBusy)
             Spacer()
             Button { state.applySelectedOptimize() } label: {

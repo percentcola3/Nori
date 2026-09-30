@@ -329,6 +329,22 @@ struct CleanupScanTests {
         expect(fm.fileExists(atPath: realParent.appendingPathComponent("target/file").path),
                "the real target behind the symlinked parent must survive")
 
+        // 内容相关删除必须在运行态探测后仍可否决，不能绕过最后一道校验。
+        let finalGuardFile = home.appendingPathComponent("Downloads/final-guard.txt")
+        try fm.createDirectory(at: finalGuardFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("reviewed duplicate".utf8).write(to: finalGuardFile)
+        let finalGuardPlan = DeletionPlan(paths: [finalGuardFile.path])
+        var finalGuardCalled = false
+        let guardedSummary = NativeCore.shared.applyCleanup(
+            items: finalGuardPlan.items, permanent: false, homeDirectory: home.path,
+            finalValidation: { path in
+                finalGuardCalled = path == finalGuardFile.path
+                return false
+            })
+        expect(finalGuardCalled && guardedSummary.removed == 0 && guardedSummary.skipped == 1,
+               "final content validation must be called and prevent Trash")
+        expect(fm.fileExists(atPath: finalGuardFile.path), "final-validation rejection must preserve the file")
+
         print(String(format: "PASS: catalog, grouping, deep scan, exclusions, cancellation, partial sizes, hardlinks, pipe output, 7-day gate, custom locations, lexical guards, secure fd-walk deletion; 10000 files in %.3fs", benchmark.elapsed))
         print(quick.diagnostics)
         print(deep.diagnostics)

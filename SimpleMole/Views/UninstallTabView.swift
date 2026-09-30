@@ -19,12 +19,16 @@ struct UninstallTabView: View {
     var body: some View {
         VStack(spacing: 0) {
             toolbar
-            searchField
             statusRow
             content
         }
         .animation(reduceMotion ? nil : MoleMotion.panel,
                    value: state.uninstallQueue.jobs)
+        // 扫描中 → 应用列表/空态/无匹配 的整块互换走弹簧过渡。
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: isListPresented)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isScanningApps)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.installedApps.isEmpty)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.filteredApps.isEmpty)
         .task(id: isActive) {
             guard isActive else {
                 isListPresented = false
@@ -42,9 +46,10 @@ struct UninstallTabView: View {
         }
     }
 
+    /// 搜索与扫描共用一行：搜索框占满剩余宽度，扫描按钮固定在行尾。
     private var toolbar: some View {
-        HStack {
-            Spacer()
+        HStack(spacing: 8) {
+            searchField
             Button { state.scanInstalledApps() } label: {
                 Label(state.isScanningApps
                       ? l10n.t("common.scanning")
@@ -81,8 +86,6 @@ struct UninstallTabView: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
         .overlay(RoundedRectangle(cornerRadius: 8)
             .strokeBorder(.separator.opacity(0.4), lineWidth: 1))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 6)
     }
 
     // One status line follows the current operation; no separate task list.
@@ -118,7 +121,6 @@ struct UninstallTabView: View {
                         Image(systemName: "info.circle")
                     }
                     .buttonStyle(MoleIconButtonStyle(size: 22))
-                    .help(l10n.t("uninstall.resultDetails"))
                     .accessibilityLabel(l10n.t("uninstall.resultDetails"))
                     .popover(isPresented: $showsResultDetails) {
                         ScrollView {
@@ -158,8 +160,10 @@ struct UninstallTabView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transition(reduceMotion ? .opacity : .moleStateSwap)
         } else if state.isScanningApps && state.installedApps.isEmpty {
             NoriScanActivity(text: state.appListStatus)
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
         } else if state.installedApps.isEmpty {
             EmptyStateView(
                 symbol: "app.dashed",
@@ -167,10 +171,12 @@ struct UninstallTabView: View {
                     ? l10n.t("uninstall.status.scanning")
                     : l10n.t("uninstall.status.none"),
                 subtitle: state.isScanningApps ? nil : l10n.t("uninstall.empty.subtitle"))
+            .transition(reduceMotion ? .opacity : .moleStateSwap)
         } else if state.filteredApps.isEmpty {
             EmptyStateView(symbol: "magnifyingglass",
                            title: l10n.t("uninstall.noMatch.title"),
                            subtitle: l10n.t("uninstall.noMatch.subtitle"))
+            .transition(reduceMotion ? .opacity : .moleStateSwap)
         } else {
             ScrollView {
                 LazyVStack(spacing: 7) {
@@ -187,6 +193,7 @@ struct UninstallTabView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)
             }
+            .transition(reduceMotion ? .opacity : .moleStateSwap)
         }
     }
 }
@@ -234,7 +241,6 @@ private struct UninstallAppRow: View {
                             }
                             .buttonStyle(MoleIconButtonStyle(size: 20))
                             .accessibilityLabel(L10n.shared.t("uninstall.queue.cancel"))
-                            .help(L10n.shared.t("uninstall.queue.cancel"))
                         }
                     }
                 } else {
@@ -258,6 +264,7 @@ private struct UninstallAppRow: View {
                     .transition(.molePanelReveal)
             }
         }
+        .clipped()
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
         .overlay(RoundedRectangle(cornerRadius: 10)
             .strokeBorder(.separator.opacity(0.35), lineWidth: 1))
@@ -319,7 +326,6 @@ private struct UninstallAppRow: View {
         .buttonStyle(MoleIconButtonStyle(isActive: isExpanded, size: 24))
         .disabled(plan == nil)
         .opacity(plan == nil ? 0.25 : 1)
-        .help(app.name)
     }
 }
 
@@ -339,7 +345,6 @@ private struct UninstallJobStateLabel: View {
         }
         .font(.system(size: 9, weight: .medium))
         .foregroundStyle(stateColor)
-        .help(job.message ?? "")
     }
 
     @ViewBuilder
