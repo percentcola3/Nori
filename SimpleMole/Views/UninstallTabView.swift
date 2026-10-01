@@ -137,9 +137,11 @@ struct UninstallTabView: View {
                 if state.isScanningApps && !state.installedApps.isEmpty {
                     NoriStatusAnimation(mood: .working, size: 64)
                 }
-                Text(state.appListStatus)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                if !state.appListStatus.isEmpty {
+                    Text(state.appListStatus)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 0)
         }
@@ -153,16 +155,10 @@ struct UninstallTabView: View {
         if !isListPresented || state.isRestoringInstalledApps
             || (!state.installedApps.isEmpty && state.filteredApps.isEmpty
                 && state.uninstallSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
-            VStack(spacing: 10) {
-                ProgressView().controlSize(.small)
-                Text(l10n.t("uninstall.loading"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .transition(reduceMotion ? .opacity : .moleStateSwap)
+            NoriScanActivity(text: l10n.t("uninstall.loading"), quiet: true)
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
         } else if state.isScanningApps && state.installedApps.isEmpty {
-            NoriScanActivity(text: state.appListStatus)
+            NoriScanActivity(text: state.appListStatus, quiet: true)
                 .transition(reduceMotion ? .opacity : .moleStateSwap)
         } else if state.installedApps.isEmpty {
             EmptyStateView(

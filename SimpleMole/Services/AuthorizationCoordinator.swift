@@ -9,15 +9,12 @@ enum ProtectedOperation: Codable, Equatable {
     case cleanupScan(force: Bool)
     case deepCleanupScan
     case quickOptimize
-    case optimize
     case developerToolsScan
     case aiScan
     case installedAppsScan
     case uninstall(app: UninstallApp)
     case developmentEnvironmentScan
     case diskOverview(force: Bool)
-    case diskAnalyze(path: String?)
-    case duplicateScan
     case previewAutoCleanup(ruleID: UUID)
     case runAutoCleanup(ruleID: UUID)
 }

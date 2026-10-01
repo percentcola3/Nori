@@ -1,25 +1,19 @@
 import AppKit
 import SwiftUI
 
-/// Agent 专清：按工具分组呈现可清理空间、Skills 与 MCP 配置体检。
-/// 与磁盘清理完全独立；勾选项直接永久删除，MCP 配置只读。
+/// Agent 专清：每个 Agent 一个分组，空间类目、Skills 与 MCP 服务器都挂在其下。
+/// 与磁盘清理完全独立；勾选项直接永久删除，MCP 改写前自动备份配置。
 struct AgentsTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var section = 0
     @State private var collapsed: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
             if state.agentScanning || state.agentApplying {
                 header
-                VStack(spacing: 12) {
-                    NoriStatusAnimation(mood: .working, size: 156)
-                    Text(state.agentStatus).font(.system(size: 12))
-                    ProgressView().controlSize(.small)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                NoriScanActivity(text: state.agentStatus, quiet: true)
                 .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else if !state.agentHasScanned {
                 header
@@ -27,37 +21,16 @@ struct AgentsTabView: View {
                 .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
                 if showsAgentNotice { statusRow }
-                // 分区胶囊与重扫按钮共用一行，省出独立工具栏。
-                HStack(alignment: .center, spacing: 10) {
-                    PillPicker(items: [l10n.t("agents.section.space"),
-                                       l10n.tf("agents.section.skills", state.agentSkills.count),
-                                       l10n.tf("agents.section.mcp", state.agentServers.count)],
-                               selection: $section)
-                    Spacer()
-                    scanButton
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 6)
-                switch section {
-                case 1: skillsList
-                    .transition(reduceMotion ? .opacity : .moleStateSwap)
-                case 2: mcpList
-                    .transition(reduceMotion ? .opacity : .moleStateSwap)
-                default: spaceList
-                    .transition(reduceMotion ? .opacity : .moleStateSwap)
-                }
-                if section != 2 {
-                    Divider()
-                    actions
-                }
+                header
+                agentList
+                Divider()
+                actions
             }
         }
-        // 扫描中 → 结果/空态、分区列表切换走弹簧过渡。
+        // 扫描中 → 结果/空态的整块互换走弹簧过渡。
         .animation(reduceMotion ? nil : MoleMotion.panel, value: state.agentScanning)
         .animation(reduceMotion ? nil : MoleMotion.panel, value: state.agentApplying)
         .animation(reduceMotion ? nil : MoleMotion.panel, value: state.agentHasScanned)
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: section)
     }
 
     // MARK: 头部
@@ -117,9 +90,9 @@ struct AgentsTabView: View {
         .padding(.bottom, 6)
     }
 
-    // MARK: 空间
+    // MARK: 统一分组列表
 
-    private var spaceList: some View {
+    private var agentList: some View {
         Group {
             if state.agentGroups.isEmpty {
                 Text(l10n.t("agents.status.empty"))
@@ -129,6 +102,10 @@ struct AgentsTabView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 10) {
+                        Label(l10n.t("agents.mcp.editable"), systemImage: "lock.open")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         ForEach(state.agentGroups) { group in
                             VStack(spacing: 8) {
                                 groupHeader(group)
@@ -138,6 +115,22 @@ struct AgentsTabView: View {
                                             if let index = state.agentCategories.firstIndex(where: { $0.id == id }) {
                                                 CategoryRowView(category: $state.agentCategories[index],
                                                                 selectionEnabled: !state.isBusy)
+                                            }
+                                        }
+                                        let groupSkills = skills(in: group)
+                                        if !groupSkills.isEmpty {
+                                            subsectionHeader(l10n.t("agents.subsection.skills"),
+                                                             count: groupSkills.count)
+                                            ForEach(groupSkills) { skill in
+                                                skillRow(skill)
+                                            }
+                                        }
+                                        let groupServers = servers(in: group)
+                                        if !groupServers.isEmpty {
+                                            subsectionHeader(l10n.t("agents.subsection.mcp"),
+                                                             count: groupServers.count)
+                                            ForEach(groupServers) { server in
+                                                serverRow(server)
                                             }
                                         }
                                     }
@@ -156,6 +149,29 @@ struct AgentsTabView: View {
         .frame(maxHeight: .infinity)
     }
 
+    private func skills(in group: AgentGroupSummary) -> [AgentSkill] {
+        state.agentSkills.filter { $0.agentID == group.id }
+    }
+
+    private func servers(in group: AgentGroupSummary) -> [AgentMCPServer] {
+        state.agentServers.filter { $0.agentID == group.id }
+    }
+
+    /// 组内小节标题（Skills / MCP），与全局分区标题同一套样式。
+    private func subsectionHeader(_ title: String, count: Int) -> some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text("\(count)")
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 4)
+        .padding(.top, 2)
+    }
+
     private func groupHeader(_ group: AgentGroupSummary) -> some View {
         Button {
             withAnimation(reduceMotion ? nil : MoleMotion.panel) {
@@ -168,21 +184,22 @@ struct AgentsTabView: View {
                     .foregroundStyle(Color.moleAccentText)
                     .frame(width: 22, height: 22)
                     .background(Circle().fill(Color.accent.opacity(0.14)))
-                Text(group.name)
+                Text(group.id == "shared" ? l10n.t("agents.group.shared") : group.name)
                     .font(.system(size: 12, weight: .semibold))
                 if !group.documented {
-                    Text(l10n.t("agents.badge.showOnly"))
+                    Text(l10n.t(group.orphaned ? "agents.badge.leftover" : "agents.badge.showOnly"))
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(group.orphaned ? Color.warning : .secondary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.surface3))
+                        .background(Capsule().fill(group.orphaned
+                            ? Color.warning.opacity(0.12) : Color.surface3))
                 }
                 Spacer(minLength: 8)
                 Text(reclaimableText(group))
                     .font(.system(size: 10).monospacedDigit())
                     .foregroundStyle(.secondary)
-                Text(ByteFormat.format(group.bytes))
+                Text(ByteFormat.format(groupTotalBytes(group)))
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Color.moleAccentText)
                 Image(systemName: "chevron.down")
@@ -204,58 +221,20 @@ struct AgentsTabView: View {
         .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
     }
 
+    /// 可回收 = 空间类目可选部分 + 本组未链接的 Skills；总占用再叠加 Skills 体积。
     private func reclaimableText(_ group: AgentGroupSummary) -> String {
         let categories = state.agentCategories.filter { group.categoryIDs.contains($0.id) }
         let reclaimable = categories.filter(\.canSelect).reduce(UInt64(0)) { $0 &+ $1.bytes }
+            &+ skills(in: group).filter { !$0.linked && !$0.identity.isEmpty }
+                .reduce(UInt64(0)) { $0 &+ $1.bytes }
         return l10n.tf("agents.group.reclaimable", ByteFormat.format(reclaimable))
     }
 
-    // MARK: Skills
-
-    private var skillsList: some View {
-        let directories = Dictionary(grouping: state.agentSkills, by: \.directory)
-        let order = state.agentSkills.map(\.directory).reduce(into: [String]()) {
-            if !$0.contains($1) { $0.append($1) }
-        }
-        return Group {
-            if state.agentSkills.isEmpty {
-                Text(l10n.t("agents.skills.empty"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        Label(l10n.t("agents.skills.hint"), systemImage: "info.circle")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                        ForEach(order, id: \.self) { directory in
-                            let skills = directories[directory] ?? []
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(spacing: 6) {
-                                    Text(abbreviate(directory))
-                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                    Text(skills.first?.usedBy.isEmpty == false
-                                         ? skills.first!.usedBy.joined(separator: " · ")
-                                         : l10n.t("agents.skills.shared"))
-                                        .font(.system(size: 10))
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                    Text("\(skills.count)")
-                                        .font(.system(size: 10).monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                }
-                                ForEach(skills) { skill in skillRow(skill) }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-        .frame(maxHeight: .infinity)
+    private func groupTotalBytes(_ group: AgentGroupSummary) -> UInt64 {
+        group.bytes &+ skills(in: group).reduce(UInt64(0)) { $0 &+ $1.bytes }
     }
+
+    // MARK: Skills
 
     private func skillRow(_ skill: AgentSkill) -> some View {
         HStack(alignment: .top, spacing: 8) {
@@ -308,89 +287,65 @@ struct AgentsTabView: View {
 
     // MARK: MCP
 
-    private var mcpList: some View {
-        let byAgent = Dictionary(grouping: state.agentServers, by: \.agentName)
-        let order = state.agentServers.map(\.agentName).reduce(into: [String]()) {
-            if !$0.contains($1) { $0.append($1) }
-        }
-        let issues = state.agentServers.reduce(0) { $0 + $1.issues.count }
-        return Group {
-            if state.agentServers.isEmpty {
-                Text(l10n.t("agents.mcp.empty"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 10) {
-                        Label(issues > 0 ? l10n.tf("agents.mcp.issueCount", issues) : l10n.t("agents.mcp.healthy"),
-                              systemImage: issues > 0 ? "exclamationmark.triangle.fill" : "checkmark.shield.fill")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(issues > 0 ? Color.warning : Color.success)
-                        Label(l10n.t("agents.mcp.readOnly"), systemImage: "lock.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                        ForEach(order, id: \.self) { agent in
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(agent).font(.system(size: 11, weight: .semibold))
-                                ForEach(byAgent[agent] ?? []) { server in serverRow(server) }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-        .frame(maxHeight: .infinity)
-    }
-
     private func serverRow(_ server: AgentMCPServer) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Image(systemName: server.remote ? "globe" : "terminal")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                Text(server.name).font(.system(size: 12, weight: .medium))
-                if server.disabled {
-                    Text(l10n.t("agents.mcp.disabled"))
-                        .font(.system(size: 9, weight: .semibold))
+        let selected = state.agentSelectedServers.contains(server.id)
+        let uneditable = server.issues.contains(.unreadableConfig)
+        return HStack(alignment: .top, spacing: 8) {
+            Toggle("", isOn: Binding(
+                get: { selected },
+                set: { _ in state.toggleAgentServer(server) }))
+                .toggleStyle(.checkbox)
+                .controlSize(.mini)
+                .labelsHidden()
+                .fixedSize()
+                .disabled(uneditable || state.isBusy)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Image(systemName: server.remote ? "globe" : "terminal")
+                        .font(.system(size: 10))
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.surface3))
+                    Text(server.name).font(.system(size: 12, weight: .medium))
+                    if server.disabled {
+                        Text(l10n.t("agents.mcp.disabled"))
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.surface3))
+                    }
+                    if let scope = server.scope {
+                        Text(abbreviate(scope))
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer()
+                    Button {
+                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: server.configPath)])
+                    } label: {
+                        Image(systemName: "folder").font(.system(size: 10))
+                    }
+                    .buttonStyle(MoleIconButtonStyle(size: 20))
                 }
-                if let scope = server.scope {
-                    Text(abbreviate(scope))
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                if !server.endpoint.isEmpty {
+                    Text(server.endpoint)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
-                Spacer()
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: server.configPath)])
-                } label: {
-                    Image(systemName: "folder").font(.system(size: 10))
+                ForEach(Array(server.issues.enumerated()), id: \.offset) { _, issue in
+                    Label(issueText(issue), systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.warning)
                 }
-                .buttonStyle(MoleIconButtonStyle(size: 20))
-            }
-            if !server.endpoint.isEmpty {
-                Text(server.endpoint)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            ForEach(Array(server.issues.enumerated()), id: \.offset) { _, issue in
-                Label(issueText(issue), systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.warning)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
+        .background(RoundedRectangle(cornerRadius: 9).fill(
+            selected ? Color.moleAccent.opacity(0.085) : Color.surface2))
     }
 
     private func issueText(_ issue: AgentMCPServer.Issue) -> String {

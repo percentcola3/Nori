@@ -252,6 +252,54 @@ enum AutoCleanupPlannerTests {
                    && !migratedLegacy[0].isRegenerable
                    && !migratedLegacy[0].isSafetyAuthorized,
                    "legacy inode-only authorization remained enabled")
+
+        // —— 版本升级继承：安全版本过期的规则保持未确认（不可执行），
+        // 但存储中的授权数据必须原样保留，且中途保存不销毁。 ——
+        func persistedEntry(_ rule: AutoCleanupRule) throws -> [String: Any] {
+            let array = try JSONSerialization.jsonObject(
+                with: JSONEncoder().encode([rule])) as? [[String: Any]] ?? []
+            guard let first = array.first else {
+                throw PlannerTestFailure(message: "rule was not encoded for persistence")
+            }
+            return first
+        }
+
+        var upgradedEntry = try persistedEntry(retentionRule)
+        upgradedEntry["safetyVersion"] = 3
+        upgradedEntry["authorizedRootIdentity"] = "1:2:3"
+        upgradedEntry["isEnabled"] = true
+        defaults.set(try JSONSerialization.data(withJSONObject: [upgradedEntry]),
+                     forKey: AutoCleanupRuleStore.storageKey)
+        let upgraded = AutoCleanupRuleStore.load(from: defaults)
+        try expect(upgraded.count == 1 && !upgraded[0].isRegenerable && !upgraded[0].isEnabled
+                   && !upgraded[0].isSafetyAuthorized,
+                   "stale safety version stayed executable after an upgrade")
+        try expect(upgraded[0].safetyVersion == 3 && upgraded[0].authorizedRootIdentity == "1:2:3",
+                   "upgrade decode destroyed the stored authorization data")
+        AutoCleanupRuleStore.save(upgraded, to: defaults)
+        let repersisted = AutoCleanupRuleStore.load(from: defaults)
+        try expect(repersisted.count == 1 && repersisted[0].safetyVersion == 3
+                   && repersisted[0].authorizedRootIdentity == "1:2:3",
+                   "saving an upgraded rule destroyed its stored authorization data")
+
+        // —— 部分损坏：一条规则字段坏了，其余规则仍要能加载。 ——
+        var brokenEntry = try persistedEntry(exactRule)
+        brokenEntry["sizeLimitBytes"] = "not-a-number"
+        defaults.set(try JSONSerialization.data(
+            withJSONObject: [try persistedEntry(retentionRule), brokenEntry]),
+            forKey: AutoCleanupRuleStore.storageKey)
+        let salvaged = AutoCleanupRuleStore.load(from: defaults)
+        try expect(salvaged.count == 1 && salvaged[0].directory == retentionRule.directory,
+                   "one corrupted rule discarded the whole persisted set")
+
+        // —— 整体损坏：覆盖前必须留下原始快照，便于恢复。 ——
+        let corruptedBlob = Data("definitely not json".utf8)
+        defaults.set(corruptedBlob, forKey: AutoCleanupRuleStore.storageKey)
+        AutoCleanupRuleStore.save([retentionRule], to: defaults)
+        try expect(defaults.data(forKey: AutoCleanupRuleStore.backupKey) == corruptedBlob,
+                   "overwriting an undecodable store kept no backup snapshot")
+        try expect(AutoCleanupRuleStore.load(from: defaults) == [retentionRule],
+                   "save after corruption did not restore a readable store")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool,

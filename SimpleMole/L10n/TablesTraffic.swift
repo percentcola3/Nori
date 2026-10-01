@@ -3,7 +3,7 @@ import Foundation
 /// 流量监控面板的独立语言表；未翻译语言自动回退英文。
 enum L10nTrafficTables {
     static let en: [String: String] = [
-        "tab.traffic": "Traffic Monitor",
+        "tab.traffic": "Traffic",
         "netmon.status.sampling": "Sampling…",
         "netmon.status.lastSample": "Last sample %@",
         "netmon.status.bytesUnavailable": "App sampling is unavailable; app byte totals paused",
@@ -37,7 +37,7 @@ enum L10nTrafficTables {
     ]
 
     static let zhHans: [String: String] = [
-        "tab.traffic": "流量监控",
+        "tab.traffic": "流量",
         "netmon.status.sampling": "采样中…",
         "netmon.status.lastSample": "最近采样 %@",
         "netmon.status.bytesUnavailable": "App 采样不可用，App 字节统计暂停",
@@ -71,7 +71,7 @@ enum L10nTrafficTables {
     ]
 
     static let zhHant: [String: String] = [
-        "tab.traffic": "流量監控",
+        "tab.traffic": "流量",
         "netmon.status.sampling": "取樣中…",
         "netmon.status.lastSample": "最近取樣 %@",
         "netmon.status.bytesUnavailable": "App 取樣無法使用，App 位元組統計暫停",

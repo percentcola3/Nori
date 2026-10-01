@@ -1,6 +1,8 @@
 import SwiftUI
+import Carbon.HIToolbox
+import os
 
-// MARK: - 设置面板（语言 + 灵动岛 + 工具 + 功能页显隐）
+// MARK: - 设置面板（通用 + 灵动岛 + 工具 + 功能页显隐）
 
 /// 设置分区卡：小节标题浮在卡片上方，卡内各行之间用细分隔线呼吸。
 private struct SettingsSection<Content: View>: View {
@@ -67,9 +69,7 @@ struct SettingsTabView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 pagesSection
-                languageSection
-                startupSection
-                screenshotSection
+                generalSection
                 islandSection
                 maintenanceSection
                 SettingsSection(title: l10n.t("permissions.title")) {
@@ -90,16 +90,32 @@ struct SettingsTabView: View {
         }
     }
 
-    // MARK: 启动与退出
+    // MARK: 通用（语言 + 启动 + 截图快捷键）
 
-    private var startupSection: some View {
-        SettingsSection(title: l10n.t("settings.startup")) {
-            SettingsRow {
+    private var generalSection: some View {
+        SettingsSection(title: l10n.t("settings.general")) {
+            SettingsRow(divider: true) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Text(l10n.t("header.language"))
+                            .font(.system(size: 12))
+                        Spacer()
+                        languagePickerButton
+                    }
+                    if languageExpanded {
+                        languageGrid
+                    }
+                }
+            }
+
+            SettingsRow(divider: true) {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle(l10n.t("settings.launchAtLogin"), isOn: Binding(
                         get: { loginItem.isRequested },
                         set: { enabled in Task { await loginItem.setEnabled(enabled) } }))
-                        .toggleStyle(.checkbox)
+                        .toggleStyle(MoleSwitchToggleStyle())
+                        .controlSize(.small)
+                        .tint(Color.moleAccentText)
                         .font(.system(size: 12))
                         .disabled(loginItem.isUpdating)
 
@@ -125,70 +141,65 @@ struct SettingsTabView: View {
                     }
                 }
             }
+
+            screenshotRow
         }
     }
 
-    // MARK: 语言
+    private var languagePickerButton: some View {
+        Button {
+            if reduceMotion { languageExpanded.toggle() }
+            else { withAnimation(MoleMotion.panel) { languageExpanded.toggle() } }
+        } label: {
+            HStack {
+                Text(L10n.shared.language.displayName)
+                    .font(.system(size: 12))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(languageExpanded ? 180 : 0))
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 27)
+            .background(Capsule().fill(.quinary))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
 
-    private var languageSection: some View {
-        SettingsSection(title: l10n.t("header.language")) {
-            SettingsRow(divider: languageExpanded) {
+    private var languageGrid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 6)], spacing: 6) {
+            ForEach(AppLanguage.allCases) { language in
                 Button {
-                    if reduceMotion { languageExpanded.toggle() }
-                    else { withAnimation(MoleMotion.panel) { languageExpanded.toggle() } }
+                    L10n.shared.setLanguage(language)
+                    if reduceMotion { languageExpanded = false }
+                    else { withAnimation(MoleMotion.panel) { languageExpanded = false } }
                 } label: {
-                    HStack {
-                        Text(L10n.shared.language.displayName)
-                            .font(.system(size: 12))
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(languageExpanded ? 180 : 0))
+                    HStack(spacing: 6) {
+                        Text(language.displayName)
+                            .lineLimit(1)
+                        Spacer(minLength: 2)
+                        Image(systemName: "checkmark")
+                            .opacity(L10n.shared.language == language ? 1 : 0)
                     }
-                    .padding(.horizontal, 10)
-                    .frame(height: 27)
-                    .background(Capsule().fill(.quinary))
-                    .contentShape(Capsule())
+                    .font(.system(size: 10, weight: L10n.shared.language == language ? .semibold : .regular))
+                    .padding(.horizontal, 8)
+                    .frame(height: 26)
+                    .background(RoundedRectangle(cornerRadius: 8)
+                        .fill(L10n.shared.language == language
+                              ? Color.moleAccent.opacity(0.15) : Color.surface2))
+                    .overlay(RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(L10n.shared.language == language
+                                      ? Color.moleAccentText.opacity(0.30) : Color.hairline,
+                                      lineWidth: 1))
+                    .contentShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
             }
-
-            if languageExpanded {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 6)], spacing: 6) {
-                    ForEach(AppLanguage.allCases) { language in
-                        Button {
-                            L10n.shared.setLanguage(language)
-                            if reduceMotion { languageExpanded = false }
-                            else { withAnimation(MoleMotion.panel) { languageExpanded = false } }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Text(language.displayName)
-                                    .lineLimit(1)
-                                Spacer(minLength: 2)
-                                Image(systemName: "checkmark")
-                                    .opacity(L10n.shared.language == language ? 1 : 0)
-                            }
-                            .font(.system(size: 10, weight: L10n.shared.language == language ? .semibold : .regular))
-                            .padding(.horizontal, 8)
-                            .frame(height: 26)
-                            .background(RoundedRectangle(cornerRadius: 8)
-                                .fill(L10n.shared.language == language
-                                      ? Color.moleAccent.opacity(0.15) : Color.surface2))
-                            .overlay(RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(L10n.shared.language == language
-                                              ? Color.moleAccentText.opacity(0.30) : Color.hairline,
-                                              lineWidth: 1))
-                            .contentShape(RoundedRectangle(cornerRadius: 8))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.top, 10)
-                .padding(.bottom, 5)
-                .transition(.molePanelReveal)
-            }
         }
+        .padding(.top, 10)
+        .padding(.bottom, 2)
+        .transition(.molePanelReveal)
     }
 
     // MARK: 灵动岛
@@ -208,13 +219,11 @@ struct SettingsTabView: View {
                     Text(l10n.t("settings.island.edge"))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
-                    Picker(l10n.t("settings.island.edge"), selection: islandEdgeBinding) {
+                    HStack(spacing: 6) {
                         ForEach(AppState.IslandEdge.allCases) { edge in
-                            Text(l10n.t(edge.labelKey)).tag(edge)
+                            edgeChip(edge)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
                 }
             }
 
@@ -277,23 +286,94 @@ struct SettingsTabView: View {
 
     // MARK: 截图
 
-    private var screenshotSection: some View {
-        SettingsSection(title: "") {
-            SettingsRow(divider: state.screenshotHotKeyRegistrationFailed) {
-                Toggle(l10n.t("shot.hotkey"), isOn: $state.screenshotHotKeyEnabled)
-                    .toggleStyle(MoleSwitchToggleStyle())
-                    .controlSize(.small)
-                    .tint(Color.moleAccentText)
-                    .font(.system(size: 12))
-            }
-            if state.screenshotHotKeyRegistrationFailed {
-                SettingsRow(vertical: 6) {
-                    Label(l10n.t("settings.screenshot.conflict"), systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Color.warning)
-                }
+    @State private var hotKeyRecording = false
+    @State private var hotKeyMonitor: Any?
+    @State private var hotKeyNeedsModifierHint = false
+
+    @ViewBuilder
+    private var screenshotRow: some View {
+        SettingsRow(divider: state.screenshotHotKeyRegistrationFailed
+                    || state.screenshotHotKeyEnabled) {
+            Toggle(l10n.t("shot.hotkey"), isOn: $state.screenshotHotKeyEnabled)
+                .toggleStyle(MoleSwitchToggleStyle())
+                .controlSize(.small)
+                .tint(Color.moleAccentText)
+                .font(.system(size: 12))
+        }
+        if state.screenshotHotKeyEnabled {
+            SettingsRow(divider: state.screenshotHotKeyRegistrationFailed, vertical: 6) {
+                hotKeyRecorder
             }
         }
+        if state.screenshotHotKeyRegistrationFailed {
+            SettingsRow(vertical: 6) {
+                Label(l10n.t("settings.screenshot.conflict"), systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Color.warning)
+            }
+        }
+    }
+
+    /// 快捷键录制：点按钮进入监听，按下新组合立即生效；Esc 取消。
+    /// 仅 ⇧ 或无修饰键的组合会被拒绝（全局热键会在打字时误触发）。
+    private var hotKeyRecorder: some View {
+        HStack(spacing: 8) {
+            Text(l10n.t("settings.screenshot.hotkey"))
+                .font(.system(size: 12))
+            if hotKeyNeedsModifierHint && hotKeyRecording {
+                Text(l10n.t("settings.screenshot.hotkey.needModifier"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.warning)
+            }
+            Spacer()
+            if state.screenshotHotKey != HotKeyCombo.default {
+                Button(l10n.t("settings.screenshot.hotkey.reset")) {
+                    state.screenshotHotKey = .default
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(hotKeyRecording || state.isBusy)
+            }
+            Button {
+                hotKeyRecording ? stopHotKeyRecording() : startHotKeyRecording()
+            } label: {
+                Text(hotKeyRecording
+                     ? l10n.t("settings.screenshot.hotkey.recording")
+                     : state.screenshotHotKey.displayLabel)
+                    .frame(minWidth: 86)
+            }
+            .buttonStyle(SecondaryButtonStyle(
+                tint: hotKeyRecording ? Color.moleAccentText : nil))
+            .disabled(state.isBusy)
+        }
+        .onDisappear { stopHotKeyRecording() }
+    }
+
+    private func startHotKeyRecording() {
+        guard hotKeyMonitor == nil else { return }
+        hotKeyRecording = true
+        hotKeyNeedsModifierHint = false
+        hotKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == UInt16(kVK_Escape) {
+                stopHotKeyRecording()
+                return nil
+            }
+            let combo = HotKeyCombo(keyCode: UInt32(event.keyCode),
+                                    modifierFlags: event.modifierFlags)
+            guard combo.hasStrongModifier else {
+                hotKeyNeedsModifierHint = true
+                return nil
+            }
+            state.screenshotHotKey = combo
+            stopHotKeyRecording()
+            return nil
+        }
+    }
+
+    private func stopHotKeyRecording() {
+        if let hotKeyMonitor { NSEvent.removeMonitor(hotKeyMonitor) }
+        hotKeyMonitor = nil
+        hotKeyRecording = false
+        hotKeyNeedsModifierHint = false
     }
 
     // MARK: 目录清理与定时清理
@@ -412,9 +492,16 @@ struct SettingsTabView: View {
         .accessibilityAddTraits(state.clipboardHistoryEnabled ? .isSelected : [])
     }
 
-    private var islandEdgeBinding: Binding<AppState.IslandEdge> {
-        Binding(get: { state.islandEdge },
-                set: { state.setIslandEdge($0) })
+    /// 浮动位置单选胶囊：与功能页/岛上内容标签同一套视觉。
+    private func edgeChip(_ edge: AppState.IslandEdge) -> some View {
+        let isSelected = state.islandEdge == edge
+        return Button {
+            state.setIslandEdge(edge)
+        } label: {
+            chipLabel(l10n.t(edge.labelKey), isActive: isSelected)
+        }
+        .buttonStyle(MolePlainButtonStyle())
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var menuBarIconBinding: Binding<Bool> {

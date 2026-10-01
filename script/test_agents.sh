@@ -22,6 +22,7 @@ swiftc -O -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentInventory.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentMCPConfigEditor.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCleanupExecutor.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
     "$ROOT_DIR/script/AgentCatalogTests.swift" \

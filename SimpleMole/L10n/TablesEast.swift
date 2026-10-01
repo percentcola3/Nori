@@ -5,12 +5,11 @@ import Foundation
 extension L10nTables {
     static let zhHant: [String: String] = [
         "window.title": "Nori",
-        "tab.cleanup": "硬碟清理",
-        "tab.uninstall": "應用解除安裝",
-        "tab.optimize": "Optimize",
-        "tab.devenv": "開發環境",
-        "tab.processes": "程序清理",
-        "tab.ports": "連接埠清理",
+        "tab.cleanup": "清理",
+        "tab.uninstall": "軟體",
+        "tab.devenv": "Dev環境",
+        "tab.processes": "程序",
+        "tab.ports": "連接埠",
         "tab.images": "圖片瘦身",
         "header.whitelist": "白名單",
         "header.language": "語言",
@@ -28,7 +27,6 @@ extension L10nTables {
 
 
         "cleanup.cancelScan": "取消掃描",
-        "cleanup.empty.subtitle": "點擊「開始掃描」查看可清理項目\n完成後這裡會顯示快取、日誌、安裝包等結果分組",
         "cleanup.apply.busy": "正在處理…",
         "cleanup.morePaths": "… 以及另外 %d 個路徑",
         "cleanup.selectNone": "請先選擇至少一個分類",
@@ -38,7 +36,6 @@ extension L10nTables {
         "uninstall.status.none": "尚未掃描應用",
         "uninstall.status.scanning": "正在掃描已安裝應用…",
         "uninstall.status.empty": "未發現可解除安裝的應用",
-        "uninstall.status.count": "共 %d 個應用",
         "uninstall.noMatch.title": "沒有符合的應用",
         "uninstall.noMatch.subtitle": "換個關鍵字試試",
         "uninstall.empty.subtitle": "點擊「掃描應用」查看可解除安裝清單",
@@ -50,11 +47,9 @@ extension L10nTables {
         "file.app": "應用本體",
         "file.installer": "安裝包檔案",
 
-        "devenv.manageCli": "管理 CLI 工具",
         "devenv.status.none": "未識別到版本管理器或執行環境",
         "devenv.status.scanning": "正在識別開發環境…",
         "devenv.status.empty": "尚未掃描開發環境",
-        "devenv.status.summary": "%d 個執行時版本 · %d 個工具/套件管理器",
         "devenv.empty.subtitle": "點擊「重新掃描」識別已安裝的執行環境與工具",
         "devenv.tools": "工具與套件管理器",
         "devenv.tools.hint": "工具及版本管理器託管的版本僅供檢視；請使用對應管理器移除版本。",
@@ -77,7 +72,6 @@ extension L10nTables {
         "proc.status.reading": "正在讀取活動程序…",
         "proc.status.none": "沒有發現可管理的使用者程序",
         "proc.status.systemHint": "系統常駐程序不會出現在這裡",
-        "proc.status.pids": "%d 個程序 · 進階 PID 模式",
         "proc.kill": "結束",
         "proc.detail.app": "應用級管理 · PID %d",
         "proc.confirm.killPid.title": "結束這個 PID？",
@@ -86,7 +80,6 @@ extension L10nTables {
         "proc.confirm.quit.title": "結束 %@？",
 
         "ports.status.reading": "正在讀取監聽連接埠…",
-        "ports.status.count": "%d 個監聽連接埠",
         "ports.status.none": "沒有發現 TCP 監聽連接埠",
         "ports.close": "關閉",
         "ports.row": "連接埠 %@ · %@",
@@ -139,10 +132,7 @@ extension L10nTables {
         "log.wlSaved": "白名單已儲存（%d 條）。下次掃描與清理將立即生效。",
         "log.wlInvalid": "白名單僅接受不含 .. 的絕對路徑：%@",
 
-        "confirm.apply.title": "確認處理 %d 個項目？",
         "confirm.apply.trash.ok": "移入垃圾桶",
-        "confirm.apply.tools.msg": "將呼叫對應的 npm、pnpm、brew、cargo、dotnet 或 pipx 解除安裝命令。",
-        "confirm.apply.tools.ok": "執行套件管理器解除安裝",
         "confirm.env.title": "清理 %d 個開發環境版本？",
         "confirm.env.msg": "選中的 %d 個執行時/工具鏈版本（%@）會移入垃圾桶（可恢復）。使用中的版本不會被清理。需要時可透過對應版本管理器重新安裝。",
 
@@ -156,18 +146,10 @@ extension L10nTables {
         "proc.unknown": "未知程序",
     
     
-        "tab.analyze": "磁碟分析",
+        "tab.analyze": "分析",
         "analyze.scan": "分析",
+        "analyze.start": "開始分析",
         "analyze.scanning": "正在分析…大目錄可能需要一點時間",
-        "analyze.pick": "選擇資料夾",
-        "analyze.up": "返回上級",
-        "analyze.status.empty": "尚未分析",
-        "analyze.status.summary": "共 %d 項 · 總計 %@",
-        "analyze.selected": "已選 %d 項 · %@",
-        "analyze.apply": "刪除所選",
-        "analyze.confirm.title": "刪除 %d 個項目？",
-        "analyze.confirm.msg": "將移入垃圾桶（%@，可復原）。Mole 會執行路徑保護與白名單校驗，系統關鍵路徑自動跳過。",
-        "analyze.empty.subtitle": "選擇一個目錄或用快捷入口開始分析",
     
         "gc.title": "官方清理命令",
         "gc.subtitle": "執行各套件管理器內建的清理命令，不做任何直接刪除",
@@ -214,7 +196,7 @@ extension L10nTables {
         "clip.title": "剪貼簿歷史",
         "clip.empty": "還沒有剪貼簿記錄",
         "shot.title": "截圖編輯",
-        "shot.hotkey": "截圖快速鍵（⌘⌃A）",
+        "shot.hotkey": "截圖快速鍵",
         "shot.save": "儲存",
         "shot.saved": "已儲存 ✓",
         "shot.undo": "還原",
@@ -230,10 +212,9 @@ extension L10nTables {
 
     static let ja: [String: String] = [
         "window.title": "Nori",
-        "tab.cleanup": "ディスククリーンアップ",
-        "tab.uninstall": "アプリ削除",
-        "tab.optimize": "Optimize",
-        "tab.devenv": "開発環境",
+        "tab.cleanup": "クリーンアップ",
+        "tab.uninstall": "アプリ",
+        "tab.devenv": "Dev環境",
         "tab.processes": "プロセス",
         "tab.ports": "ポート",
         "tab.images": "画像スリム化",
@@ -252,7 +233,6 @@ extension L10nTables {
 
 
         "cleanup.cancelScan": "スキャンを中止",
-        "cleanup.empty.subtitle": "「スキャン開始」でクリーン可能項目を確認\nキャッシュ・ログ・インストーラなどが分類表示されます",
         "cleanup.apply.busy": "処理中…",
         "cleanup.morePaths": "… 他 %d 件のパス",
         "cleanup.selectNone": "先にカテゴリを1つ以上選択してください",
@@ -262,7 +242,6 @@ extension L10nTables {
         "uninstall.status.none": "アプリ未スキャン",
         "uninstall.status.scanning": "インストール済みアプリをスキャン中…",
         "uninstall.status.empty": "削除可能なアプリが見つかりません",
-        "uninstall.status.count": "%d 個のアプリ",
         "uninstall.noMatch.title": "一致するアプリなし",
         "uninstall.noMatch.subtitle": "別のキーワードをお試しください",
         "uninstall.empty.subtitle": "「アプリをスキャン」で削除可能なリストを表示",
@@ -274,11 +253,9 @@ extension L10nTables {
         "file.app": "アプリ本体",
         "file.installer": "インストーラファイル",
 
-        "devenv.manageCli": "CLI ツールを管理",
         "devenv.status.none": "バージョン管理ツールやランタイムが見つかりません",
         "devenv.status.scanning": "開発環境を検出中…",
         "devenv.status.empty": "開発環境は未スキャン",
-        "devenv.status.summary": "ランタイム %d バージョン · ツール/パッケージマネージャ %d 件",
         "devenv.empty.subtitle": "「再スキャン」でインストール済みのランタイムとツールを検出",
         "devenv.tools": "ツールとパッケージマネージャ",
         "devenv.tools.hint": "ツールとバージョン管理下のバージョンは表示のみです。削除は各管理ツールで行ってください。",
@@ -301,7 +278,6 @@ extension L10nTables {
         "proc.status.reading": "アクティブプロセスを読み込み中…",
         "proc.status.none": "管理可能なユーザープロセスがありません",
         "proc.status.systemHint": "システムデーモンはここに表示されません",
-        "proc.status.pids": "%d 件の PID · 詳細 PID モード",
         "proc.kill": "終了",
         "proc.detail.app": "アプリ単位の管理 · PID %d",
         "proc.confirm.killPid.title": "この PID を終了しますか？",
@@ -310,7 +286,6 @@ extension L10nTables {
         "proc.confirm.quit.title": "%@ を終了しますか？",
 
         "ports.status.reading": "リッスンポートを読み込み中…",
-        "ports.status.count": "リッスンポート %d 件",
         "ports.status.none": "TCP リッスンポートが見つかりません",
         "ports.close": "閉じる",
         "ports.row": "ポート %@ · %@",
@@ -363,10 +338,7 @@ extension L10nTables {
         "log.wlSaved": "ホワイトリストを保存しました（%d 件）。次回のスキャンとクリーンアップから有効になります。",
         "log.wlInvalid": "ホワイトリストは .. を含まない絶対パスのみ受け付けます：%@",
 
-        "confirm.apply.title": "%d 項目を処理しますか？",
         "confirm.apply.trash.ok": "ゴミ箱へ移動",
-        "confirm.apply.tools.msg": "対応する npm / pnpm / brew / cargo / dotnet / pipx のアンインストールコマンドを実行します。",
-        "confirm.apply.tools.ok": "パッケージアンインストールを実行",
         "confirm.env.title": "%d 件の開発環境バージョンをクリーンアップしますか？",
         "confirm.env.msg": "選択した %d 件のランタイム/ツールチェーンバージョン（%@）はゴミ箱へ移動します（復元可能）。使用中のバージョンはクリーンアップされません。必要に応じてバージョン管理ツールで再インストールできます。",
 
@@ -382,16 +354,8 @@ extension L10nTables {
     
         "tab.analyze": "ディスク分析",
         "analyze.scan": "分析",
+        "analyze.start": "分析を開始",
         "analyze.scanning": "分析中…大きなフォルダには時間がかかります",
-        "analyze.pick": "フォルダを選択",
-        "analyze.up": "上へ",
-        "analyze.status.empty": "未分析",
-        "analyze.status.summary": "%d 項目 · 合計 %@",
-        "analyze.selected": "%d 件選択 · %@",
-        "analyze.apply": "選択を削除",
-        "analyze.confirm.title": "%d 件を削除しますか？",
-        "analyze.confirm.msg": "%@ をゴミ箱へ移動します（復元可能）。Mole がパス保護とホワイトリストを検証し、システムの重要パスは自動スキップします。",
-        "analyze.empty.subtitle": "フォルダを選ぶかクイックリンクから始めます",
     
         "gc.title": "公式クリーンアップコマンド",
         "gc.subtitle": "各パッケージマネージャ独自のクリーンアップコマンドを実行。直接削除は行いません",
@@ -438,7 +402,7 @@ extension L10nTables {
         "clip.title": "クリップボード履歴",
         "clip.empty": "クリップボードの記録はまだありません",
         "shot.title": "スクリーンショット編集",
-        "shot.hotkey": "スクリーンショットのホットキー（⌘⌃A）",
+        "shot.hotkey": "スクリーンショットのホットキー",
         "shot.save": "保存",
         "shot.saved": "保存済み ✓",
         "shot.undo": "取り消す",

@@ -2,122 +2,26 @@ import SwiftUI
 import AppKit
 import QuickLookThumbnailing
 
-/// 磁盘分析的视图切换：目录浏览 / 大文件 / 图片 / 视频。
-struct AnalyzeModePicker: View {
-    @ObservedObject var state: AppState
-    @ObservedObject private var l10n = L10n.shared
-
-    var body: some View {
-        PillPicker(items: AnalyzeMode.allCases.map(title), selection: Binding(
-            get: { AnalyzeMode.allCases.firstIndex(of: state.analyzeMode) ?? 0 },
-            set: { state.setAnalyzeMode(AnalyzeMode.allCases[$0]) }))
-    }
-
-    private func title(_ mode: AnalyzeMode) -> String {
-        let summary = state.analyzeMediaSummary
-        switch mode {
-        case .directories: return l10n.t("analyze.mode.directories")
-        case .largeFiles: return l10n.tf("analyze.mode.largeFiles", state.analyzeLargeFiles.count)
-        case .images: return l10n.tf("analyze.mode.images", summary.imageCount)
-        case .videos: return l10n.tf("analyze.mode.videos", summary.videoCount)
-        }
-    }
-}
-
-/// 聚合清单：缩略图 + 名称 + 所在目录 + 大小；只有用户自管位置的文件可勾选。
-struct SlimCandidateListView: View {
-    @ObservedObject var state: AppState
-    @ObservedObject private var l10n = L10n.shared
-
-    var body: some View {
-        let candidates = state.slimCandidates
-        if candidates.isEmpty {
-            EmptyStateView(symbol: emptySymbol,
-                           title: l10n.t("slim.empty.title"),
-                           subtitle: l10n.t(emptySubtitleKey))
-        } else {
-            VStack(spacing: 0) {
-                HStack(spacing: 6) {
-                    Text(headline)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                    Spacer()
-                    if candidates.contains(where: \.eligible) {
-                        Button(l10n.t("slim.selectAll")) { state.selectAllSlimCandidates() }
-                            .buttonStyle(SecondaryButtonStyle())
-                            .controlSize(.small)
-                            .disabled(state.isBusy)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 6)
-                ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(candidates) { candidate in
-                            SlimCandidateRow(candidate: candidate,
-                                             isSelected: state.slimSelection.contains(candidate.path),
-                                             disabled: state.isBusy) {
-                                state.toggleSlimSelection(candidate)
-                            } onReveal: {
-                                state.revealPath(candidate.path)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                }
-            }
-        }
-    }
-
-    private var headline: String {
-        let summary = state.analyzeMediaSummary
-        switch state.analyzeMode {
-        case .images:
-            return l10n.tf("slim.headline.images", summary.imageCount,
-                           ByteFormat.format(summary.imageBytes), MediaSlimPolicy.perKindCap)
-        case .videos:
-            return l10n.tf("slim.headline.videos", summary.videoCount,
-                           ByteFormat.format(summary.videoBytes), MediaSlimPolicy.perKindCap)
-        default:
-            return l10n.t("slim.headline.largeFiles")
-        }
-    }
-
-    private var emptySymbol: String {
-        switch state.analyzeMode {
-        case .images: return "photo.on.rectangle.angled"
-        case .videos: return "film"
-        default: return "doc.zipper"
-        }
-    }
-
-    private var emptySubtitleKey: String {
-        switch state.analyzeMode {
-        case .images: return "slim.empty.images"
-        case .videos: return "slim.empty.videos"
-        default: return "slim.empty.largeFiles"
-        }
-    }
-}
-
-private struct SlimCandidateRow: View {
+/// 聚合清单行：缩略图 + 名称 + 所在目录 + 大小；扫描层已过滤系统位置，全部可勾选。
+struct SlimCandidateRow: View {
     let candidate: SlimCandidate
     let isSelected: Bool
     let disabled: Bool
     let onToggle: () -> Void
     let onReveal: () -> Void
+    /// 为该文件所在目录设置定时清理；目录已被规则管理时为 nil（改为显示标记）。
+    var onAutoClean: (() -> Void)? = nil
+    var autoCleanCovered = false
     @ObservedObject private var l10n = L10n.shared
 
     var body: some View {
         HStack(spacing: 8) {
             Button(action: onToggle) {
                 HStack(spacing: 10) {
-                    Image(systemName: candidate.eligible
-                          ? (isSelected ? "checkmark.circle.fill" : "circle") : "lock.fill")
-                        .font(.system(size: candidate.eligible ? 13 : 10))
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 13))
                         .foregroundStyle(isSelected
-                            ? AnyShapeStyle(Color.moleAccentText) : AnyShapeStyle(.tertiary))
+                            ? AnyShapeStyle(Color.moleAccentText) : AnyShapeStyle(.secondary))
                         .frame(width: 18)
                     MediaThumbnail(path: candidate.path, size: candidate.size, kind: candidate.kind)
                     VStack(alignment: .leading, spacing: 2) {
@@ -132,7 +36,7 @@ private struct SlimCandidateRow: View {
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 6)
-                    Text(l10n.t(candidate.eligible ? operationKey : "slim.readonly"))
+                    Text(l10n.t(operationKey))
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 6)
@@ -143,7 +47,24 @@ private struct SlimCandidateRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(MoleSelectableRowButtonStyle(isSelected: isSelected, verticalPadding: 5))
-            .disabled(disabled || !candidate.eligible)
+            .disabled(disabled)
+
+            if autoCleanCovered {
+                Image(systemName: "clock.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.moleAccentText)
+                    .help(l10n.t("auto.mark.covered"))
+                    .accessibilityLabel(l10n.t("auto.mark.covered"))
+            } else if let onAutoClean {
+                Button(action: onAutoClean) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .buttonStyle(MoleIconButtonStyle(size: 24))
+                .disabled(disabled)
+                .help(l10n.t("auto.entry.create"))
+                .accessibilityLabel(l10n.t("auto.entry.create"))
+            }
 
             Button(action: onReveal) {
                 Image(systemName: "folder")
@@ -167,7 +88,7 @@ private struct SlimCandidateRow: View {
     }
 }
 
-private struct MediaThumbnail: View {
+struct MediaThumbnail: View {
     let path: String
     let size: UInt64
     let kind: MediaKind?

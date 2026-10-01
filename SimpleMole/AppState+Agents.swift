@@ -5,7 +5,8 @@ import Foundation
 @MainActor
 extension AppState {
     var agentSelectedCount: Int {
-        agentCategories.reduce(0) { $0 + $1.selectedPathCount } + agentSelectedSkills.count
+        agentCategories.reduce(0) { $0 + $1.selectedPathCount }
+            + agentSelectedSkills.count + agentSelectedServers.count
     }
 
     var agentSelectedBytes: UInt64 {
@@ -30,6 +31,7 @@ extension AppState {
             agentSkills = report.skills
             agentServers = report.servers
             agentSelectedSkills = []
+            agentSelectedServers = []
             agentScanning = false
             agentHasScanned = true
             agentScanComplete = report.complete
@@ -53,11 +55,13 @@ extension AppState {
             agentCategories[index].selected = agentCategories[index].risk == .safe
         }
         agentSelectedSkills = []
+        agentSelectedServers = []
     }
 
     func clearAgentSelection() {
         for index in agentCategories.indices { agentCategories[index].selected = false }
         agentSelectedSkills = []
+        agentSelectedServers = []
     }
 
     func toggleAgentSkill(_ skill: AgentSkill) {
@@ -66,6 +70,16 @@ extension AppState {
             agentSelectedSkills.remove(skill.path)
         } else {
             agentSelectedSkills.insert(skill.path)
+        }
+    }
+
+    /// 配置不可读的服务器无法安全改写，保持不可勾选。
+    func toggleAgentServer(_ server: AgentMCPServer) {
+        guard !isBusy, !server.issues.contains(.unreadableConfig) else { return }
+        if agentSelectedServers.contains(server.id) {
+            agentSelectedServers.remove(server.id)
+        } else {
+            agentSelectedServers.insert(server.id)
         }
     }
 
@@ -84,31 +98,43 @@ extension AppState {
             category.activityOwners = []
             selected.append(category)
         }
-        let count = selected.reduce(0) { $0 + $1.paths.count }
+        let serverRequests = agentServers
+            .filter { agentSelectedServers.contains($0.id) }
+            .map { AgentMCPConfigEditor.Request(configPath: $0.configPath, format: $0.format,
+                                                serverName: $0.name, scope: $0.scope) }
+        let count = selected.reduce(0) { $0 + $1.paths.count } + serverRequests.count
         guard count > 0 else {
             agentStatus = L10n.shared.t("cleanup.selectNone")
             return
         }
-        performAgentApply(selected)
+        performAgentApply(selected, mcpRequests: serverRequests)
     }
 
-    private func performAgentApply(_ requested: [CleanupCategory]) {
+    private func performAgentApply(_ requested: [CleanupCategory],
+                                   mcpRequests: [AgentMCPConfigEditor.Request]) {
         guard !isBusy else { return }
         agentApplying = true
-        agentStatus = L10n.shared.tf("status.processing", requested.reduce(0) { $0 + $1.paths.count })
+        agentStatus = L10n.shared.tf("status.processing",
+                                     requested.reduce(0) { $0 + $1.paths.count } + mcpRequests.count)
         Task {
             let snapshot = await captureRunningApplicationSnapshot()
             let home = NSHomeDirectory()
             let outcome = await Task.detached(priority: .utility) {
                 AgentCleanupExecutor.execute(requested, running: snapshot, home: home, permanent: true)
             }.value
-            if !outcome.summary.messages.isEmpty {
-                log(outcome.summary.messages.joined(separator: "\n"))
+            // 文件删除完成后才改写 MCP 配置；编辑器自带备份与执行时复核。
+            let mcp = mcpRequests.isEmpty
+                ? AgentMCPConfigEditor.Outcome()
+                : await Task.detached(priority: .utility) { AgentMCPConfigEditor.apply(mcpRequests) }.value
+            var messages = outcome.summary.messages
+            messages.append(contentsOf: mcp.messages)
+            if !messages.isEmpty {
+                log(messages.joined(separator: "\n"))
             }
             agentApplying = false
-            let removed = outcome.summary.removed
-            let skipped = outcome.summary.skipped + outcome.refused
-            let failed = outcome.summary.failed
+            let removed = outcome.summary.removed + mcp.removed
+            let skipped = outcome.summary.skipped + outcome.refused + mcp.missing
+            let failed = outcome.summary.failed + mcp.failed
             agentOutcomeMood = NoriCleanupFeedback.mood(removed: removed, skipped: skipped, failed: failed)
             noteHeaderReaction(NoriHeaderReaction.mood(removed: removed, skipped: skipped, failed: failed))
             let summary = L10n.shared.tf("cleanup.execution.summary", removed, skipped, failed)

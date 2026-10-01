@@ -39,18 +39,22 @@ struct NoriStatusAnimation: View {
 }
 
 /// A single centered mascot replaces the empty inventory while a scan runs.
+/// `quiet` drops the caption and spinner: the animated SVG alone carries the state.
 struct NoriScanActivity: View {
     let text: String
     var assetName: String? = nil
+    var quiet: Bool = false
 
     var body: some View {
         VStack(spacing: 16) {
-            NoriStatusAnimation(mood: .working, size: 156, assetName: assetName)
-            Text(text)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-            ProgressView().controlSize(.small)
+            NoriStatusAnimation(mood: .working, size: quiet ? 168 : 156, assetName: assetName)
+            if !quiet {
+                Text(text)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                ProgressView().controlSize(.small)
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

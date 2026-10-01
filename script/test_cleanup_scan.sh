@@ -9,6 +9,7 @@ swiftc -O -target "$(uname -m)-apple-macos13.0" \
     -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \

@@ -1,4 +1,5 @@
 import Foundation
+import os
 import SwiftUI
 import AppKit
 import Combine
@@ -35,9 +36,10 @@ final class AppState: ObservableObject {
 
     // MARK: 窗口与导航
 
-    /// 功能页标识：设置中可按需隐藏。
+    /// 功能页标识：设置中可按需隐藏。系统优化页已下架（DR-11），其有
+    /// 价值的能力分流到硬盘清理（系统数据库维护）与开发环境（网络/服务修复）。
     enum PageKey: String, CaseIterable, Identifiable {
-        case cleanup, agents, analyze, uninstall, optimize, devenv, processes, ports, traffic, clipboard, settings
+        case cleanup, agents, analyze, uninstall, devenv, processes, ports, traffic, clipboard, settings
         var id: String { rawValue }
         var titleKey: String { self == .settings ? "settings.title" : "tab.\(rawValue)" }
 
@@ -143,6 +145,7 @@ final class AppState: ObservableObject {
     @Published var agentSkills: [AgentSkill] = []
     @Published var agentServers: [AgentMCPServer] = []
     @Published var agentSelectedSkills: Set<String> = []
+    @Published var agentSelectedServers: Set<String> = []
     @Published var agentScanning = false
     @Published var agentApplying = false
     @Published var agentScanComplete = false
@@ -191,11 +194,20 @@ final class AppState: ObservableObject {
     @Published var cleanupQueued = false
     private var pendingCleanup: (() -> Void)?
 
-    // MARK: 系统优化
+    // MARK: 系统维护（原系统优化页能力分流：数据库→清理页，网络/服务→开发环境）
 
-    @Published var optimizeTasks: [NativeCore.OptimizeTask] = NativeCore.shared.initialOptimizeTasks()
-    @Published var isOptimizing = false
-    @Published var optimizeStatus = ""
+    /// 系统数据库维护行（清理页卡片）：SQLite 压缩、通知历史、使用记录、
+    /// 下载隔离历史、窗口保存状态。
+    @Published var systemMaintenanceRows: [SystemMaintenanceRow] = []
+    @Published var isSystemMaintenanceRunning = false
+    @Published var systemMaintenanceStatus = ""
+    /// 开发环境：DNS/网络栈/服务修复与出厂重置的执行状态。
+    @Published var networkToolStatus = ""
+    @Published var isNetworkToolRunning = false
+    /// 开发环境：shell 配置文件体检结果（环境变量清理）。
+    @Published var shellEnvIssues: [ShellEnvIssue] = []
+    @Published var shellEnvAudited = false
+    @Published var isShellEnvFixing = false
 
     // MARK: 日志
 
@@ -275,6 +287,8 @@ final class AppState: ObservableObject {
     @Published var isAutoCleanupScanning = false
     @Published var autoCleanupStatus = ""
     @Published var showAutoCleanupSheet = false
+    /// 每条规则最近一次规划/执行失败的原因，成功后清除；仅存活于当前会话。
+    @Published var autoCleanupRuleIssues: [UUID: String] = [:]
 
     // MARK: 配置体检（Shell rc + 网络配置，只读）
 
@@ -356,14 +370,14 @@ final class AppState: ObservableObject {
 
     // MARK: 磁盘分析
 
-    @Published var analyzePath: String = NSHomeDirectory()
+    /// 固定从根目录全盘扫描；该路径仅用于内部记录，不再对外展示层级。
+    @Published var analyzePath: String = "/"
     @Published var analyzeEntries: [AnalyzeEntry] = []
-    @Published var analyzeSelection: Set<String> = []
     @Published var analyzeTotalSize: UInt64 = 0
     @Published var analyzeLargeFiles: [AnalyzeReport.LargeFile] = []
-    /// 磁盘分析的视图：目录浏览，或按大文件/图片/视频聚合的可瘦身清单。
-    @Published var analyzeMode: AnalyzeMode = .directories
     @Published var analyzeMedia: [MediaFile] = []
+    /// 磁盘分析页当前聚焦的类型；默认整个磁盘（全部子分类一起展示）。
+    @Published var analyzeMode: AnalyzeMode = .overview
     @Published var analyzeMediaSummary = MediaSummary()
     @Published var slimSelection: Set<String> = []
     @Published var slimOptions = SlimOptions()
@@ -372,12 +386,10 @@ final class AppState: ObservableObject {
     @Published var slimProgress: SlimProgress?
     var slimTask: Task<Void, Never>?
     @Published var isAnalyzing = false
-    @Published var analyzeIsOverview = false
-    /// 当前展示的是第一层“快速分析”结果（个人目录 + 既知缓存 + 保存位置）。
     @Published var analyzeStatus: String
     @Published var analyzeCurrentPath = ""
     var analyzeCache = DiskAnalysisCache()
-    private var analyzeHasScanned = false
+    var analyzeHasScanned = false
     private var analyzeScanControl: CleanupScanControl?
 
     // APFS 快照（本地 Time Machine 快照与可清除空间）
@@ -386,9 +398,7 @@ final class AppState: ObservableObject {
     @Published var snapshotsScanned = false
     @Published var isThinning = false
 
-    // 用户指定目录的精确重复文件 / 相似图片。
-    @Published var showDuplicateFiles = false
-    @Published var duplicateRoots: [String] = []
+    // 全盘扫描的重复文件子分类（内容级比对）。
     @Published var duplicateMode: DuplicateMode = .exact
     @Published var duplicateGroups: [DuplicateFileGroup] = []
     @Published var duplicateSelection: Set<String> = []
@@ -399,12 +409,6 @@ final class AppState: ObservableObject {
     @Published var duplicateScanFinished = false
     var duplicateScanControl: DuplicateScanControl?
     var duplicateScannedRoots: [String] = []
-
-    var analyzeSelectedBytes: UInt64 {
-        analyzeEntries.filter {
-            analyzeSelection.contains($0.path) && $0.canCleanDirectly
-        }.reduce(0) { $0 + $1.size }
-    }
 
     // MARK: 白名单
 
@@ -446,17 +450,32 @@ final class AppState: ObservableObject {
     @Published var screenshotHotKeyEnabled: Bool {
         didSet {
             UserDefaults.standard.set(screenshotHotKeyEnabled, forKey: "SMShotHotKey")
-            if screenshotHotKeyEnabled {
-                screenshotHotKeyRegistrationFailed = !HotKeyCenter.shared.register {
-                    NotificationCenter.default.post(name: .smTakeScreenshot, object: nil)
-                }
-            } else {
-                HotKeyCenter.shared.unregister()
-                screenshotHotKeyRegistrationFailed = false
-            }
+            registerScreenshotHotKey()
+        }
+    }
+    /// 截图全局快捷键的组合（默认 ⇧⌘S，可自定义并持久化）。
+    @Published var screenshotHotKey = HotKeyCombo.load() {
+        didSet {
+            guard oldValue != screenshotHotKey else { return }
+            screenshotHotKey.store()
+            registerScreenshotHotKey()
         }
     }
     @Published private(set) var screenshotHotKeyRegistrationFailed = false
+
+    /// 统一的快捷键注册收口：开关与组合变化都走这里。
+    private func registerScreenshotHotKey() {
+        guard screenshotHotKeyEnabled else {
+            HotKeyCenter.shared.unregister()
+            screenshotHotKeyRegistrationFailed = false
+            return
+        }
+        screenshotHotKeyRegistrationFailed = !HotKeyCenter.shared.register(
+            keyCode: screenshotHotKey.keyCode,
+            modifiers: screenshotHotKey.modifiers) {
+            NotificationCenter.default.post(name: .smTakeScreenshot, object: nil)
+        }
+    }
 
     // MARK: 权限中心
 
@@ -568,17 +587,16 @@ final class AppState: ObservableObject {
         defer { activeProtectedOperation = nil }
         switch operation {
         case .cleanupScan(let force): scanCleanup(force: force)
-        case .deepCleanupScan: scanCleanup(force: true, mode: .deep)
-        case .quickOptimize: quickOptimize()
-        case .optimize: runOptimize()
+        // 深度/快速两个入口已合并：无论从哪个旧入口恢复，都走统一的
+        // “快速 + 自动深度补扫”流程。
+        case .deepCleanupScan: startCleanupScan()
+        case .quickOptimize: startCleanupScan()
         case .developerToolsScan: scanDeveloperTools()
         case .aiScan: scanAgents()
         case .installedAppsScan: scanInstalledApps()
         case .uninstall(let app): previewUninstall(app)
         case .developmentEnvironmentScan: scanDevEnv()
         case .diskOverview(let force): scanDiskOverview(force: force)
-        case .diskAnalyze(let path): scanAnalyze(path)
-        case .duplicateScan: scanDuplicates()
         case .previewAutoCleanup(let ruleID): previewAutoCleanup(ruleID)
         case .runAutoCleanup(let ruleID): runAutoCleanupNow(ruleID)
         }
@@ -600,12 +618,14 @@ final class AppState: ObservableObject {
     var isBusyExcludingUninstall: Bool {
         isScanning || isApplying || isSlimming
             || isScanningEnv
-            || isAnalyzing || isThinning || isScanningDuplicates || isDeletingDuplicates
+            || isThinning || isDeletingDuplicates
             || gcRunningId != nil || netFixRunning || isAutoCleanupScanning
-            || isOptimizing
             || agentScanning || agentApplying
             || simulatorInventory.isDeleting
     }
+
+    /// 磁盘分析与重复文件比对是只读遍历，在后台持续执行，不阻塞其他操作
+    /// （各自入口有独立的重入保护：`analyzeHasScanned`/`scanDuplicateFiles`）。
 
     var selectedCount: Int {
         categories.reduce(0) { $0 + $1.selectedPathCount }
@@ -657,9 +677,9 @@ final class AppState: ObservableObject {
         portStatus = L10n.shared.t("ports.status.none")
         appListStatus = L10n.shared.t("uninstall.status.none")
         devEnvStatus = L10n.shared.t("devenv.status.empty")
-        analyzeStatus = L10n.shared.t("analyze.status.empty")
+        // 未扫描时不需要任何状态文案：空态由吉祥物动图与入口按钮表达。
+        analyzeStatus = ""
         autoCleanupStatus = L10n.shared.t("auto.status.ready")
-        optimizeStatus = L10n.shared.t("optimize.status.ready")
         if !islandEnabled && !menuBarIconVisible { setMenuBarIconVisible(true) }
 
         Publishers.CombineLatest3($installedApps, $uninstallPlans, $uninstallSearch)
@@ -678,7 +698,7 @@ final class AppState: ObservableObject {
                     ($0.app.id, $0.plan)
                 }, uniquingKeysWith: { _, latest in latest })
                 self.installedApps = cachedInventory.map(\.app)
-                self.appListStatus = self.l10n.tf("uninstall.status.count", self.installedApps.count)
+                self.appListStatus = ""
             }
             self.isRestoringInstalledApps = false
             self.scheduleUninstallInventoryRefresh(after: cachedInventory.isEmpty ? 0.4 : 2.0)
@@ -694,9 +714,8 @@ final class AppState: ObservableObject {
                     guard let self, self.selectedTab == tab else { return }
                     let pages = self.visiblePages
                     guard tab < pages.count else { return }
-                    // A full-disk traversal must not keep every cleanup action
-                    // disabled after the user leaves the analysis page.
-                    if pages[tab] != .analyze { self.cancelAnalyze() }
+                    // 全盘分析在后台持续执行，离开页面不取消；它也不再计入
+                    // isBusy，避免遍历期间其他页的清理操作一直被禁用。
                     switch pages[tab] {
                     case .cleanup:
                         // Keep the existing result/selection. Scanning starts
@@ -710,16 +729,11 @@ final class AppState: ObservableObject {
                             self.scanAgents()
                         }
                     case .analyze:
-                        self.scanSnapshots()
+                        // 全盘扫描耗时：tab 激活不自动触发，等用户点击“开始分析”。
                         self.permissionCenter.refresh()
-                        if self.permissionCenter.fullDiskAccessGranted {
-                            self.scanUserSpace()
-                        }
                     case .uninstall:
                         // The page's cancellable loading task starts data work
                         // only after the navigation/placeholder has appeared.
-                        break
-                    case .optimize:
                         break
                     case .devenv:
                         self.permissionCenter.refresh()
@@ -752,15 +766,11 @@ final class AppState: ObservableObject {
                 self.portStatus = self.l10n.t("ports.status.none")
                 if !self.isScanningApps {
                     self.appListStatus = self.installedApps.isEmpty
-                        ? self.l10n.t("uninstall.status.none")
-                        : self.l10n.tf("uninstall.status.count", self.installedApps.count)
+                        ? self.l10n.t("uninstall.status.none") : ""
                 }
                 if !self.isScanningEnv { self.devEnvStatus = self.l10n.t("devenv.status.empty") }
                 if !self.isAutoCleanupScanning {
                     self.autoCleanupStatus = self.l10n.t("auto.status.ready")
-                }
-                if !self.isOptimizing {
-                    self.optimizeStatus = self.l10n.t("optimize.status.ready")
                 }
             }
             .store(in: &cancellables)
@@ -789,11 +799,7 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
         // 服务启动放在所有存储属性初始化完成之后。
         if clipboardHistoryEnabled { clipboardManager.start() }
-        if screenshotHotKeyEnabled {
-            screenshotHotKeyRegistrationFailed = !HotKeyCenter.shared.register {
-                NotificationCenter.default.post(name: .smTakeScreenshot, object: nil)
-            }
-        }
+        registerScreenshotHotKey()
         // /Applications is safe to watch at launch. ~/.Trash is registered
         // only after Full Disk Access has been verified for this process.
         startUninstallInventoryMonitoring(includeProtectedPaths: false)
@@ -989,7 +995,8 @@ final class AppState: ObservableObject {
         cleanupProgress.currentPath = l10n.t("cleanup.progress.done")
     }
 
-    func scanCleanup(force: Bool = false, mode: CleanupScanMode = .quick) {
+    func scanCleanup(force: Bool = false, mode: CleanupScanMode = .quick,
+                     deepFollowUp: Bool = false) {
         let operation: ProtectedOperation = mode == .deep ? .deepCleanupScan : .cleanupScan(force: force)
         guard authorize(operation, presentingPermissionCenter: true) else {
             return
@@ -1060,114 +1067,210 @@ final class AppState: ObservableObject {
             // empty one. The cache stores only static scanner output; runtime
             // protection is still reapplied on every restore/use.
             if mode == .quick && scan.cacheable { CleanupCache.save(scan.categories) }
+            // 合并入口的自动升级：快速扫描有 45s/8s 限时，被截断的目录
+            // 直接续跑深度补扫，用户只感知一次“扫描”。
+            if deepFollowUp, mode == .quick, !scan.cancelled, !scan.deferredPaths.isEmpty {
+                log(l10n.t("cleanup.scan.deepFollowUp"))
+                statusText = l10n.t("cleanup.scan.deepFollowUp")
+                scanCleanup(force: true, mode: .deep)
+            }
         }
     }
 
-    func quickOptimize() {
-        guard authorize(.quickOptimize, presentingPermissionCenter: true) else { return }
+    /// 清理页唯一的扫描入口：先限时快速扫描给出结果，未完成的目录自动
+    /// 升级为深度补扫。只准备清单，绝不自动打开确认或后台删除。
+    func startCleanupScan() {
         guard !isBusyExcludingUninstall, !cleanupQueued else { return }
         family = .clean
         jump(to: .cleanup)
-        // One-click clean only prepares the quick inventory. It never opens a
-        // confirmation dialog or starts deleting in the background.
-        scanCleanup(force: true, mode: .quick)
+        scanCleanup(force: true, mode: .quick, deepFollowUp: true)
     }
 
-    var optimizeSelectedCount: Int {
-        optimizeTasks.filter { $0.selected && $0.selectable }.count
-    }
+    // MARK: - 系统维护（原系统优化页分流能力）
 
-    var optimizeHasPreview: Bool { optimizeTasks.contains { $0.preview != nil } }
-
-    /// Read-only pass: every task reports whether it is needed and what it
-    /// would change. Needed tasks are preselected unless they erase history.
-    func runOptimize() {
-        guard authorize(.optimize, presentingPermissionCenter: true) else { return }
-        guard !isBusy else {
-            optimizeStatus = l10n.t("optimize.status.busy")
-            return
-        }
-        isOptimizing = true
-        optimizeStatus = l10n.t("optimize.status.inspecting")
-        let requested = optimizeTasks
+    /// 清理页“系统数据库”卡片：只体检、列出可执行项，逐项确认后执行。
+    func scanSystemMaintenance() {
+        guard !isSystemMaintenanceRunning else { return }
+        isSystemMaintenanceRunning = true
+        systemMaintenanceStatus = l10n.t("sysmaint.status.inspecting")
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let inspected = await NativeCore.shared.inspectOptimize(tasks: requested)
-            self.optimizeTasks = inspected
-            self.isOptimizing = false
-            self.noteHeaderReaction(.success)
-            let needed = inspected.filter(\.selectable).count
-            self.optimizeStatus = self.l10n.tf("optimize.status.inspected", needed, self.optimizeSelectedCount)
+            let rows = await NativeCore.shared.inspectSystemMaintenance()
+            self.systemMaintenanceRows = rows.filter { $0.preview.need == .needed }
+            self.isSystemMaintenanceRunning = false
+            self.systemMaintenanceStatus = self.systemMaintenanceRows.isEmpty
+                ? l10n.t("sysmaint.status.clean")
+                : l10n.tf("sysmaint.status.found", self.systemMaintenanceRows.count)
         }
     }
 
-    func toggleOptimizeTask(_ id: String) {
-        guard !isOptimizing, let index = optimizeTasks.firstIndex(where: { $0.id == id }),
-              optimizeTasks[index].selectable else { return }
-        optimizeTasks[index].selected.toggle()
-    }
-
-    func selectRecommendedOptimize() {
-        guard !isOptimizing else { return }
-        for index in optimizeTasks.indices {
-            optimizeTasks[index].selected = optimizeTasks[index].selectable && optimizeTasks[index].defaultOn
-        }
-    }
-
-    func clearOptimizeSelection() {
-        guard !isOptimizing else { return }
-        for index in optimizeTasks.indices { optimizeTasks[index].selected = false }
-    }
-
-    /// The user confirms once; each selected task reports its own result and
-    /// failures do not prevent the remaining independent tasks from running.
-    func applySelectedOptimize() {
-        guard authorize(.optimize, presentingPermissionCenter: true) else { return }
-        guard !isBusy, optimizeSelectedCount > 0 else { return }
-        let admin = NativeCore.shared.selectedAdminTasks(optimizeTasks)
+    func applySystemMaintenance(_ rowID: String) {
+        guard !isSystemMaintenanceRunning,
+              let row = systemMaintenanceRows.first(where: { $0.id == rowID }) else { return }
         confirmation = Confirmation(
-            title: l10n.t("optimize.confirm.title"),
-            message: l10n.tf(admin.isEmpty ? "optimize.confirm.selected" : "optimize.confirm.selectedAdmin",
-                             optimizeSelectedCount, admin.count),
-            confirmLabel: l10n.t("optimize.runSelected")) { [weak self] in
-                self?.performOptimize()
+            title: l10n.t("sysmaint.confirm.title"),
+            message: l10n.tf("sysmaint.confirm.message", l10n.t(row.item.titleKey), row.preview.summary),
+            confirmLabel: l10n.t("sysmaint.confirm.ok")) { [weak self] in
+                self?.performSystemMaintenance(rowID)
             }
     }
 
-    private func performOptimize() {
-        guard !isOptimizing else { return }
-        isOptimizing = true
-        optimizeStatus = l10n.t("optimize.status.running")
-        log(l10n.t("optimize.log.start"))
-        let requested = optimizeTasks
-        let admin = NativeCore.shared.selectedAdminTasks(requested)
+    private func performSystemMaintenance(_ rowID: String) {
+        guard let row = systemMaintenanceRows.first(where: { $0.id == rowID }) else { return }
+        isSystemMaintenanceRunning = true
+        systemMaintenanceStatus = l10n.t("sysmaint.status.running")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let result = await NativeCore.shared.runMaintenanceTask(
+                id: row.id, preview: row.preview)
+            let fresh = await NativeCore.shared.inspectSystemMaintenance(only: row.id).first
+            if let index = self.systemMaintenanceRows.firstIndex(where: { $0.id == row.id }) {
+                if let fresh, fresh.preview.need != .needed {
+                    self.systemMaintenanceRows.remove(at: index)
+                } else if let fresh {
+                    self.systemMaintenanceRows[index] = fresh
+                }
+            }
+            self.isSystemMaintenanceRunning = false
+            self.systemMaintenanceStatus = result.message
+            self.log("\(l10n.t(row.item.titleKey)): \(result.message)")
+            self.noteHeaderReaction(result.state == .failed ? .attention : .success)
+        }
+    }
+
+    // MARK: - 网络与系统服务修复（开发环境页）
+
+    /// DNS 缓存刷新 / 网络栈重置（管理员任务，复用提权桥接）。
+    func runAdminNetworkTask(_ task: String) {
+        guard !isNetworkToolRunning else { return }
+        confirmation = Confirmation(
+            title: l10n.t("nettool.confirm.title"),
+            message: l10n.t("nettool.confirm.\(task)"),
+            confirmLabel: l10n.t("nettool.confirm.ok")) { [weak self] in
+                self?.performAdminNetworkTask(task)
+            }
+    }
+
+    private func performAdminNetworkTask(_ task: String) {
+        isNetworkToolRunning = true
+        networkToolStatus = l10n.t("nettool.status.running")
         let testMode = ProcessInfo.processInfo.environment["MOLE_TEST_NO_AUTH"] == "1"
             || ProcessInfo.processInfo.environment["MOLE_TEST_MODE"] == "1"
         Task { @MainActor [weak self] in
             guard let self else { return }
-            var tasks = await NativeCore.shared.runOptimize(tasks: requested).tasks
-            if !admin.isEmpty {
-                if testMode {
-                    tasks = NativeCore.mergeAdminResults("", succeeded: false, requested: admin, into: tasks)
-                } else {
-                    let result = await MoleEngine.shared.runPrivilegedBridge(
-                        "bin/app_optimize_admin.sh", arguments: [String(getuid())] + admin, timeout: 1800)
-                    tasks = NativeCore.mergeAdminResults(result.output, succeeded: result.succeeded,
-                                                         requested: admin, into: tasks)
-                    if !result.succeeded { self.logFailure(result) }
+            defer {
+                self.isNetworkToolRunning = false
+                self.networkToolStatus = ""
+            }
+            guard !testMode else {
+                self.networkToolStatus = self.l10n.t("nettool.status.skipped")
+                return
+            }
+            let result = await MoleEngine.shared.runPrivilegedBridge(
+                "bin/app_optimize_admin.sh", arguments: [String(getuid()), task], timeout: 300)
+            // 桥接输出 `task<TAB>state<TAB>message`，取本任务的回报行。
+            let message = result.output.split(whereSeparator: \.isNewline)
+                .last { $0.hasPrefix(task + "\t") }
+                .map { $0.split(separator: "\t", maxSplits: 2).last.map(String.init) ?? "" } ?? ""
+            let failed = !result.succeeded || message.isEmpty
+            self.networkToolStatus = failed ? self.l10n.t("nettool.status.failed") : message
+            if failed { self.logFailure(result) }
+            self.noteHeaderReaction(failed ? .attention : .success)
+        }
+    }
+
+    /// QuickLook / 图标服务 / LaunchServices 修复（无需管理员）。
+    func runServiceRepair(_ id: String) {
+        guard !isNetworkToolRunning else { return }
+        isNetworkToolRunning = true
+        networkToolStatus = l10n.t("nettool.status.running")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let preview = NativeCore.OptimizePreview(need: .needed, summary: "")
+            let result = await NativeCore.shared.runMaintenanceTask(id: id, preview: preview)
+            self.isNetworkToolRunning = false
+            self.networkToolStatus = result.message
+            self.log(result.message)
+            self.noteHeaderReaction(result.state == .failed ? .attention : .success)
+        }
+    }
+
+    /// 网络环境出厂重置：删除系统默认之外的配置（代理/DNS/位置/WiFi 记忆/
+    /// hosts/resolver），需要管理员授权，逐项动作先列明再确认。
+    func resetNetworkEnvironment() {
+        guard !isNetworkToolRunning else { return }
+        confirmation = Confirmation(
+            title: l10n.t("nettool.reset.confirm.title"),
+            message: l10n.t("nettool.reset.confirm.message"),
+            confirmLabel: l10n.t("nettool.reset.confirm.ok")) { [weak self] in
+                self?.performNetworkReset()
+            }
+    }
+
+    private func performNetworkReset() {
+        isNetworkToolRunning = true
+        networkToolStatus = l10n.t("nettool.status.running")
+        let testMode = ProcessInfo.processInfo.environment["MOLE_TEST_NO_AUTH"] == "1"
+            || ProcessInfo.processInfo.environment["MOLE_TEST_MODE"] == "1"
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isNetworkToolRunning = false }
+            guard !testMode else {
+                self.networkToolStatus = self.l10n.t("nettool.status.skipped")
+                return
+            }
+            let result = await MoleEngine.shared.runPrivilegedBridge(
+                "bin/app_net_reset.sh", arguments: [String(getuid())], timeout: 300)
+            let summary = Parsers.networkResetSummary(result.output)
+            self.networkToolStatus = result.succeeded
+                ? summary ?? self.l10n.t("nettool.reset.done")
+                : self.l10n.t("nettool.status.failed")
+            if result.succeeded { self.log(summary ?? self.l10n.t("nettool.reset.done")) }
+            else { self.logFailure(result) }
+            self.noteHeaderReaction(result.succeeded ? .success : .attention)
+            // 网络配置已变，体检缓存作废。
+            self.netAudited = false
+        }
+    }
+
+    // MARK: - 环境变量体检（开发环境页）
+
+    /// 只读扫描 shell 配置文件：死路径、重复 PATH 段、指向缺失目录的导出、
+    /// 失效的工具初始化行。
+    func scanShellEnv() {
+        guard !isShellEnvFixing else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.shellEnvIssues = await ShellEnvAudit.scan()
+            self.shellEnvAudited = true
+        }
+    }
+
+    /// 备份后应用选中的修复（改写或删除对应行）。
+    func fixShellEnvIssues(_ issues: [ShellEnvIssue]) {
+        guard !isShellEnvFixing, !issues.isEmpty else { return }
+        confirmation = Confirmation(
+            title: l10n.t("envaudit.confirm.title"),
+            message: l10n.tf("envaudit.confirm.message", issues.count),
+            confirmLabel: l10n.t("envaudit.confirm.ok")) { [weak self] in
+                guard let self else { return }
+                self.isShellEnvFixing = true
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    let outcome = await ShellEnvAudit.apply(issues)
+                    self.isShellEnvFixing = false
+                    self.shellEnvIssues.removeAll { fixed in
+                        issues.contains { $0.id == fixed.id }
+                    }
+                    let message = outcome.backups.isEmpty
+                        ? self.l10n.tf("envaudit.status.fixedNoBackup", outcome.removed)
+                        : self.l10n.tf("envaudit.status.fixed", outcome.removed, outcome.backups.joined(separator: " · "))
+                    self.log(message)
+                    self.networkToolStatus = message
+                    // shell 配置已变，重新体检一次以刷新剩余问题。
+                    self.shellEnvIssues = await ShellEnvAudit.scan()
                 }
             }
-            self.optimizeTasks = tasks
-            self.isOptimizing = false
-            let applied = tasks.filter { $0.state == .applied }.count
-            let failed = tasks.filter { $0.state == .failed }.count
-            self.noteHeaderReaction(failed > 0 ? .attention : (applied > 0 ? .success : nil))
-            self.optimizeStatus = self.l10n.tf("optimize.status.done", applied, failed)
-            self.log(self.l10n.tf("optimize.log.done", applied, failed))
-            for task in tasks where task.state != .pending {
-                self.log("\(task.title): \(task.message)")
-            }
-        }
     }
 
     private struct UnifiedCleanupScan {
@@ -1181,7 +1284,22 @@ final class AppState: ObservableObject {
         let requiredSourceResults: [RunResult]
         let runtimeResult: RunResult
         let runningSnapshot: RunningApplicationSnapshot
-        var deferredPaths: [String] = []
+        let deferredPaths: [String]
+        /// 用户取消：合并扫描不允许把取消当作“需要深度补扫”。
+        let cancelled: Bool
+
+        init(categories: [CleanupCategory], sourceResults: [RunResult],
+             requiredSourceResults: [RunResult], runtimeResult: RunResult,
+             runningSnapshot: RunningApplicationSnapshot,
+             deferredPaths: [String] = [], cancelled: Bool = false) {
+            self.categories = categories
+            self.sourceResults = sourceResults
+            self.requiredSourceResults = requiredSourceResults
+            self.runtimeResult = runtimeResult
+            self.runningSnapshot = runningSnapshot
+            self.deferredPaths = deferredPaths
+            self.cancelled = cancelled
+        }
 
         var results: [RunResult] { sourceResults + [runtimeResult] }
 
@@ -1227,7 +1345,8 @@ final class AppState: ObservableObject {
             exitCode: coreScan.succeeded ? 0 : 1, timedOut: false)
 
         let combined = CleanupCategory.safeCleanupCandidates(from: coreScan.categories)
-        if mode == .deep, !control.isCancelled {
+        // 安装包清单并入统一扫描：合并后的单一入口也需要它，不再专属于深度模式。
+        if !control.isCancelled {
             cleanupProgress.phase = l10n.t("file.installer")
             let installers = await MoleEngine.shared.runBridge("bin/app_installer_scan.sh",
                 extraEnvironment: fullDiskScanEnvironment, timeout: 45)
@@ -1236,10 +1355,10 @@ final class AppState: ObservableObject {
             if !installers.succeeded { logFailure(installers) }
         }
         if control.isCancelled {
-            let cancelled = RunResult(output: "", errorOutput: "Scan cancelled.", exitCode: 1, timedOut: false)
-            return UnifiedCleanupScan(categories: [], sourceResults: [cancelled],
-                requiredSourceResults: [cancelled], runtimeResult: runtimeResult,
-                runningSnapshot: .unavailable)
+            let cancelledResult = RunResult(output: "", errorOutput: "Scan cancelled.", exitCode: 1, timedOut: false)
+            return UnifiedCleanupScan(categories: [], sourceResults: [cancelledResult],
+                requiredSourceResults: [cancelledResult], runtimeResult: runtimeResult,
+                runningSnapshot: .unavailable, cancelled: true)
         }
 
 
@@ -1387,43 +1506,12 @@ final class AppState: ObservableObject {
                 statusText = l10n.t("cleanup.selectNone")
                 return
             }
-            confirmApply(categories: selectedCategories, family: applyFamily)
+            // 用户在清单里逐项勾选后按“清理”就是明确指令：不再弹确认框，
+            // 直接执行。执行层的路径/白名单/文件身份/运行中应用复核保持不变。
+            performApply(categories: selectedCategories,
+                         family: applyFamily, mode: .manual)
         }
     }
-
-    private func confirmApply(categories selectedCategories: [CleanupCategory],
-                              family applyFamily: CleanupFamily) {
-        let selectedCount = selectedCategories.reduce(0) { $0 + $1.paths.count }
-        let actionTitle: String
-        var message: String
-        switch applyFamily {
-        case .clean:
-            // 磁盘清理是永久删除：用独立的不可逆确认文案。
-            actionTitle = l10n.t("confirm.cleanupPermanent.ok")
-            message = l10n.t("confirm.cleanupPermanent.msg")
-        case .tools:
-            actionTitle = l10n.t("confirm.apply.tools.ok")
-            message = l10n.t("confirm.apply.tools.msg")
-        }
-        let warningCount = selectedCategories
-            .filter { $0.risk == .warning }
-            .reduce(0) { $0 + $1.paths.count }
-        if warningCount > 0 {
-            message += "\n\n" + l10n.tf("cleanup.warningConfirmation", warningCount)
-        }
-        confirmation = Confirmation(
-            title: Self.permanentFamilies.contains(applyFamily)
-                ? l10n.tf("confirm.cleanupPermanent.title", selectedCount)
-                : l10n.tf("confirm.apply.title", selectedCount),
-            message: message,
-            confirmLabel: actionTitle) { [weak self] in
-                self?.performApply(categories: selectedCategories,
-                                   family: applyFamily, mode: .manual)
-        }
-    }
-
-    /// 永久删除的家族：清理页；安装包、卸载、分析选择项默认移入废纸篓。
-    private static let permanentFamilies: Set<CleanupFamily> = [.clean]
 
     /// 执行阶段再次读取进程表，并按每个类别自己的 route 分流。扫描来源不会再
     /// 因为 UI 合并展示而退化成通用删除入口。
@@ -1496,7 +1584,7 @@ final class AppState: ObservableObject {
                 await refreshCleanupInventory(after: applyFamily)
                 isApplying = false
                 reportCleanupResult(executionResult,
-                                    permanently: Self.permanentFamilies.contains(applyFamily))
+                                    permanently: applyFamily == .clean)
                 return
             }
 
@@ -1507,7 +1595,7 @@ final class AppState: ObservableObject {
                 log("cleanup route=\(route.rawValue) started paths=\(routeCategories.reduce(0) { $0 + $1.paths.count })")
                 let routeResult = await executeCleanupRoute(
                     route, categories: routeCategories, mode: mode,
-                    permanently: Self.permanentFamilies.contains(applyFamily))
+                    permanently: applyFamily == .clean)
                 log(String(format: "cleanup route=%@ completed %.2fs", route.rawValue, Date().timeIntervalSince(started)))
                 executionResult.merge(routeResult)
             }
@@ -1515,7 +1603,7 @@ final class AppState: ObservableObject {
             await refreshCleanupInventory(after: applyFamily)
             isApplying = false
             reportCleanupResult(executionResult,
-                                permanently: Self.permanentFamilies.contains(applyFamily))
+                                permanently: applyFamily == .clean)
             if applyFamily == .tools { scanDeveloperTools() }
         }
     }
@@ -1748,7 +1836,8 @@ final class AppState: ObservableObject {
             processRows = sampled.groups.map(\.app)
             processHistory.record(sampled.groups)
             processAlerts = highUsageTracker.update(sampled.groups)
-            processStatus = l10n.tf("proc.status.sampled", sampled.groups.count, sampled.total)
+            // 数量汇总对用户无感：正常采样后不再展示统计文案。
+            processStatus = ""
         }
     }
 
@@ -1939,9 +2028,7 @@ final class AppState: ObservableObject {
                 processStatus = l10n.tf("proc.status.autoCleaned", succeeded)
             } else if abnormalCount == 0 {
                 // 处理失败后目标可能自行退出；此时不把自然消失误报成清理成功。
-                processStatus = rows.isEmpty
-                    ? l10n.t("proc.status.none")
-                    : l10n.tf("proc.status.pids", rows.count)
+                processStatus = rows.isEmpty ? l10n.t("proc.status.none") : ""
             } else {
                 processStatus = l10n.tf("proc.status.abnormalRemaining", abnormalCount)
             }
@@ -1950,9 +2037,7 @@ final class AppState: ObservableObject {
         } else if abnormalCount > 0 {
             processStatus = l10n.tf("proc.status.abnormalDetected", abnormalCount)
         } else {
-            processStatus = rows.isEmpty
-                ? l10n.t("proc.status.none")
-                : l10n.tf("proc.status.pids", rows.count)
+            processStatus = rows.isEmpty ? l10n.t("proc.status.none") : ""
         }
     }
 
@@ -1977,9 +2062,7 @@ final class AppState: ObservableObject {
                 return
             }
             portRows = RuntimeStore.portRows(fromText: result.output)
-            portStatus = portRows.isEmpty
-                ? l10n.t("ports.status.none")
-                : l10n.tf("ports.status.count", portRows.count)
+            portStatus = portRows.isEmpty ? l10n.t("ports.status.none") : ""
         }
     }
 
@@ -2153,9 +2236,7 @@ final class AppState: ObservableObject {
                     && !plan.fileIdentities.isEmpty
             }
             installedApps = apps
-            appListStatus = installedApps.isEmpty
-                ? l10n.t("uninstall.status.empty")
-                : l10n.tf("uninstall.status.count", installedApps.count)
+            appListStatus = installedApps.isEmpty ? l10n.t("uninstall.status.empty") : ""
             persistUninstallInventory()
 
             let missing = apps.filter { uninstallPlans[$0.id] == nil }
@@ -2295,7 +2376,7 @@ final class AppState: ObservableObject {
             installedApps.removeAll { $0.id == target.id && $0.appIdentity == target.appIdentity }
             uninstallPlans.removeValue(forKey: target.id)
             persistUninstallInventory()
-            appListStatus = l10n.tf("uninstall.status.count", installedApps.count)
+            appListStatus = ""
             var message = l10n.tf("status.uninstalled", target.name)
             if !result.retainedPaths.isEmpty {
                 message += "\n" + l10n.tf("uninstall.retained", result.retainedPaths.count)
@@ -2397,11 +2478,7 @@ final class AppState: ObservableObject {
             if announce { noteHeaderReaction(result.succeeded ? .success : .attention) }
             devEnvEntries = Parsers.devEnvEntries(result.output)
             devEnvSelection.removeAll()
-            let runtimeCount = devEnvEntries.filter { !$0.isManager }.count
-            let managerCount = devEnvEntries.filter(\.isManager).count
-            devEnvStatus = devEnvEntries.isEmpty
-                ? l10n.t("devenv.status.none")
-                : l10n.tf("devenv.status.summary", runtimeCount, managerCount)
+            devEnvStatus = devEnvEntries.isEmpty ? l10n.t("devenv.status.none") : ""
             logFailure(result)
         }
     }
@@ -2498,42 +2575,23 @@ final class AppState: ObservableObject {
 
     // MARK: - 磁盘分析
 
-    /// Explicit root scope uses the same traversal as custom directories.
+    /// 全盘分析固定从根目录开始，结果按 大文件/图片/视频/重复文件 子分类展示。
     func scanDiskOverview(force: Bool = false) {
         guard authorize(.diskOverview(force: force),
                         presentingPermissionCenter: true), !isBusy else { return }
         if !force, analyzeHasScanned { return }
         if force { analyzeCache.invalidate("/") }
-        startAnalyze(displayPath: "/", overview: true)
-    }
-
-    /// 首次进入从当前用户目录开始，返回页面时保留当前浏览位置。
-    func scanUserSpace() {
-        guard !analyzeHasScanned else { return }
-        scanAnalyze(NSHomeDirectory())
-    }
-
-    func scanAnalyze(_ path: String? = nil, force: Bool = false) {
-        guard !isBusy else { return }
-        let target = URL(fileURLWithPath: path ?? analyzePath, isDirectory: true).standardizedFileURL.path
-        if force { analyzeCache.invalidate(target) }
-        if let cached = analyzeCache.report(for: target) {
-            showAnalyzeReport(cached)
-            return
-        }
-        guard authorize(.diskAnalyze(path: target),
-                        presentingPermissionCenter: true) else { return }
-        startAnalyze(displayPath: target, overview: target == "/")
+        startAnalyze()
     }
 
     func cancelAnalyze() { analyzeScanControl?.cancel() }
 
-    private func startAnalyze(displayPath: String, overview: Bool) {
-        guard fullDiskScanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
+    private func startAnalyze() {
+        guard !isAnalyzing,
+              fullDiskScanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
         analyzeHasScanned = true
-        analyzePath = displayPath
-        analyzeIsOverview = overview
-        if let cached = analyzeCache.report(for: displayPath) {
+        analyzePath = "/"
+        if let cached = analyzeCache.report(for: "/") {
             showAnalyzeReport(cached)
             return
         }
@@ -2545,13 +2603,12 @@ final class AppState: ObservableObject {
         analyzeMedia = []
         analyzeMediaSummary = MediaSummary()
         slimSelection.removeAll()
-        analyzeSelection.removeAll()
         analyzeStatus = l10n.t("analyze.scanning")
         let control = CleanupScanControl(mode: .deep)
         analyzeScanControl = control
         Task {
             let report = await NativeCore.shared.scanAnalyze(
-                path: displayPath, overview: overview, control: control,
+                path: "/", overview: true, control: control,
                 progress: { [weak self] report in
                     Task { @MainActor in
                         guard let self, self.analyzeScanControl === control else { return }
@@ -2571,13 +2628,17 @@ final class AppState: ObservableObject {
             noteHeaderReaction(NoriHeaderReaction.mood(
                 succeeded: report.error == nil && report.isPartial != true,
                 cancelled: control.isCancelled))
+            // 重复文件是扫描结果的子分类：磁盘走查完成后自动开始内容级比对。
+            // 聚焦在大文件/图片/视频时跳过，避免为不看的结果付出比对开销。
+            if !control.isCancelled, analyzeMode.runsDuplicateComparison {
+                scanDuplicateFiles()
+            }
         }
     }
 
     private func showAnalyzeReport(_ report: AnalyzeReport) {
         analyzeCurrentPath = ""
-        analyzeSelection.removeAll()
-        analyzeIsOverview = report.overview
+        slimSelection.removeAll()
         analyzePath = report.path
         // 0 字节且统计完整的条目没有信息量：隐藏它们让列表聚焦真实占用；
         // 标注为部分统计（未知大小）的条目保留展示。
@@ -2588,14 +2649,8 @@ final class AppState: ObservableObject {
         analyzeLargeFiles = report.largeFiles ?? []
         analyzeMedia = report.media ?? []
         analyzeMediaSummary = report.mediaSummary ?? MediaSummary()
-        slimSelection.removeAll()
-        if let error = report.error {
-            analyzeStatus = error
-        } else {
-            analyzeStatus = l10n.tf(report.isPartial == true
-                ? "analyze.directory.partial" : "analyze.status.summary",
-                analyzeEntries.count, ByteFormat.format(analyzeTotalSize))
-        }
+        // 汇总数据由各子分类自行展示；这里只保留错误信息。
+        analyzeStatus = report.error ?? ""
     }
 
     // MARK: APFS 快照
@@ -2653,102 +2708,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 授权入口只打开目录选择；用户显式开始后再扫描。
-    func scanDuplicates() {
-        guard !isBusy else { return }
-        guard authorize(.duplicateScan, presentingPermissionCenter: true) else { return }
-        showDuplicateFiles = true
-    }
-
-    /// 返回上级目录（根目录不再上跳）。
-    func analyzeGoUp() {
-        guard !isAnalyzing, analyzePath != "/" else { return }
-        scanAnalyze(URL(fileURLWithPath: analyzePath).deletingLastPathComponent().path)
-    }
-
-    /// NSOpenPanel 选择任意目录分析。
-    func chooseAnalyzeFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.message = l10n.t("analyze.pick")
-        if panel.runModal() == .OK, let url = panel.url {
-            scanAnalyze(url.path)
-        }
-    }
-
-    func toggleAnalyzeSelection(_ entry: AnalyzeEntry) {
-        guard entry.canCleanDirectly else { return }
-        if analyzeSelection.contains(entry.path) {
-            analyzeSelection.remove(entry.path)
-        } else {
-            analyzeSelection.insert(entry.path)
-        }
-    }
-
-    func revealAnalyzeEntry(_ entry: AnalyzeEntry) {
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.path)])
-    }
-
-    func openAnalyzeEntry(_ entry: AnalyzeEntry) {
-        if entry.isDir { scanAnalyze(entry.path) }
-        else { revealAnalyzeEntry(entry) }
-    }
-
-    func applyAnalyzeCleanup() {
-        guard !isBusy else { return }
-        let paths = analyzeEntries.filter {
-            analyzeSelection.contains($0.path) && $0.canCleanDirectly
-        }.map(\.path)
-        guard !paths.isEmpty else { return }
-        let deletionPlan = DeletionPlan(paths: paths)
-        let selectedCount = deletionPlan.items.count
-        confirmation = Confirmation(
-            title: l10n.tf("analyze.confirm.title", selectedCount),
-            message: l10n.tf("analyze.confirm.msg", ByteFormat.format(analyzeSelectedBytes)),
-            confirmLabel: l10n.t("confirm.apply.trash.ok")) { [weak self] in
-                guard let self else { return }
-                self.isApplying = true
-                self.statusText = self.l10n.tf("status.processing", selectedCount)
-                self.log(self.l10n.tf("log.pipeline", selectedCount, "app_apply.sh"))
-                Task {
-                    var removed = 0
-                    var skipped = 0
-                    var failed = 0
-                    var allSucceeded = true
-                    if !deletionPlan.items.isEmpty {
-                        let allowedRoot = self.analyzeIsOverview ? NSHomeDirectory() : self.analyzePath
-                        let summary = await Task.detached(priority: .utility) {
-                            NativeCore.shared.applyCleanup(
-                                items: deletionPlan.items, permanent: false,
-                                allowedRoots: [allowedRoot])
-                        }.value
-                        if !summary.messages.isEmpty {
-                            self.log(summary.messages.joined(separator: "\n"))
-                        }
-                        removed += summary.removed
-                        skipped += summary.skipped
-                        failed += summary.failed
-                        allSucceeded = allSucceeded && summary.failed == 0 && summary.skipped == 0
-                    }
-                    self.isApplying = false
-                    self.statusText = (allSucceeded && failed == 0)
-                        ? self.l10n.tf("status.cleanupDone", removed)
-                        : self.l10n.tf("status.cleanupPartial", removed, failed)
-                    self.log((allSucceeded && failed == 0)
-                        ? self.l10n.tf("log.cleanupDone", removed)
-                        : self.l10n.tf("log.cleanupPartial", removed, failed)
-                              + (skipped > 0 ? " (\(skipped) skipped)" : ""))
-                    if self.analyzeIsOverview {
-                        self.scanDiskOverview(force: true)
-                    } else {
-                        self.scanAnalyze(force: true)
-                    }
-                }
-            }
-    }
-
     // MARK: - 自动目录清理
 
     private static let autoCleanupLastCheckKey = "SMAutoCleanupLastCheck"
@@ -2781,8 +2740,9 @@ final class AppState: ObservableObject {
                 lastReclaimedBytes: 0)
             autoCleanupRules.append(rule)
             persistAutoCleanupRules()
-            autoCleanupStatus = l10n.t("auto.status.added")
-            previewAutoCleanup(rule.id)
+            // 不立刻预览：未确认“仅可再生内容”前预览必然失败，改为引导
+            // 用户先完成确认，再预览、再开启。
+            autoCleanupStatus = l10n.t("auto.status.needsConfirmation")
         } catch {
             autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
             log(autoCleanupStatus)
@@ -2861,9 +2821,9 @@ final class AppState: ObservableObject {
             normalized.isEnabled = false
             autoCleanupStatus = l10n.t("auto.status.authorizationRequired")
         }
-        let scheduleChanged = normalized.isEnabled && (
-            !previous.isEnabled
-                || previous.policy != normalized.policy
+        let becameEnabled = normalized.isEnabled && !previous.isEnabled
+        let scheduleAdjusted = normalized.isEnabled && (
+            previous.policy != normalized.policy
                 || previous.sizeLimitBytes != normalized.sizeLimitBytes
                 || previous.retentionDays != normalized.retentionDays)
         autoCleanupRules[index] = normalized
@@ -2871,15 +2831,21 @@ final class AppState: ObservableObject {
             autoCleanupPreview = nil
             autoCleanupPreviewRuleID = nil
         }
+        autoCleanupRuleIssues[normalized.id] = nil
         persistAutoCleanupRules()
-        if scheduleChanged {
+        if becameEnabled || scheduleAdjusted {
             UserDefaults.standard.removeObject(forKey: Self.autoCleanupLastCheckKey)
+        }
+        if becameEnabled {
+            // 开启规则立即执行一轮；只清限频不触发会让用户以为定时没生效。
+            runScheduledAutoCleanup(force: true)
         }
     }
 
     func removeAutoCleanupRule(_ id: UUID) {
         guard !isBusy else { return }
         autoCleanupRules.removeAll { $0.id == id }
+        autoCleanupRuleIssues[id] = nil
         if autoCleanupPreviewRuleID == id {
             autoCleanupPreview = nil
             autoCleanupPreviewRuleID = nil
@@ -2899,6 +2865,7 @@ final class AppState: ObservableObject {
                     for: rule, protecting: protectedAutoCleanupDirectories(excluding: id))
                 autoCleanupPreview = plan
                 autoCleanupPreviewRuleID = id
+                autoCleanupRuleIssues[id] = nil
                 autoCleanupStatus = plan.candidates.isEmpty
                     ? l10n.t("auto.status.empty")
                     : l10n.tf("auto.status.preview", plan.candidates.count,
@@ -2906,6 +2873,7 @@ final class AppState: ObservableObject {
             } catch {
                 autoCleanupPreview = nil
                 autoCleanupPreviewRuleID = nil
+                autoCleanupRuleIssues[id] = error.localizedDescription
                 autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
                 log(autoCleanupStatus)
             }
@@ -2943,12 +2911,15 @@ final class AppState: ObservableObject {
                 isAutoCleanupScanning = true
                 let result = await applyAutoCleanup(rule: rule, plan: plan)
                 isAutoCleanupScanning = false
+                autoCleanupRuleIssues[id] = result.failed == 0 ? nil
+                    : l10n.tf("auto.status.partial", result.removed, result.failed)
                 autoCleanupStatus = result.failed == 0
                     ? l10n.tf("auto.status.done", result.removed,
                               ByteFormat.format(result.reclaimedBytes))
                     : l10n.tf("auto.status.partial", result.removed, result.failed)
             } catch {
                 isAutoCleanupScanning = false
+                autoCleanupRuleIssues[id] = error.localizedDescription
                 autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
                 log(autoCleanupStatus)
             }
@@ -3009,13 +2980,19 @@ final class AppState: ObservableObject {
                     let plan = try await AutoCleanupPlanner.plan(
                         for: current,
                         protecting: protectedAutoCleanupDirectories(excluding: current.id))
-                    guard !plan.candidates.isEmpty else { continue }
+                    guard !plan.candidates.isEmpty else {
+                        autoCleanupRuleIssues[current.id] = nil
+                        continue
+                    }
                     let result = await applyAutoCleanup(rule: current, plan: plan)
                     removed += result.removed
                     reclaimed &+= result.reclaimedBytes
                     failures += result.failed
+                    autoCleanupRuleIssues[current.id] = result.failed == 0 ? nil
+                        : l10n.tf("auto.status.partial", result.removed, result.failed)
                 } catch {
                     failures += 1
+                    autoCleanupRuleIssues[current.id] = error.localizedDescription
                     log(l10n.tf("auto.log.ruleFailed", current.directory, error.localizedDescription))
                 }
             }
@@ -3105,6 +3082,20 @@ final class AppState: ObservableObject {
 
     private func protectedAutoCleanupDirectories(excluding id: UUID) -> [String] {
         Array(autoCleanupRules.lazy.filter { $0.id != id }.map(\.directory))
+    }
+
+    /// 目录是否已被自动清理规则管理：规则目录为该目录自身或其祖先。
+    /// 清理页与磁盘分析用它给已设置定时的条目打“已定时”标记。
+    func autoCleanupRuleCovering(directory: String) -> AutoCleanupRule? {
+        let path = URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL.path
+        for rule in autoCleanupRules {
+            let root = URL(fileURLWithPath: rule.directory, isDirectory: true)
+                .standardizedFileURL.path
+            if path == root || path.hasPrefix(root + "/") {
+                return rule
+            }
+        }
+        return nil
     }
 
     // MARK: - 白名单

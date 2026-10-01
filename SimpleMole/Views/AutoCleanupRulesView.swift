@@ -4,12 +4,19 @@ import SwiftUI
 struct AutoCleanupRulesView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var permissions: PermissionCenter
+
+    init(state: AppState) {
+        self.state = state
+        _permissions = ObservedObject(wrappedValue: state.permissionCenter)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
             statusBar
+            diskAccessBanner
             content
         }
         .frame(width: 680, height: 560)
@@ -82,6 +89,31 @@ struct AutoCleanupRulesView: View {
         }
     }
 
+    /// 后台定时静默跳过只留一行日志；面板里显式提示，避免“已开启却
+    /// 从不执行”的无反馈状态。
+    @ViewBuilder
+    private var diskAccessBanner: some View {
+        if !permissions.fullDiskAccessGranted, !state.autoCleanupRules.isEmpty {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(Color.warning)
+                Text(l10n.t("auto.fda.banner"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button(l10n.t("auto.fda.open")) {
+                    state.presentPermissionCenter()
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 7)
+            .background(Color.warning.opacity(0.08))
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         if state.autoCleanupRules.isEmpty {
@@ -117,6 +149,21 @@ private struct AutoCleanupRuleRow: View {
             Divider()
                 .padding(.vertical, 10)
             configuration
+
+            if let issue = state.autoCleanupRuleIssues[rule.id] {
+                Divider()
+                    .padding(.vertical, 10)
+                Label {
+                    Text(l10n.tf("auto.row.issue", issue))
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color.warning)
+                }
+            }
 
             if let plan = previewPlan {
                 Divider()
@@ -217,11 +264,22 @@ private struct AutoCleanupRuleRow: View {
             }
 
             Toggle(isOn: regenerableBinding) {
-                Label(l10n.t("auto.regenerable.confirm"), systemImage: "checkmark.shield")
-                    .font(.system(size: 10, weight: .medium))
+                Label {
+                    Text(l10n.t("auto.regenerable.confirm"))
+                        .font(.system(size: 10,
+                                      weight: currentRule.isSafetyAuthorized ? .medium : .semibold))
+                        .foregroundStyle(currentRule.isSafetyAuthorized
+                                         ? Color.secondary : Color.warning)
+                } icon: {
+                    Image(systemName: currentRule.isSafetyAuthorized
+                          ? "checkmark.shield" : "shield.lefthalf.filled")
+                        .foregroundStyle(currentRule.isSafetyAuthorized
+                                         ? Color.moleAccentText : Color.warning)
+                }
             }
             .toggleStyle(.checkbox)
             .disabled(state.isBusy)
+            .help(l10n.t("auto.regenerable.help"))
         }
     }
 

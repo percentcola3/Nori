@@ -7,6 +7,8 @@ struct AgentSkill: Identifiable, Equatable, Sendable {
     let summary: String
     let directory: String
     let usedBy: [String]
+    /// 挂靠的 Agent 分组 id；共享目录落到 "shared"。
+    let agentID: String
     let bytes: UInt64
     let identity: String
     /// 指向别处的链接只展示来源，不作为删除对象。
@@ -23,7 +25,10 @@ struct AgentMCPServer: Identifiable, Equatable, Sendable {
 
     let id: String
     let agentName: String
+    /// 挂靠的 Agent 分组 id（即所属 AgentDefinition.id）。
+    let agentID: String
     let configPath: String
+    let format: AgentMCPFormat
     let scope: String?
     let name: String
     let remote: Bool
@@ -36,7 +41,11 @@ struct AgentGroupSummary: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
     let documented: Bool
+    /// undocumented 工具且应用本体已找不到：数据为卸载残留。
+    let orphaned: Bool
     let categoryIDs: [UUID]
+    let skillIDs: [String]
+    let serverIDs: [String]
     let bytes: UInt64
 }
 
@@ -48,16 +57,21 @@ struct AgentScanReport: Sendable {
     var complete = true
 }
 
-/// Agent 专清的只读扫描：目录计量、Skills 清点与 MCP 配置体检。
-/// MCP 配置只读取、从不写回。
+/// Agent 专清的扫描：目录计量、Skills 清点与 MCP 配置体检。
+/// MCP 配置在扫描阶段只读取；清理阶段的改写见 AgentMCPConfigEditor。
 enum AgentInventory {
     static func scan(home: String = NSHomeDirectory(),
                      control: CleanupScanControl = CleanupScanControl(
                         mode: .deep, totalBudget: 180, directoryBudget: 30),
-                     localize: (String) -> String = { $0 }) -> AgentScanReport {
+                     localize: (String) -> String = { $0 },
+                     presence context: AgentPresenceContext? = nil) -> AgentScanReport {
         var report = AgentScanReport()
         let installed = AgentCatalog.definitions.filter { AgentCatalog.isInstalled($0, home: home) }
-        let resolved = installed.map { ($0, AgentCatalog.resolve($0, home: home)) }
+        let orphanedIDs = Set(installed.filter { AgentCatalog.isOrphaned($0, home: home, presence: context) }
+            .map(\.id))
+        // 已卸载工具不再是“Agent”：数据属于磁盘垃圾，由清理扫描按应用残留收录。
+        let active = installed.filter { !orphanedIDs.contains($0.id) }
+        let resolved = active.map { ($0, AgentCatalog.resolve($0, home: home, presence: context)) }
         let allPaths = Array(Set(resolved.flatMap { $0.1.flatMap(\.paths) })).sorted()
         let measurements = CleanupScanWorker.measure(allPaths, control: control) { _, _ in }
         var sizes: [String: UInt64] = [:]
@@ -65,6 +79,10 @@ enum AgentInventory {
             sizes[path] = measurement.bytes
             if !measurement.complete { report.complete = false }
         }
+
+        report.skills = scanSkills(home: home, control: control, agents: active,
+                                   orphanedAgentIDs: orphanedIDs)
+        report.servers = scanMCP(agents: active, home: home)
 
         for (agent, targets) in resolved {
             var merged: [String: CleanupCategory] = [:]
@@ -94,16 +112,18 @@ enum AgentInventory {
                 merged[key] = category
             }
             let categories = order.compactMap { merged[$0] }.sorted(by: CleanupCategory.sizeDescending)
-            guard !categories.isEmpty else { continue }
+            let skillIDs = report.skills.filter { $0.agentID == agent.id }.map(\.path)
+            let serverIDs = report.servers.filter { $0.agentID == agent.id }.map(\.id)
+            guard !categories.isEmpty || !skillIDs.isEmpty || !serverIDs.isEmpty else { continue }
             report.categories.append(contentsOf: categories)
             report.groups.append(AgentGroupSummary(
                 id: agent.id, name: agent.name, documented: agent.documented,
+                orphaned: orphanedIDs.contains(agent.id),
                 categoryIDs: categories.map(\.id),
+                skillIDs: skillIDs, serverIDs: serverIDs,
                 bytes: categories.reduce(0) { $0 &+ $1.bytes }))
         }
         report.groups.sort { $0.bytes > $1.bytes }
-        report.skills = scanSkills(home: home, control: control)
-        report.servers = scanMCP(agents: installed, home: home)
         return report
     }
 
@@ -130,9 +150,21 @@ enum AgentInventory {
 
     // MARK: - Skills
 
-    static func scanSkills(home: String, control: CleanupScanControl) -> [AgentSkill] {
+    /// Skill 挂靠规则：目录被多个 Agent 声明时归属第一个声明者，无人声明落到 "shared"。
+    /// 只属于已卸载工具的 skills 目录随残留一起走清理漏斗，不出现在 Agent 页。
+    static func scanSkills(home: String, control: CleanupScanControl,
+                           agents: [AgentDefinition] = [],
+                           orphanedAgentIDs: Set<String> = []) -> [AgentSkill] {
+        let idsByAgentName = Dictionary(agents.map { ($0.name, $0.id) }, uniquingKeysWith: { first, _ in first })
+        let orphanedNames = Set(AgentCatalog.definitions
+            .filter { orphanedAgentIDs.contains($0.id) }.map(\.name))
         var skills: [AgentSkill] = []
         for directory in AgentCatalog.skillDirectories(home: home) {
+            if !directory.agentNames.isEmpty,
+               directory.agentNames.allSatisfy({ orphanedNames.contains($0) }) {
+                continue
+            }
+            let ownerID = directory.agentNames.first.flatMap { idsByAgentName[$0] } ?? "shared"
             for name in AgentCatalog.childNames(of: directory.path) {
                 let path = directory.path + "/" + name
                 let linked = AgentCatalog.isSymlink(path)
@@ -143,7 +175,8 @@ enum AgentInventory {
                 let bytes = linked ? 0 : CleanupScanWorker.measure(path, control: control).bytes
                 skills.append(AgentSkill(
                     path: path, name: manifest.name ?? name, summary: manifest.summary ?? "",
-                    directory: directory.path, usedBy: directory.agentNames, bytes: bytes,
+                    directory: directory.path, usedBy: directory.agentNames, agentID: ownerID,
+                    bytes: bytes,
                     identity: linked ? "" : (DeletionPlan.identity(at: path) ?? ""),
                     linked: linked, linkTarget: linked ? resolved : nil))
             }
@@ -197,13 +230,15 @@ enum AgentInventory {
                 }
                 guard let entries else {
                     servers.append(AgentMCPServer(
-                        id: agent.id + "|" + path, agentName: agent.name, configPath: path,
+                        id: agent.id + "|" + path, agentName: agent.name, agentID: agent.id,
+                        configPath: path, format: source.format,
                         scope: nil, name: (path as NSString).lastPathComponent, remote: false,
                         endpoint: "", disabled: false, issues: [.unreadableConfig]))
                     continue
                 }
                 for entry in entries {
                     servers.append(server(agent: agent, path: path, entry: entry,
+                                          format: source.format,
                                           searchPath: searchPath, home: home))
                 }
             }
@@ -213,6 +248,7 @@ enum AgentInventory {
 
     private static func server(agent: AgentDefinition, path: String,
                                entry: (scope: String?, name: String, config: [String: Any]),
+                               format: AgentMCPFormat,
                                searchPath: [String], home: String) -> AgentMCPServer {
         let config = entry.config
         var command: String?
@@ -259,7 +295,8 @@ enum AgentInventory {
         }
         return AgentMCPServer(
             id: agent.id + "|" + path + "|" + (entry.scope ?? "") + "|" + entry.name,
-            agentName: agent.name, configPath: path, scope: entry.scope, name: entry.name,
+            agentName: agent.name, agentID: agent.id, configPath: path, format: format,
+            scope: entry.scope, name: entry.name,
             remote: url != nil, endpoint: String(endpoint.prefix(180)), disabled: disabled,
             issues: issues)
     }
@@ -367,26 +404,11 @@ enum AgentInventory {
     // MARK: - 检查规则
 
     static func executableSearchPath(home: String) -> [String] {
-        let environment = (ProcessInfo.processInfo.environment["PATH"] ?? "")
-            .split(separator: ":").map(String.init)
-        let common = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
-                      home + "/.local/bin", home + "/.bun/bin", home + "/.cargo/bin",
-                      home + "/.volta/bin", home + "/.deno/bin", home + "/go/bin",
-                      home + "/.npm-global/bin", home + "/Library/pnpm"]
-        var seen = Set<String>()
-        return (environment + common).filter { seen.insert($0).inserted }
+        AgentCatalog.executableSearchPath(home: home)
     }
 
     static func resolveExecutable(_ command: String, searchPath: [String], home: String) -> String? {
-        var candidate = command
-        if candidate.hasPrefix("~/") { candidate = home + candidate.dropFirst(1) }
-        if candidate.contains("/") {
-            // 相对路径由宿主按插件或工作目录解析，这里无法判定缺失与否。
-            guard candidate.hasPrefix("/") else { return candidate }
-            return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
-        }
-        return searchPath.map { $0 + "/" + candidate }
-            .first { FileManager.default.isExecutableFile(atPath: $0) }
+        AgentCatalog.resolveExecutable(command, searchPath: searchPath, home: home)
     }
 
     static func isPlaintextSecret(name: String, value: String) -> Bool {

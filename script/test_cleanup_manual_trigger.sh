@@ -36,11 +36,14 @@ cleanup_tab=$(/usr/bin/awk '
 [[ "$cleanup_tab" == "break" ]] || fail "cleanup tab activation mutates results or starts work"
 
 /usr/bin/grep -Fq 'state.requestScanAccess(.quickOptimize)' "$CLEANUP_VIEW" || \
-    fail "manual quick scan button is missing"
-/usr/bin/grep -Fq 'state.requestScanAccess(.deepCleanupScan)' "$CLEANUP_VIEW" || \
-    fail "manual deep scan button is missing"
-/usr/bin/grep -Fq 'scanCleanup(force: true, mode: .quick)' "$APP_STATE" || \
-    fail "manual quick scan does not request a fresh scan"
+    fail "the unified scan button is missing"
+if /usr/bin/grep -Fq 'state.requestScanAccess(.deepCleanupScan)' "$CLEANUP_VIEW"; then
+    fail "cleanup tab still exposes a separate deep-scan entry"
+fi
+/usr/bin/grep -Fq 'scanCleanup(force: true, mode: .quick, deepFollowUp: true)' "$APP_STATE" || \
+    fail "the unified entry does not run a fresh quick scan with deep follow-up"
+/usr/bin/grep -Fq 'if deepFollowUp, mode == .quick, !scan.cancelled, !scan.deferredPaths.isEmpty' \
+    "$APP_STATE" || fail "quick scans with unfinished directories no longer escalate to deep"
 /usr/bin/grep -Fq 'if mode == .quick && scan.cacheable { CleanupCache.save(scan.categories) }' \
     "$APP_STATE" || fail "successful manual scans are no longer cached"
 

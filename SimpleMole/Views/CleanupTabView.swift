@@ -41,19 +41,35 @@ struct CleanupTabView: View {
         }
     }
 
+    /// 类目下已被自动清理规则管理的路径：类目行显示“已定时”徽标，
+    /// 展开列表逐路径打标。
+    private func coveredAutoCleanPaths(for category: CleanupCategory) -> Set<String> {
+        Set(category.paths.filter {
+            state.autoCleanupRuleCovering(directory: $0) != nil
+        })
+    }
+
+    /// 类别列表之外的独立内容源：安装包清单与系统数据库体检。
+    /// 空态与工具栏按钮必须把它们算进来，否则会出现“空态提示 +
+    /// 安装包结果”同屏，或没有任何重新扫描入口。
+    private var hasAuxiliaryCleanupContent: Bool {
+        state.installerCandidates != nil
+            || !state.systemMaintenanceRows.isEmpty
+            || state.isSystemMaintenanceRunning
+            || !state.systemMaintenanceStatus.isEmpty
+    }
+
+    private var hasAnyCleanupContent: Bool {
+        !state.categories.isEmpty || hasAuxiliaryCleanupContent
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 8) {
-                Label(l10n.t("cleanup.safeOnly"), systemImage: "checkmark.shield.fill")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
                 Spacer()
-                Button { state.requestScanAccess(.deepCleanupScan) } label: {
-                    Text(l10n.t("cleanup.scan.deep"))
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(state.isBusyExcludingUninstall || state.cleanupQueued)
-                if state.isCleanupScanning || !state.categories.isEmpty {
+                // 深度/快速两个入口已合并：一次点击先快速扫描，
+                // 未完成的目录自动升级为深度补扫。
+                if state.isCleanupScanning || hasAnyCleanupContent {
                     quickCleanButton
                 }
             }
@@ -85,27 +101,18 @@ struct CleanupTabView: View {
             }
 
             if state.isApplying {
-                VStack(spacing: 12) {
-                    NoriStatusAnimation(mood: .working, size: 84)
-                    Text(state.statusText).font(.system(size: 12))
-                    ProgressView().controlSize(.small)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                NoriScanActivity(text: state.statusText, quiet: true)
                 .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else if state.isCleanupScanning {
                 CleanupScanProgressView(state: state)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(reduceMotion ? .opacity : .moleStateSwap)
-            } else if state.categories.isEmpty {
+            } else if state.categories.isEmpty && !hasAuxiliaryCleanupContent {
                 VStack(spacing: 12) {
                     if state.cleanupOutcomeMood != .attention {
                         NoriStatusAnimation(mood: .idle, size: 120, assetName: "nori-coffee")
                     }
                     quickCleanButton
-                    Text(l10n.t("cleanup.empty.subtitle"))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
                 }
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -126,6 +133,8 @@ struct CleanupTabView: View {
                                                     category: $state.categories[index],
                                                     selectionEnabled: state.cleanupScanComplete
                                                         && !state.isApplying,
+                                                    coveredPaths: coveredAutoCleanPaths(
+                                                        for: state.categories[index]),
                                                     onAutoClean: autoCleanAction(
                                                         for: state.categories[index]))
                                             }
@@ -138,6 +147,9 @@ struct CleanupTabView: View {
                             .clipped()
                             .transition(.molePanelReveal)
                         }
+
+                        installerSection
+                        systemMaintenanceSection
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 4)
@@ -146,17 +158,6 @@ struct CleanupTabView: View {
                                value: state.categories.map(\.id))
                 }
                 .transition(reduceMotion ? .opacity : .moleStateSwap)
-            }
-
-            if !state.isCleanupScanning, let installers = state.installerCandidates {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(l10n.t("cleanup.installers.review")).font(.caption).foregroundStyle(.secondary)
-                    CategoryRowView(category: Binding(
-                        get: { state.installerCandidates ?? installers },
-                        set: { state.installerCandidates = $0 }), selectionEnabled: !state.isBusy)
-                    Button(l10n.t("confirm.cleanupPermanent.ok")) { state.applyInstallers() }
-                        .disabled(state.isBusy || state.installerCandidates?.selectedSubset == nil)
-                }.padding(.horizontal, 16).padding(.vertical, 8)
             }
 
             if !state.isCleanupScanning && !state.categories.isEmpty {
@@ -169,10 +170,51 @@ struct CleanupTabView: View {
                 autoCleanIntent = nil
             }
         }
+        // 扫描完成后体检系统数据库（原系统优化页分流能力，DR-11）。
+        .onChange(of: state.cleanupScanComplete) { done in
+            if done { state.scanSystemMaintenance() }
+        }
         // 扫描中 → 结果/空态 的整块互换走弹簧过渡，而不是硬切。
         .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isApplying)
         .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isCleanupScanning)
         .animation(reduceMotion ? nil : MoleMotion.panel, value: state.categories.isEmpty)
+    }
+
+    // MARK: 安装包与系统数据库维护（与类别列表同区滚动的独立内容源）
+
+    @ViewBuilder
+    private var installerSection: some View {
+        // 安装包只在有清单时渲染；扫描中不出现。
+        if !state.isCleanupScanning, let installers = state.installerCandidates {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(l10n.t("cleanup.installers.review")).font(.caption).foregroundStyle(.secondary)
+                CategoryRowView(category: Binding(
+                    get: { state.installerCandidates ?? installers },
+                    set: { state.installerCandidates = $0 }),
+                    selectionEnabled: !state.isBusy,
+                    coveredPaths: [])
+                Button(l10n.t("confirm.cleanupPermanent.ok")) { state.applyInstallers() }
+                    .disabled(state.isBusy || state.installerCandidates?.selectedSubset == nil)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var systemMaintenanceSection: some View {
+        if !state.isCleanupScanning {
+            if state.systemMaintenanceRows.isEmpty {
+                if state.isSystemMaintenanceRunning || !state.systemMaintenanceStatus.isEmpty {
+                    systemMaintenanceHeader
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    systemMaintenanceHeader
+                    ForEach(state.systemMaintenanceRows) { row in
+                        systemMaintenanceRow(row)
+                    }
+                }
+            }
+        }
     }
 
     private var quickCleanButton: some View {
@@ -186,42 +228,68 @@ struct CleanupTabView: View {
         .disabled(state.isBusyExcludingUninstall || state.cleanupQueued)
     }
 
+    // MARK: 系统数据库维护（原系统优化页分流）
+
+    private var systemMaintenanceHeader: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "internaldrive")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.moleAccentText)
+            Text(l10n.t("sysmaint.title"))
+                .font(.system(size: 12, weight: .semibold))
+            if state.isSystemMaintenanceRunning {
+                ProgressView().controlSize(.mini)
+            } else if !state.systemMaintenanceStatus.isEmpty {
+                Text(state.systemMaintenanceStatus)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            Button { state.scanSystemMaintenance() } label: {
+                Label(l10n.t("sysmaint.check"), systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .controlSize(.small)
+            .labelStyle(.iconOnly)
+            .disabled(state.isSystemMaintenanceRunning)
+        }
+    }
+
+    private func systemMaintenanceRow(_ row: SystemMaintenanceRow) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "cylinder.split.1x2")
+                .font(.system(size: 11))
+                .foregroundStyle(Color.moleAccentText)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(l10n.t(row.item.titleKey))
+                    .font(.system(size: 12, weight: .medium))
+                Text(row.preview.summary)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            Button {
+                state.applySystemMaintenance(row.id)
+            } label: {
+                Label(l10n.t("sysmaint.confirm.ok"), systemImage: "wrench.and.screwdriver")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .controlSize(.small)
+            .disabled(state.isSystemMaintenanceRunning || state.isBusy)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
+    }
+
     private var cleanupActions: some View {
         HStack(spacing: 8) {
-            Button {
-                for index in state.categories.indices {
-                    state.categories[index].selected = state.categories[index].canSelect
-                }
-            } label: {
-                Label(l10n.t("common.selectAll"), systemImage: "checkmark.circle")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .disabled(state.categories.isEmpty || !state.cleanupScanComplete
-                || state.isApplying)
-            .labelStyle(.iconOnly)
-            Button {
-                for index in state.categories.indices { state.categories[index].selected = false }
-            } label: {
-                Label(l10n.t("common.deselectAll"), systemImage: "minus.circle")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .disabled(state.categories.isEmpty || state.isApplying)
-            .labelStyle(.iconOnly)
-            if state.cleanupScanComplete && !state.categories.isEmpty {
-                HStack(spacing: 5) {
-                    RiskBadge(risk: .safe)
-                    Text("\(state.quickCleanCount) · \(ByteFormat.format(state.quickCleanBytes))")
-                        .font(.system(size: 10).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                    if state.reviewCount > 0 {
-                        Divider().frame(height: 14)
-                        RiskBadge(risk: .warning)
-                        Text("\(state.reviewCount)")
-                            .font(.system(size: 10).monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
+            // 全选/取消全选由各分组头的开关承担：底部只保留唯一的执行入口。
             Spacer()
             Button { state.applyCleanup() } label: {
                 Label(applyLabel, systemImage: "trash.fill")
@@ -237,8 +305,7 @@ struct CleanupTabView: View {
         if state.cleanupQueued { return l10n.t("cleanup.queued") }
         if state.isApplying { return l10n.t("cleanup.apply.busy") }
         if state.selectedCount > 0 {
-            return l10n.tf("cleanup.delete.withCount", state.selectedCount,
-                           ByteFormat.format(state.selectedBytes))
+            return l10n.tf("cleanup.delete.withCount", ByteFormat.format(state.selectedBytes))
         }
         return l10n.t("cleanup.delete")
     }
@@ -333,101 +400,24 @@ struct CleanupTabView: View {
     }
 }
 
-/// 扫描尚未产生结果时的进度面板。路径使用横向滚动条，长路径不会把
-/// 窗口撑宽；底层只回传目录级事件，不会因 UI 更新拖慢文件遍历。
+/// 扫描尚未产生结果时的占位：仅 SVG 动画 + 取消按钮，不再展示文字与
+/// 进度控件；底层只回传目录级事件，不会因 UI 更新拖慢文件遍历。
 private struct CleanupScanProgressView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
 
-    private var progress: CleanupScanProgress { state.cleanupProgress }
-
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 20) {
             NoriStatusAnimation(mood: .working, size: 156)
-                .padding(.bottom, 8)
-            HStack(spacing: 7) {
-                Text(l10n.t(state.cleanupScanMode.titleKey))
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 8)
-                if let fraction = progress.fraction {
-                    Text("\(Int((fraction * 100).rounded()))%")
-                        .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(Color.moleAccentText)
-                }
-            }
-
-            Text(l10n.t(state.cleanupScanMode.hintKey))
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            if let fraction = progress.fraction {
-                ProgressView(value: fraction)
-                    .tint(Color.moleAccent)
-            } else {
-                ProgressView()
-                    .tint(Color.moleAccent)
-            }
-
-            HStack(spacing: 6) {
-                if progress.detailTotal > 0 {
-                    Text(l10n.tf("cleanup.progress.detail",
-                                progress.detailCompleted, progress.detailTotal))
-                        .font(.system(size: 10).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                } else if progress.total > 0 {
-                    Text(l10n.tf("cleanup.progress.items",
-                                progress.completed, progress.total))
-                        .font(.system(size: 10).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-
-            ScanPathTicker(path: l10n.tf(
-                "cleanup.progress.path",
-                progress.currentPath.isEmpty ? NSHomeDirectory() : progress.currentPath))
-
             Button { state.cancelCleanupScan() } label: {
                 Label(l10n.t("cleanup.cancelScan"), systemImage: "xmark.circle")
             }
             .buttonStyle(SecondaryButtonStyle())
             .controlSize(.small)
         }
-        .frame(maxWidth: 540)
         .padding(.horizontal, 28)
         .padding(.vertical, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-    }
-}
-
-private struct ScanPathTicker: View {
-    let path: String
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(path)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .id(path)
-                    .frame(minWidth: 260, alignment: .leading)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .onAppear {
-                proxy.scrollTo(path, anchor: .trailing)
-            }
-            .onChange(of: path) { nextPath in
-                withAnimation(.linear(duration: 0.3)) {
-                    proxy.scrollTo(nextPath, anchor: .trailing)
-                }
-            }
-        }
-        .frame(height: 16)
-        .clipped()
     }
 }
 
@@ -463,10 +453,22 @@ extension CleanupGroupBucket {
 struct CategoryRowView: View {
     @Binding var category: CleanupCategory
     let selectionEnabled: Bool
+    var coveredPaths: Set<String> = []
     var onAutoClean: (() -> Void)? = nil
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
+
+    /// 类目下的路径是否全部已设置定时清理（决定徽标文案）。
+    private var fullyScheduled: Bool {
+        !coveredPaths.isEmpty && coveredPaths.count == category.paths.count
+    }
+
+    private var scheduledBadgeText: String {
+        fullyScheduled
+            ? l10n.t("auto.mark.covered")
+            : l10n.tf("auto.mark.coveredPartial", coveredPaths.count, category.paths.count)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -493,6 +495,20 @@ struct CategoryRowView: View {
                 .buttonStyle(MolePlainButtonStyle(pressedScale: 0.99))
                 Spacer()
                 SizeBadge(text: ByteFormat.format(category.bytes), prominent: category.selected)
+                if !coveredPaths.isEmpty {
+                    HStack(spacing: 3) {
+                        Image(systemName: "clock.fill")
+                            .font(.system(size: 8, weight: .semibold))
+                        Text(scheduledBadgeText)
+                            .font(.system(size: 9, weight: .semibold))
+                    }
+                    .foregroundStyle(Color.moleAccentText)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.moleAccent.opacity(0.12)))
+                    .help(l10n.t("auto.mark.covered"))
+                    .accessibilityLabel(l10n.t("auto.mark.covered"))
+                }
                 if let onAutoClean {
                     Button(action: onAutoClean) {
                         Image(systemName: "clock.arrow.circlepath")
@@ -526,6 +542,12 @@ struct CategoryRowView: View {
                                 .labelsHidden()
                                 .fixedSize()
                                 .disabled(!category.canSelect || !selectionEnabled)
+                            if coveredPaths.contains(path) {
+                                Image(systemName: "clock.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(Color.moleAccentText)
+                                    .help(l10n.t("auto.mark.covered"))
+                            }
                             Text(path)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(.secondary)

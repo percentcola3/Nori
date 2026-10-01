@@ -1,38 +1,12 @@
 #!/usr/bin/env bash
-# 系统优化：任务目录、只读预检、证据绑定与提权桥接。
+# 系统优化的管理员桥接安全检查。原优化页已下架（DR-11），Swift 任务目录
+# 测试随之移除；app_optimize_admin.sh 仍为开发环境页 DNS/网络栈按钮的
+# 提权通道，其安全行为继续在此验证：
+# 测试模式不执行任何系统命令；非 root 直接拒绝；参数校验先于一切。
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-optimize-build.XXXXXX")"
-FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/.optimize-fixture.XXXXXX")"
-trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 BRIDGE="$ROOT_DIR/bridge/app_optimize_admin.sh"
 
-swiftc -O -target "$(uname -m)-apple-macos13.0" \
-    -module-cache-path "$TEST_DIR/cache" \
-    -framework AppKit -framework IOKit \
-    "$ROOT_DIR/SimpleMole/Models.swift" \
-    "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
-    "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
-    "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
-    "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
-    "$ROOT_DIR/SimpleMole/Services/DiskAnalysisWorker.swift" \
-    "$ROOT_DIR/SimpleMole/Services/MediaSlimmer.swift" \
-    "$ROOT_DIR/SimpleMole/Services/NativeCore.swift" \
-    "$ROOT_DIR/SimpleMole/Services/NativeCore+Optimize.swift" \
-    "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
-    "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
-    "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
-    "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
-    "$ROOT_DIR/script/OptimizeTests.swift" \
-    -o "$TEST_DIR/optimize-tests"
-if [[ "${1:-}" == "--probe" ]]; then
-    # 只读：对真实系统运行每项预检，不执行任何任务。
-    "$TEST_DIR/optimize-tests" --probe
-    exit 0
-fi
-"$TEST_DIR/optimize-tests" "$FIXTURE_DIR" "$BRIDGE"
-
-# 提权桥接：测试模式不执行任何系统命令；非 root 直接拒绝；参数校验先于一切。
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 output=$(MOLE_TEST_NO_AUTH=1 bash "$BRIDGE" 501 dns periodic)
 [[ "$output" == $'dns\tunavailable\tSkipped in test mode.\nperiodic\tunavailable\tSkipped in test mode.' ]] ||

@@ -4,20 +4,22 @@ import Foundation
 /// 主要动作，细项回退英文。
 enum L10nMediaTables {
     static let en: [String: String] = [
-        "analyze.mode.directories": "Folders",
-        "analyze.mode.largeFiles": "Large files %ld",
-        "analyze.mode.images": "Images %ld",
-        "analyze.mode.videos": "Videos %ld",
-        "slim.empty.title": "Nothing to slim here",
-        "slim.empty.images": "No images of 1 MB or more in your own folders under this location.",
-        "slim.empty.videos": "No videos of 20 MB or more in your own folders under this location.",
-        "slim.empty.largeFiles": "No files of 100 MB or more under this location.",
-        "slim.selectAll": "Select all",
+        "analyze.section.largeFiles": "Large files",
+        "analyze.section.images": "Images",
+        "analyze.section.videos": "Videos",
+        "analyze.section.duplicates": "Duplicates",
+        "analyze.mode.overview": "Entire disk",
+        "analyze.mode.empty": "No results in this category",
+        "analyze.section.summary.files": "%ld files · %@",
+        "analyze.section.summary.duplicates": "%ld groups · up to %@ reclaimable",
+        "analyze.section.summary.similar": "%ld groups of similar images",
+        "analyze.section.showAll": "Show all %ld",
+        "analyze.section.collapse": "Show less",
+        "analyze.section.expand": "Expand",
+        "analyze.section.waiting": "Duplicate comparison starts automatically after the disk analysis",
         "slim.headline.images": "%ld images · %@ in total · largest %ld shown",
         "slim.headline.videos": "%ld videos · %@ in total · largest %ld shown",
-        "slim.headline.largeFiles": "Files of 100 MB or more. Images and videos are re-encoded; other files are zipped.",
-        "slim.readonly": "View only",
-        "slim.readonly.help": "Inside Library, an app, a photo library or a hidden folder. Changing it could break the app that owns it.",
+        "slim.selectAll": "Select all",
         "slim.op.image": "Compress",
         "slim.op.video": "Transcode",
         "slim.op.archive": "Zip",
@@ -81,20 +83,22 @@ enum L10nMediaTables {
     ]
 
     static let zhHans: [String: String] = [
-        "analyze.mode.directories": "目录",
-        "analyze.mode.largeFiles": "大文件 %ld",
-        "analyze.mode.images": "图片 %ld",
-        "analyze.mode.videos": "视频 %ld",
-        "slim.empty.title": "这里没有可瘦身的文件",
-        "slim.empty.images": "当前位置下，你自己的文件夹里没有 1 MB 以上的图片。",
-        "slim.empty.videos": "当前位置下，你自己的文件夹里没有 20 MB 以上的视频。",
-        "slim.empty.largeFiles": "当前位置下没有 100 MB 以上的文件。",
-        "slim.selectAll": "全选",
+        "analyze.section.largeFiles": "大文件",
+        "analyze.section.images": "图片",
+        "analyze.section.videos": "视频",
+        "analyze.section.duplicates": "重复文件",
+        "analyze.mode.overview": "整个磁盘",
+        "analyze.mode.empty": "该分类暂无结果",
+        "analyze.section.summary.files": "%ld 个文件 · %@",
+        "analyze.section.summary.duplicates": "%ld 组 · 最多可释放 %@",
+        "analyze.section.summary.similar": "%ld 组相似图片",
+        "analyze.section.showAll": "显示全部 %ld 项",
+        "analyze.section.collapse": "收起",
+        "analyze.section.expand": "展开",
+        "analyze.section.waiting": "磁盘分析完成后自动比对重复文件",
         "slim.headline.images": "共 %ld 张图片 · 合计 %@ · 展示最大的 %ld 张",
         "slim.headline.videos": "共 %ld 个视频 · 合计 %@ · 展示最大的 %ld 个",
-        "slim.headline.largeFiles": "100 MB 以上的文件。图片和视频重新编码，其他文件打包成 zip。",
-        "slim.readonly": "仅查看",
-        "slim.readonly.help": "位于资源库、App、照片图库或隐藏文件夹内，改动可能损坏所属 App。",
+        "slim.selectAll": "全选",
         "slim.op.image": "压缩",
         "slim.op.video": "转码",
         "slim.op.archive": "打包",
@@ -158,20 +162,22 @@ enum L10nMediaTables {
     ]
 
     static let zhHant: [String: String] = [
-        "analyze.mode.directories": "目錄",
-        "analyze.mode.largeFiles": "大檔案 %ld",
-        "analyze.mode.images": "圖片 %ld",
-        "analyze.mode.videos": "影片 %ld",
-        "slim.empty.title": "這裡沒有可瘦身的檔案",
-        "slim.empty.images": "目前位置下，你自己的資料夾裡沒有 1 MB 以上的圖片。",
-        "slim.empty.videos": "目前位置下，你自己的資料夾裡沒有 20 MB 以上的影片。",
-        "slim.empty.largeFiles": "目前位置下沒有 100 MB 以上的檔案。",
-        "slim.selectAll": "全選",
+        "analyze.section.largeFiles": "大檔案",
+        "analyze.section.images": "圖片",
+        "analyze.section.videos": "影片",
+        "analyze.section.duplicates": "重複檔案",
+        "analyze.mode.overview": "整個磁碟",
+        "analyze.mode.empty": "該分類暫無結果",
+        "analyze.section.summary.files": "%ld 個檔案 · %@",
+        "analyze.section.summary.duplicates": "%ld 組 · 最多可釋放 %@",
+        "analyze.section.summary.similar": "%ld 組相似圖片",
+        "analyze.section.showAll": "顯示全部 %ld 項",
+        "analyze.section.collapse": "收起",
+        "analyze.section.expand": "展開",
+        "analyze.section.waiting": "磁碟分析完成後自動比對重複檔案",
         "slim.headline.images": "共 %ld 張圖片 · 合計 %@ · 顯示最大的 %ld 張",
         "slim.headline.videos": "共 %ld 部影片 · 合計 %@ · 顯示最大的 %ld 部",
-        "slim.headline.largeFiles": "100 MB 以上的檔案。圖片和影片重新編碼，其他檔案打包成 zip。",
-        "slim.readonly": "僅檢視",
-        "slim.readonly.help": "位於資源庫、App、照片圖庫或隱藏資料夾內，改動可能損壞所屬 App。",
+        "slim.selectAll": "全選",
         "slim.op.image": "壓縮",
         "slim.op.video": "轉檔",
         "slim.op.archive": "打包",
@@ -234,13 +240,16 @@ enum L10nMediaTables {
         "slim.reason.verify": "zip 驗證失敗"
     ]
 
-    private static func short(_ folders: String, _ large: String, _ images: String,
-                              _ videos: String, _ slim: String, _ start: String) -> [String: String] {
+    private static func short(_ overview: String, _ empty: String, _ large: String,
+                              _ images: String, _ videos: String, _ duplicates: String,
+                              _ slim: String, _ start: String) -> [String: String] {
         [
-            "analyze.mode.directories": folders,
-            "analyze.mode.largeFiles": large + " %ld",
-            "analyze.mode.images": images + " %ld",
-            "analyze.mode.videos": videos + " %ld",
+            "analyze.mode.overview": overview,
+            "analyze.mode.empty": empty,
+            "analyze.section.largeFiles": large,
+            "analyze.section.images": images,
+            "analyze.section.videos": videos,
+            "analyze.section.duplicates": duplicates,
             "slim.action": slim,
             "slim.start": start
         ]
@@ -250,15 +259,15 @@ enum L10nMediaTables {
         switch language {
         case .zhHans: return zhHans
         case .zhHant: return zhHant
-        case .ja: return short("フォルダ", "大きなファイル", "画像", "動画", "スリム化", "開始")
-        case .ko: return short("폴더", "큰 파일", "이미지", "동영상", "용량 줄이기", "시작")
-        case .de: return short("Ordner", "Große Dateien", "Bilder", "Videos", "Verkleinern", "Starten")
-        case .fr: return short("Dossiers", "Gros fichiers", "Images", "Vidéos", "Alléger", "Démarrer")
-        case .es: return short("Carpetas", "Archivos grandes", "Imágenes", "Vídeos", "Reducir", "Iniciar")
-        case .pt: return short("Pastas", "Arquivos grandes", "Imagens", "Vídeos", "Reduzir", "Iniciar")
-        case .it: return short("Cartelle", "File grandi", "Immagini", "Video", "Alleggerisci", "Avvia")
-        case .ru: return short("Папки", "Большие файлы", "Изображения", "Видео", "Сжать", "Начать")
-        case .tr: return short("Klasörler", "Büyük dosyalar", "Görseller", "Videolar", "Küçült", "Başlat")
+        case .ja: return short("ディスク全体", "この分類の結果はまだありません", "大きなファイル", "画像", "動画", "重複ファイル", "スリム化", "開始")
+        case .ko: return short("전체 디스크", "이 범주에는 아직 결과가 없습니다", "큰 파일", "이미지", "동영상", "중복 파일", "용량 줄이기", "시작")
+        case .de: return short("Gesamte Festplatte", "Noch keine Ergebnisse in dieser Kategorie", "Große Dateien", "Bilder", "Videos", "Duplikate", "Verkleinern", "Starten")
+        case .fr: return short("Disque entier", "Pas encore de résultats dans cette catégorie", "Gros fichiers", "Images", "Vidéos", "Doublons", "Alléger", "Démarrer")
+        case .es: return short("Disco completo", "Aún no hay resultados en esta categoría", "Archivos grandes", "Imágenes", "Vídeos", "Duplicados", "Reducir", "Iniciar")
+        case .pt: return short("Disco inteiro", "Ainda sem resultados nesta categoria", "Arquivos grandes", "Imagens", "Vídeos", "Duplicados", "Reduzir", "Iniciar")
+        case .it: return short("Disco intero", "Ancora nessun risultato in questa categoria", "File grandi", "Immagini", "Video", "Duplicati", "Alleggerisci", "Avvia")
+        case .ru: return short("Весь диск", "В этой категории пока нет результатов", "Большие файлы", "Изображения", "Видео", "Дубликаты", "Сжать", "Начать")
+        case .tr: return short("Tüm disk", "Bu kategoride henüz sonuç yok", "Büyük dosyalar", "Görseller", "Videolar", "Yinelenenler", "Küçült", "Başlat")
         case .en, .auto: return en
         }
     }

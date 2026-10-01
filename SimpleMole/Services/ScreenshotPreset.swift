@@ -63,7 +63,8 @@ enum PresetFrameStyle: String, CaseIterable, Hashable {
     case macWindow
     /// 圆角卡片：无标题栏，细边框。
     case roundedCard
-    /// iPhone 外壳：机身 + 灵动岛 + 侧键，截图完整落在屏幕内。
+    /// iPhone 外壳：机身 + 灵动岛 + 侧键；屏幕固定为手机比例，
+    /// 截图居中自动剪裁（cover）填满屏幕。
     case iphone
 
     var l10nKey: String { "shot.frame.\(rawValue)" }
@@ -236,14 +237,30 @@ struct PresetLayout: Equatable {
     let buttonProtrusion: CGFloat
     /// 灵动岛（画布坐标），完全落在上边框内、不遮挡内容。
     let islandRect: CGRect
+    /// 源截图尺寸（未剪裁）。iPhone 外壳的 contentRect 是按手机屏幕比例
+    /// 居中剪裁后的屏幕区域；渲染层用该尺寸把原图以 cover 方式铺满屏幕。
+    let contentSourceSize: CGSize
+
+    /// 主流 iPhone 的屏幕宽高比；外壳的屏幕区域固定为该比例。
+    static let phoneScreenRatio: CGFloat = 9.0 / 19.5
 
     static func compute(contentSize: CGSize, composition: ScreenshotComposition) -> PresetLayout {
         let preset = composition.preset
-        let width = max(1, contentSize.width)
-        let height = max(1, contentSize.height)
+        let source = CGSize(width: max(1, contentSize.width), height: max(1, contentSize.height))
+        let isPhone = composition.frame == .iphone
+        // 屏幕尺寸从源图按 cover 推导：保留较小的维度并裁掉另一个维度的两侧，
+        // 可见区域始终保持原始分辨率，不会拉伸。
+        var width = source.width
+        var height = source.height
+        if isPhone {
+            if source.width / source.height > Self.phoneScreenRatio {
+                width = (source.height * Self.phoneScreenRatio).rounded()
+            } else {
+                height = (source.width / Self.phoneScreenRatio).rounded()
+            }
+        }
         // 以 1000pt 宽为基准缩放相框细节，导出 2x 时线条与点仍成比例。
         let chromeScale = min(4, max(0.5, width / 1000))
-        let isPhone = composition.frame == .iphone
         let bezelSide = isPhone ? (55 * chromeScale).rounded() : 0
         let bezelTop = isPhone ? (110 * chromeScale).rounded() : 0
         let bezelBottom = bezelSide
@@ -290,7 +307,8 @@ struct PresetLayout: Equatable {
                             bezelTop: bezelTop, bezelSide: bezelSide, bezelBottom: bezelBottom,
                             bodyCornerRadius: bodyCornerRadius,
                             screenCornerRadius: screenCornerRadius,
-                            buttonProtrusion: buttonProtrusion, islandRect: islandRect)
+                            buttonProtrusion: buttonProtrusion, islandRect: islandRect,
+                            contentSourceSize: source)
     }
 }
 

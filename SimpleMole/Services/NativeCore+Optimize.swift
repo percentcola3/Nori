@@ -2,103 +2,58 @@ import AppKit
 import Darwin
 import Foundation
 
-/// 系统优化：Mole `mo optimize` 的完整任务表。每项先做只读预检
-/// （是否需要、将改动什么），用户勾选后才执行；执行时只作用于预检记录
-/// 下来的证据（路径 + 身份、bundle ID、偏好键），不会顺带处理新出现的项。
+/// 系统数据库维护项：原系统优化页分流到硬盘清理的能力（DR-11）。
+enum SystemMaintenanceItem: String, CaseIterable, Identifiable {
+    case sqliteVacuum = "sqlite-vacuum"
+    case notifications = "notifications"
+    case coreduet = "coreduet"
+    case quarantine = "quarantine"
+    case savedState = "saved-state"
+
+    var id: String { rawValue }
+    var titleKey: String { "sysmaint.item.\(rawValue)" }
+    var detailKey: String { "sysmaint.item.\(rawValue).detail" }
+}
+
+/// 维护行：清理页卡片展示与执行的最小载体（只读体检产出）。
+struct SystemMaintenanceRow: Identifiable, Equatable {
+    let item: SystemMaintenanceItem
+    let preview: NativeCore.OptimizePreview
+    var id: String { item.rawValue }
+}
+
+/// 原系统优化页的执行层保留：系统数据库维护（清理页卡片）与
+/// QuickLook/图标/LaunchServices 服务修复（开发环境页按钮）。
+/// DNS 与网络栈的管理员任务由 bridge/app_optimize_admin.sh 直接承载。
 extension NativeCore {
     typealias OptimizePreview = OptimizeTask.Preview
 
     static let sqliteMaxBytes: UInt64 = 100 * 1024 * 1024
     static let notificationThresholdBytes: UInt64 = 50 * 1024 * 1024
     static let knowledgeThresholdBytes: UInt64 = 100 * 1024 * 1024
+
     /// Cocoa 参考时间（2001-01-01）相对 Unix 纪元的秒数。
     static let cocoaEpochOffset: Double = 978_307_200
 
-    func initialOptimizeTasks() -> [OptimizeTask] {
-        [
-            OptimizeTask(id: "dns", title: "DNS cache",
-                         detail: "Flush the resolver cache and restart mDNSResponder.", kind: .admin),
-            OptimizeTask(id: "quicklook", title: "Quick Look cache", detail: "Refresh Quick Look thumbnails."),
-            OptimizeTask(id: "iconservices", title: "Icon services", detail: "Restart the Finder icon service."),
-            OptimizeTask(id: "launchservices", title: "LaunchServices",
-                         detail: "Rebuild app and document associations."),
-            OptimizeTask(id: "saved-state", title: "Saved application state",
-                         detail: "Move saved window states older than 30 days to Trash."),
-            OptimizeTask(id: "broken-configs", title: "Broken preferences",
-                         detail: "Move corrupt third-party preference files to Trash; Apple and login settings are never touched."),
-            OptimizeTask(id: "shared-file-list", title: "Shared file lists",
-                         detail: "Move corrupt Finder favorites and recent-item lists to Trash; recent documents are kept."),
-            OptimizeTask(id: "finder-dsstore", title: "Network .DS_Store",
-                         detail: "Stop Finder writing .DS_Store on network and USB volumes."),
-            OptimizeTask(id: "legacy-overrides", title: "Legacy overrides",
-                         detail: "Remove old App Nap and disk-image verification overrides."),
-            OptimizeTask(id: "spotlight-orphans", title: "Spotlight orphan rules",
-                         detail: "Drop Spotlight search rules left behind by uninstalled apps."),
-            OptimizeTask(id: "sqlite-vacuum", title: "SQLite databases",
-                         detail: "Compact Mail, Messages and Safari databases after an integrity check."),
-            OptimizeTask(id: "network-stack", title: "Network stack",
-                         detail: "Flush routes and ARP only when the network is unhealthy and no VPN is active.",
-                         kind: .admin),
-            OptimizeTask(id: "periodic", title: "Periodic maintenance",
-                         detail: "Run daily, weekly and monthly scripts when they are more than 7 days old.",
-                         kind: .admin),
-            OptimizeTask(id: "permissions", title: "User permissions",
-                         detail: "Reset home directory permissions only when ownership or write access is wrong.",
-                         kind: .admin),
-            OptimizeTask(id: "spotlight", title: "Spotlight index",
-                         detail: "Rebuild the index only when searches are measurably slow on AC power.",
-                         kind: .admin, defaultOn: false),
-            OptimizeTask(id: "disk-verify", title: "Disk health",
-                         detail: "Verify the startup volume read-only; may take minutes.",
-                         kind: .admin, defaultOn: false),
-            OptimizeTask(id: "quarantine", title: "Quarantine history",
-                         detail: "Clear the download history; files and Gatekeeper checks are unaffected.",
-                         defaultOn: false),
-            OptimizeTask(id: "notifications", title: "Notification history",
-                         detail: "Delete delivered notifications older than 30 days when the database exceeds 50 MB.",
-                         defaultOn: false),
-            OptimizeTask(id: "coreduet", title: "Usage history",
-                         detail: "Delete Screen Time usage records older than 90 days when the database exceeds 100 MB.",
-                         defaultOn: false),
-            OptimizeTask(id: "launch-agents", title: "Launch agents",
-                         detail: "Report user launch agents whose program is missing; nothing is removed.",
-                         kind: .report),
-            OptimizeTask(id: "login-items", title: "Login items",
-                         detail: "Review login items in System Settings.", kind: .report)
-        ]
-    }
+    // MARK: 体检
 
-    // MARK: Inspect
-
-    func inspectOptimize(tasks: [OptimizeTask],
-                         homeDirectory: String = NSHomeDirectory()) async -> [OptimizeTask] {
+    /// 体检系统数据库维护项（`only` 为空时体检全部），在后台线程执行。
+    func inspectSystemMaintenance(homeDirectory home: String = NSHomeDirectory(),
+                                  only: String? = nil) async -> [SystemMaintenanceRow] {
         await Task.detached(priority: .utility) { [self] in
-            tasks.map { task in
-                var task = task
-                task.state = .pending
-                task.message = ""
-                task.preview = isOptimizeWhitelisted(task, homeDirectory: homeDirectory)
-                    ? .init(need: .blocked, summary: "Skipped by whitelist.")
-                    : inspectOptimizeTask(task.id, homeDirectory: homeDirectory)
-                task.selected = task.selectable && task.defaultOn
-                return task
+            let ids = only.map { [$0] } ?? SystemMaintenanceItem.allCases.map(\.rawValue)
+            return ids.compactMap { id -> SystemMaintenanceRow? in
+                guard let item = SystemMaintenanceItem(rawValue: id) else { return nil }
+                return SystemMaintenanceRow(item: item,
+                                             preview: inspectMaintenanceItem(id, homeDirectory: home))
             }
         }.value
     }
 
-    func inspectOptimizeTask(_ id: String, homeDirectory home: String) -> OptimizePreview {
+    func inspectMaintenanceItem(_ id: String, homeDirectory home: String) -> OptimizePreview {
         switch id {
-        case "dns":
-            return .init(need: .needed, summary: "Flush DNS caches and restart mDNSResponder.")
-        case "quicklook":
-            return .init(need: .needed, summary: "Reset the Quick Look thumbnail cache.")
-        case "iconservices":
-            return .init(need: .needed, summary: "Restart iconservicesagent so Finder redraws icons.")
-        case "launchservices":
-            let tool = Self.lsregister
-            return fileManager.isExecutableFile(atPath: tool)
-                ? .init(need: .needed, summary: "Garbage-collect and re-register app associations.")
-                : .init(need: .unavailable, summary: "lsregister is unavailable on this macOS version.")
+        case "sqlite-vacuum":
+            return inspectSQLiteVacuum(homeDirectory: home)
         case "saved-state":
             let targets = oldSavedStates(homeDirectory: home)
             return targets.isEmpty
@@ -106,77 +61,6 @@ extension NativeCore {
                 : .init(need: .needed, summary: "\(targets.count) saved state(s) older than 30 days.",
                         items: targets.map { URL(fileURLWithPath: $0.path).lastPathComponent },
                         plan: targets.map(Self.planEntry))
-        case "broken-configs":
-            let result = repairBrokenPreferences(homeDirectory: home, dryRun: true)
-            let targets = result.corrupt.compactMap { path in
-                DeletionPlan.identity(at: path).map { (path: path, identity: $0) }
-            }
-            if targets.isEmpty {
-                return .init(need: .clean, summary: result.partial
-                    ? "No corrupt preference file found before the time limit."
-                    : "All third-party preference files are valid.")
-            }
-            return .init(need: .needed, summary: "\(targets.count) corrupt preference file(s).",
-                         items: targets.map { URL(fileURLWithPath: $0.path).lastPathComponent },
-                         plan: targets.map(Self.planEntry))
-        case "shared-file-list":
-            guard let targets = corruptSharedFileLists(homeDirectory: home) else {
-                return .init(need: .unavailable, summary: "Could not inspect shared file lists.")
-            }
-            return targets.isEmpty
-                ? .init(need: .clean, summary: "Shared file lists are healthy.")
-                : .init(need: .needed, summary: "\(targets.count) corrupt shared file list(s).",
-                        items: targets.map { URL(fileURLWithPath: $0.path).lastPathComponent },
-                        plan: targets.map(Self.planEntry))
-        case "finder-dsstore":
-            let missing = Self.dsStoreKeys.filter { key in
-                let value = runCommandOutput("/usr/bin/defaults", ["read", "com.apple.desktopservices", key])
-                return !Self.isTruthy(value)
-            }
-            return missing.isEmpty
-                ? .init(need: .clean, summary: "Finder already skips .DS_Store on network and USB volumes.")
-                : .init(need: .needed, summary: "Set \(missing.joined(separator: ", ")).",
-                        items: missing, plan: missing)
-        case "legacy-overrides":
-            let found = Self.legacyOverrides.filter { domain, key in
-                Self.isTruthy(runCommandOutput("/usr/bin/defaults", ["read", domain, key]))
-            }
-            return found.isEmpty
-                ? .init(need: .clean, summary: "No legacy overrides found.")
-                : .init(need: .needed, summary: "\(found.count) legacy override(s) set.",
-                        items: found.map { "\($0.0) \($0.1)" },
-                        plan: found.map { "\($0.0)\t\($0.1)" })
-        case "spotlight-orphans":
-            let orphans = orphanSpotlightRules()
-            return orphans.isEmpty
-                ? .init(need: .clean, summary: "Spotlight search rules are clean.")
-                : .init(need: .needed, summary: "\(orphans.count) rule(s) for uninstalled apps.",
-                        items: orphans, plan: orphans)
-        case "sqlite-vacuum":
-            return inspectSQLiteVacuum(homeDirectory: home)
-        case "network-stack":
-            return inspectNetworkStack()
-        case "periodic":
-            guard fileManager.isExecutableFile(atPath: "/usr/sbin/periodic") else {
-                return .init(need: .unavailable, summary: "periodic is not available on this macOS version.")
-            }
-            let log = "/var/log/daily.out"
-            if let modified = (try? fileManager.attributesOfItem(atPath: log))?[.modificationDate] as? Date {
-                let days = Int(Date().timeIntervalSince(modified) / 86_400)
-                if days < 7 { return .init(need: .clean, summary: "Last ran \(days) day(s) ago.") }
-                return .init(need: .needed, summary: "Last ran \(days) day(s) ago.")
-            }
-            return .init(need: .needed, summary: "No record of a previous run.")
-        case "permissions":
-            let problems = permissionProblems(homeDirectory: home)
-            return problems.isEmpty
-                ? .init(need: .clean, summary: "Home directory ownership and write access are correct.")
-                : .init(need: .needed, summary: "Permission problems found.", items: problems)
-        case "spotlight":
-            return inspectSpotlight()
-        case "disk-verify":
-            return .init(need: .needed,
-                         summary: "Read-only check of the startup volume, bounded to 10 minutes.")
         case "quarantine":
             let database = home + "/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
             guard fileManager.fileExists(atPath: database) else {
@@ -206,53 +90,29 @@ extension NativeCore {
             return bytes < Self.knowledgeThresholdBytes
                 ? .init(need: .clean, summary: "Database is \(Self.byteText(bytes)); below 100 MB.")
                 : .init(need: .needed, summary: "Database is \(Self.byteText(bytes)).", plan: [database])
-        case "launch-agents":
-            let report = brokenLaunchAgents(homeDirectory: home)
-            if report.broken.isEmpty {
-                return .init(need: .clean, summary: report.scanned == 0
-                    ? "No user launch agents installed."
-                    : "All \(report.scanned) user launch agent(s) point to existing programs.")
-            }
-            return .init(need: .blocked,
-                         summary: "\(report.broken.count) agent(s) point at a missing program; left in place.",
-                         items: report.broken.map {
-                             "\(URL(fileURLWithPath: $0.plist).lastPathComponent) → \($0.program)"
-                         },
-                         plan: report.broken.map(\.plist))
-        case "login-items":
-            return .init(need: .blocked,
-                         summary: "macOS only exposes login items to System Settings; review them there.")
         default:
-            return .init(need: .unavailable, summary: "Unknown task.")
+            return .init(need: .unavailable, summary: "Unknown maintenance item.")
         }
     }
 
-    // MARK: Apply
+    // MARK: 执行
 
-    /// 执行勾选的非提权任务；`admin` 任务保持待定，由调用方交给提权桥接。
-    func runOptimize(tasks: [OptimizeTask],
-                     homeDirectory: String = NSHomeDirectory()) async -> OptimizeReport {
+    /// 执行单个维护/修复动作；清理页卡片与开发环境按钮共用。
+    /// 白名单命中的项跳过（与清理页一致的用户保护）。
+    func runMaintenanceTask(id: String, preview: OptimizePreview,
+                            homeDirectory home: String = NSHomeDirectory()) async
+        -> (state: OptimizeTask.State, message: String) {
         await Task.detached(priority: .utility) { [self] in
-            let output = tasks.map { task -> OptimizeTask in
-                var task = task
-                guard task.selected, task.selectable, task.kind == .action,
-                      let preview = task.preview else { return task }
-                if isOptimizeWhitelisted(task, homeDirectory: homeDirectory) {
-                    task.state = .unchanged
-                    task.message = "Skipped by whitelist."
-                    return task
-                }
-                let result = applyOptimizeTask(task.id, preview: preview, homeDirectory: homeDirectory)
-                task.state = result.state
-                task.message = result.message
-                return task
+            let probe = OptimizeTask(id: id, title: id, detail: "")
+            if isOptimizeWhitelisted(probe, homeDirectory: home) {
+                return (.unchanged, "Skipped by whitelist.")
             }
-            return OptimizeReport(tasks: output, finishedAt: Date())
+            return applyMaintenanceTask(id, preview: preview, homeDirectory: home)
         }.value
     }
 
-    func applyOptimizeTask(_ id: String, preview: OptimizePreview,
-                           homeDirectory home: String) -> (state: OptimizeTask.State, message: String) {
+    func applyMaintenanceTask(_ id: String, preview: OptimizePreview,
+                              homeDirectory home: String) -> (state: OptimizeTask.State, message: String) {
         switch id {
         case "quicklook":
             let ok = runCommand("/usr/bin/qlmanage", ["-r", "cache"])
@@ -262,11 +122,12 @@ extension NativeCore {
             return ok ? (.applied, "Finder icon service restarted.")
                 : (.unchanged, "Icon service was not running; no change was needed.")
         case "launchservices":
-            // `-kill` 会丢掉用户手动注册的应用，与 Mole 一样只做 gc + 重注册。
+            // `-kill` 会丢掉用户手动注册的应用，只做 gc + 重注册。
             _ = runCommand(Self.lsregister, ["-gc"])
             let full = runCommand(Self.lsregister,
                                   ["-r", "-f", "-domain", "local", "-domain", "user", "-domain", "system"])
-            let partial = full || runCommand(Self.lsregister, ["-r", "-f", "-domain", "local", "-domain", "user"])
+            let partial = full || runCommand(Self.lsregister,
+                                             ["-r", "-f", "-domain", "local", "-domain", "user"])
             if full { return (.applied, "LaunchServices database rebuilt.") }
             return partial ? (.applied, "LaunchServices rebuilt for user and local domains.")
                 : (.failed, "LaunchServices rebuild failed.")
@@ -274,41 +135,6 @@ extension NativeCore {
             let root = home + "/Library/Saved Application State"
             let fresh = Set(oldSavedStates(homeDirectory: home).map(Self.planEntry))
             return trashPlanned(preview.plan.filter(fresh.contains), parent: root, noun: "saved state(s)")
-        case "broken-configs":
-            let targets = preview.plan.filter { entry in
-                Self.planPath(entry).map { !runCommand("/usr/bin/plutil", ["-lint", "-s", $0]) } ?? false
-            }
-            return trashPlanned(targets, parent: home + "/Library/Preferences", noun: "corrupt preference file(s)")
-        case "shared-file-list":
-            let fresh = Set((corruptSharedFileLists(homeDirectory: home) ?? []).map(Self.planEntry))
-            let result = trashPlanned(preview.plan.filter(fresh.contains),
-                                      parent: home + "/Library/Application Support/com.apple.sharedfilelist",
-                                      noun: "corrupt shared file list(s)")
-            if result.state == .applied { _ = runCommand("/usr/bin/killall", ["sharedfilelistd"]) }
-            return result
-        case "finder-dsstore":
-            let keys = preview.plan.filter(Self.dsStoreKeys.contains)
-            let ok = keys.allSatisfy {
-                runCommand("/usr/bin/defaults", ["write", "com.apple.desktopservices", $0, "-bool", "TRUE"])
-            }
-            return ok ? (.applied, "Finder will stop writing .DS_Store on network and USB volumes.")
-                : (.failed, "Could not update Finder metadata preferences.")
-        case "legacy-overrides":
-            let allowed = Set(Self.legacyOverrides.map { "\($0.0)\t\($0.1)" })
-            var removed = 0
-            var failed = 0
-            for entry in preview.plan where allowed.contains(entry) {
-                let parts = entry.split(separator: "\t").map(String.init)
-                guard Self.isTruthy(runCommandOutput("/usr/bin/defaults", ["read", parts[0], parts[1]])) else {
-                    continue
-                }
-                if runCommand("/usr/bin/defaults", ["delete", parts[0], parts[1]]) { removed += 1 } else { failed += 1 }
-            }
-            if failed > 0 { return (.failed, "Some legacy overrides could not be removed.") }
-            return removed > 0 ? (.applied, "Removed \(removed) legacy override(s).")
-                : (.unchanged, "No legacy overrides found.")
-        case "spotlight-orphans":
-            return pruneSpotlightRules(preview.plan)
         case "sqlite-vacuum":
             return vacuumDatabases(preview.plan, homeDirectory: home)
         case "quarantine":
@@ -319,69 +145,21 @@ extension NativeCore {
         case "coreduet":
             return trimKnowledge(preview.plan, homeDirectory: home)
         default:
-            return (.unavailable, "This task is not executed by the optimizer.")
+            return (.unavailable, "This item is not executed here.")
         }
     }
 
-    // MARK: Administrator batch
-
-    static let adminTaskIDs: Set<String> = ["dns", "network-stack", "periodic", "permissions",
-                                            "spotlight", "disk-verify"]
-
-    func selectedAdminTasks(_ tasks: [OptimizeTask]) -> [String] {
-        tasks.filter { $0.selected && $0.selectable && $0.kind == .admin && Self.adminTaskIDs.contains($0.id) }
-            .map(\.id)
-    }
-
-    /// 解析提权桥接输出：每行 `id<TAB>state<TAB>message`；未回报的任务视为失败。
-    static func mergeAdminResults(_ output: String, succeeded: Bool,
-                                  requested: [String], into tasks: [OptimizeTask]) -> [OptimizeTask] {
-        var results: [String: (OptimizeTask.State, String)] = [:]
-        for line in output.split(whereSeparator: \.isNewline) {
-            let fields = line.split(separator: "\t", maxSplits: 2).map(String.init)
-            guard fields.count == 3, requested.contains(fields[0]),
-                  let state = OptimizeTask.State(rawValue: fields[1]), state != .pending else { continue }
-            results[fields[0]] = (state, fields[2])
-        }
-        return tasks.map { task in
-            guard requested.contains(task.id) else { return task }
-            var task = task
-            if let (state, message) = results[task.id] {
-                task.state = state
-                task.message = message
-            } else {
-                task.state = succeeded ? .failed : .unavailable
-                task.message = succeeded
-                    ? "No result was reported for this task."
-                    : "Administrator access was not granted."
-            }
-            return task
-        }
-    }
-
-    // MARK: Evidence helpers
+    // MARK: 计划与工具
 
     static let lsregister =
         "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
-    static let dsStoreKeys = ["DSDontWriteNetworkStores", "DSDontWriteUSBStores"]
-    static let legacyOverrides: [(String, String)] = [
-        ("-g", "NSAppSleepDisabled"),
-        ("com.apple.frameworks.diskimages", "skip-verify"),
-        ("com.apple.frameworks.diskimages", "skip-verify-locked"),
-        ("com.apple.frameworks.diskimages", "skip-verify-remote")
-    ]
 
     static func planEntry(_ target: (path: String, identity: String)) -> String {
-        target.identity + "\t" + target.path
+        "\(target.identity)\t\(target.path)"
     }
 
     static func planPath(_ entry: String) -> String? {
         entry.split(separator: "\t", maxSplits: 1).last.map(String.init)
-    }
-
-    static func isTruthy(_ value: String?) -> Bool {
-        guard let value else { return false }
-        return ["1", "true", "yes"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
     static func byteText(_ bytes: UInt64) -> String {
@@ -414,76 +192,6 @@ extension NativeCore {
                   let identity = DeletionPlan.identity(at: item.path) else { return nil }
             return (item.path, identity)
         }
-    }
-
-    /// Mole `opt_shared_file_list_repair`：plutil 拒绝的 .sfl2/.sfl3，
-    /// 最近文档列表属于用户数据，永远排除。nil 表示无法判定。
-    func corruptSharedFileLists(homeDirectory home: String) -> [(path: String, identity: String)]? {
-        let root = URL(fileURLWithPath: home + "/Library/Application Support/com.apple.sharedfilelist",
-                       isDirectory: true)
-        guard isDirectory(root), !isSymlink(root) else { return [] }
-        guard let enumerator = fileManager.enumerator(
-            at: root, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else { return nil }
-        let deadline = Date().addingTimeInterval(10)
-        var found: [(path: String, identity: String)] = []
-        for case let url as URL in enumerator {
-            guard Date() < deadline else { return nil }
-            if isSymlink(url) { enumerator.skipDescendants(); continue }
-            guard ["sfl2", "sfl3"].contains(url.pathExtension),
-                  !url.path.contains("ApplicationRecentDocuments"),
-                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
-                  !runCommand("/usr/bin/plutil", ["-lint", "-s", url.path]),
-                  let identity = DeletionPlan.identity(at: url.path) else { continue }
-            found.append((url.path, identity))
-        }
-        return found.sorted { $0.path < $1.path }
-    }
-
-    // MARK: Spotlight rules
-
-    func orphanSpotlightRules() -> [String] {
-        rawSpotlightRules().filter { rule in
-            guard !rule.hasPrefix("System."), !rule.hasPrefix("com.apple."),
-                  Self.isReverseDNS(rule) else { return false }
-            return bundleIsInstalled(rule) == false
-        }
-    }
-
-    private func rawSpotlightRules() -> [String] {
-        let defaults = UserDefaults(suiteName: "com.apple.spotlight")
-        return defaults?.array(forKey: "EnabledPreferenceRules")?.compactMap { $0 as? String } ?? []
-    }
-
-    /// true 已安装；false 两路证据都证明不存在；nil 无法判定（按已安装处理）。
-    private func bundleIsInstalled(_ bundleID: String) -> Bool? {
-        if NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil { return true }
-        guard let output = SystemMetrics.commandOutput(
-            "/usr/bin/mdfind", arguments: ["kMDItemCFBundleIdentifier == '\(bundleID)'"], timeoutSeconds: 5)
-        else { return nil }
-        return output.split(whereSeparator: \.isNewline).isEmpty ? false : true
-    }
-
-    static func isReverseDNS(_ value: String) -> Bool {
-        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count >= 3 else { return false }
-        return parts.allSatisfy { part in
-            !part.isEmpty && part.allSatisfy { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
-        }
-    }
-
-    private func pruneSpotlightRules(_ plan: [String]) -> (state: OptimizeTask.State, message: String) {
-        let current = rawSpotlightRules()
-        let fresh = Set(orphanSpotlightRules())
-        let remove = Set(plan).intersection(fresh)
-        guard !remove.isEmpty else { return (.unchanged, "Spotlight search rules are clean.") }
-        let keep = current.filter { !remove.contains($0) }
-        // 经 cfprefsd 写回整个数组，避免直接改 plist 被缓存覆盖。
-        let ok = keep.isEmpty
-            ? runCommand("/usr/bin/defaults", ["delete", "com.apple.spotlight", "EnabledPreferenceRules"])
-            : runCommand("/usr/bin/defaults",
-                         ["write", "com.apple.spotlight", "EnabledPreferenceRules", "-array"] + keep)
-        return ok ? (.applied, "Removed \(remove.count) orphan Spotlight rule(s).")
-            : (.failed, "Could not update Spotlight search rules.")
     }
 
     // MARK: SQLite
@@ -578,6 +286,7 @@ extension NativeCore {
             : (.unchanged, "Nothing left to compact.")
     }
 
+    /// 只执行固定语句；语句常量在调用点写死，永不拼接外部输入。
     func sqlite(_ database: String, _ statement: String, readOnly: Bool = false,
                 timeout: TimeInterval = 10) -> String? {
         let arguments = (readOnly ? ["-readonly"] : []) + [database, statement]
@@ -637,68 +346,5 @@ extension NativeCore {
             return (.failed, "Usage database is busy or locked.")
         }
         return (.applied, "Removed usage records older than 90 days (now \(Self.byteText(sqliteFamilyBytes(database)))).")
-    }
-
-    // MARK: Network, Spotlight, permissions
-
-    private func inspectNetworkStack() -> OptimizePreview {
-        if let services = SystemMetrics.commandOutput("/usr/sbin/scutil", arguments: ["--nc", "list"],
-                                                      timeoutSeconds: 5),
-           services.contains("(Connected)") {
-            return .init(need: .blocked, summary: "A VPN is connected; routes are left alone.")
-        }
-        let route = SystemMetrics.commandOutput("/sbin/route", arguments: ["-n", "get", "default"],
-                                                timeoutSeconds: 5)
-        if let route, route.split(whereSeparator: \.isNewline).contains(where: {
-            $0.trimmingCharacters(in: .whitespaces).hasPrefix("interface: utun")
-        }) {
-            return .init(need: .blocked, summary: "A VPN owns the default route; routes are left alone.")
-        }
-        let dns = SystemMetrics.commandOutput("/usr/bin/dscacheutil",
-                                              arguments: ["-q", "host", "-a", "name", "example.com"],
-                                              timeoutSeconds: 5)
-        var problems: [String] = []
-        if route == nil { problems.append("No default route") }
-        if dns?.contains("ip_address") != true { problems.append("DNS lookup failed") }
-        return problems.isEmpty
-            ? .init(need: .clean, summary: "Routing and DNS are healthy.")
-            : .init(need: .needed, summary: problems.joined(separator: "; ") + ".", items: problems)
-    }
-
-    private func inspectSpotlight() -> OptimizePreview {
-        guard let status = SystemMetrics.commandOutput("/usr/bin/mdutil", arguments: ["-s", "/"],
-                                                       timeoutSeconds: 8) else {
-            return .init(need: .unavailable, summary: "Could not read the Spotlight index status.")
-        }
-        if status.localizedCaseInsensitiveContains("disabled") {
-            return .init(need: .clean, summary: "Spotlight indexing is disabled.")
-        }
-        let power = SystemMetrics.commandOutput("/usr/bin/pmset", arguments: ["-g", "ps"], timeoutSeconds: 5) ?? ""
-        guard power.contains("AC Power") else {
-            return .init(need: .blocked, summary: "Connect to power to measure search speed.")
-        }
-        var slow = 0
-        for _ in 0..<2 {
-            let started = Date()
-            let answered = SystemMetrics.commandOutput(
-                "/usr/bin/mdfind", arguments: ["kMDItemFSName == 'Applications'"], timeoutSeconds: 10) != nil
-            if !answered || Date().timeIntervalSince(started) > 3 { slow += 1 }
-        }
-        return slow >= 2
-            ? .init(need: .needed, summary: "Searches are slow; rebuilding takes 1-2 hours in the background.")
-            : .init(need: .clean, summary: "Spotlight answers quickly.")
-    }
-
-    func permissionProblems(homeDirectory home: String) -> [String] {
-        var problems: [String] = []
-        if let owner = (try? fileManager.attributesOfItem(atPath: home))?[.ownerAccountName] as? String,
-           owner != NSUserName() {
-            problems.append("Home is owned by \(owner)")
-        }
-        for path in [home, home + "/Library", home + "/Library/Preferences"]
-        where fileManager.fileExists(atPath: path) && !fileManager.isWritableFile(atPath: path) {
-            problems.append("\(path.replacingOccurrences(of: home, with: "~")) is not writable")
-        }
-        return problems
     }
 }

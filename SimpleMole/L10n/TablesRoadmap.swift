@@ -3,8 +3,6 @@ import Foundation
 /// 风险模型与扩展管理器的独立语言表；未翻译语言自动回退英文。
 enum L10nRoadmapTables {
     static let en: [String: String] = [
-        "analyze.directory.hint": "Allocated space · largest first · refresh to update",
-        "analyze.directory.partial": "%d items · at least %@ · some content is unreadable, cancelled or on another volume",
 
         "cleanup.queued": "Waiting for uninstall to finish",
         "cleanup.installers.review": "Installer candidates · select files you no longer need to delete permanently",
@@ -25,6 +23,7 @@ enum L10nRoadmapTables {
         "cleanup.risk.installer": "Installer or disk image; review before removal.",
         "cleanup.risk.projectArtifact": "Generated project artifact; review the project first.",
         "cleanup.risk.appLeftover": "Application leftover that may still contain user data.",
+        "cleanup.risk.agentLeftover": "Leftover data of an uninstalled AI tool; its app and command are both gone.",
         "cleanup.risk.backup": "Backup content is never selected automatically.",
         "cleanup.risk.userSession": "User session or conversation history; manual review only.",
         "cleanup.risk.model": "Model assets are protected.",
@@ -43,7 +42,6 @@ enum L10nRoadmapTables {
         "cleanup.risk.protectedContent": "Protected user, model, Docker, or system content.",
         "cleanup.risk.invalidPath": "Invalid or untrusted path.",
         "cleanup.risk.unknown": "Unknown content; review manually.",
-        "cleanup.warningConfirmation": "%d Warning items are included. Confirm that they are no longer needed.",
         "auto.regenerable.confirm": "I confirm this folder contains only regenerable content",
         "auto.regenerable.help": "Required for preview and scheduling. Models, sessions, projects, credentials, databases, Docker and system content are always refused.",
         "auto.status.authorizationRequired": "Confirm that the folder is regenerable before enabling automation",
@@ -82,8 +80,6 @@ enum L10nRoadmapTables {
     ]
 
     static let zhHans: [String: String] = [
-        "analyze.directory.hint": "实际占用空间 · 从大到小 · 刷新更新数据",
-        "analyze.directory.partial": "共 %d 项 · 至少 %@ · 部分内容无权读取、已取消或位于其他磁盘",
 
         "cleanup.queued": "等待卸载完成后清理",
         "cleanup.installers.review": "安装包候选 · 勾选不再需要的文件后永久删除",
@@ -104,6 +100,7 @@ enum L10nRoadmapTables {
         "cleanup.risk.installer": "安装包或磁盘镜像，清理前请确认。",
         "cleanup.risk.projectArtifact": "项目生成物，清理前请确认项目状态。",
         "cleanup.risk.appLeftover": "应用残留中可能仍含用户数据。",
+        "cleanup.risk.agentLeftover": "已卸载 AI 工具的残留数据；应用本体与命令均已不存在。",
         "cleanup.risk.backup": "备份内容不会被自动勾选。",
         "cleanup.risk.userSession": "用户会话或对话记录，只允许手动检查。",
         "cleanup.risk.model": "模型资源已受保护。",
@@ -122,7 +119,6 @@ enum L10nRoadmapTables {
         "cleanup.risk.protectedContent": "用户数据、模型、Docker 或系统内容已受保护。",
         "cleanup.risk.invalidPath": "路径无效或不可信。",
         "cleanup.risk.unknown": "内容类型未知，需要手动判断。",
-        "cleanup.warningConfirmation": "已包含 %d 个 Warning 项，请确认这些内容确实不再需要。",
         "auto.regenerable.confirm": "我确认该目录只包含可再生内容",
         "auto.regenerable.help": "预览和定时执行前必须确认；模型、会话、项目、凭据、数据库、Docker 与系统内容始终拒绝处理。",
         "auto.status.authorizationRequired": "请先确认目录内容可再生，再开启自动清理",
@@ -161,8 +157,6 @@ enum L10nRoadmapTables {
     ]
 
     static let zhHant: [String: String] = [
-        "analyze.directory.hint": "實際佔用空間 · 由大到小 · 重新整理更新資料",
-        "analyze.directory.partial": "共 %d 項 · 至少 %@ · 部分內容無權讀取、已取消或位於其他磁碟",
 
         "cleanup.queued": "等待解除安裝完成後清理",
         "cleanup.installers.review": "安裝包候選 · 勾選不再需要的檔案後永久刪除",
@@ -201,7 +195,6 @@ enum L10nRoadmapTables {
         "cleanup.risk.protectedContent": "使用者資料、模型、Docker 或系統內容已受保護。",
         "cleanup.risk.invalidPath": "路徑無效或不可信。",
         "cleanup.risk.unknown": "內容類型未知，需要手動判斷。",
-        "cleanup.warningConfirmation": "已包含 %d 個 Warning 項目，請確認確實不再需要。",
         "auto.regenerable.confirm": "我確認此目錄只包含可再生內容",
         "auto.regenerable.help": "預覽和排程前必須確認；模型、工作階段、專案、憑證、資料庫、Docker 與系統內容一律拒絕處理。",
         "auto.status.authorizationRequired": "請先確認目錄內容可再生，再開啟自動清理",

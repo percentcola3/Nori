@@ -3,9 +3,6 @@ import Foundation
 
 enum CleanupScanMode: String, Codable, Sendable {
     case quick, deep
-
-    var titleKey: String { "cleanup.scan.\(rawValue)" }
-    var hintKey: String { "cleanup.scan.\(rawValue).hint" }
 }
 
 /// A single cancellation/deadline shared by discovery and all sizing workers.

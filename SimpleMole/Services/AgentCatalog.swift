@@ -38,7 +38,7 @@ struct AgentTarget: Sendable {
     }
 }
 
-enum AgentMCPFormat: Sendable {
+enum AgentMCPFormat: Equatable, Sendable {
     /// JSON 对象内的 key 路径（点分隔），值为 name → server 映射。
     case json(keyPath: String)
     /// TOML `[<table>.<name>]` 段。
@@ -48,6 +48,19 @@ enum AgentMCPFormat: Sendable {
 struct AgentMCPSource: Sendable {
     let path: String
     let format: AgentMCPFormat
+}
+
+/// 无官方文档工具的存在性线索：App bundle 名与 PATH 上的命令。
+/// 两者都找不到时，其数据目录视为已卸载应用的残留，升级为可清理。
+struct AgentPresence: Sendable {
+    let bundleNames: [String]
+    let commands: [String]
+}
+
+/// presence 检测的搜索范围：生产用默认值，测试注入沙盒目录保证确定性。
+struct AgentPresenceContext: Sendable {
+    let applicationDirs: [String]
+    let searchPath: [String]
 }
 
 struct AgentDefinition: Sendable {
@@ -62,6 +75,8 @@ struct AgentDefinition: Sendable {
     let targets: [AgentTarget]
     let skillDirectories: [String]
     let mcpSources: [AgentMCPSource]
+    /// 仅 undocumented 工具需要：用于区分「装着但没说明」与「已卸载的残留」。
+    var presence: AgentPresence? = nil
 }
 
 enum AgentCatalog {
@@ -318,27 +333,34 @@ enum AgentCatalog {
                       "agents.label.appCache", owners: [])
             ],
             skillDirectories: [], mcpSources: []),
-        // 以下工具没有公开的目录说明：只显示占用，不提供删除。
+        // 以下工具没有公开的目录说明：应用本体还在时只显示占用；
+        // presence（bundle/命令）都找不到时按已卸载残留放开清理。
         undocumented(id: "qoder", name: "Qoder", roots: [appSupport + "Qoder", ".qoder"],
-                     skills: [".qoder/skills"], mcp: []),
+                     skills: [".qoder/skills"], mcp: [], bundles: ["Qoder"]),
         undocumented(id: "kiro", name: "Kiro", roots: [appSupport + "Kiro", ".kiro"],
                      skills: [".kiro/skills"],
-                     mcp: [.init(path: ".kiro/settings/mcp.json", format: .json(keyPath: "mcpServers"))]),
+                     mcp: [.init(path: ".kiro/settings/mcp.json", format: .json(keyPath: "mcpServers"))],
+                     bundles: ["Kiro"]),
         undocumented(id: "trae", name: "Trae", roots: [appSupport + "Trae", ".trae"],
                      skills: [".trae/skills"],
-                     mcp: [.init(path: appSupport + "Trae/User/mcp.json", format: .json(keyPath: "mcpServers"))]),
+                     mcp: [.init(path: appSupport + "Trae/User/mcp.json", format: .json(keyPath: "mcpServers"))],
+                     bundles: ["Trae"]),
         undocumented(id: "zed", name: "Zed", roots: [appSupport + "Zed", "Library/Caches/dev.zed.Zed"],
                      skills: [],
-                     mcp: [.init(path: ".config/zed/settings.json", format: .json(keyPath: "context_servers"))]),
+                     mcp: [.init(path: ".config/zed/settings.json", format: .json(keyPath: "context_servers"))],
+                     bundles: ["Zed"]),
         undocumented(id: "warp", name: "Warp", roots: [appSupport + "dev.warp.Warp-Stable", ".warp"],
                      skills: [".warp/skills"],
-                     mcp: [.init(path: ".warp/.mcp.json", format: .json(keyPath: "mcpServers"))]),
+                     mcp: [.init(path: ".warp/.mcp.json", format: .json(keyPath: "mcpServers"))],
+                     bundles: ["Warp"]),
         undocumented(id: "amp", name: "Amp", roots: [".config/amp", ".cache/amp"],
                      skills: [".config/amp/skills"],
-                     mcp: [.init(path: ".config/amp/settings.json", format: .json(keyPath: "amp.mcpServers"))]),
+                     mcp: [.init(path: ".config/amp/settings.json", format: .json(keyPath: "amp.mcpServers"))],
+                     commands: ["amp"]),
         undocumented(id: "crush", name: "Crush", roots: [".config/crush", ".local/share/crush"],
                      skills: [".config/crush/skills"],
-                     mcp: [.init(path: ".config/crush/crush.json", format: .json(keyPath: "mcp"))]),
+                     mcp: [.init(path: ".config/crush/crush.json", format: .json(keyPath: "mcp"))],
+                     commands: ["crush"]),
         AgentDefinition(
             id: "shared", name: "Shared", owners: [],
             detect: [".agents/skills", ".config/agents/skills"], documented: true,
@@ -347,10 +369,13 @@ enum AgentCatalog {
     ]
 
     private static func undocumented(id: String, name: String, roots: [String],
-                                     skills: [String], mcp: [AgentMCPSource]) -> AgentDefinition {
-        AgentDefinition(id: id, name: name, owners: [], detect: roots, documented: false,
+                                     skills: [String], mcp: [AgentMCPSource],
+                                     bundles: [String] = [], commands: [String] = []) -> AgentDefinition {
+        let presence = bundles.isEmpty && commands.isEmpty
+            ? nil : AgentPresence(bundleNames: bundles, commands: commands)
+        return AgentDefinition(id: id, name: name, owners: [], detect: roots, documented: false,
                         targets: roots.map { .init(.showOnly, .path($0), "agents.label.appData", owners: []) },
-                        skillDirectories: skills, mcpSources: mcp)
+                        skillDirectories: skills, mcpSources: mcp, presence: presence)
     }
 
     // MARK: - 解析
@@ -367,13 +392,41 @@ enum AgentCatalog {
         agent.detect.contains { exists(absolute($0, home: home)) }
     }
 
+    /// undocumented 工具的应用本体探测：bundle 与命令都找不到 → 数据是已卸载残留。
+    static func isOrphaned(_ agent: AgentDefinition, home: String,
+                           presence context: AgentPresenceContext? = nil) -> Bool {
+        guard !agent.documented, let presence = agent.presence else { return false }
+        let context = context ?? defaultPresenceContext(home: home)
+        let bundlePresent = presence.bundleNames.contains { name in
+            context.applicationDirs.contains { exists($0 + "/" + name + ".app") }
+        }
+        if bundlePresent { return false }
+        return !presence.commands.contains {
+            resolveExecutable($0, searchPath: context.searchPath, home: home) != nil
+        }
+    }
+
+    static func defaultPresenceContext(home: String) -> AgentPresenceContext {
+        AgentPresenceContext(
+            applicationDirs: ["/Applications", "/Applications/Setapp", home + "/Applications"],
+            searchPath: executableSearchPath(home: home))
+    }
+
     /// 目录解析的唯一入口：扫描与执行边界都调用它，保证两边的候选集合相同。
-    static func resolve(_ agent: AgentDefinition, home: String) -> [ResolvedTarget] {
-        agent.targets.compactMap { target in
+    static func resolve(_ agent: AgentDefinition, home: String,
+                        presence context: AgentPresenceContext? = nil) -> [ResolvedTarget] {
+        let orphaned = isOrphaned(agent, home: home, presence: context)
+        return agent.targets.compactMap { target in
             let paths = resolve(target.kind, home: home)
             guard !paths.isEmpty else { return nil }
+            let tier: AgentTier
+            if agent.documented {
+                tier = target.tier
+            } else {
+                tier = orphaned ? .review : .showOnly
+            }
             return ResolvedTarget(agentID: agent.id,
-                                  tier: agent.documented ? target.tier : .showOnly,
+                                  tier: tier,
                                   labelKey: target.labelKey,
                                   owners: target.owners ?? agent.owners,
                                   paths: paths)
@@ -435,14 +488,41 @@ enum AgentCatalog {
     }
 
     /// 执行边界复核：只返回当前目录仍解析为 safe/review 的路径。
-    static func deletablePaths(home: String) -> Set<String> {
+    /// 已卸载工具的残留不再走 Agent 漏斗（清理扫描会作为应用残留收录），
+    /// 因此这里只认仍装在机器上的 documented 工具。
+    static func deletablePaths(home: String, presence context: AgentPresenceContext? = nil) -> Set<String> {
         var result = Set<String>()
         for agent in definitions where agent.documented {
-            for target in resolve(agent, home: home) where target.tier != .showOnly {
+            for target in resolve(agent, home: home, presence: context) where target.tier != .showOnly {
                 result.formUnion(target.paths)
             }
         }
         return result
+    }
+
+    // MARK: - 可执行文件解析（presence 与 MCP 体检共用）
+
+    static func executableSearchPath(home: String) -> [String] {
+        let environment = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+            .split(separator: ":").map(String.init)
+        let common = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin",
+                      home + "/.local/bin", home + "/.bun/bin", home + "/.cargo/bin",
+                      home + "/.volta/bin", home + "/.deno/bin", home + "/go/bin",
+                      home + "/.npm-global/bin", home + "/Library/pnpm"]
+        var seen = Set<String>()
+        return (environment + common).filter { seen.insert($0).inserted }
+    }
+
+    static func resolveExecutable(_ command: String, searchPath: [String], home: String) -> String? {
+        var candidate = command
+        if candidate.hasPrefix("~/") { candidate = home + candidate.dropFirst(1) }
+        if candidate.contains("/") {
+            // 相对路径由宿主按插件或工作目录解析，这里无法判定缺失与否。
+            guard candidate.hasPrefix("/") else { return candidate }
+            return FileManager.default.isExecutableFile(atPath: candidate) ? candidate : nil
+        }
+        return searchPath.map { $0 + "/" + command }
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     // MARK: - Skills

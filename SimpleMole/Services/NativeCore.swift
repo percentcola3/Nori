@@ -165,6 +165,24 @@ final class NativeCore: @unchecked Sendable {
                                   ".cache", ".Trash"].map { home.appendingPathComponent($0).path })
             var candidates: [CleanupScanCandidate] = []
             var seen = Set<String>()
+            // 已卸载 AI 工具的数据根：应用本体（bundle 与 PATH 命令）都已找不到，
+            // 按磁盘垃圾进入清理清单；Agent 专清页不再展示这些工具。
+            for agent in AgentCatalog.definitions
+            where !agent.documented && AgentCatalog.isInstalled(agent, home: home.path)
+                && AgentCatalog.isOrphaned(agent, home: home.path) {
+                for relative in agent.detect {
+                    guard !control.shouldStop else { break }
+                    let path = AgentCatalog.absolute(relative, home: home.path)
+                    guard self.cleanupPathIsPhysical(URL(fileURLWithPath: path), home: home),
+                          seen.insert(path).inserted,
+                          !self.matchesWhitelist(path, entries: whitelist) else { continue }
+                    candidates.append(CleanupScanCandidate(
+                        path: path, name: agent.name + " leftovers",
+                        policy: CleanupRiskPolicy.uninstalledAgentLeftover(
+                            path: path, homeDirectory: home.path),
+                        retention: 0))
+                }
+            }
             for (root, label, _, _, retention) in roots {
                 guard !control.shouldStop else { break }
                 guard self.cleanupPathIsPhysical(root, home: home) else { continue }

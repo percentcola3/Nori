@@ -3,6 +3,11 @@ import Foundation
 /// One-time migrations between product identities (Simple Mole → ForgeSweep →
 /// Nori). Internal engine names remain unchanged; only user preferences and
 /// app-owned storage move to the current product namespace.
+///
+/// Auto-cleanup rules are deliberately NOT migrated: each rule carries a
+/// per-directory "regenerable only" authorization bound to the install that
+/// recorded it, and a fresh install must not silently inherit automatic
+/// deletion rules from a previous brand.
 enum BrandMigration {
     private static let migrationKey = "SMNoriBrandMigrationV1"
     private static let legacyBundleIdentifiers = ["com.forgesweep.app", "com.simplemole.app"]
@@ -13,7 +18,8 @@ enum BrandMigration {
 
         for legacyIdentifier in legacyBundleIdentifiers {
             guard let legacy = defaults.persistentDomain(forName: legacyIdentifier) else { continue }
-            for (key, value) in legacy where key.hasPrefix("SM") {
+            for (key, value) in legacy
+            where key.hasPrefix("SM") && key != AutoCleanupRuleStore.storageKey {
                 if defaults.object(forKey: key) == nil {
                     defaults.set(value, forKey: key)
                 }

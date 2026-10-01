@@ -16,14 +16,18 @@ struct ProcessesTabView: View {
                 .padding(.bottom, 6)
 
             HStack(spacing: 6) {
-                if state.runtimeInFlight && state.advancedProcesses {
-                    ProgressView()
-                        .controlSize(.mini)
+                // 数量统计已移除：仅在存在有意义的状态（操作反馈/加载/异常）时展示。
+                if !state.processActionStatus.isEmpty {
+                    Text(state.processActionStatus)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if !state.processStatus.isEmpty {
+                    Text(state.processStatus)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                Text(state.processActionStatus.isEmpty ? state.processStatus : state.processActionStatus)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
                 Spacer()
             }
             .padding(.horizontal, 16)
@@ -465,9 +469,11 @@ struct PortsTabView: View {
                     ProgressView()
                         .controlSize(.mini)
                 }
-                Text(state.portStatus)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                if !state.portStatus.isEmpty {
+                    Text(state.portStatus)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
             }
             .padding(.horizontal, 16)

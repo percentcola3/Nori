@@ -1,9 +1,33 @@
 import AppKit
 import Foundation
 
-enum AnalyzeMode: String, CaseIterable, Identifiable {
-    case directories, largeFiles, images, videos
+/// 磁盘分析结果的瘦身子分类；重复文件单独成节，不参与瘦身。
+enum AnalyzeSection: String, CaseIterable, Identifiable {
+    case largeFiles, images, videos
     var id: String { rawValue }
+}
+
+/// 磁盘分析页顶部的分析类型：默认整个磁盘一次性看全部子分类，
+/// 也可以聚焦某一个子类只看它。重复文件的内容级比对只在
+/// 整个磁盘/重复文件两种模式下自动跟进，其余模式跳过这笔开销。
+enum AnalyzeMode: String, CaseIterable, Identifiable {
+    case overview
+    case largeFiles, images, videos, duplicates
+    var id: String { rawValue }
+
+    /// 聚焦模式对应的子分类；overview 没有单一对应。
+    var section: AnalyzeSection? {
+        switch self {
+        case .overview, .duplicates: return nil
+        case .largeFiles: return .largeFiles
+        case .images: return .images
+        case .videos: return .videos
+        }
+    }
+
+    var runsDuplicateComparison: Bool {
+        self == .overview || self == .duplicates
+    }
 }
 
 struct SlimProgress: Equatable {
@@ -13,13 +37,12 @@ struct SlimProgress: Equatable {
     var fraction: Double?
 }
 
-/// 聚合视图里的一行：大文件、图片或视频。只有位于用户自管位置的文件可勾选瘦身。
+/// 聚合视图里的一行：大文件、图片或视频。扫描层已过滤系统位置，这里全部可操作。
 struct SlimCandidate: Identifiable, Equatable {
     let name: String
     let path: String
     let size: UInt64
     let kind: MediaKind?
-    let eligible: Bool
     var id: String { path }
     var operation: SlimOperation { SlimOperation.operation(for: path) }
 }
@@ -28,41 +51,33 @@ struct SlimCandidate: Identifiable, Equatable {
 /// 结果不变小就丢弃，替换时原件移入废纸篓。
 @MainActor
 extension AppState {
-    var slimCandidates: [SlimCandidate] {
-        switch analyzeMode {
-        case .directories:
-            return []
+    func slimCandidates(in section: AnalyzeSection) -> [SlimCandidate] {
+        switch section {
         case .largeFiles:
-            let home = NSHomeDirectory()
             return analyzeLargeFiles.map {
                 SlimCandidate(name: $0.name, path: $0.path, size: $0.size,
-                              kind: MediaSlimPolicy.kind(forPath: $0.path),
-                              eligible: MediaSlimPolicy.isEligible($0.path, home: home))
+                              kind: MediaSlimPolicy.kind(forPath: $0.path))
             }
         case .images, .videos:
-            let kind: MediaKind = analyzeMode == .images ? .image : .video
+            let kind: MediaKind = section == .images ? .image : .video
             return analyzeMedia.filter { $0.kind == kind }.map {
-                SlimCandidate(name: $0.name, path: $0.path, size: $0.size, kind: $0.kind, eligible: true)
+                SlimCandidate(name: $0.name, path: $0.path, size: $0.size, kind: $0.kind)
             }
         }
     }
 
     var slimSelectedCandidates: [SlimCandidate] {
-        slimCandidates.filter { $0.eligible && slimSelection.contains($0.path) }
+        AnalyzeSection.allCases
+            .flatMap { slimCandidates(in: $0) }
+            .filter { slimSelection.contains($0.path) }
     }
 
     var slimSelectedBytes: UInt64 {
         slimSelectedCandidates.reduce(0) { $0 &+ $1.size }
     }
 
-    func setAnalyzeMode(_ mode: AnalyzeMode) {
-        guard analyzeMode != mode else { return }
-        analyzeMode = mode
-        slimSelection.removeAll()
-    }
-
     func toggleSlimSelection(_ candidate: SlimCandidate) {
-        guard candidate.eligible, !isBusy else { return }
+        guard !isBusy else { return }
         if slimSelection.contains(candidate.path) {
             slimSelection.remove(candidate.path)
         } else {
@@ -70,12 +85,14 @@ extension AppState {
         }
     }
 
-    func selectAllSlimCandidates() {
-        let eligible = slimCandidates.filter(\.eligible).map(\.path)
-        if eligible.allSatisfy(slimSelection.contains) {
-            slimSelection.removeAll()
+    /// 某一子分类的全选/取消全选；不影响其他分类的已选项。
+    func toggleSelectAllSlimCandidates(in section: AnalyzeSection) {
+        guard !isBusy else { return }
+        let paths = slimCandidates(in: section).map(\.path)
+        if paths.allSatisfy(slimSelection.contains) {
+            slimSelection.subtract(paths)
         } else {
-            slimSelection = Set(eligible)
+            slimSelection.formUnion(paths)
         }
     }
 

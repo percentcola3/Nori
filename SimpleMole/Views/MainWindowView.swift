@@ -24,11 +24,9 @@ struct MainWindowView: View {
             ZStack {
                 VStack(spacing: 0) {
                     titleBarRow
-                    Divider()
                     PillPicker(items: tabs, selection: $state.selectedTab)
-                        .padding(.top, 8)
-                        .padding(.bottom, 6)
-                    Divider()
+                        .padding(.top, 10)
+                        .padding(.bottom, 8)
                     AnimatedTabContent(state: state)
                         .frame(maxHeight: .infinity)
                 }
@@ -80,7 +78,11 @@ struct MainWindowView: View {
             } label: {
                 Label(l10n.t("settings.quit"), systemImage: "power")
             }
-            .buttonStyle(DangerButtonStyle(tint: Color.warning))
+            .buttonStyle(DangerButtonStyle())
+            // 距顶边与距右边统一为 10pt：顶部对齐后下移 8pt，底部恰好
+            // 落进原标题栏的下内边距，行高与整体布局保持不变。
+            .frame(maxHeight: .infinity, alignment: .top)
+            .offset(y: 8)
         }
         .frame(height: 28)
         .padding(.horizontal, 10)
@@ -149,7 +151,6 @@ private struct AnimatedTabContent: View {
             case .agents: AgentsTabView(state: state)
             case .analyze: AnalyzeTabView(state: state)
             case .uninstall: UninstallTabView(state: state)
-            case .optimize: OptimizeTabView(state: state)
             case .devenv: DevEnvTabView(state: state)
             case .processes: ProcessesTabView(state: state)
             case .ports: PortsTabView(state: state)

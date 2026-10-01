@@ -5,10 +5,9 @@ import Foundation
 extension L10nTables {
     static let es: [String: String] = [
         "window.title": "Nori",
-        "tab.cleanup": "Limpiar disco",
-        "tab.uninstall": "Desinstalar apps",
-        "tab.optimize": "Optimize",
-        "tab.devenv": "Entorno dev",
+        "tab.cleanup": "Limpieza",
+        "tab.uninstall": "Apps",
+        "tab.devenv": "Dev",
         "tab.processes": "Procesos",
         "tab.ports": "Puertos",
         "tab.images": "Imágenes",
@@ -27,7 +26,6 @@ extension L10nTables {
 
 
         "cleanup.cancelScan": "Cancelar escaneo",
-        "cleanup.empty.subtitle": "Pulsa «Iniciar escaneo» para ver elementos limpiables\nCachés, registros e instaladores aparecerán agrupados",
         "cleanup.apply.busy": "Procesando…",
         "cleanup.morePaths": "… y %d rutas más",
         "cleanup.selectNone": "Selecciona antes al menos una categoría",
@@ -37,7 +35,6 @@ extension L10nTables {
         "uninstall.status.none": "Apps sin escanear",
         "uninstall.status.scanning": "Escaneando apps instaladas…",
         "uninstall.status.empty": "No se encontraron apps desinstalables",
-        "uninstall.status.count": "%d apps",
         "uninstall.noMatch.title": "Sin apps coincidentes",
         "uninstall.noMatch.subtitle": "Prueba otra palabra clave",
         "uninstall.empty.subtitle": "Pulsa «Escanear apps» para listar las desinstalables",
@@ -49,11 +46,9 @@ extension L10nTables {
         "file.app": "Bundle de la app",
         "file.installer": "Archivos de instalación",
 
-        "devenv.manageCli": "Gestionar herramientas CLI",
         "devenv.status.none": "No se detectaron gestores de versiones ni runtimes",
         "devenv.status.scanning": "Detectando entorno dev…",
         "devenv.status.empty": "Entorno dev sin escanear",
-        "devenv.status.summary": "%d versiones de runtime · %d herramientas / gestores",
         "devenv.empty.subtitle": "Pulsa «Reescanear» para detectar runtimes y herramientas",
         "devenv.tools": "Herramientas y gestores",
         "devenv.tools.hint": "Las herramientas y versiones gestionadas son de solo lectura aquí; elimina las versiones con su gestor.",
@@ -76,7 +71,6 @@ extension L10nTables {
         "proc.status.reading": "Leyendo procesos activos…",
         "proc.status.none": "No hay procesos de usuario gestionables",
         "proc.status.systemHint": "Los demonios del sistema nunca aparecen aquí",
-        "proc.status.pids": "%d PID · modo PID avanzado",
         "proc.kill": "Terminar",
         "proc.detail.app": "Gestión por app · PID %d",
         "proc.confirm.killPid.title": "¿Terminar este PID?",
@@ -85,7 +79,6 @@ extension L10nTables {
         "proc.confirm.quit.title": "¿Salir de %@?",
 
         "ports.status.reading": "Leyendo puertos en escucha…",
-        "ports.status.count": "%d puertos en escucha",
         "ports.status.none": "No se encontraron puertos TCP en escucha",
         "ports.close": "Cerrar",
         "ports.row": "Puerto %@ · %@",
@@ -138,10 +131,7 @@ extension L10nTables {
         "log.wlSaved": "Lista blanca guardada (%d entradas). Surte efecto en el próximo escaneo y limpieza.",
         "log.wlInvalid": "La lista blanca solo acepta rutas absolutas sin ..: %@",
 
-        "confirm.apply.title": "¿Procesar %d elementos?",
         "confirm.apply.trash.ok": "A la papelera",
-        "confirm.apply.tools.msg": "Ejecuta el comando de desinstalación npm, pnpm, brew, cargo, dotnet o pipx correspondiente.",
-        "confirm.apply.tools.ok": "Desinstalar paquete",
         "confirm.env.title": "¿Limpiar %d versiones del entorno dev?",
         "confirm.env.msg": "Las %d versiones seleccionadas (%@) van a la papelera (recuperables). Las versiones en uso nunca se limpian. Reinstálalas con el gestor de versiones cuando quieras.",
 
@@ -155,18 +145,10 @@ extension L10nTables {
         "proc.unknown": "Proceso desconocido",
     
     
-        "tab.analyze": "Analizar disco",
+        "tab.analyze": "Análisis",
         "analyze.scan": "Analizar",
+        "analyze.start": "Iniciar análisis",
         "analyze.scanning": "Analizando… las carpetas grandes pueden tardar",
-        "analyze.pick": "Elegir carpeta",
-        "analyze.up": "Subir",
-        "analyze.status.empty": "Sin analizar",
-        "analyze.status.summary": "%d elementos · %@ en total",
-        "analyze.selected": "%d seleccionados · %@",
-        "analyze.apply": "Eliminar selección",
-        "analyze.confirm.title": "¿Eliminar %d elementos?",
-        "analyze.confirm.msg": "%@ irá a la papelera (recuperable). Mole valida rutas y lista blanca; las rutas del sistema protegidas se omiten.",
-        "analyze.empty.subtitle": "Elige una carpeta o usa los accesos rápidos",
     
         "gc.title": "Comandos GC oficiales",
         "gc.subtitle": "Ejecuta el comando de limpieza nativo de cada gestor — sin borrado directo",
@@ -213,7 +195,7 @@ extension L10nTables {
         "clip.title": "Historial del portapapeles",
         "clip.empty": "Aún no hay entradas del portapapeles",
         "shot.title": "Editor de captura",
-        "shot.hotkey": "Atajo de captura（⌘⌃A）",
+        "shot.hotkey": "Atajo de captura",
         "shot.save": "Guardar",
         "shot.saved": "Guardado ✓",
         "shot.undo": "Deshacer",
@@ -229,10 +211,9 @@ extension L10nTables {
 
     static let pt: [String: String] = [
         "window.title": "Nori",
-        "tab.cleanup": "Limpar disco",
-        "tab.uninstall": "Desinstalar apps",
-        "tab.optimize": "Optimize",
-        "tab.devenv": "Ambiente dev",
+        "tab.cleanup": "Limpeza",
+        "tab.uninstall": "Apps",
+        "tab.devenv": "Dev",
         "tab.processes": "Processos",
         "tab.ports": "Portas",
         "tab.images": "Imagens",
@@ -251,7 +232,6 @@ extension L10nTables {
 
 
         "cleanup.cancelScan": "Cancelar varredura",
-        "cleanup.empty.subtitle": "Clique em “Iniciar varredura” para ver itens limpáveis\nCaches, logs e instaladores aparecerão agrupados",
         "cleanup.apply.busy": "Processando…",
         "cleanup.morePaths": "… e mais %d caminhos",
         "cleanup.selectNone": "Selecione antes pelo menos uma categoria",
@@ -261,7 +241,6 @@ extension L10nTables {
         "uninstall.status.none": "Apps não escaneadas",
         "uninstall.status.scanning": "Escaneando apps instaladas…",
         "uninstall.status.empty": "Nenhum app desinstalável encontrada",
-        "uninstall.status.count": "%d apps",
         "uninstall.noMatch.title": "Nenhum app correspondente",
         "uninstall.noMatch.subtitle": "Tente outra palavra-chave",
         "uninstall.empty.subtitle": "Clique em “Escaniar apps” para listar as desinstaláveis",
@@ -273,11 +252,9 @@ extension L10nTables {
         "file.app": "Bundle do app",
         "file.installer": "Arquivos de instalação",
 
-        "devenv.manageCli": "Gerenciar ferramentas CLI",
         "devenv.status.none": "Nenhum gerenciador de versões ou runtime detectado",
         "devenv.status.scanning": "Detectando ambiente dev…",
         "devenv.status.empty": "Ambiente dev não escaneado",
-        "devenv.status.summary": "%d versões de runtime · %d ferramentas / gerenciadores",
         "devenv.empty.subtitle": "Clique em “Escaniar de novo” para detectar runtimes e ferramentas",
         "devenv.tools": "Ferramentas e gerenciadores",
         "devenv.tools.hint": "Ferramentas e versões gerenciadas são somente leitura aqui; remova as versões com o gerenciador.",
@@ -300,7 +277,6 @@ extension L10nTables {
         "proc.status.reading": "Lendo processos ativos…",
         "proc.status.none": "Nenhum processo de usuário gerenciável",
         "proc.status.systemHint": "Daemons do sistema nunca aparecem aqui",
-        "proc.status.pids": "%d PIDs · modo PID avançado",
         "proc.kill": "Encerrar",
         "proc.detail.app": "Gerenciamento por app · PID %d",
         "proc.confirm.killPid.title": "Encerrar este PID?",
@@ -309,7 +285,6 @@ extension L10nTables {
         "proc.confirm.quit.title": "Sair do %@?",
 
         "ports.status.reading": "Lendo portas em escuta…",
-        "ports.status.count": "%d portas em escuta",
         "ports.status.none": "Nenhuma porta TCP em escuta encontrada",
         "ports.close": "Fechar",
         "ports.row": "Porta %@ · %@",
@@ -362,10 +337,7 @@ extension L10nTables {
         "log.wlSaved": "Lista de permissões salva (%d entradas). Vale na próxima varredura e limpeza.",
         "log.wlInvalid": "A lista aceita apenas caminhos absolutos sem ..: %@",
 
-        "confirm.apply.title": "Processar %d itens?",
         "confirm.apply.trash.ok": "Mover para o Lixo",
-        "confirm.apply.tools.msg": "Executa o comando de desinstalação npm, pnpm, brew, cargo, dotnet ou pipx correspondente.",
-        "confirm.apply.tools.ok": "Desinstalar pacote",
         "confirm.env.title": "Limpar %d versões do ambiente dev?",
         "confirm.env.msg": "As %d versões selecionadas (%@) vão para o Lixo (recuperáveis). Versões em uso nunca são limpas. Reinstale pelo gerenciador de versões quando precisar.",
 
@@ -379,18 +351,10 @@ extension L10nTables {
         "proc.unknown": "Processo desconhecido",
     
     
-        "tab.analyze": "Analisar disco",
+        "tab.analyze": "Análise",
         "analyze.scan": "Analisar",
+        "analyze.start": "Iniciar análise",
         "analyze.scanning": "Analisando… pastas grandes podem demorar",
-        "analyze.pick": "Escolher pasta",
-        "analyze.up": "Subir",
-        "analyze.status.empty": "Não analisado",
-        "analyze.status.summary": "%d itens · %@ no total",
-        "analyze.selected": "%d selecionados · %@",
-        "analyze.apply": "Excluir seleção",
-        "analyze.confirm.title": "Excluir %d itens?",
-        "analyze.confirm.msg": "%@ irá para o Lixo (recuperável). O Mole valida caminhos e lista de permissões; caminhos do sistema protegidos são ignorados.",
-        "analyze.empty.subtitle": "Escolha uma pasta ou use os atalhos",
     
         "gc.title": "Comandos GC oficiais",
         "gc.subtitle": "Executa o comando de limpeza nativo de cada gerenciador — sem exclusão direta",
@@ -437,7 +401,7 @@ extension L10nTables {
         "clip.title": "Histórico da área de transferência",
         "clip.empty": "Ainda não há registros da área de transferência",
         "shot.title": "Editor de captura de tela",
-        "shot.hotkey": "Atalho de captura（⌘⌃A）",
+        "shot.hotkey": "Atalho de captura",
         "shot.save": "Salvar",
         "shot.saved": "Salvo ✓",
         "shot.undo": "Desfazer",
@@ -453,10 +417,9 @@ extension L10nTables {
 
     static let it: [String: String] = [
         "window.title": "Nori",
-        "tab.cleanup": "Pulizia disco",
-        "tab.uninstall": "Disinstalla app",
-        "tab.optimize": "Optimize",
-        "tab.devenv": "Ambiente dev",
+        "tab.cleanup": "Pulizia",
+        "tab.uninstall": "App",
+        "tab.devenv": "Dev",
         "tab.processes": "Processi",
         "tab.ports": "Porte",
         "tab.images": "Immagini",
@@ -475,7 +438,6 @@ extension L10nTables {
 
 
         "cleanup.cancelScan": "Annulla scansione",
-        "cleanup.empty.subtitle": "Clicca “Avvia scansione” per vedere gli elementi ripulibili\nCache, log e installer appariranno qui raggruppati",
         "cleanup.apply.busy": "Elaborazione…",
         "cleanup.morePaths": "… e altri %d percorsi",
         "cleanup.selectNone": "Seleziona prima almeno una categoria",
@@ -485,7 +447,6 @@ extension L10nTables {
         "uninstall.status.none": "App non scansionate",
         "uninstall.status.scanning": "Scansione delle app installate…",
         "uninstall.status.empty": "Nessuna app disinstallabile trovata",
-        "uninstall.status.count": "%d app",
         "uninstall.noMatch.title": "Nessuna app corrispondente",
         "uninstall.noMatch.subtitle": "Prova un'altra parola chiave",
         "uninstall.empty.subtitle": "Clicca “Scansiona app” per elencare le disinstallabili",
@@ -497,11 +458,9 @@ extension L10nTables {
         "file.app": "Bundle dell'app",
         "file.installer": "File di installazione",
 
-        "devenv.manageCli": "Gestisci strumenti CLI",
         "devenv.status.none": "Nessun gestore di versioni o runtime rilevato",
         "devenv.status.scanning": "Rilevamento ambiente dev…",
         "devenv.status.empty": "Ambiente dev non scansionato",
-        "devenv.status.summary": "%d versioni di runtime · %d strumenti / gestori",
         "devenv.empty.subtitle": "Clicca “Riscansiona” per rilevare runtime e strumenti",
         "devenv.tools": "Strumenti e gestori",
         "devenv.tools.hint": "Strumenti e versioni gestite sono di sola lettura qui; rimuovi le versioni con il relativo gestore.",
@@ -524,7 +483,6 @@ extension L10nTables {
         "proc.status.reading": "Lettura processi attivi…",
         "proc.status.none": "Nessun processo utente gestibile",
         "proc.status.systemHint": "I demoni di sistema non compaiono mai qui",
-        "proc.status.pids": "%d PID · modalità PID avanzata",
         "proc.kill": "Termina",
         "proc.detail.app": "Gestione per app · PID %d",
         "proc.confirm.killPid.title": "Terminare questo PID?",
@@ -533,7 +491,6 @@ extension L10nTables {
         "proc.confirm.quit.title": "Uscire da %@?",
 
         "ports.status.reading": "Lettura porte in ascolto…",
-        "ports.status.count": "%d porte in ascolto",
         "ports.status.none": "Nessuna porta TCP in ascolto trovata",
         "ports.close": "Chiudi",
         "ports.row": "Porta %@ · %@",
@@ -586,10 +543,7 @@ extension L10nTables {
         "log.wlSaved": "Whitelist salvata (%d voci). Vale dalla prossima scansione e pulizia.",
         "log.wlInvalid": "La whitelist accetta solo percorsi assoluti senza ..: %@",
 
-        "confirm.apply.title": "Trattare %d elementi?",
         "confirm.apply.trash.ok": "Nel Cestino",
-        "confirm.apply.tools.msg": "Esegue il comando di disinstallazione npm, pnpm, brew, cargo, dotnet o pipx corrispondente.",
-        "confirm.apply.tools.ok": "Disinstalla pacchetto",
         "confirm.env.title": "Pulire %d versioni dell'ambiente dev?",
         "confirm.env.msg": "Le %d versioni selezionate (%@) vanno nel Cestino (recuperabili). Le versioni in uso non vengono mai pulite. Reinstalla col gestore di versioni quando vuoi.",
 
@@ -603,18 +557,10 @@ extension L10nTables {
         "proc.unknown": "Processo sconosciuto",
     
     
-        "tab.analyze": "Analizza disco",
+        "tab.analyze": "Analisi",
         "analyze.scan": "Analizza",
+        "analyze.start": "Avvia analisi",
         "analyze.scanning": "Analisi… le cartelle grandi possono richiedere tempo",
-        "analyze.pick": "Scegli cartella",
-        "analyze.up": "Su",
-        "analyze.status.empty": "Non analizzato",
-        "analyze.status.summary": "%d elementi · %@ totali",
-        "analyze.selected": "%d selezionati · %@",
-        "analyze.apply": "Elimina selezione",
-        "analyze.confirm.title": "Eliminare %d elementi?",
-        "analyze.confirm.msg": "%@ andrà nel Cestino (recuperabile). Mole valida percorsi e whitelist; i percorsi di sistema protetti vengono saltati.",
-        "analyze.empty.subtitle": "Scegli una cartella o usa i link rapidi",
     
         "gc.title": "Comandi GC ufficiali",
         "gc.subtitle": "Esegue i comandi di pulizia nativi di ogni gestore — nessuna eliminazione diretta",
@@ -661,7 +607,7 @@ extension L10nTables {
         "clip.title": "Cronologia degli appunti",
         "clip.empty": "Nessuna voce degli appunti ancora",
         "shot.title": "Editor di screenshot",
-        "shot.hotkey": "Scorciatoia screenshot（⌘⌃A）",
+        "shot.hotkey": "Scorciatoia screenshot",
         "shot.save": "Salva",
         "shot.saved": "Salvato ✓",
         "shot.undo": "Annulla",
@@ -677,10 +623,9 @@ extension L10nTables {
 
     static let ru: [String: String] = [
         "window.title": "Nori",
-        "tab.cleanup": "Очистка диска",
-        "tab.uninstall": "Удаление приложений",
-        "tab.optimize": "Optimize",
-        "tab.devenv": "Среда разработки",
+        "tab.cleanup": "Очистка",
+        "tab.uninstall": "Приложения",
+        "tab.devenv": "Dev",
         "tab.processes": "Процессы",
         "tab.ports": "Порты",
         "tab.images": "Изображения",
@@ -699,7 +644,6 @@ extension L10nTables {
 
 
         "cleanup.cancelScan": "Отменить сканирование",
-        "cleanup.empty.subtitle": "Нажмите «Начать сканирование», чтобы увидеть очищаемое\nКэши, журналы и установщики появятся здесь по группам",
         "cleanup.apply.busy": "Обработка…",
         "cleanup.morePaths": "… и ещё %d путей",
         "cleanup.selectNone": "Сначала выберите хотя бы одну категорию",
@@ -709,7 +653,6 @@ extension L10nTables {
         "uninstall.status.none": "Приложения не сканировались",
         "uninstall.status.scanning": "Сканирование установленных приложений…",
         "uninstall.status.empty": "Удаляемых приложений не найдено",
-        "uninstall.status.count": "Приложений: %d",
         "uninstall.noMatch.title": "Нет подходящих приложений",
         "uninstall.noMatch.subtitle": "Попробуйте другое слово",
         "uninstall.empty.subtitle": "Нажмите «Сканировать приложения» для списка",
@@ -721,11 +664,9 @@ extension L10nTables {
         "file.app": "Бандл приложения",
         "file.installer": "Файлы установщиков",
 
-        "devenv.manageCli": "Управлять CLI-инструментами",
         "devenv.status.none": "Менеджеры версий и рантаймы не найдены",
         "devenv.status.scanning": "Определение среды разработки…",
         "devenv.status.empty": "Среда разработки не сканировалась",
-        "devenv.status.summary": "Версий рантаймов: %d · инструментов/менеджеров: %d",
         "devenv.empty.subtitle": "Нажмите «Сканировать снова» для определения рантаймов и инструментов",
         "devenv.tools": "Инструменты и менеджеры",
         "devenv.tools.hint": "Инструменты и управляемые версии здесь доступны только для просмотра; удаляйте версии через их менеджер.",
@@ -748,7 +689,6 @@ extension L10nTables {
         "proc.status.reading": "Чтение активных процессов…",
         "proc.status.none": "Нет управляемых пользовательских процессов",
         "proc.status.systemHint": "Системные демоны здесь не появляются",
-        "proc.status.pids": "PID: %d · расширенный режим PID",
         "proc.kill": "Завершить",
         "proc.detail.app": "Управление по приложению · PID %d",
         "proc.confirm.killPid.title": "Завершить этот PID?",
@@ -757,7 +697,6 @@ extension L10nTables {
         "proc.confirm.quit.title": "Завершить «%@»?",
 
         "ports.status.reading": "Чтение портов прослушивания…",
-        "ports.status.count": "Портов прослушивания: %d",
         "ports.status.none": "Порты TCP прослушивания не найдены",
         "ports.close": "Закрыть",
         "ports.row": "Порт %@ · %@",
@@ -810,10 +749,7 @@ extension L10nTables {
         "log.wlSaved": "Белый список сохранён (записей: %d). Действует со следующего сканирования.",
         "log.wlInvalid": "Белый список принимает только абсолютные пути без ..: %@",
 
-        "confirm.apply.title": "Обработать объектов: %d?",
         "confirm.apply.trash.ok": "В Корзину",
-        "confirm.apply.tools.msg": "Выполняет соответствующую команду удаления npm, pnpm, brew, cargo, dotnet или pipx.",
-        "confirm.apply.tools.ok": "Удалить пакет",
         "confirm.env.title": "Очистить версий среды разработки: %d?",
         "confirm.env.msg": "Выбранные версии рантаймов/тулчейнов (%d, %@) попадут в Корзину (восстановимы). Используемые версии никогда не очищаются. Переустановите через менеджер версий при необходимости.",
 
@@ -827,18 +763,10 @@ extension L10nTables {
         "proc.unknown": "Неизвестный процесс",
     
     
-        "tab.analyze": "Анализ диска",
+        "tab.analyze": "Анализ",
         "analyze.scan": "Анализировать",
+        "analyze.start": "Начать анализ",
         "analyze.scanning": "Анализ… большие папки могут занять время",
-        "analyze.pick": "Выбрать папку",
-        "analyze.up": "Вверх",
-        "analyze.status.empty": "Не анализировалось",
-        "analyze.status.summary": "Элементов: %d · всего %@",
-        "analyze.selected": "Выбрано: %d · %@",
-        "analyze.apply": "Удалить выбранное",
-        "analyze.confirm.title": "Удалить объектов: %d?",
-        "analyze.confirm.msg": "%@ попадёт в Корзину (восстановимо). Mole проверяет пути и белый список; защищённые системные пути пропускаются.",
-        "analyze.empty.subtitle": "Выберите папку или используйте быстрые ссылки",
     
         "gc.title": "Официальные команды очистки",
         "gc.subtitle": "Запускает собственные команды очистки каждого менеджера пакетов — без прямого удаления",
@@ -885,7 +813,7 @@ extension L10nTables {
         "clip.title": "История буфера обмена",
         "clip.empty": "Записей буфера обмена пока нет",
         "shot.title": "Редактор скриншотов",
-        "shot.hotkey": "Горячая клавиша скриншота（⌘⌃A）",
+        "shot.hotkey": "Горячая клавиша скриншота",
         "shot.save": "Сохранить",
         "shot.saved": "Сохранено ✓",
         "shot.undo": "Отменить",
@@ -901,10 +829,9 @@ extension L10nTables {
 
     static let tr: [String: String] = [
         "window.title": "Nori",
-        "tab.cleanup": "Disk Temizliği",
-        "tab.uninstall": "Uygulama Kaldırma",
-        "tab.optimize": "Optimize",
-        "tab.devenv": "Geliştirme Ortamı",
+        "tab.cleanup": "Temizlik",
+        "tab.uninstall": "Uygulamalar",
+        "tab.devenv": "Dev",
         "tab.processes": "Süreçler",
         "tab.ports": "Portlar",
         "tab.images": "Görseller",
@@ -923,7 +850,6 @@ extension L10nTables {
 
 
         "cleanup.cancelScan": "Taramayı iptal et",
-        "cleanup.empty.subtitle": "Temizlenebilir öğeleri görmek için “Taramayı başlat”a tıklayın\nÖnbellek, günlük ve yükleyiciler burada gruplu görünür",
         "cleanup.apply.busy": "İşleniyor…",
         "cleanup.morePaths": "… ve %d yol daha",
         "cleanup.selectNone": "Önce en az bir kategori seçin",
@@ -933,7 +859,6 @@ extension L10nTables {
         "uninstall.status.none": "Uygulamalar taranmadı",
         "uninstall.status.scanning": "Yüklü uygulamalar taranıyor…",
         "uninstall.status.empty": "Kaldırılabilir uygulama bulunamadı",
-        "uninstall.status.count": "%d uygulama",
         "uninstall.noMatch.title": "Eşleşen uygulama yok",
         "uninstall.noMatch.subtitle": "Başka bir anahtar kelime deneyin",
         "uninstall.empty.subtitle": "Kaldırılabilirları listelemek için “Uygulamaları tara”ya tıklayın",
@@ -945,11 +870,9 @@ extension L10nTables {
         "file.app": "Uygulama paketi",
         "file.installer": "Yükleyici dosyaları",
 
-        "devenv.manageCli": "CLI Araçlarını Yönet",
         "devenv.status.none": "Sürüm yöneticisi veya çalışma zamanı bulunamadı",
         "devenv.status.scanning": "Geliştirme ortamı tanımlanıyor…",
         "devenv.status.empty": "Geliştirme ortamı taranmadı",
-        "devenv.status.summary": "%d çalışma zamanı sürümü · %d araç / paket yöneticisi",
         "devenv.empty.subtitle": "Yüklü çalışma zamanlarını tanımak için “Yeniden tara”ya tıklayın",
         "devenv.tools": "Araçlar ve Paket Yöneticileri",
         "devenv.tools.hint": "Araçlar ve yönetilen sürümler burada salt okunurdur; sürümleri ilgili yöneticiyle kaldırın.",
@@ -972,7 +895,6 @@ extension L10nTables {
         "proc.status.reading": "Etkin süreçler okunuyor…",
         "proc.status.none": "Yönetilebilir kullanıcı süreci yok",
         "proc.status.systemHint": "Sistem arka plan süreçleri burada görünmez",
-        "proc.status.pids": "%d PID · Gelişmiş PID modu",
         "proc.kill": "Sonlandır",
         "proc.detail.app": "Uygulama düzeyinde yönetim · PID %d",
         "proc.confirm.killPid.title": "Bu PID sonlandırılsın mı?",
@@ -981,7 +903,6 @@ extension L10nTables {
         "proc.confirm.quit.title": "%@ kapatılsın mı?",
 
         "ports.status.reading": "Dinleme portları okunuyor…",
-        "ports.status.count": "%d dinleme portu",
         "ports.status.none": "TCP dinleme portu bulunamadı",
         "ports.close": "Kapat",
         "ports.row": "Port %@ · %@",
@@ -1034,10 +955,7 @@ extension L10nTables {
         "log.wlSaved": "Beyaz liste kaydedildi (%d girdi). Bir sonraki tarama ve temizlikte geçerli olur.",
         "log.wlInvalid": "Beyaz liste yalnızca .. içermeyen mutlak yolları kabul eder: %@",
 
-        "confirm.apply.title": "%d öğe işlensin mi?",
         "confirm.apply.trash.ok": "Çöp Kutusu'na taşı",
-        "confirm.apply.tools.msg": "İlgili npm, pnpm, brew, cargo, dotnet veya pipx kaldırma komutunu çalıştırır.",
-        "confirm.apply.tools.ok": "Paket kaldırmayı çalıştır",
         "confirm.env.title": "%d geliştirme ortamı sürümü temizlensin mi?",
         "confirm.env.msg": "Seçilen %d çalışma zamanı/araç zinciri sürümü (%@) Çöp Kutusu'na gider (geri alınabilir). Kullanımdaki sürümler asla temizlenmez. İstediğinizde sürüm yöneticisiyle yeniden yükleyebilirsiniz.",
 
@@ -1051,18 +969,10 @@ extension L10nTables {
         "proc.unknown": "Bilinmeyen süreç",
     
     
-        "tab.analyze": "Disk Analizi",
+        "tab.analyze": "Analiz",
         "analyze.scan": "Analiz Et",
+        "analyze.start": "Analizi Başlat",
         "analyze.scanning": "Analiz ediliyor… büyük klasörler zaman alabilir",
-        "analyze.pick": "Klasör Seç",
-        "analyze.up": "Yukarı",
-        "analyze.status.empty": "Analiz edilmedi",
-        "analyze.status.summary": "%d öğe · toplam %@",
-        "analyze.selected": "%d seçili · %@",
-        "analyze.apply": "Seçileni Sil",
-        "analyze.confirm.title": "%d öğe silinsin mi?",
-        "analyze.confirm.msg": "%@ ÃÃ¶p Kutusu’na taÅÄ±nÄ±r (geri alÄ±nabilir). Mole yollarÄ± ve beyaz listeyi doÄrular; korunan sistem yollarÄ± otomatik atlanÄ±r.",
-        "analyze.empty.subtitle": "Bir klasör seçin veya hızlı bağlantıları kullanın",
     
         "gc.title": "Resmî GC Komutları",
         "gc.subtitle": "Her paket yöneticisinin kendi temizlik komutunu çalıştırır — doğrudan silme yok",
@@ -1109,7 +1019,7 @@ extension L10nTables {
         "clip.title": "Pano Geçmişi",
         "clip.empty": "Henüz pano kaydı yok",
         "shot.title": "Ekran Görüntüsü Düzenleyici",
-        "shot.hotkey": "Ekran görüntüsü kısayolu（⌘⌃A）",
+        "shot.hotkey": "Ekran görüntüsü kısayolu",
         "shot.save": "Kaydet",
         "shot.saved": "Kaydedildi ✓",
         "shot.undo": "Geri al",

@@ -34,35 +34,13 @@ extension AppState {
             .filter { duplicateSelection.contains($0.path) }.reduce(0) { $0 + $1.size }
     }
 
-    func chooseDuplicateFolders() {
-        guard !isBusy else { return }
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = true
-        panel.canCreateDirectories = false
-        panel.prompt = L10n.shared.t("duplicates.scope.choose")
-        guard panel.runModal() == .OK else { return }
-        for url in panel.urls { addDuplicateRoot(url.path) }
-    }
-
-    func addDuplicateRoot(_ path: String) {
-        guard !isBusy else { return }
-        let root = URL(fileURLWithPath: path).standardizedFileURL.path
-        guard DuplicateScanner.isAllowedRoot(root) else {
-            duplicateStatus = L10n.shared.t("duplicates.scope.rejected")
-            return
+    /// 完全重复组每组保留一份后的可释放量。相似图片组大小不一，不估算。
+    var duplicateReclaimableBytes: UInt64 {
+        guard duplicateMode == .exact, !duplicateGroups.isEmpty else { return 0 }
+        return duplicateGroups.reduce(0) { total, group in
+            let keeper = group.members.map(\.size).max() ?? 0
+            return total + group.members.reduce(0) { $0 + $1.size } - keeper
         }
-        guard !duplicateRoots.contains(where: { root == $0 || root.hasPrefix($0 + "/") }) else { return }
-        duplicateRoots.removeAll { $0.hasPrefix(root + "/") }
-        duplicateRoots.append(root)
-        resetDuplicateResults()
-    }
-
-    func removeDuplicateRoot(_ path: String) {
-        guard !isBusy else { return }
-        duplicateRoots.removeAll { $0 == path }
-        resetDuplicateResults()
     }
 
     func setDuplicateMode(_ mode: DuplicateMode) {
@@ -80,11 +58,12 @@ extension AppState {
         duplicateCoverage = ""
     }
 
+    /// 全盘扫描的重复文件子分类：家目录内做内容级比对，系统文件、
+    /// 包目录与隐藏位置由扫描策略直接排除，用户无需选择范围。
     func scanDuplicateFiles() {
-        guard !isBusy, !duplicateRoots.isEmpty else { return }
+        guard !isBusy, !isScanningDuplicates else { return }
         guard permissionCenter.fullDiskAccessGranted else {
-            showDuplicateFiles = false
-            requestScanAccess(.duplicateScan)
+            duplicateStatus = L10n.shared.t("duplicates.status.noAccess")
             return
         }
         resetDuplicateResults()
@@ -92,7 +71,7 @@ extension AppState {
         duplicateScanControl = control
         isScanningDuplicates = true
         duplicateStatus = L10n.shared.tf("duplicates.status.enumerating", 0)
-        let roots = duplicateRoots
+        let roots = [NSHomeDirectory()]
         let mode = duplicateMode
         let progress: (DuplicateScanProgress) -> Void = { [weak self] event in
             Task { @MainActor [weak self] in
@@ -178,7 +157,7 @@ extension AppState {
         else { duplicateSelection.insert(record.path) }
     }
 
-    /// Called only after the sheet's explicit Trash confirmation. This native
+    /// Runs only after the section's explicit Trash confirmation. This native
     /// route retains the cleanup whitelist and open-file checks, with a fresh
     /// group/content validation at each final mutation edge.
     func deleteSelectedDuplicates() {

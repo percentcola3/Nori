@@ -4,7 +4,7 @@ import Foundation
 /// 细项回退英文。
 enum L10nAgentsTables {
     static let en: [String: String] = [
-        "tab.agents": "AI Agents",
+        "tab.agents": "Agents",
         "agents.title": "AI Agent Cleanup",
         "agents.subtitle": "Caches, old versions and history left by coding agents. Selected items are deleted permanently.",
         "agents.scan": "Scan agents",
@@ -14,19 +14,14 @@ enum L10nAgentsTables {
         "agents.status.empty": "No agent data found.",
         "agents.status.done": "%ld agents · %@ in total",
         "agents.status.partial": "Some folders were too large to measure fully",
-        "agents.section.space": "Space",
-        "agents.section.skills": "Skills %ld",
-        "agents.section.mcp": "MCP %ld",
         "agents.badge.showOnly": "Size only",
+        "agents.badge.leftover": "Uninstalled · leftover",
         "agents.group.reclaimable": "Reclaimable %@",
-        "agents.skills.empty": "No skills installed.",
-        "agents.skills.hint": "Skills you select are deleted permanently. Linked skills point to another folder and are shown for reference only.",
-        "agents.skills.shared": "Shared by several agents",
+        "agents.group.shared": "Shared skills",
+        "agents.subsection.skills": "Skills",
+        "agents.subsection.mcp": "MCP servers",
         "agents.skills.linked": "Link",
-        "agents.mcp.empty": "No MCP servers configured.",
-        "agents.mcp.issueCount": "%ld issues found",
-        "agents.mcp.healthy": "No issues found",
-        "agents.mcp.readOnly": "Read-only check. Nori never edits MCP configuration files; open the file to change it.",
+        "agents.mcp.editable": "Selected skills are deleted permanently; selected MCP servers are removed from their config files (a backup is written next to the original).",
         "agents.mcp.disabled": "Disabled",
         "agents.mcp.issue.command": "Command not found: %@",
         "agents.mcp.issue.secret": "Plaintext secret in %@ (%@). Prefer an environment variable.",
@@ -73,7 +68,7 @@ enum L10nAgentsTables {
     ]
 
     static let zhHans: [String: String] = [
-        "tab.agents": "Agent 专清",
+        "tab.agents": "Agent",
         "agents.title": "AI Agent 专清",
         "agents.subtitle": "编程 Agent 留下的缓存、旧版本和历史记录，勾选后直接永久删除。",
         "agents.scan": "扫描 Agent",
@@ -83,19 +78,14 @@ enum L10nAgentsTables {
         "agents.status.empty": "没有发现 Agent 数据。",
         "agents.status.done": "%ld 个 Agent · 共 %@",
         "agents.status.partial": "部分目录过大，未能完整计量",
-        "agents.section.space": "空间",
-        "agents.section.skills": "Skills %ld",
-        "agents.section.mcp": "MCP %ld",
         "agents.badge.showOnly": "仅显示",
+        "agents.badge.leftover": "已卸载 · 残留",
         "agents.group.reclaimable": "可清理 %@",
-        "agents.skills.empty": "没有安装 Skill。",
-        "agents.skills.hint": "勾选的 Skill 会被直接永久删除。链接类 Skill 指向其他目录，只作展示。",
-        "agents.skills.shared": "多个 Agent 共用",
+        "agents.group.shared": "共享 Skills",
+        "agents.subsection.skills": "Skills",
+        "agents.subsection.mcp": "MCP 服务",
         "agents.skills.linked": "链接",
-        "agents.mcp.empty": "没有配置 MCP 服务。",
-        "agents.mcp.issueCount": "发现 %ld 个问题",
-        "agents.mcp.healthy": "未发现问题",
-        "agents.mcp.readOnly": "只读检查：Nori 从不修改 MCP 配置文件，需要调整请打开文件自行编辑。",
+        "agents.mcp.editable": "勾选的 Skill 将被直接永久删除；勾选的 MCP 服务会从配置文件中移除，修改前会在原文件旁生成备份。",
         "agents.mcp.disabled": "已停用",
         "agents.mcp.issue.command": "找不到命令：%@",
         "agents.mcp.issue.secret": "%@ 中有明文密钥（%@），建议改用环境变量。",
@@ -142,7 +132,7 @@ enum L10nAgentsTables {
     ]
 
     static let zhHant: [String: String] = [
-        "tab.agents": "Agent 專清",
+        "tab.agents": "Agent",
         "agents.title": "AI Agent 專清",
         "agents.subtitle": "程式 Agent 留下的快取、舊版本和歷史紀錄，勾選後直接永久刪除。",
         "agents.scan": "掃描 Agent",
@@ -152,17 +142,14 @@ enum L10nAgentsTables {
         "agents.status.empty": "沒有發現 Agent 資料。",
         "agents.status.done": "%ld 個 Agent · 共 %@",
         "agents.status.partial": "部分目錄過大，未能完整計量",
-        "agents.section.space": "空間",
         "agents.badge.showOnly": "僅顯示",
+        "agents.badge.leftover": "已解除安裝 · 殘留",
         "agents.group.reclaimable": "可清理 %@",
-        "agents.skills.empty": "沒有安裝 Skill。",
-        "agents.skills.hint": "勾選的 Skill 會被直接永久刪除。連結類 Skill 指向其他目錄，只作展示。",
-        "agents.skills.shared": "多個 Agent 共用",
+        "agents.group.shared": "共享 Skills",
+        "agents.subsection.skills": "Skills",
+        "agents.subsection.mcp": "MCP 服務",
         "agents.skills.linked": "連結",
-        "agents.mcp.empty": "沒有設定 MCP 服務。",
-        "agents.mcp.issueCount": "發現 %ld 個問題",
-        "agents.mcp.healthy": "未發現問題",
-        "agents.mcp.readOnly": "唯讀檢查：Nori 從不修改 MCP 設定檔，需要調整請開啟檔案自行編輯。",
+        "agents.mcp.editable": "勾選的 Skill 將被直接永久刪除；勾選的 MCP 服務會從設定檔中移除，修改前會在原檔旁產生備份。",
         "agents.mcp.disabled": "已停用",
         "agents.mcp.issue.command": "找不到指令：%@",
         "agents.mcp.issue.secret": "%@ 中有明文金鑰（%@），建議改用環境變數。",
@@ -185,7 +172,7 @@ enum L10nAgentsTables {
     ]
 
     static let ja: [String: String] = [
-        "tab.agents": "AI エージェント",
+        "tab.agents": "Agent",
         "agents.title": "AI エージェントのクリーンアップ",
         "agents.scan": "エージェントをスキャン",
         "agents.rescan": "再スキャン",
@@ -194,7 +181,7 @@ enum L10nAgentsTables {
     ]
 
     static let ko: [String: String] = [
-        "tab.agents": "AI 에이전트",
+        "tab.agents": "Agent",
         "agents.title": "AI 에이전트 정리",
         "agents.scan": "에이전트 스캔",
         "agents.rescan": "다시 스캔",
@@ -203,7 +190,7 @@ enum L10nAgentsTables {
     ]
 
     static let de: [String: String] = [
-        "tab.agents": "KI-Agenten",
+        "tab.agents": "Agenten",
         "agents.title": "KI-Agenten bereinigen",
         "agents.scan": "Agenten scannen",
         "agents.rescan": "Erneut scannen",
@@ -212,7 +199,7 @@ enum L10nAgentsTables {
     ]
 
     static let fr: [String: String] = [
-        "tab.agents": "Agents IA",
+        "tab.agents": "Agents",
         "agents.title": "Nettoyage des agents IA",
         "agents.scan": "Analyser les agents",
         "agents.rescan": "Relancer",
@@ -221,7 +208,7 @@ enum L10nAgentsTables {
     ]
 
     static let es: [String: String] = [
-        "tab.agents": "Agentes IA",
+        "tab.agents": "Agentes",
         "agents.title": "Limpieza de agentes IA",
         "agents.scan": "Analizar agentes",
         "agents.rescan": "Volver a analizar",
@@ -230,7 +217,7 @@ enum L10nAgentsTables {
     ]
 
     static let pt: [String: String] = [
-        "tab.agents": "Agentes de IA",
+        "tab.agents": "Agentes",
         "agents.title": "Limpeza de agentes de IA",
         "agents.scan": "Analisar agentes",
         "agents.rescan": "Analisar de novo",
@@ -239,7 +226,7 @@ enum L10nAgentsTables {
     ]
 
     static let it: [String: String] = [
-        "tab.agents": "Agenti IA",
+        "tab.agents": "Agenti",
         "agents.title": "Pulizia agenti IA",
         "agents.scan": "Analizza agenti",
         "agents.rescan": "Rianalizza",
@@ -248,7 +235,7 @@ enum L10nAgentsTables {
     ]
 
     static let ru: [String: String] = [
-        "tab.agents": "ИИ-агенты",
+        "tab.agents": "Агенты",
         "agents.title": "Очистка ИИ-агентов",
         "agents.scan": "Сканировать агентов",
         "agents.rescan": "Пересканировать",
@@ -257,7 +244,7 @@ enum L10nAgentsTables {
     ]
 
     static let tr: [String: String] = [
-        "tab.agents": "Yapay Zekâ Ajanları",
+        "tab.agents": "Ajanlar",
         "agents.title": "Yapay zekâ ajanı temizliği",
         "agents.scan": "Ajanları tara",
         "agents.rescan": "Yeniden tara",

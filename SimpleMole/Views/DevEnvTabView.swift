@@ -6,16 +6,21 @@ struct DevEnvTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 环境变量体检中勾选待清理的行。
+    @State private var envSelection: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
             // 状态文本与工具栏共用一行：状态居左，操作按钮靠右。
             HStack(alignment: .center, spacing: 8) {
-                Text(state.devEnvStatus)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                // 数量统计已移除：仅在加载/为空/出错等有意义的状态时展示。
+                if !state.devEnvStatus.isEmpty {
+                    Text(state.devEnvStatus)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 Spacer(minLength: 12)
                 Menu {
                     Button {
@@ -39,15 +44,6 @@ struct DevEnvTabView: View {
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .disabled(state.isBusy)
-                Button {
-                    state.jump(to: .cleanup)
-                    state.scanDeveloperTools()
-                } label: {
-                    Label(l10n.t("devenv.manageCli"), systemImage: "shippingbox.fill")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .labelStyle(.iconOnly)
-                .disabled(state.isBusy)
             }
             .padding(.horizontal, 16)
             .padding(.top, 14)
@@ -61,7 +57,7 @@ struct DevEnvTabView: View {
             }
 
             if state.isScanningEnv {
-                NoriScanActivity(text: state.devEnvStatus, assetName: "nori-typing")
+                NoriScanActivity(text: state.devEnvStatus, assetName: "nori-typing", quiet: true)
                     .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else if state.devEnvEntries.isEmpty && state.gcActions.isEmpty {
                 EmptyStateView(symbol: "cpu",
@@ -274,6 +270,8 @@ struct DevEnvTabView: View {
                                     .foregroundStyle(.tertiary)
                             }
                         }
+                        networkToolsSection
+                        envAuditSection
                         if !generalGcActions.isEmpty {
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(spacing: 6) {
@@ -351,6 +349,175 @@ struct DevEnvTabView: View {
             Spacer()
         }
         .padding(.horizontal, 4)
+    }
+
+    // MARK: 网络与服务修复（原系统优化页分流）
+
+    private var networkToolsSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                sectionTitle(l10n.t("nettool.section"))
+                if state.isNetworkToolRunning {
+                    ProgressView().controlSize(.mini)
+                } else if !state.networkToolStatus.isEmpty {
+                    Text(state.networkToolStatus)
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            HStack(spacing: 6) {
+                Button { state.runAdminNetworkTask("dns") } label: {
+                    Label(l10n.t("nettool.dns"), systemImage: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .controlSize(.small)
+                .disabled(state.isNetworkToolRunning)
+
+                Button { state.runAdminNetworkTask("network-stack") } label: {
+                    Label(l10n.t("nettool.network-stack"), systemImage: "network.badge.shield.half.filled")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .controlSize(.small)
+                .disabled(state.isNetworkToolRunning)
+
+                Button { state.runServiceRepair("quicklook") } label: {
+                    Label(l10n.t("nettool.quicklook"), systemImage: "eye")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .controlSize(.small)
+                .disabled(state.isNetworkToolRunning)
+
+                Button { state.runServiceRepair("iconservices") } label: {
+                    Label(l10n.t("nettool.iconservices"), systemImage: "square.grid.2x2")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .controlSize(.small)
+                .disabled(state.isNetworkToolRunning)
+
+                Button { state.runServiceRepair("launchservices") } label: {
+                    Label(l10n.t("nettool.launchservices"), systemImage: "arrow.triangle.swap")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .controlSize(.small)
+                .disabled(state.isNetworkToolRunning)
+
+                Spacer()
+
+                Button { state.resetNetworkEnvironment() } label: {
+                    Label(l10n.t("nettool.reset.title"), systemImage: "arrow.counterclockwise.circle")
+                }
+                .buttonStyle(DangerButtonStyle())
+                .controlSize(.small)
+                .disabled(state.isNetworkToolRunning)
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    // MARK: 环境变量体检
+
+    private var envAuditSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                sectionTitle(l10n.t("envaudit.title"))
+                if state.isShellEnvFixing {
+                    ProgressView().controlSize(.mini)
+                }
+                Spacer()
+                Button { state.scanShellEnv() } label: {
+                    Label(l10n.t("envaudit.scan"), systemImage: "magnifyingglass")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .controlSize(.small)
+                .disabled(state.isShellEnvFixing)
+            }
+            if state.shellEnvAudited {
+                if state.shellEnvIssues.isEmpty {
+                    auditEmptyRow(l10n.t("envaudit.empty"))
+                } else {
+                    ForEach(state.shellEnvIssues) { issue in
+                        envIssueRow(issue)
+                    }
+                    HStack(spacing: 6) {
+                        Text(l10n.tf("envaudit.confirm.message", state.shellEnvIssues.count))
+                            .font(.system(size: 10))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(2)
+                        Spacer()
+                        Button {
+                            let selected = state.shellEnvIssues.filter { envSelection.contains($0.id) }
+                            state.fixShellEnvIssues(selected)
+                        } label: {
+                            Label(l10n.t("envaudit.fix"), systemImage: "scissors")
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .controlSize(.small)
+                        .disabled(envSelection.isEmpty || state.isShellEnvFixing)
+                    }
+                    .padding(.horizontal, 4)
+                }
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func envIssueRow(_ issue: ShellEnvIssue) -> some View {
+        HStack(spacing: 8) {
+            Toggle("", isOn: Binding(
+                get: { envSelection.contains(issue.id) },
+                set: { selected in
+                    if selected { envSelection.insert(issue.id) } else { envSelection.remove(issue.id) }
+                }))
+                .toggleStyle(.checkbox)
+                .controlSize(.mini)
+                .labelsHidden()
+                .fixedSize()
+                .disabled(state.isShellEnvFixing)
+            Text(reasonText(issue))
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Color.warning)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(Color.warning.opacity(0.12)))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(issue.line)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(URL(fileURLWithPath: issue.file).lastPathComponent
+                     + ":" + String(issue.lineNumber) + " · " + issue.detail)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            if issue.replacement != nil {
+                Image(systemName: "pencil.and.list.clipboard")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .help(l10n.t("envaudit.reason.duplicatePath"))
+            } else {
+                Image(systemName: "trash")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
+    }
+
+    private func reasonText(_ issue: ShellEnvIssue) -> String {
+        switch issue.kind {
+        case .deadPath: return l10n.t("envaudit.reason.deadPath")
+        case .duplicatePath: return l10n.t("envaudit.reason.duplicatePath")
+        case .deadExport: return l10n.tf("envaudit.reason.deadExport", issue.detail)
+        case .deadToolInit: return l10n.t("envaudit.reason.deadToolInit")
+        }
     }
 
     private func auditEmptyRow(_ text: String) -> some View {

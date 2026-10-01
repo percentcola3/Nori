@@ -122,10 +122,26 @@ struct AgentCatalogTests {
                        "undocumented agent \(agent.id) offers deletion")
             }
         }
+        // --- 残留判定：已卸载工具整体退出 Agent 漏斗，交由清理扫描按磁盘垃圾收录。
         try write("Library/Application Support/Kiro/Cache/entry")
         let kiro = AgentCatalog.definitions.first { $0.id == "kiro" }!
-        expect(AgentCatalog.resolve(kiro, home: home).allSatisfy { $0.tier == .showOnly },
-               "undocumented tool resolved to a deletable tier")
+        let sandboxPresence = AgentPresenceContext(
+            applicationDirs: [home + "/Applications"], searchPath: [])
+        expect(AgentCatalog.resolve(kiro, home: home, presence: sandboxPresence)
+            .allSatisfy { $0.tier == .review },
+               "orphaned undocumented tool stayed show-only")
+        expect(!AgentCatalog.deletablePaths(home: home, presence: sandboxPresence)
+            .contains(home + "/Library/Application Support/Kiro"),
+               "orphaned leftovers must move to the cleanup funnel, not the agent funnel")
+        let sandboxReport = AgentInventory.scan(home: home, presence: sandboxPresence)
+        expect(sandboxReport.groups.allSatisfy { $0.id != "kiro" }
+               && sandboxReport.categories.allSatisfy { !$0.paths.contains(home + "/Library/Application Support/Kiro") },
+               "an uninstalled tool still appears on the agents page")
+        try write("Applications/Kiro.app/Contents/Info.plist")
+        expect(AgentCatalog.resolve(kiro, home: home, presence: sandboxPresence)
+            .allSatisfy { $0.tier == .showOnly },
+               "undocumented tool with its app present became deletable")
+        try? fm.removeItem(atPath: home + "/Applications/Kiro.app")
 
         // --- 扫描报告：Safe 默认勾选，Review 不勾选，showOnly 不可选。
         try write(".claude/projects/-Users-me-repo/session.jsonl")
@@ -245,6 +261,39 @@ struct AgentCatalogTests {
         let after = try Data(contentsOf: URL(fileURLWithPath: home + "/.claude.json"))
         expect(after == before,
                "MCP scan modified a configuration file")
+
+        // --- MCP 编辑：勾选的服务器从配置移除；备份落在原文件旁，其余条目保持不变。
+        let scanPresence = AgentPresenceContext(
+            applicationDirs: [home + "/Applications"], searchPath: [])
+        let scanned = AgentInventory.scan(home: home, presence: scanPresence)
+        guard let fsServer = scanned.servers.first(where: { $0.name == "fs" }),
+              let webServer = scanned.servers.first(where: { $0.name == "web" }),
+              let shellServer = scanned.servers.first(where: { $0.name == "shell" }) else {
+            expect(false, "MCP fixture servers missing before edit")
+            return
+        }
+        let removal = AgentMCPConfigEditor.apply([
+            .init(configPath: fsServer.configPath, format: fsServer.format,
+                  serverName: fsServer.name, scope: fsServer.scope),
+            .init(configPath: webServer.configPath, format: webServer.format,
+                  serverName: webServer.name, scope: webServer.scope),
+            .init(configPath: shellServer.configPath, format: shellServer.format,
+                  serverName: shellServer.name, scope: shellServer.scope)])
+        expect(removal.removed == 3 && removal.failed == 0,
+               "MCP removal outcome wrong: \(removal)")
+        let rescanned = AgentInventory.scan(home: home, presence: scanPresence)
+        expect(rescanned.servers.filter { ["fs", "web", "shell"].contains($0.name) }.isEmpty,
+               "removed MCP servers still reported after edit")
+        expect(rescanned.servers.contains { $0.name == "plugin" }
+               && rescanned.servers.contains { $0.name == "remote.docs" },
+               "untouched TOML servers were lost in the edit")
+        expect(fm.fileExists(atPath: home + "/.claude.json.nori-backup")
+               && fm.fileExists(atPath: home + "/.codex/config.toml.nori-backup"),
+               "MCP edit did not back up the configuration files")
+        let tomlAfter = try String(contentsOf: URL(fileURLWithPath: home + "/.codex/config.toml"),
+                                    encoding: .utf8)
+        expect(tomlAfter.contains("model = \"gpt\"") && !tomlAfter.contains("mcp_servers.shell"),
+               "TOML rewrite damaged unrelated lines")
 
         // --- 磁盘清理默认流程不再收 Agent 目录。
         expect(CleanupRiskPolicy.isAgentOwnedPath(home + "/.codex/logs_2.sqlite", homeDirectory: home)

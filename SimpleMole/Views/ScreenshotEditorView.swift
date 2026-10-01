@@ -721,8 +721,8 @@ struct PresetFrameView<Content: View>: View {
         isLight ? lightPhoneBody : darkPhoneBody
     }
 
-    /// iPhone 机身：渐变后盖 + 侧键 + 黑色屏幕包边；截图完整落在屏幕内，
-    /// 灵动岛留在上边框里，不遮挡内容。坐标同卡片（左上为原点）。
+    /// iPhone 机身：渐变后盖 + 侧键 + 黑色屏幕包边；截图以原始尺寸铺在屏幕上、
+    /// 居中自动剪裁（cover），灵动岛留在上边框里，不遮挡内容。坐标同卡片（左上为原点）。
     private func phoneBody(_ layout: PresetLayout) -> some View {
         let bodyShape = RoundedRectangle(cornerRadius: layout.bodyCornerRadius, style: .continuous)
         let rim = (3 * layout.chromeScale).rounded()
@@ -737,7 +737,9 @@ struct PresetFrameView<Content: View>: View {
                        height: layout.contentRect.height + rim * 2)
                 .offset(x: layout.contentRect.minX - layout.cardRect.minX - rim,
                         y: layout.contentRect.minY - layout.cardRect.minY - rim)
+            // 原图保持原始尺寸、超出屏幕的部分居中裁掉，绝不拉伸变形。
             content()
+                .frame(width: layout.contentSourceSize.width, height: layout.contentSourceSize.height)
                 .frame(width: layout.contentRect.width, height: layout.contentRect.height)
                 .clipShape(screenShape)
                 .offset(x: layout.contentRect.minX - layout.cardRect.minX,

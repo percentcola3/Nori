@@ -8,6 +8,7 @@ struct ScreenshotPresetTests {
         testPlainLayoutIsIdentity()
         testWindowLayoutAddsChromeAndPadding()
         testPhoneShellLayout()
+        testPhoneShellCropsLandscapeSource()
         testPhoneShellWithoutPaddingKeepsButtons()
         testAspectNeverCropsContent()
         testChromeScalesWithResolution()
@@ -59,17 +60,25 @@ struct ScreenshotPresetTests {
                      "iphone preset must default to the iphone frame")
         let layout = PresetLayout.compute(contentSize: CGSize(width: 600, height: 1200),
                                           composition: composition)
-        // chromeScale = 600/1000 = 0.6
-        precondition(layout.bezelSide == 33 && layout.bezelTop == 66 && layout.bezelBottom == 33,
-                     "bezel must scale with content width, got \(layout.bezelSide)/\(layout.bezelTop)")
-        precondition(layout.cardRect.size == CGSize(width: 666, height: 1299),
-                     "body must be content plus bezels, got \(layout.cardRect.size)")
-        precondition(layout.contentRect == CGRect(x: layout.cardRect.minX + 33,
-                                                  y: layout.cardRect.minY + 66,
-                                                  width: 600, height: 1200),
-                     "content rect must sit inside the bezels, got \(layout.contentRect)")
-        precondition(layout.padding == 30, "5% padding of 600 must be 30, got \(layout.padding)")
-        precondition(layout.canvasSize == CGSize(width: 726, height: 1359),
+        // 屏幕固定为手机比例：600×1200 比屏幕更宽，宽度被居中剪裁为 554、高度完整保留。
+        precondition(layout.contentSourceSize == CGSize(width: 600, height: 1200),
+                     "source size must stay uncropped for cover rendering")
+        precondition(layout.contentRect.size == CGSize(width: 554, height: 1200),
+                     "screen must crop the wider source to the phone ratio, got \(layout.contentRect.size)")
+        precondition(abs(layout.contentRect.width / layout.contentRect.height
+                         - PresetLayout.phoneScreenRatio) < 0.001,
+                     "screen aspect must match the phone ratio")
+        // chromeScale = 554/1000 = 0.554
+        precondition(layout.bezelSide == 30 && layout.bezelTop == 61 && layout.bezelBottom == 30,
+                     "bezel must scale with the screen width, got \(layout.bezelSide)/\(layout.bezelTop)")
+        precondition(layout.cardRect.size == CGSize(width: 614, height: 1291),
+                     "body must be screen plus bezels, got \(layout.cardRect.size)")
+        precondition(layout.contentRect == CGRect(x: layout.cardRect.minX + 30,
+                                                  y: layout.cardRect.minY + 61,
+                                                  width: 554, height: 1200),
+                     "screen must sit inside the bezels, got \(layout.contentRect)")
+        precondition(layout.padding == 28, "5% padding of 554 must be 28, got \(layout.padding)")
+        precondition(layout.canvasSize == CGSize(width: 670, height: 1347),
                      "canvas must be body + padding, got \(layout.canvasSize)")
         precondition(layout.islandRect.midX == layout.cardRect.midX
                      && layout.islandRect.maxY <= layout.contentRect.minY,
@@ -77,6 +86,26 @@ struct ScreenshotPresetTests {
         precondition(layout.bodyCornerRadius > layout.screenCornerRadius && layout.screenCornerRadius > 0,
                      "screen corners must be tighter than the body corners")
         precondition(layout.titleBarHeight == 0, "phone shell has no title bar")
+    }
+
+    /// 横版截图套 iPhone 壳：屏幕保持手机比例，宽边被居中剪裁、内容不缩放不变形。
+    static func testPhoneShellCropsLandscapeSource() {
+        var composition = ScreenshotComposition(preset: ScreenshotPreset.builtIn(id: "aurora")!)
+        composition.frame = .iphone
+        let layout = PresetLayout.compute(contentSize: CGSize(width: 1200, height: 800),
+                                          composition: composition)
+        precondition(layout.contentSourceSize == CGSize(width: 1200, height: 800),
+                     "source size must stay uncropped")
+        precondition(layout.contentRect.size == CGSize(width: 369, height: 800),
+                     "landscape source must crop width to the phone ratio, got \(layout.contentRect.size)")
+        precondition(abs(layout.contentRect.width / layout.contentRect.height
+                         - PresetLayout.phoneScreenRatio) < 0.001,
+                     "cropped screen must keep the phone ratio")
+        // 比 9:19.5 更“瘦”的截图：宽度完整保留、高度被剪裁。
+        let tall = PresetLayout.compute(contentSize: CGSize(width: 400, height: 1000),
+                                        composition: composition)
+        precondition(tall.contentRect.size == CGSize(width: 400, height: 867),
+                     "skinny source must crop height instead, got \(tall.contentRect.size)")
     }
 
     static func testPhoneShellWithoutPaddingKeepsButtons() {
@@ -103,7 +132,19 @@ struct ScreenshotPresetTests {
                 let layout = PresetLayout.compute(contentSize: content, composition: composition)
                 let canvas = CGRect(origin: .zero, size: layout.canvasSize)
                 precondition(canvas.contains(layout.cardRect), "\(frame)/\(aspect) must keep the card inside the canvas")
-                precondition(layout.contentRect.size == content, "\(frame)/\(aspect) must never resize the content")
+                if frame == .iphone {
+                    // iPhone 外壳：屏幕固定为手机比例，内容按 cover 居中剪裁，不缩放。
+                    precondition(layout.contentSourceSize == content,
+                                 "\(frame)/\(aspect) must keep the uncropped source size")
+                    precondition(layout.contentRect.width <= content.width
+                                 && layout.contentRect.height <= content.height,
+                                 "\(frame)/\(aspect) screen must not exceed the source")
+                    precondition(abs(layout.contentRect.width / layout.contentRect.height
+                                     - PresetLayout.phoneScreenRatio) < 0.001,
+                                 "\(frame)/\(aspect) screen ratio must stay a phone ratio")
+                } else {
+                    precondition(layout.contentRect.size == content, "\(frame)/\(aspect) must never resize the content")
+                }
                 if let ratio = aspect.ratio {
                     let actual = layout.canvasSize.width / layout.canvasSize.height
                     precondition(abs(actual - ratio) < 0.01, "\(frame)/\(aspect) ratio \(actual) != \(ratio)")

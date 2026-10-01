@@ -20,6 +20,22 @@ enum DiskAnalysisWorker {
         var mediaSummary = MediaSummary()
     }
 
+    /// 顶层子目录的遍历结果汇入这里的全局累加器。硬链接按 (device, inode)
+    /// 全局去重，top-N 截断与进度快照也都是跨子目录状态；锁只出现在低频
+    /// 事件（硬链接命中、媒体/大文件命中、目录收尾、进度节流）上。
+    private final class SharedState {
+        let lock = NSLock()
+        var seen = Set<Identity>()
+        var rows: [AnalyzeEntry] = []
+        var largeFiles: [AnalyzeReport.LargeFile] = []
+        var media: [MediaFile] = []
+        var mediaSummary = MediaSummary()
+        var directoryReports: [String: AnalyzeReport] = [:]
+        var totalFiles = 0
+        var incomplete = false
+        var lastProgress = -Double.infinity
+    }
+
     /// Keep the largest files per kind; trimming lazily keeps appends cheap.
     static func trimMedia(_ list: inout [MediaFile], slack: Int = 1) {
         let cap = MediaSlimPolicy.perKindCap
@@ -36,6 +52,10 @@ enum DiskAnalysisWorker {
                      progressInterval: TimeInterval = 0.15,
                      progress: ((AnalyzeReport) -> Void)? = nil) -> AnalyzeReport {
         let root = URL(fileURLWithPath: path).standardizedFileURL
+        // Root scans feed only the aggregated categories; drilling into the
+        // directory index is not offered there, so per-directory reports and
+        // their entry buffers are not accumulated for the whole filesystem.
+        let collectDirectoryReports = root.path != "/"
         var report = AnalyzeReport(path: root.path, overview: root.path == "/", entries: [],
                                    largeFiles: [], totalSize: 0, totalFiles: 0)
         let children: [URL]
@@ -51,57 +71,72 @@ enum DiskAnalysisWorker {
         }
         var rootStat = stat()
         let rootBytes = lstat(root.path, &rootStat) == 0 ? UInt64(max(0, rootStat.st_blocks)) * 512 : 0
-        var seen = Set<Identity>()
-        var rows: [AnalyzeEntry] = []
-        var totalFiles = 0
-        var largeFiles: [AnalyzeReport.LargeFile] = []
-        var directoryReports: [String: AnalyzeReport] = [:]
-        var media: [MediaFile] = []
-        var mediaSummary = MediaSummary()
-        var incomplete = false
-        var lastProgress = -Double.infinity
+        let shared = SharedState()
 
-        func snapshot(partial: Bool, currentEntry: AnalyzeEntry? = nil,
-                      currentPath: String? = nil) -> AnalyzeReport {
-            var trimmed = media
+        func makeSnapshot(partial: Bool, currentEntry: AnalyzeEntry? = nil,
+                          currentPath: String? = nil) -> AnalyzeReport {
+            shared.lock.lock()
+            defer { shared.lock.unlock() }
+            var trimmed = shared.media
             trimMedia(&trimmed)
-            var entries = rows
+            var entries = shared.rows
             if let currentEntry { entries.append(currentEntry) }
-            var report = AnalyzeReport(path: root.path, overview: root.path == "/",
-                                       entries: entries.sorted(by: AnalyzeEntry.analysisOrder),
-                                       largeFiles: largeFiles.sorted { $0.size > $1.size },
-                                       totalSize: rootBytes + entries.reduce(0) { $0 + $1.size },
-                                       totalFiles: totalFiles, isPartial: partial)
-            report.media = trimmed.sorted { $0.size > $1.size }
-            report.mediaSummary = mediaSummary
-            report.currentPath = currentPath
-            return report
+            var snapshot = AnalyzeReport(path: root.path, overview: root.path == "/",
+                                         entries: entries.sorted(by: AnalyzeEntry.analysisOrder),
+                                         largeFiles: shared.largeFiles.sorted { $0.size > $1.size },
+                                         totalSize: rootBytes + entries.reduce(0) { $0 + $1.size },
+                                         totalFiles: shared.totalFiles, isPartial: partial)
+            snapshot.media = trimmed.sorted { $0.size > $1.size }
+            snapshot.mediaSummary = shared.mediaSummary
+            snapshot.currentPath = currentPath
+            return snapshot
         }
 
-        for child in children {
-            if control.isCancelled { incomplete = true; break }
+        func scanChild(_ child: URL) {
+            if control.isCancelled {
+                shared.lock.lock()
+                shared.incomplete = true
+                shared.lock.unlock()
+                return
+            }
             var metadata = stat()
             let available = lstat(child.path, &metadata) == 0
             let directory = available && (metadata.st_mode & S_IFMT) == S_IFDIR
             var bytes: UInt64 = 0
             var partial = !available
             var stack: [Directory] = []
+            // 文件数按小批增量汇入全局计数：进度快照需要在遍历中看到
+            // totalFiles 增长（中途取消依赖它），但又不必逐文件抢锁。
+            var pendingFiles = 0
+            func flushPendingFiles() {
+                guard pendingFiles > 0 else { return }
+                shared.lock.lock()
+                shared.totalFiles += pendingFiles
+                shared.lock.unlock()
+                pendingFiles = 0
+            }
             func publishProgress(at path: String) {
                 guard let progress else { return }
                 let now = ProcessInfo.processInfo.systemUptime
-                guard now - lastProgress >= progressInterval else { return }
-                lastProgress = now
+                var due = false
+                shared.lock.lock()
+                if now - shared.lastProgress >= progressInterval {
+                    shared.lastProgress = now
+                    due = true
+                }
+                shared.lock.unlock()
+                guard due else { return }
                 // Include the active subtree's measured bytes. Waiting for its
                 // final FTS_DP can leave a large Library/developer tree silent
                 // for minutes even though files are still being visited.
                 let current = AnalyzeEntry(name: child.lastPathComponent, path: child.path,
                                            size: bytes, isDir: directory, cleanable: false,
                                            isPartial: true)
-                progress(snapshot(partial: true, currentEntry: current, currentPath: path))
+                progress(makeSnapshot(partial: true, currentEntry: current, currentPath: path))
             }
             func append(_ row: AnalyzeEntry, files: Int) {
                 guard !stack.isEmpty else { return }
-                stack[stack.count - 1].entries.append(row)
+                if collectDirectoryReports { stack[stack.count - 1].entries.append(row) }
                 stack[stack.count - 1].bytes += row.size
                 stack[stack.count - 1].files += files
                 stack[stack.count - 1].partial = stack.last!.partial || row.isPartial == true
@@ -110,14 +145,18 @@ enum DiskAnalysisWorker {
                 guard var directory = stack.popLast() else { return }
                 let partial = interrupted || directory.partial
                 trimMedia(&directory.media)
-                var directoryReport = AnalyzeReport(
-                    path: directory.path, overview: false,
-                    entries: directory.entries.sorted(by: AnalyzeEntry.analysisOrder),
-                    largeFiles: directory.largeFiles, totalSize: directory.bytes, totalFiles: directory.files,
-                    isPartial: partial)
-                directoryReport.media = directory.media.sorted { $0.size > $1.size }
-                directoryReport.mediaSummary = directory.mediaSummary
-                directoryReports[directory.path] = directoryReport
+                if collectDirectoryReports {
+                    var directoryReport = AnalyzeReport(
+                        path: directory.path, overview: false,
+                        entries: directory.entries.sorted(by: AnalyzeEntry.analysisOrder),
+                        largeFiles: directory.largeFiles, totalSize: directory.bytes, totalFiles: directory.files,
+                        isPartial: partial)
+                    directoryReport.media = directory.media.sorted { $0.size > $1.size }
+                    directoryReport.mediaSummary = directory.mediaSummary
+                    shared.lock.lock()
+                    shared.directoryReports[directory.path] = directoryReport
+                    shared.lock.unlock()
+                }
                 if !stack.isEmpty {
                     stack[stack.count - 1].media.append(contentsOf: directory.media)
                     trimMedia(&stack[stack.count - 1].media, slack: 4)
@@ -178,9 +217,11 @@ enum DiskAnalysisWorker {
                             }
                             var allocated = UInt64(max(0, info.st_blocks)) * 512
                             if info.st_nlink > 1 && Int32(item.fts_info) == FTS_F {
-                                if !seen.insert(Identity(device: info.st_dev, inode: info.st_ino)).inserted {
-                                    allocated = 0
-                                }
+                                shared.lock.lock()
+                                let doubleCounted = !shared.seen.insert(
+                                    Identity(device: info.st_dev, inode: info.st_ino)).inserted
+                                shared.lock.unlock()
+                                if doubleCounted { allocated = 0 }
                             }
                             bytes += allocated
                             if Int32(item.fts_info) == FTS_D {
@@ -189,15 +230,21 @@ enum DiskAnalysisWorker {
                                 append(AnalyzeEntry(name: itemName, path: itemPath, size: allocated,
                                                     isDir: false, cleanable: false, isPartial: false),
                                        files: Int32(item.fts_info) == FTS_F ? 1 : 0)
+                                if Int32(item.fts_info) == FTS_F {
+                                    pendingFiles += 1
+                                    if pendingFiles >= 32 { flushPendingFiles() }
+                                }
                             }
                             if Int32(item.fts_info) == FTS_F,
                                let kind = MediaSlimPolicy.kind(forPath: itemName),
                                allocated >= MediaSlimPolicy.minimumBytes(for: kind),
                                MediaSlimPolicy.isEligible(itemPath, home: home) {
                                 let file = MediaFile(name: itemName, path: itemPath, size: allocated, kind: kind)
-                                mediaSummary.add(kind, bytes: allocated)
-                                media.append(file)
-                                trimMedia(&media, slack: 4)
+                                shared.lock.lock()
+                                shared.mediaSummary.add(kind, bytes: allocated)
+                                shared.media.append(file)
+                                trimMedia(&shared.media, slack: 4)
+                                shared.lock.unlock()
                                 if !stack.isEmpty {
                                     stack[stack.count - 1].media.append(file)
                                     trimMedia(&stack[stack.count - 1].media, slack: 4)
@@ -205,21 +252,27 @@ enum DiskAnalysisWorker {
                                 }
                             }
                             if Int32(item.fts_info) == FTS_F {
-                                totalFiles += 1
-                                if allocated >= 100 * 1024 * 1024 {
-                                    let filePath = String(cString: item.fts_path)
-                                    largeFiles.append(.init(name: URL(fileURLWithPath: filePath).lastPathComponent,
-                                                            path: filePath, size: allocated))
+                                // Only user-managed locations qualify as "large
+                                // files": system content cannot be cleaned here
+                                // and would drown the useful rows.
+                                if allocated >= 100 * 1024 * 1024,
+                                   MediaSlimPolicy.isEligible(itemPath, home: home) {
+                                    let large = AnalyzeReport.LargeFile(
+                                        name: URL(fileURLWithPath: itemPath).lastPathComponent,
+                                        path: itemPath, size: allocated)
+                                    shared.lock.lock()
+                                    shared.largeFiles.append(large)
+                                    if shared.largeFiles.count > 100 {
+                                        shared.largeFiles.sort { $0.size > $1.size }
+                                        shared.largeFiles.removeLast()
+                                    }
+                                    shared.lock.unlock()
                                     if !stack.isEmpty {
-                                        stack[stack.count - 1].largeFiles.append(largeFiles.last!)
+                                        stack[stack.count - 1].largeFiles.append(large)
                                         if stack.last!.largeFiles.count > 100 {
                                             stack[stack.count - 1].largeFiles.sort { $0.size > $1.size }
                                             stack[stack.count - 1].largeFiles.removeLast()
                                         }
-                                    }
-                                    if largeFiles.count > 100 {
-                                        largeFiles.sort { $0.size > $1.size }
-                                        largeFiles.removeLast()
                                     }
                                 }
                             }
@@ -232,17 +285,27 @@ enum DiskAnalysisWorker {
             while !stack.isEmpty { finishDirectory(interrupted: true) }
             // Analysis never promotes a directory to a cleanup target merely
             // because its name resembles a cache or build output directory.
-            rows.append(AnalyzeEntry(name: child.lastPathComponent, path: child.path,
-                                     size: bytes, isDir: directory, cleanable: false,
-                                     isPartial: partial))
-            incomplete = incomplete || partial
-            let now = ProcessInfo.processInfo.systemUptime
-            if now - lastProgress >= progressInterval {
-                lastProgress = now
-                progress?(snapshot(partial: true, currentPath: child.path))
-            }
+            shared.lock.lock()
+            shared.rows.append(AnalyzeEntry(name: child.lastPathComponent, path: child.path,
+                                            size: bytes, isDir: directory, cleanable: false,
+                                            isPartial: partial))
+            shared.totalFiles += pendingFiles
+            pendingFiles = 0
+            shared.incomplete = shared.incomplete || partial
+            shared.lock.unlock()
         }
-        var result = snapshot(partial: incomplete || control.isCancelled)
+
+        // 顶层子目录之间没有依赖：每个子目录一棵独立的 FTS 树，按子目录粒度
+        // 并行（GCD 按可用核自适应调度），单个大目录不会被其他空目录阻塞。
+        DispatchQueue.concurrentPerform(iterations: children.count) { index in
+            scanChild(children[index])
+        }
+
+        shared.lock.lock()
+        let incomplete = shared.incomplete
+        let directoryReports = shared.directoryReports
+        shared.lock.unlock()
+        var result = makeSnapshot(partial: incomplete || control.isCancelled)
         result.directoryReports = directoryReports
         return result
     }
@@ -265,7 +328,7 @@ struct DiskAnalysisCache {
     }
 
     mutating func invalidate(_ path: String) {
-        let root = URL(fileURLWithPath: path).standardizedFileURL.path
+        let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
         func contains(_ ancestor: String, _ descendant: String) -> Bool {
             ancestor == "/" || ancestor == descendant || descendant.hasPrefix(ancestor + "/")
         }

@@ -142,7 +142,7 @@ struct SecondaryButtonStyle: ButtonStyle {
 }
 
 struct DangerButtonStyle: ButtonStyle {
-    /// 覆盖默认的 danger 着色，供非红色但同样需要警示表面的入口（如标题栏退出）。
+    /// 覆盖默认的 danger 着色，供非红色但同样需要警示表面的入口。
     var tint: Color? = nil
 
     private var base: Color { tint ?? Color.danger }

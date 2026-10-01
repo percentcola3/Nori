@@ -223,6 +223,24 @@ enum CleanupRiskPolicy {
                                  reasonKey: "cleanup.risk.appLeftover")
     }
 
+    /// 已卸载 AI 工具的数据残留。与“废纸篓关联残留”不同：这里的存在性
+    /// 证据是应用本体（bundle 与 PATH 命令）都已确认不存在，整个数据根
+    /// 目录按磁盘垃圾开放清理；受保护内容检查仍然生效。
+    static func uninstalledAgentLeftover(path: String,
+                                         homeDirectory: String = NSHomeDirectory()) -> CleanupPolicyDescriptor {
+        guard (path as NSString).isAbsolutePath else {
+            return protectedUnknown(source: .appLeftover)
+        }
+        let normalized = normalize(path)
+        if isProtectedContent(normalized, homeDirectory: homeDirectory) {
+            return protectedDescriptor(source: .appLeftover,
+                                       reasonKey: "cleanup.risk.protectedContent")
+        }
+        return .init(source: .appLeftover, risk: .safe, disposal: .permanentDelete,
+                     applyRoute: .genericTrash, activityGuard: .openFile,
+                     reasonKey: "cleanup.risk.agentLeftover")
+    }
+
     static func developerCache(path: String,
                                homeDirectory: String = NSHomeDirectory()) -> CleanupPolicyDescriptor {
         guard (path as NSString).isAbsolutePath else {

@@ -66,8 +66,8 @@ test_native_core_ownership_contract() {
         fail "uninstall apply does not use NativeCore"
     /usr/bin/grep -Fq 'NativeCore.shared.scanAnalyze' "$app_state" || \
         fail "analyze does not use NativeCore"
-    /usr/bin/grep -Fq 'NativeCore.shared.runOptimize' "$app_state" || \
-        fail "optimize does not use NativeCore"
+    /usr/bin/grep -Fq 'NativeCore.shared.runMaintenanceTask' "$app_state" || \
+        fail "system maintenance does not use NativeCore"
     /usr/bin/grep -Fq 'metrics = SystemMetrics.sample()' "$app_state" || \
         fail "status sampling does not use SystemMetrics"
 
@@ -147,6 +147,8 @@ test_tab_motion_contract() {
 test_control_motion_contract() {
     local components="$ROOT_DIR/SimpleMole/Views/Components.swift"
     local analyze="$ROOT_DIR/SimpleMole/Views/AnalyzeTabView.swift"
+    local analyze_sections="$ROOT_DIR/SimpleMole/Views/AnalyzeSectionViews.swift"
+    local analyze_media="$ROOT_DIR/SimpleMole/Views/MediaSlimViews.swift"
     local cleanup="$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift"
     local dev_env="$ROOT_DIR/SimpleMole/Views/DevEnvTabView.swift"
     local uninstall="$ROOT_DIR/SimpleMole/Views/UninstallTabView.swift"
@@ -159,15 +161,18 @@ test_control_motion_contract() {
         fail "detail disclosure actions do not share an icon button style"
     /usr/bin/grep -Fq 'struct MolePlainButtonStyle: ButtonStyle' "$components" || \
         fail "surface-free buttons have no shared press feedback"
-    /usr/bin/grep -Fq '.buttonStyle(MoleSelectableRowButtonStyle' "$analyze" || \
-        fail "disk analysis rows bypass the selectable-row interaction"
+    /usr/bin/grep -Fq '.buttonStyle(MoleSelectableRowButtonStyle' "$analyze_sections" || \
+        fail "disk analysis duplicate rows bypass the selectable-row interaction"
+    /usr/bin/grep -Fq '.buttonStyle(MoleSelectableRowButtonStyle' "$analyze_media" || \
+        fail "disk analysis slim rows bypass the selectable-row interaction"
     /usr/bin/grep -Fq '.buttonStyle(MoleSelectableRowButtonStyle' "$dev_env" || \
         fail "development environment rows bypass the selectable-row interaction"
     /usr/bin/grep -Fq '.buttonStyle(MolePlainButtonStyle' "$cleanup" || \
         fail "cleanup detail titles still bypass Button semantics"
     /usr/bin/grep -Fq '.buttonStyle(MoleIconButtonStyle' "$uninstall" || \
         fail "uninstall disclosure action lacks press feedback"
-    if /usr/bin/grep -Fq 'onTapGesture { state.toggleDupSelection(member) }' "$analyze"; then
+    if /usr/bin/grep -Fq 'onTapGesture { state.toggleDupSelection(member) }' "$analyze" \
+        || /usr/bin/grep -Fq 'onTapGesture { state.toggleDupSelection(member) }' "$analyze_sections"; then
         fail "duplicate rows still register overlapping selection gestures"
     fi
 
@@ -273,8 +278,12 @@ test_island_contract() {
     if /usr/bin/grep -Fq 'Color.clear.frame(height: safeTop)' "$island"; then
         fail "island surface starts below the hardware notch instead of the screen top"
     fi
-    /usr/bin/grep -Fq '.padding(.top, safeTop)' "$island" || \
+    # 内容避让量由 expandedTopInset 汇总：有刘海屏沿用 safeTop 原值避让硬件刘海，
+    # 无刘海屏改用菜单栏内边距（见其定义处）。
+    /usr/bin/grep -Fq 'hardwareNotch ? safeTop : IslandLayout.nonNotchExpandedTopInset' "$island" || \
         fail "island content does not avoid the hardware notch"
+    /usr/bin/grep -Fq '.padding(.top, expandedTopInset)' "$island" || \
+        fail "expanded island content is not inset below the notch"
     # 刘海手柄与展开面板共享玻璃材质：不允许实底黑 curtain 盖住玻璃。
     /usr/bin/grep -Fq 'shape.fill(Color.islandHandleVeil)' \
         "$ROOT_DIR/SimpleMole/Views/LiquidPresentation.swift" || \
@@ -317,7 +326,8 @@ test_island_contract() {
         fail "menu bar icon visibility is not persisted"
     /usr/bin/grep -Fq '"settings.menubaricon"' "$l10n" || \
         fail "menu bar icon toggle has no localization"
-    if /usr/bin/grep -Fq 'island.edge' "$l10n"; then
+    # 只禁止已退役的裸 island.edge.* 键；settings.island.edge.* 是设置页在用的活键。
+    if /usr/bin/grep -Fq '"island.edge' "$l10n"; then
         fail "retired island edge dock keys are still localized"
     fi
 
@@ -346,8 +356,8 @@ test_productivity_feature_contract() {
     /usr/bin/grep -Fq 'state.requestScanAccess(.quickOptimize)' \
         "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" || \
         fail "main cleanup page does not expose Quick Clean"
-    /usr/bin/grep -Fq 'requestScanAccess(.deepCleanupScan)' "$cleanup_view" || \
-        fail "cleanup has no explicit deep scan entry"
+    # 深度扫描入口已并入统一扫描流程；深度能力本身仍由 AppState 的
+    # .deepCleanupScan 授权链路提供，不再要求清理页有独立按钮。
     if /usr/bin/grep -Fq '"bin/app_dev_scan.sh"' "$app_state"; then
         fail "unified cleanup still launches a duplicate developer-cache scan"
     fi
@@ -529,27 +539,38 @@ test_productivity_feature_contract() {
         "$app_delegate" | /usr/bin/grep -Fq 'runScheduledAutoCleanup'; then
         fail "every app activation still launches a background filesystem scan"
     fi
-    /usr/bin/grep -Fq 'startAnalyze(displayPath: "/", overview: true)' "$app_state" || \
+    /usr/bin/grep -Fq 'path: "/", overview: true, control: control,' "$app_state" || \
         fail "disk analysis does not start from the native machine-wide overview"
     /usr/bin/grep -Fq '.sorted(by: AnalyzeEntry.analysisOrder)' "$app_state" || \
         fail "disk analysis results are not size ordered"
     if sed -n '/private func startAnalyze(/,/MARK: APFS/p' "$app_state" | grep -Fq '.prefix(10)'; then
         fail "disk analysis still hides children beyond Top 10"
     fi
-    /usr/bin/grep -Fq 'ForEach(state.analyzeEntries)' "$analyze_view" || \
-        fail "disk analysis does not render the current directory directly"
+    # 结果页按 大文件/图片/视频/重复文件 子分类一页展示，不再有目录层级浏览。
+    local analyze_sections="$ROOT_DIR/SimpleMole/Views/AnalyzeSectionViews.swift"
+    local analyze_worker="$ROOT_DIR/SimpleMole/Services/DiskAnalysisWorker.swift"
+    /usr/bin/grep -Fq 'state.slimCandidates(in: section)' "$analyze_view" || \
+        fail "disk analysis results are not rendered as scan sub-categories"
+    /usr/bin/grep -Fq 'state.canSelectDuplicate(member, group: group)' "$analyze_sections" || \
+        fail "duplicate groups do not enforce keep-one selection"
+    # 子分类在扫描层过滤系统位置：不可清理的文件不进入结果。
+    /usr/bin/grep -Fq 'MediaSlimPolicy.isEligible(itemPath, home: home)' "$analyze_worker" || \
+        fail "large-file collection no longer filters system-managed locations"
+    if /usr/bin/grep -Fq 'analyze.scope' "$analyze_view" \
+        || /usr/bin/grep -Fq 'chooseAnalyzeFolder' "$app_state" \
+        || /usr/bin/grep -Fq 'scanUserSpace' "$app_state"; then
+        fail "disk analysis still exposes manual scan-scope selection"
+    fi
     /usr/bin/grep -Fq 'CleanupCategory.safeCleanupCandidates(from:' "$app_state" || \
         fail "disk cleanup does not centrally exclude Warning and Protected results"
     /usr/bin/grep -Fq 'environment["SIMPLEMOLE_DELETE_MODE"] = "permanent"' "$app_state" || \
         fail "disk cleanup does not explicitly request permanent deletion"
-    /usr/bin/grep -Fq 'confirm.cleanupPermanent.title' "$app_state" || \
-        fail "permanent cleanup lacks an irreversible-action confirmation"
-    /usr/bin/grep -Fq 'guard entry.canCleanDirectly else { return }' "$app_state" || \
-        fail "disk analysis selection does not fail closed"
-    /usr/bin/grep -Fq 'state.openAnalyzeEntry(entry)' "$analyze_view" || \
-        fail "apps and drill-down rows are not routed by analysis policy"
-    /usr/bin/grep -Fq 'Label(l10n.t("analyze.advanced"), systemImage: "ellipsis.circle")' \
-        "$analyze_view" || fail "advanced disk scopes are not consolidated"
+    # 2026-10 起清理不再弹确认：清单勾选即指令，执行层复核保持不变。
+    if /usr/bin/grep -Fq 'confirm.cleanupPermanent.title' "$app_state"; then
+        fail "manual cleanup still prompts for confirmation before applying"
+    fi
+    /usr/bin/grep -Fq 'performApply(categories: selectedCategories,' \
+        "$app_state" || fail "manual cleanup no longer executes directly"
     if /usr/bin/grep -Fq 'private var quickRoots' "$analyze_view"; then
         fail "disk analysis still exposes confusing directory tabs"
     fi
@@ -2421,7 +2442,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     if /usr/bin/grep -Fq 'confirmation = Confirmation(' "$ROOT_DIR/SimpleMole/AppState+Agents.swift"; then
         fail "agent cleanup asks for confirmation again"
     fi
-    bash "$ROOT_DIR/script/test_optimize.sh" || fail "optimize previews, evidence binding and admin bridge tests"
+    bash "$ROOT_DIR/script/test_optimize.sh" || fail "optimize admin bridge safety tests"
     bash "$ROOT_DIR/script/test_cleanup_refresh.sh" || fail "post-cleanup inventory refresh tests"
     bash "$ROOT_DIR/script/test_disk_analysis.sh" || fail "directory analysis tests"
     bash "$ROOT_DIR/script/test_media.sh" || fail "file slimming tests"

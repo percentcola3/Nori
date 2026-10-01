@@ -80,6 +80,27 @@ enum Parsers {
         return (removed, failed)
     }
 
+    /// 解析 app_net_reset.sh 的 `step<TAB>state<TAB>detail` 输出：
+    /// 全部成功/跳过时返回一句可读摘要；任一步失败返回 nil（调用方展示
+    /// 失败文案，完整明细走日志）。
+    static func networkResetSummary(_ text: String) -> String? {
+        let rows = text.split(whereSeparator: \.isNewline).compactMap { line -> (state: String, detail: String)? in
+            let fields = line.split(separator: "\t", maxSplits: 2).map(String.init)
+            guard fields.count == 3 else { return nil }
+            return (fields[1], fields[2])
+        }
+        guard !rows.isEmpty, !rows.contains(where: { $0.state == "fail" }) else { return nil }
+        let backups = rows.map(\.detail).filter { $0.contains("backup") }
+        let done = rows.filter { $0.state == "ok" }.count
+        let skipped = rows.filter { $0.state == "skip" }.count
+        var summary = "\(done)/\(rows.count) steps"
+        if skipped > 0 { summary += ", \(skipped) skipped" }
+        if let first = backups.first, let open = first.firstIndex(of: "(") {
+            summary += " \(first[open...])"
+        }
+        return summary
+    }
+
 
     /// 解析开发环境 TSV：`bytes\tkind\tname\tpath`。同一路径出现多次时
     /// 保留 current 记录（nvm 默认版本会与 family 扫描重复）。

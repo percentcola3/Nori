@@ -21,6 +21,8 @@
 @keyframes nori-keyFly {0%{opacity:0;transform:translate(0,10px) rotate(0deg)}12%,78%{opacity:1}100%{opacity:0;transform:translate(var(--dx),var(--dy)) rotate(var(--turn))}}
 @keyframes nori-keyDrop {0%{opacity:0;transform:translate(0,-42px) rotate(-8deg)}14%,76%{opacity:1}100%{opacity:0;transform:translate(var(--dx),64px) rotate(var(--turn))}}
 .key-fly,.key-drop{opacity:0}
+@keyframes nori-typeJelly {0%,100%{transform:translateY(0) rotate(0deg) scale(1,1)}4%{transform:translateY(4px) rotate(-2deg) scale(1.06,.94)}10%{transform:translateY(-3px) rotate(1.4deg) scale(.965,1.035)}16%{transform:translateY(0) rotate(-.5deg) scale(1.02,.98)}27%{transform:translateY(4px) rotate(2deg) scale(1.06,.94)}33%{transform:translateY(-3px) rotate(-1.4deg) scale(.965,1.035)}39%{transform:translateY(0) rotate(.5deg) scale(1.02,.98)}50%{transform:translateY(4px) rotate(-1.5deg) scale(1.055,.945)}56%{transform:translateY(-2.5px) rotate(1deg) scale(.97,1.03)}62%{transform:translateY(0) rotate(0deg) scale(1.01,.99)}77%{transform:translateY(4px) rotate(1.5deg) scale(1.055,.945)}83%{transform:translateY(-2.5px) rotate(-1deg) scale(.97,1.03)}90%{transform:translateY(0) rotate(0deg) scale(1,1)}}
+@keyframes nori-typeGaze {0%,6%{transform:translate(-4px,3px)}23%,29%{transform:translate(5px,4px)}46%,52%{transform:translate(2px,3px)}73%,79%{transform:translate(-1px,4px)}100%{transform:translate(-4px,3px)}}
 .cup-lift{transform-origin:184px 176px}
 @keyframes nori-sip {0%,22%,100%{transform:translate(0,0) rotate(0deg)}46%,62%{transform:translate(-14px,-10px) rotate(-8deg)}}
 @keyframes nori-sipBody {0%,22%,100%{transform:rotate(0deg) scale(1)}46%,62%{transform:rotate(2deg) scale(1.02,.98)}}

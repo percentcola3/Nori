@@ -81,12 +81,16 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
             Int.self, forKey: .safetyVersion) ?? 0
         let decodedRootIdentity = try values.decodeIfPresent(
             String.self, forKey: .authorizedRootIdentity)
+        let identityFormatValid = Self.isCurrentRootIdentity(decodedRootIdentity)
         let hasCurrentAuthorization = requestedRegenerable
             && decodedSafetyVersion == Self.currentSafetyVersion
-            && Self.isCurrentRootIdentity(decodedRootIdentity)
+            && identityFormatValid
+        // 运行时授权保持保守：安全版本或身份过期时规则一律视为未确认。
+        // 但存储中的授权数据按原样保留——升级（或回滚）后重新勾选
+        // “仅可再生内容”即可恢复规则，不需要重建，也不因中途保存而销毁。
         isRegenerable = hasCurrentAuthorization
         safetyVersion = decodedSafetyVersion
-        authorizedRootIdentity = hasCurrentAuthorization ? decodedRootIdentity : nil
+        authorizedRootIdentity = identityFormatValid ? decodedRootIdentity : nil
         let requestedEnabled = try values.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
         let validSizeLimit = policy != .sizeLimit
             || (Self.minimumSizeLimitBytes...Self.maximumSizeLimitBytes).contains(sizeLimitBytes)
@@ -131,16 +135,35 @@ struct AutoCleanupPlan: Equatable, Sendable {
 
 enum AutoCleanupRuleStore {
     static let storageKey = "SMAutoCleanupRules"
+    /// 存储无法解码时，覆盖前保留的最后一份原始快照（升级路径的恢复底牌）。
+    static let backupKey = "SMAutoCleanupRulesBackup"
 
+    /// 读取版本升级前的旧数据（同一 JSON 数组格式；新增字段必须
+    /// decodeIfPresent 可选，JSONDecoder 忽略未知键，两个方向兼容）。
+    /// 单条规则字段损坏时保留其余可解析的规则，而不是整批丢失。
     static func load(from defaults: UserDefaults = .standard) -> [AutoCleanupRule] {
-        guard let data = defaults.data(forKey: storageKey),
-              let rules = try? JSONDecoder().decode([AutoCleanupRule].self, from: data) else {
-            return []
+        guard let data = defaults.data(forKey: storageKey) else { return [] }
+        if let rules = try? JSONDecoder().decode([AutoCleanupRule].self, from: data) {
+            return rules
         }
-        return rules
+        guard let entries = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]]
+        else { return [] }
+        let decoder = JSONDecoder()
+        var salvaged: [AutoCleanupRule] = []
+        for entry in entries {
+            guard let entryData = try? JSONSerialization.data(withJSONObject: entry),
+                  let rule = try? decoder.decode(AutoCleanupRule.self, from: entryData)
+            else { continue }
+            salvaged.append(rule)
+        }
+        return salvaged
     }
 
     static func save(_ rules: [AutoCleanupRule], to defaults: UserDefaults = .standard) {
+        if let existing = defaults.data(forKey: storageKey), !existing.isEmpty,
+           (try? JSONDecoder().decode([AutoCleanupRule].self, from: existing)) == nil {
+            defaults.set(existing, forKey: backupKey)
+        }
         guard let data = try? JSONEncoder().encode(rules) else { return }
         defaults.set(data, forKey: storageKey)
     }
