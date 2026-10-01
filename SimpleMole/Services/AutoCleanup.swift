@@ -28,6 +28,9 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
     var authorizedRootIdentity: String?
     var lastRunAt: Date?
     var lastReclaimedBytes: UInt64
+    /// 历史执行统计：累计执行次数与累计清理量，随每次执行递增。
+    var executionCount: Int
+    var totalReclaimedBytes: UInt64
 
     var isSafetyAuthorized: Bool {
         isRegenerable && safetyVersion == Self.currentSafetyVersion
@@ -44,7 +47,9 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
          safetyVersion: Int = AutoCleanupRule.currentSafetyVersion,
          authorizedRootIdentity: String? = nil,
          lastRunAt: Date? = nil,
-         lastReclaimedBytes: UInt64 = 0) {
+         lastReclaimedBytes: UInt64 = 0,
+         executionCount: Int = 0,
+         totalReclaimedBytes: UInt64 = 0) {
         self.id = id
         self.directory = directory
         self.policy = policy
@@ -58,6 +63,8 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
         self.authorizedRootIdentity = resolvedRootIdentity
         self.lastRunAt = lastRunAt
         self.lastReclaimedBytes = lastReclaimedBytes
+        self.executionCount = executionCount
+        self.totalReclaimedBytes = totalReclaimedBytes
         self.isEnabled = isEnabled && isRegenerable
             && Self.isCurrentRootIdentity(resolvedRootIdentity)
     }
@@ -66,6 +73,7 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
         case id, directory, policy, sizeLimitBytes, retentionDays, isEnabled
         case isRegenerable, safetyVersion, authorizedRootIdentity
         case lastRunAt, lastReclaimedBytes
+        case executionCount, totalReclaimedBytes
     }
 
     init(from decoder: Decoder) throws {
@@ -97,6 +105,9 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
         isEnabled = requestedEnabled && hasCurrentAuthorization && validSizeLimit
         lastRunAt = try values.decodeIfPresent(Date.self, forKey: .lastRunAt)
         lastReclaimedBytes = try values.decodeIfPresent(UInt64.self, forKey: .lastReclaimedBytes) ?? 0
+        // 旧数据没有统计字段：从 0 开始累计。
+        executionCount = try values.decodeIfPresent(Int.self, forKey: .executionCount) ?? 0
+        totalReclaimedBytes = try values.decodeIfPresent(UInt64.self, forKey: .totalReclaimedBytes) ?? 0
     }
 
     static func rootIdentity(at path: String) -> String? {

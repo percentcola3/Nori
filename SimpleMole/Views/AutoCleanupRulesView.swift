@@ -209,6 +209,12 @@ private struct AutoCleanupRuleRow: View {
             VStack(alignment: .trailing, spacing: 2) {
                 Text(lastRunText)
                 Text(l10n.tf("auto.lastReclaimed", ByteFormat.format(rule.lastReclaimedBytes)))
+                if currentRule.executionCount > 0 {
+                    // 累计统计：让用户看到这条规则长期以来的实际产出。
+                    Text(l10n.tf("auto.stats", currentRule.executionCount,
+                                 ByteFormat.format(currentRule.totalReclaimedBytes)))
+                        .foregroundStyle(Color.moleAccentText.opacity(0.85))
+                }
             }
             .font(.system(size: 9).monospacedDigit())
             .foregroundStyle(.tertiary)

@@ -465,17 +465,43 @@ final class AppState: ObservableObject {
     }
     @Published private(set) var screenshotHotKeyRegistrationFailed = false
 
-    /// 统一的快捷键注册收口：开关与组合变化都走这里。
-    private func registerScreenshotHotKey() {
-        guard screenshotHotKeyEnabled else {
-            HotKeyCenter.shared.unregister()
-            screenshotHotKeyRegistrationFailed = false
-            return
+    /// 按比例截取（第二热键，默认 ⇧⌘R）：固定比例选区，可拖动不可缩放。
+    @Published var ratioCaptureHotKeyEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(ratioCaptureHotKeyEnabled, forKey: "SMShotRatioHotKey")
+            registerScreenshotHotKey()
         }
-        screenshotHotKeyRegistrationFailed = !HotKeyCenter.shared.register(
-            keyCode: screenshotHotKey.keyCode,
-            modifiers: screenshotHotKey.modifiers) {
-            NotificationCenter.default.post(name: .smTakeScreenshot, object: nil)
+    }
+    @Published var ratioCaptureHotKey = HotKeyCombo.loadRatio() {
+        didSet {
+            guard oldValue != ratioCaptureHotKey else { return }
+            ratioCaptureHotKey.storeRatio()
+            registerScreenshotHotKey()
+        }
+    }
+    @Published private(set) var ratioCaptureHotKeyRegistrationFailed = false
+
+    /// 统一的快捷键注册收口：任一开关或组合变化都整体重注册。
+    private func registerScreenshotHotKey() {
+        HotKeyCenter.shared.unregister()
+        screenshotHotKeyRegistrationFailed = false
+        ratioCaptureHotKeyRegistrationFailed = false
+        guard screenshotHotKeyEnabled || ratioCaptureHotKeyEnabled else { return }
+        if screenshotHotKeyEnabled {
+            screenshotHotKeyRegistrationFailed = !HotKeyCenter.shared.register(
+                id: "screenshot",
+                keyCode: screenshotHotKey.keyCode,
+                modifiers: screenshotHotKey.modifiers) {
+                NotificationCenter.default.post(name: .smTakeScreenshot, object: nil)
+            }
+        }
+        if ratioCaptureHotKeyEnabled {
+            ratioCaptureHotKeyRegistrationFailed = !HotKeyCenter.shared.register(
+                id: "ratio-capture",
+                keyCode: ratioCaptureHotKey.keyCode,
+                modifiers: ratioCaptureHotKey.modifiers) {
+                NotificationCenter.default.post(name: .smTakeRatioScreenshot, object: nil)
+            }
         }
     }
 
@@ -670,6 +696,7 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(Array(sanitizedHiddenPages), forKey: "SMHiddenPages")
         clipboardHistoryEnabled = UserDefaults.standard.object(forKey: "SMClipboardHistory") as? Bool ?? false
         screenshotHotKeyEnabled = UserDefaults.standard.object(forKey: "SMShotHotKey") as? Bool ?? true
+        ratioCaptureHotKeyEnabled = UserDefaults.standard.object(forKey: "SMShotRatioHotKey") as? Bool ?? false
         islandEnabled = true
         UserDefaults.standard.set(true, forKey: "SMIslandEnabled")
         menuBarIconVisible = UserDefaults.standard.object(forKey: "SMMenuBarIconVisible") as? Bool ?? true
@@ -3078,6 +3105,8 @@ final class AppState: ObservableObject {
         if let index = autoCleanupRules.firstIndex(where: { $0.id == rule.id }) {
             autoCleanupRules[index].lastRunAt = Date()
             autoCleanupRules[index].lastReclaimedBytes = reclaimed
+            autoCleanupRules[index].executionCount += 1
+            autoCleanupRules[index].totalReclaimedBytes &+= reclaimed
             persistAutoCleanupRules()
         }
         CleanupCache.invalidate()
