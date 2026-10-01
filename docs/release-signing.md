@@ -40,13 +40,19 @@ FORGESWEEP_SIGNING_P12_PASSWORD="$(cat "$HOME/Nori-release-backup/signing-passwo
   bash script/release_identity.sh import
 ```
 
-The importer validates the original certificate pin and matching private key before persisting anything. It configures code-signing trust only on the publisher's machine. End users do not install this certificate.
+The importer validates the original certificate pin and matching private key before persisting anything. Local imports configure code-signing trust on the publisher's machine; temporary CI trust is described below. End users do not install this certificate.
 
 ## GitHub Actions and release assets
 
 Repository Actions secrets are `FORGESWEEP_SIGNING_P12_BASE64` and `FORGESWEEP_SIGNING_P12_PASSWORD`. Keep their legacy names to reuse the existing identity. On a repository without these secrets, `bash script/configure_release_secrets.sh` uploads them from the local archive without logging their values. It refuses to overwrite either existing secret.
 
-The **Signed macOS release** workflow uses a GitHub-hosted `macos-15` runner and the stable Xcode 26.2 toolchain. It never creates signing keys and never falls back to ad-hoc signing. Its temporary keychain and code-signing trust are removed by an `always()` cleanup step.
+The **Signed macOS release** workflow uses a GitHub-hosted `macos-15` runner and the stable Xcode 26.2 toolchain. It never creates signing keys and never falls back to ad-hoc signing.
+
+CI signing supports only disposable GitHub-hosted runners. Before adding its dedicated release keychain, the importer records the runner user's existing keychain search list, then temporarily adds the release keychain to that list. It uses `sudo -n` to configure temporary, code-signing-only trust in the administrator domain. This setup is not intended for self-hosted machines.
+
+An imported identity is accepted only after an actual signing probe succeeds: the importer copies a Mach-O executable, signs that copy with the fixed certificate fingerprint, the `com.nori.app` identifier, an explicit `--keychain`, `--options runtime` and `--timestamp=none`, then verifies the signature. It also extracts the signing leaf certificate and checks its fingerprint, and compares the probe's entire designated requirement with the fixed release identity. Merely finding an identity in the keychain is insufficient. The probe does not change the app's pinned bundle identifier, certificate or designated requirement.
+
+Trust and keychain commands have bounded execution times. A timeout, failed signing probe or identity mismatch stops the release instead of accepting an unverified identity. The `always()` cleanup step first restores the recorded search list, then removes temporary code-signing trust and the dedicated keychain, and reports cleanup failures. It does not delete the publisher's locally archived private key.
 
 For each release:
 
@@ -159,7 +165,11 @@ bash script/configure_release_secrets.sh
 
 CI 使用 `macos-15` 和 `/Applications/Xcode_26.2.app/Contents/Developer`，串行交叉编译 `arm64`、`x86_64` 两种架构。它先跑回归检查并验证版本/身份连续性，再导入私钥、打包和校验，最后清理临时钥匙串；上传范围只包含两个 DMG、公开身份记录与校验和。该工作流不接受 pull request 事件，手动运行限定默认分支。仅向经过审核的分支和标签开放发布权限；建议用 GitHub rulesets 保护默认分支和 `v*` 标签。
 
-CI 签名仅支持一次性的 GitHub-hosted runner。导入脚本使用 `sudo -n` 在管理员域临时加入仅限代码签名的证书信任，`always` 清理步骤对称移除该信任与临时钥匙串；此分支不适用于自托管机器。本机长期保存的私钥不会由 CI 的 `cleanup` 删除。
+CI 签名仅支持一次性的 GitHub-hosted runner。导入脚本先记录 runner 用户已有的钥匙串搜索列表，再把专用发布钥匙串临时加入列表，并使用 `sudo -n` 在管理员域临时加入仅限代码签名的证书信任；此分支不适用于自托管机器。
+
+导入身份只有通过实际签名探针后才会被接受：脚本复制一个 Mach-O 可执行文件，用固定证书指纹、`com.nori.app` 标识、显式 `--keychain`、`--options runtime` 和 `--timestamp=none` 签署副本，再验证签名。它还会提取签名叶证书、核对指纹，并将探针的完整 designated requirement 与固定发布身份比较。只在钥匙串中找到身份不能证明签名可用。这项探针检查不会改变 App 已固定的 Bundle ID、证书或 designated requirement。
+
+信任与钥匙串命令都有执行时间上限。命令超时、签名探针失败或身份不匹配都会停止发布，不会接受未经验证的身份。`always()` 清理步骤先恢复已记录的搜索列表，再移除临时代码签名信任与专用钥匙串，并报告清理失败；本机长期归档的私钥不会由 CI 的 `cleanup` 删除。
 
 若 GitHub 从 runner 镜像移除固定的 Xcode 路径，流程会明确失败。维护者应查阅 [runner 镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)，验证替代稳定版本后再更新工作流，不要自动回退到未经验证的 beta SDK。
 

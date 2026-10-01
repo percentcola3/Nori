@@ -32,27 +32,102 @@ case "$MODE" in init|ensure|import|export|cleanup) ;; *) usage >&2; exit 2 ;; es
 [[ "$SIGNING_DIR" == /* && ! -L "$SIGNING_DIR" ]] || release_signing_error "signing directory must be an absolute, non-symlink path"
 case "$SIGNING_DIR/" in "$ROOT_DIR/"*) release_signing_error "private signing material must stay outside the repository" ;; esac
 
+# macOS has no built-in timeout command. Run the supervisor as root for admin
+# trust operations so it can also terminate a blocked root security process.
+# Never print command arguments: some security arguments contain passwords.
+run_bounded() {
+    local seconds="$1"; shift
+    local elevation=()
+    if [[ "$1" == sudo ]]; then elevation=(sudo -n); shift; fi
+    ${elevation[@]+"${elevation[@]}"} /usr/bin/python3 - "$seconds" "$@" <<'PY'
+import os, signal, subprocess, sys
+seconds = int(sys.argv[1])
+active_process = None
+def stop_group(process, sig):
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass  # The command exited between the deadline and the signal.
+def run():
+    global active_process
+    process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+    active_process = process
+    try:
+        return process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        stop_group(process, signal.SIGTERM)
+        try:
+            process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            stop_group(process, signal.SIGKILL)
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+        print("error: signing system command timed out after %s seconds" % seconds, file=sys.stderr)
+        return 124
+try:
+    status = run()
+except (Exception, KeyboardInterrupt):
+    # Exception repr/context can contain the complete command, including a
+    # password. Keep every supervisor failure diagnostic argument-free.
+    if active_process is not None:
+        try:
+            stop_group(active_process, signal.SIGKILL)
+        except (Exception, KeyboardInterrupt):
+            pass
+        try:
+            active_process.wait(timeout=2)
+        except (Exception, KeyboardInterrupt):
+            pass
+    print("error: signing system command supervisor failed", file=sys.stderr)
+    status = 125
+sys.exit(status)
+PY
+}
+
+read_saved_keychains() {
+    local saved="$1" path
+    SAVED_KEYCHAINS=()
+    [[ -f "$saved" && ! -L "$saved" ]] || return 1
+    while IFS= read -r path || [[ -n "$path" ]]; do
+        [[ "$path" == /* ]] || return 1
+        SAVED_KEYCHAINS+=("$path")
+    done < "$saved"
+}
+
 if [[ "$MODE" == cleanup ]]; then
     [[ "${GITHUB_ACTIONS:-}" == true && -n "${RUNNER_TEMP:-}" && -n "${SM_RELEASE_SIGNING_DIR:-}" ]] || \
         release_signing_error "cleanup is only for an explicit GitHub Actions temporary directory"
+    [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || \
+        release_signing_error "CI signing is supported only on a disposable GitHub-hosted runner"
     [[ -d "$SIGNING_DIR" ]] || exit 0
     CI_ROOT="$(cd "$RUNNER_TEMP" && pwd -P)"
     CI_DIR="$(cd "$SIGNING_DIR" && pwd -P)"
     case "$CI_DIR/" in "$CI_ROOT/"?*/) ;; *) release_signing_error "cleanup directory must be inside RUNNER_TEMP" ;; esac
     [[ -f "$CI_DIR/.nori-release-signing" ]] || release_signing_error "refusing to clean an unowned directory"
     cleanup_status=0
+    if [[ -e "$CI_DIR/original-user-keychains" ]]; then
+        if read_saved_keychains "$CI_DIR/original-user-keychains"; then
+            run_bounded 15 /usr/bin/security list-keychains -d user -s \
+                ${SAVED_KEYCHAINS[@]+"${SAVED_KEYCHAINS[@]}"} >/dev/null 2>&1 || cleanup_status=1
+        else
+            cleanup_status=1
+        fi
+    fi
     if [[ -f "$CI_DIR/trust-domain" && -f "$CI_DIR/release.cer" ]]; then
         if [[ "$(cat "$CI_DIR/trust-domain")" == admin ]]; then
-            sudo -n /usr/bin/security remove-trusted-cert -d "$CI_DIR/release.cer" >/dev/null 2>&1 || cleanup_status=1
+            run_bounded 25 sudo /usr/bin/security remove-trusted-cert -d "$CI_DIR/release.cer" >/dev/null 2>&1 || cleanup_status=1
         else
-            /usr/bin/security remove-trusted-cert "$CI_DIR/release.cer" >/dev/null 2>&1 || cleanup_status=1
+            run_bounded 25 /usr/bin/security remove-trusted-cert "$CI_DIR/release.cer" >/dev/null 2>&1 || cleanup_status=1
         fi
     fi
     if [[ -f "$CI_DIR/release.keychain-db" ]]; then
-        /usr/bin/security delete-keychain "$CI_DIR/release.keychain-db" >/dev/null 2>&1 || cleanup_status=1
+        run_bounded 20 /usr/bin/security delete-keychain "$CI_DIR/release.keychain-db" >/dev/null 2>&1 || cleanup_status=1
     fi
     rm -rf "$CI_DIR"
     echo "Removed disposable release signing material."
+    [[ "$cleanup_status" == 0 ]] || echo 'error: temporary signing cleanup did not fully restore the runner context' >&2
     exit "$cleanup_status"
 fi
 
@@ -83,6 +158,65 @@ chmod 700 "$WORK"
 
 new_password() { /usr/bin/openssl rand -base64 32 > "$1"; chmod 600 "$1"; }
 
+prepare_ci_keychain_search() {
+    [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || \
+        release_signing_error "CI signing is supported only on a disposable GitHub-hosted runner"
+    [[ -n "${RUNNER_TEMP:-}" && -n "${SM_RELEASE_SIGNING_DIR:-}" ]] || \
+        release_signing_error "CI signing requires an explicit RUNNER_TEMP signing directory"
+    local runner_root path
+    runner_root="$(cd "$RUNNER_TEMP" && pwd -P)"
+    case "$SIGNING_DIR/" in "$runner_root/"?*/) ;; *) release_signing_error "CI signing directory must be inside RUNNER_TEMP" ;; esac
+    # Save before create-keychain, which can itself change the search list.
+    if [[ ! -e "$SIGNING_DIR/original-user-keychains" ]]; then
+        run_bounded 15 /usr/bin/security list-keychains -d user > "$WORK/user-keychains-output" || \
+            release_signing_error "could not read the runner keychain search list"
+        /usr/bin/python3 - "$WORK/user-keychains-output" "$WORK/user-keychains-saved" <<'PY'
+import pathlib, shlex, sys
+paths = shlex.split(pathlib.Path(sys.argv[1]).read_text())
+if any(not p.startswith("/") or "\n" in p or "\r" in p for p in paths):
+    sys.exit("error: invalid runner keychain search list")
+pathlib.Path(sys.argv[2]).write_text("".join(p + "\n" for p in paths))
+PY
+        mv "$WORK/user-keychains-saved" "$SIGNING_DIR/original-user-keychains"
+    fi
+    read_saved_keychains "$SIGNING_DIR/original-user-keychains" || \
+        release_signing_error "the saved runner keychain search list is invalid"
+}
+
+activate_ci_keychain_search() {
+    local path
+    local search=("$KEYCHAIN")
+    for path in ${SAVED_KEYCHAINS[@]+"${SAVED_KEYCHAINS[@]}"}; do
+        [[ "$path" == "$KEYCHAIN" ]] || search+=("$path")
+    done
+    run_bounded 15 /usr/bin/security list-keychains -d user -s "${search[@]}" || \
+        release_signing_error "could not activate the runner signing keychain search list"
+}
+
+verify_signing_probe() {
+    local probe="$WORK/signing-probe" leaf_sha1 requirement pin_lower
+    cp /usr/bin/true "$probe"
+    chmod u+w "$probe"
+    run_bounded 25 /usr/bin/codesign --force --options runtime --timestamp=none \
+        --identifier "$RELEASE_BUNDLE_ID" --keychain "$KEYCHAIN" --sign "$RELEASE_CERT_SHA1" "$probe" || \
+        release_signing_error "the imported release key cannot sign the Mach-O probe"
+    run_bounded 15 /usr/bin/codesign --verify --strict "$probe" || \
+        release_signing_error "the release signing probe signature is invalid"
+    run_bounded 15 /usr/bin/codesign -d --extract-certificates="$WORK/probe-cert" "$probe" >/dev/null 2>&1 || \
+        release_signing_error "could not extract the release signing probe certificate"
+    leaf_sha1="$(release_certificate_sha1 "$WORK/probe-cert0")" || \
+        release_signing_error "the release signing probe certificate is invalid"
+    [[ "$leaf_sha1" == "$RELEASE_CERT_SHA1" ]] || \
+        release_signing_error "the release signing probe used a different certificate"
+    requirement="$(run_bounded 15 /usr/bin/codesign -dr - "$probe" 2>&1)" || \
+        release_signing_error "could not inspect the release signing probe requirement"
+    requirement="$(printf '%s\n' "$requirement" | /usr/bin/sed -n 's/^designated => //p')"
+    pin_lower="$(printf '%s' "$RELEASE_CERT_SHA1" | /usr/bin/tr '[:upper:]' '[:lower:]')"
+    [[ "$requirement" == "identifier \"$RELEASE_BUNDLE_ID\" and certificate root = H\"$pin_lower\"" ]] || \
+        release_signing_error "the release signing probe requirement did not match the fixed release identity"
+    echo "Verified the fixed release signing identity with a Mach-O probe: $RELEASE_CERT_SHA1"
+}
+
 validate_archive() {
     local archive="$1" password="$2" fingerprint
     /usr/bin/openssl pkcs12 -in "$archive" -passin "file:$password" -clcerts -nokeys \
@@ -111,40 +245,43 @@ validate_archive() {
 
 import_archive() {
     validate_archive "$ARCHIVE" "$ARCHIVE_PASS_FILE"
+    if [[ "${GITHUB_ACTIONS:-}" == true ]]; then prepare_ci_keychain_search; fi
     if [[ -f "$KEYCHAIN" ]]; then
         [[ -s "$KEYCHAIN_PASSWORD_FILE" ]] || release_signing_error "existing keychain password is missing; restore your backup, do not regenerate the identity"
     else
         [[ -s "$KEYCHAIN_PASSWORD_FILE" ]] || new_password "$KEYCHAIN_PASSWORD_FILE"
-        /usr/bin/security create-keychain -p "$(cat "$KEYCHAIN_PASSWORD_FILE")" "$KEYCHAIN" >/dev/null
+        run_bounded 20 /usr/bin/security create-keychain -p "$(cat "$KEYCHAIN_PASSWORD_FILE")" "$KEYCHAIN" >/dev/null
     fi
-    /usr/bin/security unlock-keychain -p "$(cat "$KEYCHAIN_PASSWORD_FILE")" "$KEYCHAIN" >/dev/null
-    /usr/bin/security set-keychain-settings -lut 21600 "$KEYCHAIN"
-    if /usr/bin/security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null | \
+    run_bounded 20 /usr/bin/security unlock-keychain -p "$(cat "$KEYCHAIN_PASSWORD_FILE")" "$KEYCHAIN" >/dev/null
+    run_bounded 20 /usr/bin/security set-keychain-settings -lut 21600 "$KEYCHAIN"
+    if [[ "${GITHUB_ACTIONS:-}" == true ]]; then activate_ci_keychain_search; fi
+    if ! run_bounded 15 /usr/bin/security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null | \
         /usr/bin/awk -v pin="$RELEASE_CERT_SHA1" '$2 == pin { found = 1 } END { exit !found }'; then
+        run_bounded 25 /usr/bin/security import "$WORK/validated.p12" -k "$KEYCHAIN" -P "$(cat "$ARCHIVE_PASS_FILE")" \
+            -T /usr/bin/codesign >/dev/null 2>&1 || release_signing_error "could not import the release identity"
+        run_bounded 25 /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$(cat "$KEYCHAIN_PASSWORD_FILE")" "$KEYCHAIN" >/dev/null 2>&1 || \
+            release_signing_error "could not grant codesign access to the release key"
+    elif [[ "${GITHUB_ACTIONS:-}" != true ]]; then
         echo "Release signing identity is ready: $RELEASE_CERT_SHA1"
         return
     fi
-    /usr/bin/security import "$WORK/validated.p12" -k "$KEYCHAIN" -P "$(cat "$ARCHIVE_PASS_FILE")" \
-        -T /usr/bin/codesign >/dev/null 2>&1 || release_signing_error "could not import the release identity"
-    /usr/bin/security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
-        -k "$(cat "$KEYCHAIN_PASSWORD_FILE")" "$KEYCHAIN" >/dev/null 2>&1 || \
-        release_signing_error "could not grant codesign access to the release key"
     if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
-        [[ "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] || release_signing_error "CI signing is supported only on a disposable GitHub-hosted runner"
         # Hosted runners have passwordless sudo but no GUI authorization UI.
         # This trust is restricted to code signing and removed by cleanup.
         printf 'admin\n' > "$SIGNING_DIR/trust-domain"
-        sudo -n /usr/bin/security add-trusted-cert -d -r trustRoot -p codeSign \
+        run_bounded 25 sudo /usr/bin/security add-trusted-cert -d -r trustRoot -p codeSign \
             -k "$KEYCHAIN" "$RELEASE_CERT_FILE" || release_signing_error "could not configure temporary runner code-signing trust"
     else
         echo "Configuring trust for this certificate's code signatures (macOS may request confirmation)."
-        /usr/bin/security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$RELEASE_CERT_FILE" || \
+        run_bounded 60 /usr/bin/security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$RELEASE_CERT_FILE" || \
             release_signing_error "certificate trust was not granted; private archive is preserved, rerun ensure after granting code-signing trust"
         printf 'user\n' > "$SIGNING_DIR/trust-domain"
     fi
-    /usr/bin/security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null | \
+    run_bounded 15 /usr/bin/security find-identity -v -p codesigning "$KEYCHAIN" 2>/dev/null | \
         /usr/bin/awk -v pin="$RELEASE_CERT_SHA1" '$2 == pin { found = 1 } END { exit !found }' || \
         release_signing_error "release identity is not usable by codesign"
+    if [[ "${GITHUB_ACTIONS:-}" == true ]]; then verify_signing_probe; fi
     echo "Release signing identity is ready: $RELEASE_CERT_SHA1"
 }
 

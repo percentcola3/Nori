@@ -11,7 +11,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  # A stuck, failed attempt must not block a repaired unpublished tag's source.
+  group: release-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -77,6 +78,7 @@ jobs:
           fi
 
       - name: Import the existing release identity
+        timeout-minutes: 3
         # Secrets exist only in this step's environment, never as arguments,
         # workflow outputs, artifact paths, or a generated certificate.
         env:
@@ -116,6 +118,7 @@ jobs:
 
       - name: Remove the temporary signing keychain
         if: always()
+        timeout-minutes: 2
         env:
           SM_RELEASE_SIGNING_DIR: ${{ runner.temp }}/nori-release-signing
         run: bash script/release_identity.sh cleanup
