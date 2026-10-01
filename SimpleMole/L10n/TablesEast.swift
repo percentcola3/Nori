@@ -6,6 +6,8 @@ extension L10nTables {
     static let zhHant: [String: String] = [
         "window.title": "Mac 清理與最佳化",
         "window.subtitle": "掃描後按類別選擇，所有工具都在此視窗內完成",
+        "nori.success": "完成了",
+        "nori.failure": "這次沒有成功",
         "footer.hint": "原生系統狀態 · 網路單位 MB/s",
         "tab.cleanup": "硬碟清理",
         "tab.uninstall": "應用解除安裝",

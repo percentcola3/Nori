@@ -287,6 +287,7 @@ final class AppState: ObservableObject {
                         "bin/app_net_fixproxy.sh",
                         arguments: [proxy.service, proxy.kind], timeout: 120)
                     self.netFixRunning = false
+                    self.noteNoriResult(failed: !result.succeeded)
                     self.log(self.l10n.t("log.proxyOff"))
                     self.logFailure(result)
                     let net = await MoleEngine.shared.runBridge("bin/app_net_audit.sh", timeout: 60)
@@ -615,6 +616,66 @@ final class AppState: ObservableObject {
             || isSmartAutomationRunning || projectHibernation.isWorking
             || isOptimizing || systemScanning || systemApplying
             || simulatorInventory.isDeleting || projectRadar.isScanning
+    }
+
+    /// 进程列表的定时刷新不算“正在干活”。只有用户发起的任务才换标题栏道具。
+    @Published private(set) var noriSpotlight: NoriWork?
+    @Published private(set) var noriResult: NoriResult = .quiet
+    private var noriResultGeneration = 0
+
+    var noriMood: NoriMood {
+        if activeNoriWork != nil { return .working }
+        switch noriResult {
+        case .success: return .success
+        case .failure: return .failure
+        case .quiet: return .idle
+        }
+    }
+
+    var noriWork: NoriWork { activeNoriWork ?? .sweep }
+
+    private var activeNoriWork: NoriWork? {
+        if let noriSpotlight { return noriSpotlight }
+        if netFixRunning { return .plug }
+        if isOptimizing { return .wrench }
+        if systemScanning || systemApplying { return .gauge }
+        if isScanning || isApplying || cleanupQueued || quickPanelCleaning
+            || isAutoCleanupScanning { return .sweep }
+        if isAnalyzing || isScanningDups || isThinning || projectRadar.isScanning { return .search }
+        if uninstallQueue.hasWork || simulatorInventory.isDeleting { return .box }
+        if isScanningImages { return .photo }
+        if isScanningEnv || gcRunningId != nil || projectHibernation.isWorking { return .terminal }
+        return nil
+    }
+
+    func beginNoriSpotlight(_ work: NoriWork) {
+        noriSpotlight = work
+    }
+
+    func endNoriSpotlight(failed: Bool) {
+        noriSpotlight = nil
+        noteNoriResult(failed: failed)
+    }
+
+    /// 失败提示在仍有任务进行时不会被随后的成功盖掉，等手头的活停下来再亮一会儿。
+    func noteNoriResult(failed: Bool) {
+        if !failed, noriResult == .failure { return }
+        noriResultGeneration += 1
+        let generation = noriResultGeneration
+        noriResult = failed ? .failure : .success
+        scheduleNoriResultClear(generation: generation, failed: failed)
+    }
+
+    private func scheduleNoriResultClear(generation: Int, failed: Bool) {
+        let hold: TimeInterval = failed ? 3.2 : 1.6
+        DispatchQueue.main.asyncAfter(deadline: .now() + hold) { [weak self] in
+            guard let self, self.noriResultGeneration == generation else { return }
+            if self.activeNoriWork != nil {
+                self.scheduleNoriResultClear(generation: generation, failed: failed)
+                return
+            }
+            self.noriResult = .quiet
+        }
     }
 
     var selectedCount: Int {
@@ -1068,6 +1129,7 @@ final class AppState: ObservableObject {
                 }
                 finishCleanupProgress()
                 isScanning = false
+                noteNoriResult(failed: !cleanupScanComplete)
                 let minutes = max(1, Int(cached.age / 60))
                 statusText = cleanupScanComplete
                     ? l10n.tf("status.cacheRestored", minutes)
@@ -1096,6 +1158,8 @@ final class AppState: ObservableObject {
             }
             finishCleanupProgress()
             isScanning = false
+            let cancelled = scan.requiredSourceResults.contains { $0.errorOutput == "Scan cancelled." }
+            if !cancelled { noteNoriResult(failed: !scan.allSucceeded) }
 
             scan.results.filter { !$0.succeeded }.forEach { logFailure($0) }
             if combined.isEmpty {
@@ -1160,6 +1224,7 @@ final class AppState: ObservableObject {
             self.isOptimizing = false
             let applied = report.tasks.filter { $0.state == .applied }.count
             let failed = report.tasks.filter { $0.state == .failed }.count
+            self.noteNoriResult(failed: failed > 0)
             self.optimizeStatus = self.l10n.tf("optimize.status.done", applied, failed)
             self.log(self.l10n.tf("optimize.log.done", applied, failed))
         }
@@ -1308,6 +1373,7 @@ final class AppState: ObservableObject {
                 timedOut: false)
             isScanning = false
             cleanupScanComplete = result.succeeded && runtime.succeeded
+            noteNoriResult(failed: !cleanupScanComplete)
             let snapshot = RuntimeStore.runningApplicationSnapshot(
                 fromProcessText: runtime.output, isComplete: runtime.succeeded)
             categories = protectRunningApplications(
@@ -1376,6 +1442,7 @@ final class AppState: ObservableObject {
                 arguments: [NSUserName(), NSHomeDirectory()])
             systemScanning = false
             systemScanComplete = result.succeeded
+            noteNoriResult(failed: !result.succeeded)
             systemEntries = result.succeeded
                 ? Parsers.systemDataEntries(result.output)
                 : []
@@ -1471,6 +1538,7 @@ final class AppState: ObservableObject {
         } catch {
             try? FileManager.default.removeItem(at: selectionURL)
             systemStatus = l10n.t("status.systemPartial")
+            noteNoriResult(failed: true)
             log(l10n.t("log.systemApplyPartial"))
             log(error.localizedDescription)
             return
@@ -1485,6 +1553,7 @@ final class AppState: ObservableObject {
                             selectionDigest])
             try? FileManager.default.removeItem(at: selectionURL)
             systemApplying = false
+            noteNoriResult(failed: !result.succeeded)
             if !result.output.isEmpty { log(result.output) }
             logFailure(result, stdoutAlreadyLogged: true)
             let summary = Parsers.systemApplySummary(result.output)
@@ -1705,6 +1774,7 @@ final class AppState: ObservableObject {
         let summary = l10n.tf(
             "cleanup.execution.summary", result.removed, result.skipped, result.failed)
         statusText = summary
+        noteNoriResult(failed: result.failed > 0)
         if quickPanelCleaning {
             quickPanelStatus = summary + " · " + l10n.t("quick.panel.memory")
             quickPanelCleaning = false
@@ -1966,8 +2036,10 @@ final class AppState: ObservableObject {
         processActionStatus = l10n.tf("proc.status.quitRequested", row.name)
         guard application.terminate() else {
             processActionStatus = l10n.t("status.quitRefused")
+            noteNoriResult(failed: true)
             return
         }
+        beginNoriSpotlight(.pulse)
         Task {
             for _ in 0..<50 {
                 if application.isTerminated { break }
@@ -1976,6 +2048,7 @@ final class AppState: ObservableObject {
             processActionStatus = application.isTerminated
                 ? l10n.tf("proc.status.quitDone", row.name)
                 : l10n.tf("proc.status.stillRunning", row.name)
+            endNoriSpotlight(failed: !application.isTerminated)
             refreshNativeProcesses()
         }
     }
@@ -1988,7 +2061,10 @@ final class AppState: ObservableObject {
             message: l10n.tf("proc.confirm.endGroup.msg", group.children.count),
             confirmLabel: l10n.t("proc.endGroup")) { [weak self] in
                 guard let self else { return }
-                Task { await self.performEndGroup(group) }
+                self.beginNoriSpotlight(.pulse)
+                Task {
+                    await self.performEndGroup(group)
+                }
             }
     }
 
@@ -2016,6 +2092,7 @@ final class AppState: ObservableObject {
         processActionStatus = mainEnded
             ? l10n.tf("proc.status.groupEnded", group.app.name, endedChildren)
             : l10n.tf("proc.status.stillRunning", group.app.name)
+        endNoriSpotlight(failed: !mainEnded)
         refreshNativeProcesses()
     }
 
@@ -2031,13 +2108,16 @@ final class AppState: ObservableObject {
                     switch ProcessTerminator.validate(identity) {
                     case .failure(let refusal):
                         self.processActionStatus = self.l10n.t(Self.refusalKey(refusal))
+                        self.noteNoriResult(failed: true)
                         return
                     case .success:
                         break
                     }
+                    self.beginNoriSpotlight(.pulse)
                     let ended = await ProcessTerminator.terminateThenKill(identity, grace: 3)
                     self.processActionStatus = ended
                         ? self.l10n.t("status.signalSent") : self.l10n.t("status.signalFailed")
+                    self.endNoriSpotlight(failed: !ended)
                     self.refreshNativeProcesses()
                 }
             }
@@ -2270,11 +2350,13 @@ final class AppState: ObservableObject {
             message: l10n.tf("ports.confirm.msg", row.port, row.command),
             confirmLabel: l10n.t("ports.close")) { [weak self] in
                 guard let self else { return }
+                self.beginNoriSpotlight(.plug)
                 Task {
                     let result = await MoleEngine.shared.runRuntime("kill-pid", row.signalToken)
                     self.portStatus = result.succeeded
                         ? self.l10n.t("status.signalSent")
                         : self.l10n.t("status.signalFailed")
+                    self.endNoriSpotlight(failed: !result.succeeded)
                     self.refreshPorts()
                 }
             }
@@ -2294,6 +2376,7 @@ final class AppState: ObservableObject {
                 "bin/app_image_scan.sh", arguments: [NSHomeDirectory(), "500"],
                 extraEnvironment: scanEnvironment, timeout: 120)
             isScanningImages = false
+            noteNoriResult(failed: !result.succeeded)
             let items = Parsers.imageItems(result.output)
             imageTotal = items.count
             images = Array(items.prefix(90))
@@ -2526,6 +2609,7 @@ final class AppState: ObservableObject {
     private func finishUninstall(_ job: UninstallJob, succeeded: Bool, message: String) {
         uninstallQueue.finish(job.id, succeeded: succeeded, message: message)
         statusText = message
+        noteNoriResult(failed: !succeeded)
         log(message)
     }
 
@@ -2601,6 +2685,7 @@ final class AppState: ObservableObject {
                 "bin/app_env_scan.sh", extraEnvironment: scanEnvironment,
                 timeout: 180)
             isScanningEnv = false
+            noteNoriResult(failed: !result.succeeded)
             devEnvEntries = Parsers.devEnvEntries(result.output)
             devEnvSelection.removeAll()
             let runtimeCount = devEnvEntries.filter { !$0.isManager }.count
@@ -2641,6 +2726,7 @@ final class AppState: ObservableObject {
                     self.logFailure(result, stdoutAlreadyLogged: true)
                     let summary = Parsers.applySummary(result.output)
                     let fullySucceeded = result.succeeded && summary.failed == 0
+                    self.noteNoriResult(failed: !fullySucceeded)
                     self.statusText = fullySucceeded
                         ? self.l10n.tf("status.envDone", summary.removed)
                         : self.l10n.tf("status.envPartial", summary.failed)
@@ -2688,6 +2774,7 @@ final class AppState: ObservableObject {
                         "bin/app_gc_run.sh", arguments: [action.id],
                         timeout: 1200, onLine: self.streamLog)
                     self.gcRunningId = nil
+                    self.noteNoriResult(failed: !result.succeeded)
                     self.statusText = result.succeeded
                         ? self.l10n.t("gc.finished")
                         : self.l10n.t("gc.failed")
@@ -2820,6 +2907,9 @@ final class AppState: ObservableObject {
             isAnalyzing = false
             analyzeCache.store(report)
             showAnalyzeReport(report)
+            if !control.isCancelled {
+                noteNoriResult(failed: report.error != nil)
+            }
         }
     }
 
@@ -2872,6 +2962,7 @@ final class AppState: ObservableObject {
                     let result = await MoleEngine.shared.runPrivilegedBridge(
                         "bin/app_snapshots_thin.sh", arguments: [], timeout: 300)
                     self.isThinning = false
+                    self.noteNoriResult(failed: !result.succeeded)
                     if result.succeeded {
                         let names = result.output.components(separatedBy: "\n")
                             .map { $0.trimmingCharacters(in: .whitespaces) }
@@ -2924,6 +3015,7 @@ final class AppState: ObservableObject {
                 "bin/app_dup_scan.sh", stdinData: stdinData,
                 extraEnvironment: scanEnvironment, timeout: 1800)
             isScanningDups = false
+            noteNoriResult(failed: !result.succeeded)
             dupGroups = Parsers.duplicateGroups(result.output)
             if dupGroups.isEmpty {
                 if result.succeeded { log(l10n.t("analyze.dup.empty")) }
@@ -3075,6 +3167,7 @@ final class AppState: ObservableObject {
                         allSucceeded = allSucceeded && result.succeeded
                     }
                     self.isApplying = false
+                    self.noteNoriResult(failed: !(allSucceeded && failed == 0))
                     self.statusText = (allSucceeded && failed == 0)
                         ? self.l10n.tf("status.cleanupDone", removed)
                         : self.l10n.tf("status.cleanupPartial", removed, failed)
@@ -3232,6 +3325,7 @@ final class AppState: ObservableObject {
                 isAutoCleanupScanning = false
                 guard !plan.candidates.isEmpty else {
                     autoCleanupStatus = l10n.t("auto.status.empty")
+                    noteNoriResult(failed: false)
                     return
                 }
                 let alert = NSAlert()
@@ -3246,12 +3340,14 @@ final class AppState: ObservableObject {
                 isAutoCleanupScanning = true
                 let result = await applyAutoCleanup(rule: rule, plan: plan)
                 isAutoCleanupScanning = false
+                noteNoriResult(failed: result.failed > 0)
                 autoCleanupStatus = result.failed == 0
                     ? l10n.tf("auto.status.done", result.removed,
                               ByteFormat.format(result.reclaimedBytes))
                     : l10n.tf("auto.status.partial", result.removed, result.failed)
             } catch {
                 isAutoCleanupScanning = false
+                noteNoriResult(failed: true)
                 autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
                 log(autoCleanupStatus)
             }

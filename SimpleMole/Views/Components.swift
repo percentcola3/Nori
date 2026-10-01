@@ -5,47 +5,48 @@ import AppKit
 
 struct HeaderBrandIconView: View {
     var size: CGFloat
-    var isSearching = false
-    var searchSucceeded = false
+    var mood: NoriMood = .idle
+    var work: NoriWork = .sweep
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var winkOpen: CGFloat = 1
     @State private var gazeX: CGFloat = 0
     @State private var gazeY: CGFloat = 0
-    @State private var rotation: Double = 0
-    @State private var scale: CGFloat = 1
+    @State private var hop: CGFloat = 0
+    @State private var shake: Double = 0
     @State private var isHovered = false
-    @State private var wasSearching = false
-    @State private var celebrationID = 0
-    @State private var confettiProgress: CGFloat = 0
 
     private var animationContext: MascotAnimationContext {
         MascotAnimationContext(reduceMotion: reduceMotion,
-                                isSearching: isSearching,
-                                isHovered: isHovered)
+                               mood: mood,
+                               isHovered: isHovered)
     }
 
     var body: some View {
         ZStack {
             MoleLogoMark(winkOpen: winkOpen, gazeX: gazeX, gazeY: gazeY)
-                .rotationEffect(.degrees(rotation))
-                .scaleEffect(scale)
-
-            if isSearching {
-                SearchMagnifier(size: size, animated: !reduceMotion)
-                    .transition(.scale(scale: 0.6).combined(with: .opacity))
-            }
-
-            if confettiProgress > 0.001 {
-                ConfettiBurst(progress: confettiProgress)
-                    .frame(width: size * 2.2, height: size * 2.2)
-                    .allowsHitTesting(false)
-            }
+                .offset(y: hop * size)
+                .rotationEffect(.degrees(shake))
         }
         .frame(width: size, height: size)
+        .overlay(alignment: .bottomTrailing) {
+            if mood == .working {
+                NoriWorkBadge(work: work, size: size, animated: !reduceMotion)
+                    .offset(x: size * 0.16, y: size * 0.12)
+                    .transition(.scale(scale: 0.55).combined(with: .opacity))
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if mood == .success || mood == .failure {
+                NoriResultBadge(mood: mood, size: size, animated: !reduceMotion)
+                    .offset(x: size * 0.14, y: -size * 0.10)
+                    .transition(.scale(scale: 0.4).combined(with: .opacity))
+            }
+        }
         .contentShape(Rectangle())
         .onContinuousHover { phase in
-            guard !reduceMotion, !isSearching else {
+            guard !reduceMotion, mood == .idle else {
+                isHovered = false
                 resetGaze()
                 return
             }
@@ -63,42 +64,27 @@ struct HeaderBrandIconView: View {
                 resetGaze()
             }
         }
-        .onAppear { wasSearching = isSearching }
-        .onChange(of: isSearching) { active in
-            if wasSearching, !active, searchSucceeded, !reduceMotion {
-                celebrationID += 1
-            }
-            wasSearching = active
-        }
         .task(id: animationContext) {
-            guard !reduceMotion, !isSearching, !isHovered else {
+            guard !reduceMotion, mood == .idle, !isHovered else {
                 resetMascot()
                 return
             }
             while !Task.isCancelled {
-                let pause = UInt64.random(in: 3_200_000_000...5_200_000_000)
+                let pause = UInt64.random(in: 4_400_000_000...6_400_000_000)
                 guard await wait(pause) else { return }
-                switch Int.random(in: 0..<10) {
-                case 0...5:
-                    guard await wink() else { return }
-                case 6...8:
-                    guard await glanceAround() else { return }
-                default:
-                    guard await performSpin() else { return }
-                }
+                guard await wink() else { return }
             }
         }
-        .task(id: celebrationID) {
-            guard celebrationID > 0, !reduceMotion else { return }
-            confettiProgress = 0.001
-            withAnimation(.easeOut(duration: 0.82)) { confettiProgress = 1 }
-            guard await wait(900_000_000) else { return }
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { confettiProgress = 0 }
+        .task(id: mood) {
+            await playResultMotion()
         }
-        .animation(reduceMotion ? nil : MoleMotion.control, value: isSearching)
-        .accessibilityHidden(true)
+        .animation(reduceMotion ? nil : MoleMotion.control, value: mood)
+        .animation(reduceMotion ? nil : MoleMotion.control, value: work)
+        .accessibilityElement(children: .ignore)
+        .accessibilityHidden(mood == .idle || mood == .working)
+        .accessibilityLabel(mood == .failure
+                            ? L10n.shared.t("nori.failure")
+                            : L10n.shared.t("nori.success"))
     }
 
     @MainActor
@@ -110,36 +96,21 @@ struct HeaderBrandIconView: View {
     }
 
     @MainActor
-    private func glanceAround() async -> Bool {
-        let direction: CGFloat = Bool.random() ? 0.82 : -0.82
-        withAnimation(.spring(response: 0.30, dampingFraction: 0.72)) {
-            gazeX = direction
-            gazeY = 0.18
-            rotation = Double(direction) * 2.2
+    private func playResultMotion() async {
+        hop = 0
+        shake = 0
+        guard !reduceMotion else { return }
+        if mood == .success {
+            withAnimation(.spring(response: 0.22, dampingFraction: 0.52)) { hop = -0.16 }
+            guard await wait(180_000_000) else { return }
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) { hop = 0 }
+        } else if mood == .failure {
+            let steps: [Double] = [-8, 7, -5, 4, -2, 0]
+            for step in steps {
+                withAnimation(.easeInOut(duration: 0.07)) { shake = step }
+                guard await wait(80_000_000) else { return }
+            }
         }
-        guard await wait(620_000_000) else { return false }
-        withAnimation(.spring(response: 0.34, dampingFraction: 0.76)) {
-            gazeX = -direction * 0.32
-            gazeY = -0.08
-            rotation = 0
-        }
-        guard await wait(260_000_000) else { return false }
-        resetGaze()
-        return true
-    }
-
-    @MainActor
-    private func performSpin() async -> Bool {
-        withAnimation(.easeInOut(duration: 0.62)) {
-            rotation += 360
-            scale = 1.07
-        }
-        guard await wait(650_000_000) else { return false }
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { rotation = 0 }
-        withAnimation(.spring(response: 0.24, dampingFraction: 0.74)) { scale = 1 }
-        return true
     }
 
     @MainActor
@@ -158,8 +129,6 @@ struct HeaderBrandIconView: View {
             winkOpen = 1
             gazeX = 0
             gazeY = 0
-            rotation = 0
-            scale = 1
         }
     }
 
@@ -175,7 +144,7 @@ struct HeaderBrandIconView: View {
 
 private struct MascotAnimationContext: Hashable {
     let reduceMotion: Bool
-    let isSearching: Bool
+    let mood: NoriMood
     let isHovered: Bool
 }
 
@@ -269,75 +238,6 @@ private struct MoleLogoMark: View, Animatable {
                                    style: StrokeStyle(lineWidth: max(0.72, w * 0.042),
                                                       lineCap: .round))
                 }
-            }
-        }
-    }
-}
-
-private struct SearchMagnifier: View {
-    let size: CGFloat
-    let animated: Bool
-
-    var body: some View {
-        if animated {
-            TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
-                magnifier(at: context.date.timeIntervalSinceReferenceDate)
-            }
-        } else {
-            magnifier(at: 0)
-        }
-    }
-
-    private func magnifier(at time: TimeInterval) -> some View {
-        let travel = animated ? CGFloat(sin(time * 4.2)) : 0
-        let bob = animated ? CGFloat(cos(time * 8.4)) : 0
-        return ZStack {
-            Circle()
-                .fill(Color.cyan.opacity(0.18))
-                .overlay(Circle().strokeBorder(Color.moleAccentText,
-                                               lineWidth: max(1, size * 0.065)))
-                .frame(width: size * 0.38, height: size * 0.38)
-            Capsule()
-                .fill(Color.moleAccentText)
-                .frame(width: max(1.2, size * 0.075), height: size * 0.28)
-                .rotationEffect(.degrees(-43))
-                .offset(x: size * 0.16, y: size * 0.16)
-        }
-        .shadow(color: .black.opacity(0.38), radius: 1, y: 0.5)
-        .rotationEffect(.degrees(-7 + Double(travel) * 7))
-        .offset(x: size * (0.23 + travel * 0.07),
-                y: size * (0.22 + bob * 0.025))
-    }
-}
-
-private struct ConfettiBurst: View, Animatable {
-    var progress: CGFloat
-
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    var body: some View {
-        Canvas { context, size in
-            let center = CGPoint(x: size.width / 2, y: size.height / 2)
-            let colors: [Color] = [.moleAccentText, .orange, .cyan, .pink]
-            let fade = max(0, sin(Double(progress) * .pi))
-
-            for index in 0..<8 {
-                let angle = Double(index) * (.pi * 2 / 8) - .pi / 2
-                let distance = size.width * (0.12 + progress * 0.36)
-                let point = CGPoint(x: center.x + CGFloat(cos(angle)) * distance,
-                                    y: center.y + CGFloat(sin(angle)) * distance
-                                        + progress * progress * size.height * 0.08)
-                let particle = RoundedRectangle(cornerRadius: 0.7).path(in:
-                    CGRect(x: point.x - 1, y: point.y - 1.8, width: 2, height: 3.6)
-                )
-                var transform = CGAffineTransform(translationX: -point.x, y: -point.y)
-                transform = transform.rotated(by: CGFloat(angle) + progress * 2.4)
-                transform = transform.translatedBy(x: point.x, y: point.y)
-                context.fill(particle.applying(transform),
-                             with: .color(colors[index % colors.count].opacity(fade)))
             }
         }
     }

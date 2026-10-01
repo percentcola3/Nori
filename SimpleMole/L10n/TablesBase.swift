@@ -7,6 +7,8 @@ enum L10nTables {
         // 窗口与导航
         "window.title": "Mac Cleaner & Optimizer",
         "window.subtitle": "Scan, review by category — everything lives in this window",
+        "nori.success": "Finished",
+        "nori.failure": "This one didn't finish",
         "footer.hint": "Native system stats · network in MB/s",
         "tab.cleanup": "Disk Cleanup",
         "tab.uninstall": "Uninstall Apps",
@@ -556,6 +558,8 @@ enum L10nTables {
     static let zhHans: [String: String] = [
         "window.title": "Mac 清理与优化",
         "window.subtitle": "扫描后按类别选择，所有工具都在此窗口内完成",
+        "nori.success": "完成了",
+        "nori.failure": "这次没有成功",
         "footer.hint": "原生系统状态 · 网络单位 MB/s",
         "tab.cleanup": "硬盘清理",
         "tab.uninstall": "应用卸载",

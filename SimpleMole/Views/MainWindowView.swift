@@ -124,8 +124,8 @@ struct MainWindowView: View {
             // 避开交通灯区域
             Color.clear.frame(width: 66, height: 1)
             HeaderBrandIconView(size: 20,
-                                isSearching: state.isScanning,
-                                searchSucceeded: state.cleanupScanComplete)
+                                mood: state.noriMood,
+                                work: state.noriWork)
             Text(l10n.t("window.title"))
                 .font(.system(size: 13, weight: .semibold))
             Spacer()

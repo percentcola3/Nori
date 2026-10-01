@@ -253,7 +253,7 @@ private struct CleanupScanProgressView: View {
     var body: some View {
         VStack(spacing: 10) {
             HStack(spacing: 7) {
-                HeaderBrandIconView(size: 28, isSearching: true)
+                HeaderBrandIconView(size: 28, mood: .working, work: .sweep)
                 Text(l10n.t(state.cleanupScanMode.titleKey))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.primary)

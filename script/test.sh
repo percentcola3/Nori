@@ -177,12 +177,16 @@ test_control_motion_contract() {
 test_header_layout_contract() {
     local main_window="$ROOT_DIR/SimpleMole/Views/MainWindowView.swift"
     local components="$ROOT_DIR/SimpleMole/Views/Components.swift"
+    local nori="$ROOT_DIR/SimpleMole/Views/NoriMark.swift"
+    local state="$ROOT_DIR/SimpleMole/AppState.swift"
     local icon="$ROOT_DIR/SimpleMole/Support/HeaderBrandIcon.png"
 
     /usr/bin/grep -Fq 'HeaderBrandIconView(size: 20,' "$main_window" || \
         fail "title-bar brand icon is not using the compact optical size"
-    /usr/bin/grep -Fq 'isSearching: state.isScanning' "$main_window" || \
-        fail "title-bar mascot does not react to cleanup scanning"
+    /usr/bin/grep -Fq 'mood: state.noriMood' "$main_window" || \
+        fail "title-bar mascot does not follow the task result"
+    /usr/bin/grep -Fq 'work: state.noriWork' "$main_window" || \
+        fail "title-bar mascot does not switch its working prop"
     /usr/bin/grep -Fq '.frame(height: 28)' "$main_window" || \
         fail "title-bar controls do not have a stable vertical alignment slot"
     /usr/bin/grep -Fq '.padding(.top, 2)' "$main_window" || \
@@ -199,12 +203,27 @@ test_header_layout_contract() {
         fail "title-bar mascot does not use the single-eye wink state"
     /usr/bin/grep -Fq '.onContinuousHover { phase in' "$components" || \
         fail "title-bar mascot eyes do not follow pointer movement"
-    /usr/bin/grep -Fq 'SearchMagnifier(size: size' "$components" || \
-        fail "title-bar mascot has no scanning magnifier state"
-    /usr/bin/grep -Fq 'ConfettiBurst(progress: confettiProgress)' "$components" || \
-        fail "title-bar mascot has no scan-completion celebration"
-    /usr/bin/grep -Fq 'private func performSpin() async -> Bool' "$components" || \
-        fail "title-bar mascot idle animation has no low-frequency spin"
+    /usr/bin/grep -Fq 'struct NoriWorkBadge: View' "$nori" || \
+        fail "working state has no distinct prop badge"
+    /usr/bin/grep -Fq 'struct NoriResultBadge: View' "$nori" || \
+        fail "success and failure do not share a result badge"
+    /usr/bin/grep -Fq 'case failure' "$nori" || \
+        fail "failure has no dedicated mascot mood"
+    /usr/bin/grep -Fq 'func noteNoriResult(failed: Bool)' "$state" || \
+        fail "task results do not publish a title-bar outcome"
+    /usr/bin/grep -Fq 'noteNoriResult(failed: !succeeded)' "$state" || \
+        fail "uninstall failure does not raise the title-bar reminder"
+    /usr/bin/grep -Fq 'noteNoriResult(failed: result.failed > 0)' "$state" || \
+        fail "cleanup execution failure does not raise the title-bar reminder"
+    if /usr/bin/grep -Fq 'private func performSpin() async -> Bool' "$components"; then
+        fail "idle mascot still spins instead of staying quiet"
+    fi
+    if /usr/bin/grep -Fq 'SearchMagnifier' "$components"; then
+        fail "working state is still a single magnifier for every tab"
+    fi
+    if /usr/bin/grep -Fq 'ConfettiBurst' "$components"; then
+        fail "success is still a confetti burst instead of a result badge"
+    fi
     /usr/bin/grep -Fq 'Bundle.main.url(forResource: "HeaderBrandIcon"' "$components" || \
         fail "title-bar mascot does not reuse the rounded brand artwork"
     if /usr/bin/grep -Fq 'peekAmount' "$components"; then

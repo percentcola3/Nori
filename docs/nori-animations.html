@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nori 动画</title>
+<style>
+  :root {
+    --bg: #12171c;
+    --card: #1b222a;
+    --line: rgba(255,255,255,0.08);
+    --text: #f3f1ea;
+    --muted: #9aa6b2;
+    --yellow: #f4c542;
+    --ok: #1f9d6a;
+    --bad: #d23f4b;
+    --ink: #f7f4ee;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(900px 420px at 10% -10%, rgba(244,197,66,0.08), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font: 15px/1.5 "Noto Sans SC", "PingFang SC", "Source Han Sans SC", system-ui, sans-serif;
+  }
+  main { width: min(1080px, calc(100% - 40px)); margin: 0 auto; padding: 48px 0 72px; }
+  .kicker {
+    margin: 0 0 8px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-size: 11px;
+    color: var(--yellow);
+  }
+  h1 { margin: 0 0 10px; font-size: 40px; font-weight: 650; letter-spacing: -0.03em; }
+  .lead { margin: 0; max-width: 640px; color: var(--muted); }
+  h2 { margin: 42px 0 14px; font-size: 18px; font-weight: 650; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .card, .stage, .bar-wrap, .note {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+  }
+  .card { padding: 18px 16px 16px; min-height: 250px; }
+  .card h3 { margin: 14px 0 4px; font-size: 16px; }
+  .card p, .note p { margin: 0; color: var(--muted); font-size: 13px; }
+  .stage { padding: 22px; display: grid; grid-template-columns: 220px 1fr; gap: 22px; align-items: center; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--text);
+    border-radius: 999px;
+    padding: 7px 12px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button[aria-pressed="true"] { background: var(--text); color: #12171c; border-color: transparent; }
+  .bar-wrap { padding: 18px; }
+  .window {
+    height: 52px;
+    border-radius: 12px;
+    background: #0e1318;
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px;
+  }
+  .lights { display: flex; gap: 6px; width: 66px; }
+  .lights i { width: 10px; height: 10px; border-radius: 50%; display: block; }
+  .lights i:nth-child(1) { background: #ff5f57; }
+  .lights i:nth-child(2) { background: #febc2e; }
+  .lights i:nth-child(3) { background: #28c840; }
+  .title { font-size: 13px; font-weight: 650; }
+  .controls { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+  .note { padding: 16px 18px; }
+  .note strong { color: var(--text); }
+
+  .nori {
+    position: relative;
+    width: 120px;
+    height: 120px;
+    margin: 0 auto;
+  }
+  .nori.mini { width: 28px; height: 28px; margin: 0; }
+  .nori img { width: 100%; height: 100%; display: block; object-fit: contain; }
+  .face { position: absolute; inset: 0; transform-origin: 50% 60%; }
+  .lid {
+    position: absolute;
+    left: 28%;
+    top: 56%;
+    width: 16%;
+    height: 12%;
+    border-radius: 8px;
+    background: #f4f1e8;
+    opacity: 0;
+  }
+  .nori.idle .lid { animation: blink 5.4s infinite; }
+  .nori.success .face { animation: hop 0.7s ease; }
+  .nori.failure .face { animation: shake 0.55s ease; }
+  .badge {
+    position: absolute;
+    width: 46%;
+    height: 46%;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.35);
+  }
+  .badge svg { width: 62%; height: 62%; }
+  .badge.work { right: -8%; bottom: -4%; animation: bob 0.95s ease-in-out infinite; }
+  .badge.result { right: -6%; top: -8%; }
+  .badge.result.failure { animation: pulse 0.7s ease-in-out infinite; }
+  .badge.result.success { animation: pop 0.45s cubic-bezier(.2,1.4,.4,1) both; }
+  .nori.mini .badge { box-shadow: none; }
+  .nori.static .lid, .nori.static .badge { animation: none; }
+
+  @keyframes blink {
+    0%, 86%, 100% { opacity: 0; }
+    90%, 94% { opacity: 1; }
+  }
+  @keyframes bob {
+    0%, 100% { transform: translateY(0) rotate(-6deg); }
+    50% { transform: translateY(-12%) rotate(6deg); }
+  }
+  @keyframes hop {
+    0% { transform: translateY(0); }
+    35% { transform: translateY(-14%); }
+    100% { transform: translateY(0); }
+  }
+  @keyframes shake {
+    0%, 100% { transform: rotate(0); }
+    20% { transform: rotate(-8deg); }
+    40% { transform: rotate(7deg); }
+    60% { transform: rotate(-5deg); }
+    80% { transform: rotate(3deg); }
+  }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.12); }
+  }
+  @keyframes pop {
+    0% { transform: scale(0.4); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @media (max-width: 860px) {
+    .grid, .stage { grid-template-columns: 1fr; }
+    h1 { font-size: 32px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lid, .face, .badge { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <p class="kicker">ForgeSweep · Nori</p>
+  <h1>四个状态就够了</h1>
+  <p class="lead">脸保持安静。工作中只换手里的小道具，成功和失败用角标说完，不再把眨眼、无聊、庆祝、提醒做成看起来一样的另一张脸。</p>
+
+  <h2>状态</h2>
+  <div class="grid" id="states"></div>
+
+  <h2>工作中，按页面换道具</h2>
+  <div class="stage">
+    <div class="nori working" id="stage"></div>
+    <div>
+      <div class="chips" id="chips"></div>
+      <p class="lead" id="workHint" style="margin-top:14px"></p>
+    </div>
+  </div>
+
+  <h2>标题栏跟着任务结果走</h2>
+  <div class="bar-wrap">
+    <div class="window">
+      <div class="lights" aria-hidden="true"><i></i><i></i><i></i></div>
+      <div class="nori mini idle" id="bar"></div>
+      <div class="title">Mac 清理与优化</div>
+    </div>
+    <div class="controls" id="barControls"></div>
+  </div>
+
+  <h2>收起来的</h2>
+  <div class="note">
+    <p><strong>静态、待机、无聊、眨眼、旧庆祝、旧提醒</strong>收成一个待机：脸不动，偶尔眨一下，鼠标移上去眼睛会跟着看。庆祝不再撒彩纸，失败不再没有反应。标题栏只在结果出来时从工作中切到成功或失败。流量和剪贴板的道具已经留好，这两个页面没有单独的执行动作，所以不会空转。</p>
+  </div>
+</main>
+<script>
+const face = "../SimpleMole/Support/HeaderBrandIcon.png";
+const works = [
+  ["sweep", "清理", "#149e8c", "扫帚扫过缓存"],
+  ["search", "分析", "#2e8ad9", "放大镜对着大文件"],
+  ["box", "卸载", "#e58529", "纸箱搬走应用"],
+  ["wrench", "优化", "#5c7aeb", "扳手拧一下系统"],
+  ["gauge", "系统数据", "#299e6b", "表针看占用"],
+  ["terminal", "开发环境", "#389453", "终端光标还在跳"],
+  ["pulse", "进程", "#db525f", "三根柱子在起伏"],
+  ["plug", "端口", "#7b5cdb", "插头准备拔掉"],
+  ["wave", "流量", "#2994d1", "一条小波浪"],
+  ["photo", "图片", "#db6694", "相框在看图"],
+  ["clip", "剪贴板", "#c7941f", "夹着刚复制的内容"]
+];
+
+function glyph(kind) {
+  const common = 'fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"';
+  const paths = {
+    sweep: `<path ${common} d="M7 21 L15 4 M11 4 L21 8 M10 7 L19 11"/>`,
+    search: `<circle ${common} cx="9" cy="9" r="5.5"/><path ${common} d="M13 13 L21 21"/>`,
+    box: `<rect ${common} x="4" y="8" width="16" height="12" rx="2"/><path ${common} d="M4 12 H20"/>`,
+    wrench: `<circle ${common} cx="7" cy="17" r="3.2"/><path ${common} d="M9 15 L20 4"/>`,
+    gauge: `<path ${common} d="M5 16 A8 8 0 0 1 19 16"/><path ${common} d="M12 16 L17 9"/>`,
+    terminal: `<rect ${common} x="3" y="5" width="18" height="14" rx="2"/><path ${common} d="M7 15 H12"/>`,
+    pulse: `<path ${common} d="M6 17 V10 M12 19 V5 M18 16 V9"/>`,
+    plug: `<rect ${common} x="6" y="10" width="12" height="10" rx="2"/><path ${common} d="M9 10 V4 M15 10 V4"/>`,
+    wave: `<path ${common} d="M2 14 Q6 6 10 14 T18 14 T22 14"/>`,
+    photo: `<rect ${common} x="3" y="6" width="18" height="13" rx="2"/><path ${common} d="M6 16 L10 11 L14 14 L18 9"/>`,
+    clip: `<rect ${common} x="6" y="6" width="12" height="15" rx="2"/><path ${common} d="M9 6 Q12 1 15 6"/>`,
+    ok: `<path ${common} d="M5 13 L10 18 L20 6"/>`,
+    bad: `<path ${common} d="M12 4 V15 M12 19 V20"/>`
+  };
+  return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[kind]}</svg>`;
+}
+
+function badge(kind, role, tint) {
+  const color = role === "result" ? (kind === "bad" ? "var(--bad)" : "var(--ok)") : tint;
+  return `<div class="badge ${role} ${kind === "bad" ? "failure" : kind === "ok" ? "success" : "work"}" style="background:${color}">${glyph(kind === "ok" || kind === "bad" ? kind : kind)}</div>`;
+}
+
+function mascot(mood, work) {
+  const item = works.find(w => w[0] === work) || works[0];
+  const extra = mood === "working"
+    ? badge(item[0], "work", item[2])
+    : mood === "success" ? badge("ok", "result")
+    : mood === "failure" ? badge("bad", "result")
+    : "";
+  return `<div class="face"><img src="${face}" alt=""><div class="lid"></div></div>${extra}`;
+}
+
+const states = [
+  ["idle", "待机", "安静的脸。偶尔眨眼，悬停时眼睛跟着指针。"],
+  ["working", "工作中", "脸不动，右下角的道具轻轻晃，告诉你正在忙什么。"],
+  ["success", "成功", "轻轻一跃，右上角打个勾，然后回到待机。"],
+  ["failure", "失败", "摇一下头，右上角的感叹号跳着提醒，直到你看见。"]
+];
+
+document.getElementById("states").innerHTML = states.map(([mood, title, copy]) => `
+  <article class="card">
+    <div class="nori ${mood}">${mascot(mood, "sweep")}</div>
+    <h3>${title}</h3>
+    <p>${copy}</p>
+  </article>`).join("");
+
+const stage = document.getElementById("stage");
+const hint = document.getElementById("workHint");
+const chips = document.getElementById("chips");
+const bar = document.getElementById("bar");
+const barControls = document.getElementById("barControls");
+let currentWork = "sweep";
+let barMood = "idle";
+let userLocked = false;
+
+function renderBar() {
+  bar.className = `nori mini ${barMood}`;
+  bar.innerHTML = mascot(barMood, currentWork);
+  [...barControls.children].forEach(button => {
+    button.setAttribute("aria-pressed", button.dataset.mood === barMood ? "true" : "false");
+  });
+}
+
+function showWork(id) {
+  currentWork = id;
+  const item = works.find(w => w[0] === id);
+  stage.innerHTML = mascot("working", id);
+  hint.textContent = item[1] + " · " + item[3];
+  [...chips.children].forEach(button => button.setAttribute("aria-pressed", button.dataset.work === id ? "true" : "false"));
+  if (barControls.childElementCount && barMood === "working") renderBar();
+}
+
+chips.innerHTML = works.map(([id, name]) => `<button type="button" data-work="${id}">${name}</button>`).join("");
+chips.addEventListener("click", event => {
+  const button = event.target.closest("button");
+  if (button) showWork(button.dataset.work);
+});
+showWork("sweep");
+
+const moods = [["idle","待机"],["working","工作中"],["success","成功"],["failure","失败"]];
+
+barControls.innerHTML = moods.map(([id, name]) => `<button type="button" data-mood="${id}">${name}</button>`).join("");
+barControls.addEventListener("click", event => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  userLocked = true;
+  barMood = button.dataset.mood;
+  renderBar();
+});
+
+const params = new URLSearchParams(location.search);
+if (works.some(item => item[0] === params.get("work"))) showWork(params.get("work"));
+if (["idle", "working", "success", "failure"].includes(params.get("mood"))) {
+  userLocked = true;
+  barMood = params.get("mood");
+}
+
+const script = ["idle", "working", "working", "success", "idle", "working", "failure"];
+let step = 0;
+renderBar();
+setInterval(() => {
+  if (userLocked) return;
+  barMood = script[step % script.length];
+  step += 1;
+  renderBar();
+}, 1600);
+</script>
+</body>
+</html>
