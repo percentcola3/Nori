@@ -52,7 +52,7 @@ CI signing supports only disposable GitHub-hosted runners. Before adding its ded
 
 An imported identity is accepted only after an actual signing probe succeeds: the importer copies a Mach-O executable, signs that copy with the fixed certificate fingerprint, the `com.nori.app` identifier, an explicit `--keychain`, `--options runtime` and `--timestamp=none`, then verifies the signature. It also extracts the signing leaf certificate and checks its fingerprint, and compares the probe's entire designated requirement with the fixed release identity. Merely finding an identity in the keychain is insufficient. The probe does not change the app's pinned bundle identifier, certificate or designated requirement.
 
-Trust and keychain commands have bounded execution times. A timeout, failed signing probe or identity mismatch stops the release instead of accepting an unverified identity. The `always()` cleanup step first restores the recorded search list, then removes temporary code-signing trust and the dedicated keychain, and reports cleanup failures. It does not delete the publisher's locally archived private key.
+Trust and keychain commands have bounded execution times. A provisioning timeout, failed signing probe or identity mismatch stops the release instead of accepting an unverified identity. The `always()` cleanup step first restores the recorded search list, then removes temporary code-signing trust, the dedicated keychain and private files. Only a timeout while removing administrator trust for the public certificate on a verified, disposable GitHub-hosted runner becomes an explicit warning: the runner VM's teardown removes the remaining public trust. Other trust errors, search-list restoration failures, keychain deletion failures or private-file removal failures still stop the release. Cleanup does not delete the publisher's locally archived private key.
 
 For each release:
 
@@ -169,7 +169,7 @@ CI 签名仅支持一次性的 GitHub-hosted runner。导入脚本先记录 runn
 
 导入身份只有通过实际签名探针后才会被接受：脚本复制一个 Mach-O 可执行文件，用固定证书指纹、`com.nori.app` 标识、显式 `--keychain`、`--options runtime` 和 `--timestamp=none` 签署副本，再验证签名。它还会提取签名叶证书、核对指纹，并将探针的完整 designated requirement 与固定发布身份比较。只在钥匙串中找到身份不能证明签名可用。这项探针检查不会改变 App 已固定的 Bundle ID、证书或 designated requirement。
 
-信任与钥匙串命令都有执行时间上限。命令超时、签名探针失败或身份不匹配都会停止发布，不会接受未经验证的身份。`always()` 清理步骤先恢复已记录的搜索列表，再移除临时代码签名信任与专用钥匙串，并报告清理失败；本机长期归档的私钥不会由 CI 的 `cleanup` 删除。
+信任与钥匙串命令都有执行时间上限。配置身份时命令超时、签名探针失败或身份不匹配都会停止发布，不会接受未经验证的身份。`always()` 清理步骤先恢复已记录的搜索列表，再移除临时代码签名信任、专用钥匙串和私有文件。只有在已验证的一次性 GitHub-hosted runner 上，撤销公开证书的管理员域信任超时，才会明确发出警告，由 runner 虚拟机销毁时移除剩余公开信任。其他信任错误、搜索列表恢复失败、钥匙串删除失败或私有文件删除失败仍会停止发布。本机长期归档的私钥不会由 CI 的 `cleanup` 删除。
 
 若 GitHub 从 runner 镜像移除固定的 Xcode 路径，流程会明确失败。维护者应查阅 [runner 镜像清单](https://github.com/actions/runner-images/blob/main/images/macos/macos-15-Readme.md)，验证替代稳定版本后再更新工作流，不要自动回退到未经验证的 beta SDK。
 

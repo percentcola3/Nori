@@ -117,7 +117,19 @@ if [[ "$MODE" == cleanup ]]; then
     fi
     if [[ -f "$CI_DIR/trust-domain" && -f "$CI_DIR/release.cer" ]]; then
         if [[ "$(cat "$CI_DIR/trust-domain")" == admin ]]; then
-            run_bounded 25 sudo /usr/bin/security remove-trusted-cert -d "$CI_DIR/release.cer" >/dev/null 2>&1 || cleanup_status=1
+            if run_bounded 25 sudo /usr/bin/security remove-trusted-cert -d "$CI_DIR/release.cer" >/dev/null 2>&1; then
+                :
+            else
+                trust_status=$?
+                if [[ "$trust_status" == 124 ]]; then
+                    # This guarded machine is a disposable hosted VM. The
+                    # certificate is public; VM teardown removes its remaining
+                    # administrator trust after all private material is erased.
+                    echo '::warning::Administrator code-signing trust removal timed out; the disposable GitHub-hosted VM will remove this public trust at teardown.' >&2
+                else
+                    cleanup_status=1
+                fi
+            fi
         else
             run_bounded 25 /usr/bin/security remove-trusted-cert "$CI_DIR/release.cer" >/dev/null 2>&1 || cleanup_status=1
         fi
@@ -125,8 +137,9 @@ if [[ "$MODE" == cleanup ]]; then
     if [[ -f "$CI_DIR/release.keychain-db" ]]; then
         run_bounded 20 /usr/bin/security delete-keychain "$CI_DIR/release.keychain-db" >/dev/null 2>&1 || cleanup_status=1
     fi
-    rm -rf "$CI_DIR"
-    echo "Removed disposable release signing material."
+    rm -rf "$CI_DIR" || cleanup_status=1
+    [[ ! -e "$CI_DIR" ]] || cleanup_status=1
+    [[ ! -e "$CI_DIR" ]] && echo "Removed disposable release signing material."
     [[ "$cleanup_status" == 0 ]] || echo 'error: temporary signing cleanup did not fully restore the runner context' >&2
     exit "$cleanup_status"
 fi

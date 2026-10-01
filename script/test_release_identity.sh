@@ -86,10 +86,12 @@ MOCK_PIN=$(/usr/bin/openssl x509 -in "$WORK/wrong.pem" -noout -fingerprint -sha1
 /usr/bin/python3 - "$ROOT_DIR/script/release_identity.sh" "$HOSTED_FIXTURE/script/release_identity.sh" "$WORK" <<'PY'
 import pathlib, sys
 source = pathlib.Path(sys.argv[1]).read_text()
+source = source.replace("run_bounded 25 /usr/bin/security remove-trusted-cert", "run_bounded 1 /usr/bin/security remove-trusted-cert")
 for name in ("security", "codesign"):
     source = source.replace("/usr/bin/" + name, sys.argv[3] + "/mock-" + name)
 source = source.replace("elevation=(sudo -n)", 'elevation=("' + sys.argv[3] + '/mock-sudo" -n)')
 source = source.replace("run_bounded 25 sudo", "run_bounded 1 sudo")
+source = source.replace("rm -rf", sys.argv[3] + "/mock-rm -rf")
 pathlib.Path(sys.argv[2]).write_text(source)
 # Extract the unmodified supervisor for a direct timeout regression.
 start = pathlib.Path(sys.argv[1]).read_text().index("run_bounded() {")
@@ -113,6 +115,13 @@ cat > "$WORK/mock-sudo" <<'SH'
 shift
 exec "$@"
 SH
+cat > "$WORK/mock-rm" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+for path in "$@"; do :; done
+if [[ "${MOCK_FAILURE:-}" == private-rm && "$path" == "$MOCK_CI_DIR" ]]; then exit 4; fi
+exec /bin/rm "$@"
+SH
 cat > "$WORK/mock-security" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -127,6 +136,8 @@ case "$operation" in
         else
             [[ "$1" == -s ]] || exit 2
             shift
+            if [[ ( "${MOCK_FAILURE:-}" == restore || "${MOCK_FAILURE:-}" == restore-timeout ) &&
+                  "${1:-}" == '/tmp/original login.keychain-db' ]]; then exit 4; fi
             printf '%s\n' "$@" > "$MOCK_SEARCH_LIST"
         fi ;;
     create-keychain)
@@ -140,8 +151,10 @@ case "$operation" in
         fi ;;
     import) touch "$MOCK_CI_DIR/imported" ;;
     remove-trusted-cert)
-        if [[ "${MOCK_FAILURE:-}" == cleanup-timeout ]]; then sleep 30; fi ;;
+        if [[ "${MOCK_FAILURE:-}" == cleanup-timeout || "${MOCK_FAILURE:-}" == restore-timeout ]]; then sleep 30; fi
+        [[ "${MOCK_FAILURE:-}" != trust-error ]] || exit 4 ;;
     delete-keychain)
+        [[ "${MOCK_FAILURE:-}" != delete-keychain ]] || exit 4
         [[ "$(head -n 1 "$MOCK_SEARCH_LIST")" == '/tmp/original login.keychain-db' ]] || exit 3
         rm -f "$1" ;;
     unlock-keychain|set-keychain-settings|set-key-partition-list|add-trusted-cert) : ;;
@@ -224,10 +237,36 @@ done
 
 hosted_import hosted-cleanup-timeout >/dev/null 2>&1
 export MOCK_FAILURE=cleanup-timeout
-expect_failure 'did not fully restore the runner context' hosted_cleanup
+hosted_cleanup > "$WORK/output" 2>&1 || fail 'admin public trust timeout incorrectly blocked disposable runner cleanup'
+grep -Fq '::warning::Administrator code-signing trust removal timed out' "$WORK/output" || fail 'admin trust timeout was not disclosed'
 [[ ! -e "$MOCK_CI_DIR" ]] || fail 'timed-out cleanup retained private files'
 [[ "$(head -n 1 "$MOCK_SEARCH_LIST")" == '/tmp/original login.keychain-db' ]] || fail 'timed-out cleanup did not restore search list first'
-unset MOCK_FAILURE FORGESWEEP_SIGNING_P12_BASE64 FORGESWEEP_SIGNING_P12_PASSWORD
+unset MOCK_FAILURE
+
+# Only the guarded administrator public-trust timeout is tolerated. User
+# trust errors, search-list restoration and keychain deletion remain fatal.
+for failure in trust-error restore restore-timeout delete-keychain private-rm user-timeout; do
+    hosted_import "hosted-cleanup-$failure" >/dev/null 2>&1
+    if [[ "$failure" == user-timeout ]]; then
+        printf 'user\n' > "$MOCK_CI_DIR/trust-domain"
+        export MOCK_FAILURE=cleanup-timeout
+    else
+        export MOCK_FAILURE="$failure"
+    fi
+    expect_failure 'did not fully restore the runner context' hosted_cleanup
+    if [[ "$failure" == restore-timeout ]]; then
+        grep -Fq '::warning::' "$WORK/output" || fail 'combined restore failure did not exercise the admin timeout'
+    elif grep -Fq '::warning::' "$WORK/output"; then
+        fail 'non-admin-timeout cleanup error was downgraded'
+    fi
+    unset MOCK_FAILURE
+    if [[ "$failure" == private-rm ]]; then
+        [[ -e "$MOCK_CI_DIR/identity.p12" ]] || fail 'private-rm fixture did not exercise a retained archive'
+        hosted_cleanup >/dev/null
+    fi
+    [[ ! -e "$MOCK_CI_DIR" ]] || fail 'failed context restoration retained private files'
+done
+unset FORGESWEEP_SIGNING_P12_BASE64 FORGESWEEP_SIGNING_P12_PASSWORD
 
 expect_failure 'timed out after 1 seconds' bash -c 'source "$1"; run_bounded 1 /bin/sleep 30' _ "$WORK/bounded-functions"
 expect_failure 'timed out after 1 seconds' bash -c 'source "$1"; run_bounded 1 /usr/bin/python3 -c "import time; time.sleep(1.1)" "$2"' \
