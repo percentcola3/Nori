@@ -158,27 +158,29 @@ struct AnalyzeTabView: View {
     }
 
     private var toolbar: some View {
-        HStack(alignment: .center, spacing: 8) {
-            // 分析类型分段按钮组：点任意一段即切换聚焦；未扫描时点选即开始分析。
+        // 分段按钮组独占首行（参考设计：全宽胶囊、白色选中块）；
+        // 状态文字与“重新扫描”收进第二行小条。
+        VStack(spacing: 8) {
             modeSelector
-            if !scanning {
-                Text(scanStatusText)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 8)
-            // 扫描中的取消在动画下方；未扫描时入口在分段按钮组。
-            // 工具栏只在已有结果且空闲时提供“重新扫描”。
-            if hasResults && !scanning {
-                Button {
-                    state.scanDiskOverview(force: true)
-                } label: {
-                    Label(l10n.t("analyze.scan"), systemImage: "arrow.clockwise")
+            HStack(alignment: .center, spacing: 8) {
+                if !scanning {
+                    Text(scanStatusText)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(state.isBusy)
+                Spacer(minLength: 8)
+                // 扫描中的取消在动画下方；未扫描时入口在分段按钮组。
+                if hasResults && !scanning {
+                    Button {
+                        state.scanDiskOverview(force: true)
+                    } label: {
+                        Label(l10n.t("analyze.scan"), systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(state.isBusy)
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -186,32 +188,33 @@ struct AnalyzeTabView: View {
         .padding(.bottom, 8)
     }
 
-    /// 胶囊分段按钮组：选中段浅色填充；重复点击同一段在未扫描时也会开始分析。
+    /// 全宽胶囊分段按钮组：选中段白色实心圆角块；重复点击同一段在
+    /// 未扫描时也会开始分析。
     private var modeSelector: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 4) {
             ForEach(AnalyzeMode.allCases) { mode in
                 let isSelected = state.analyzeMode == mode
                 Button {
                     selectMode(mode)
                 } label: {
                     Text(l10n.t(mode.titleKey))
-                        .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
                         .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                        .padding(.horizontal, 12)
-                        .frame(maxWidth: .infinity, minHeight: 26)
+                        .padding(.horizontal, 10)
+                        .frame(maxWidth: .infinity, minHeight: 30)
                         .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(isSelected ? Color.surface3 : Color.clear))
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(isSelected ? Color.white : Color.clear))
                 }
                 .buttonStyle(MolePlainButtonStyle())
                 .disabled(state.isBusy)
             }
         }
-        .padding(3)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.surface2))
+        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
             .strokeBorder(Color.hairline, lineWidth: 1))
-        .frame(maxWidth: 320)
+        .frame(maxWidth: .infinity)
     }
 
     private func selectMode(_ mode: AnalyzeMode) {
