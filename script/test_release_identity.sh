@@ -2,6 +2,9 @@
 # Exercise secret handling and fail-closed provisioning without touching trust/keychains.
 set +x
 set -euo pipefail
+# Each fixture chooses its own local or CI context. Do not inherit the
+# enclosing Actions job's flags into cases that simulate the publisher Mac.
+unset CI GITHUB_ACTIONS
 umask 077
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/nori-identity-tests.XXXXXX")"
