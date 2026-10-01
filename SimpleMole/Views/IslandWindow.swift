@@ -75,6 +75,7 @@ struct IslandActionTarget: NSViewRepresentable {
 
     func updateNSView(_ button: IslandActionButton, context: Context) {
         button.setAccessibilityLabel(label)
+        button.toolTip = label
         button.isEnabled = isEnabled
         button.onPressChange = onPressChange
         button.onActivate = action

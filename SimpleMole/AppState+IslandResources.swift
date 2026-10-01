@@ -76,7 +76,7 @@ extension AppState {
                 app.isTerminated ? "island.quit.done" : "island.quit.pending", row.name)
             islandClosingPIDs.remove(row.pid)
             _ = await sampleIslandProcesses()
-            refreshMetrics()
+            resampleAfterMutation()
         }
     }
 
@@ -129,10 +129,10 @@ extension AppState {
                     ? L10n.shared.tf("island.clean.cache", ByteFormat.format(UInt64(cacheBytes)))
                     : L10n.shared.t("island.clean.cache.empty")) : "")
             _ = await sampleIslandProcesses()
-            refreshMetrics()
             // Completion is observed by the rings: publish it only after the
             // post-cleanup sample, so the reveal uses current occupancy.
             islandCleaningResource = nil
+            resampleAfterMutation()
         }
     }
 }

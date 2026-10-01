@@ -69,7 +69,8 @@ struct MainWindowView: View {
             HeaderBrandIconView(size: 20, isSearching: state.isScanning,
                                 searchSucceeded: state.cleanupScanComplete, isWorking: state.isBusy,
                                 reactionID: state.headerReactionID,
-                                reactionMood: state.headerReactionMood)
+                                reactionMood: state.headerReactionMood,
+                                isTidying: state.headerTask?.tidying == true)
             Text(l10n.t("window.title"))
                 .font(.system(size: 13, weight: .semibold))
             Spacer()

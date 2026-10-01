@@ -7,6 +7,9 @@ struct NoriMascotView: View {
     var mood: NoriMood = .idle
     var size: CGFloat = 32
     var gaze: CGSize = .zero
+    /// Extra drawing room on every side, as a fraction of `size`. Result props
+    /// (confetti, the result badge) spill into it without changing layout.
+    var bleed: CGFloat = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
@@ -23,9 +26,10 @@ struct NoriMascotView: View {
             let pose = NoriMotion.pose(for: mood,
                                        elapsed: timeline.date.timeIntervalSince(startedAt),
                                        reduceMotion: reduceMotion || !appActive || !windowVisible)
-            Canvas { context, canvas in
-                context.scaleBy(x: canvas.width / NoriGeometry.canvas,
-                                y: canvas.height / NoriGeometry.canvas)
+            Canvas { context, _ in
+                context.translateBy(x: size * bleed, y: size * bleed)
+                context.scaleBy(x: size / NoriGeometry.canvas, y: size / NoriGeometry.canvas)
+                let showsProp = pose.prop > 0 && !reduceMotion
                 context.drawLayer { character in
                     character.translateBy(x: NoriGeometry.anchor.x,
                                           y: NoriGeometry.anchor.y + pose.offsetY)
@@ -53,8 +57,15 @@ struct NoriMascotView: View {
                         }
                     }
                 }
-                if pose.confetti > 0 && !reduceMotion { drawRibbons(in: &context, progress: pose.confetti) }
+                if showsProp && mood == .success { drawConfetti(in: &context, progress: pose.prop) }
+                if showsProp && (mood == .success || mood == .attention) {
+                    drawBadge(in: &context, progress: pose.prop, succeeded: mood == .success)
+                }
+                if mood == .tidying && canAnimate {
+                    drawActivityDots(in: &context, progress: pose.prop)
+                }
             }
+            .frame(width: size * (1 + 2 * bleed), height: size * (1 + 2 * bleed))
         }
         .frame(width: size, height: size)
         .background(NoriWindowVisibilityProbe { visible in windowVisible = visible })
@@ -71,7 +82,8 @@ struct NoriMascotView: View {
         }
         .task(id: mood) {
             guard mood == .success || mood == .attention else { return }
-            do { try await Task.sleep(nanoseconds: mood == .success ? 1_500_000_000 : 900_000_000) }
+            let duration = mood == .success ? NoriMotion.celebrationDuration : NoriMotion.failureDuration
+            do { try await Task.sleep(nanoseconds: UInt64((duration + 0.1) * 1_000_000_000)) }
             catch { return }
             settled = true
         }
@@ -83,20 +95,89 @@ struct NoriMascotView: View {
               green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255, opacity: 1)
     }
 
-    private func drawRibbons(in context: inout GraphicsContext, progress: Double) {
-        let colors = [NoriGeometry.ribbonBlue, NoriGeometry.ribbonGold, NoriGeometry.ribbonLilac]
-        let ribbons: [(Double, Double, Double, Double, Double)] = [
-            (70, 80, -46, -25, -120), (90, 54, -37, -28, 100), (128, 42, -12, -30, -80),
-            (177, 44, 15, -30, 110), (211, 63, 25, -30, -120), (218, 106, 20, 8, 140)
-        ]
-        let travel = 1 - pow(1 - progress, 2)
-        for (index, ribbon) in ribbons.enumerated() {
-            context.drawLayer { particle in
-                particle.opacity = min(1, progress * 8) * (1 - progress)
-                particle.translateBy(x: ribbon.0 + ribbon.2 * travel, y: ribbon.1 + ribbon.3 * travel)
-                particle.rotate(by: .degrees(ribbon.4 * travel))
-                particle.fill(Path(roundedRect: CGRect(x: -3, y: -7, width: 6, height: 14), cornerRadius: 2),
-                              with: .color(noriColor(colors[index % colors.count])))
+    /// Matches nori-success.svg: (dx, peak, fall, turn, color, round) per piece,
+    /// scaled up because the SVG figure is drawn at 0.78.
+    private static let confetti: [(Double, Double, Double, Double, UInt32, Bool)] = [
+        (-100, -36, 70, -160, NoriGeometry.ribbonBlue, false), (-68, -50, 64, 120, NoriGeometry.ribbonGold, true),
+        (-34, -58, 76, -90, NoriGeometry.ribbonLilac, false), (2, -62, 70, 140, NoriGeometry.ribbonBlue, true),
+        (36, -58, 80, -130, NoriGeometry.ribbonGold, false), (70, -50, 66, 100, NoriGeometry.ribbonLilac, true),
+        (102, -36, 74, -150, NoriGeometry.ribbonBlue, false), (-86, -18, 90, 80, NoriGeometry.ribbonLilac, true),
+        (88, -20, 88, -70, NoriGeometry.ribbonGold, true)
+    ]
+
+    private func drawConfetti(in context: inout GraphicsContext, progress: Double) {
+        let scale = 1.3
+        let opacity = min(1, progress / 0.08) * (progress > 0.72 ? max(0, (1 - progress) / 0.28) : 1)
+        for piece in Self.confetti {
+            let (dx, peak, fall, turn) = (piece.0 * scale, piece.1 * scale, piece.2 * scale, piece.3)
+            let x: Double, y: Double
+            if progress < 0.45 {
+                let s = 1 - pow(1 - progress / 0.45, 2)
+                x = dx * 0.7 * s
+                y = peak * s
+            } else {
+                let u = (progress - 0.45) / 0.55
+                x = dx * (0.7 + 0.3 * u)
+                y = peak + fall * u * u
+            }
+            context.drawLayer { layer in
+                layer.opacity = opacity
+                layer.translateBy(x: 132 + x, y: 40 + y)
+                layer.rotate(by: .degrees(turn * progress))
+                let color = GraphicsContext.Shading.color(noriColor(piece.4))
+                if piece.5 {
+                    layer.fill(Path(ellipseIn: CGRect(x: -9, y: -9, width: 18, height: 18)), with: color)
+                } else {
+                    layer.fill(Path(roundedRect: CGRect(x: -6, y: -13, width: 12, height: 26), cornerRadius: 4),
+                               with: color)
+                }
+            }
+        }
+    }
+
+    /// A centered, quiet wave carries activity without a literal cleanup prop.
+    private func drawActivityDots(in context: inout GraphicsContext, progress: Double) {
+        for index in 0..<3 {
+            let wave = max(0, sin((progress - Double(index) * 0.14) * 2 * .pi))
+            context.drawLayer { dot in
+                dot.opacity = 0.35 + wave * 0.65
+                let circle = CGRect(x: 108 + Double(index) * 20, y: 240 - wave * 4,
+                                    width: 8, height: 8)
+                dot.fill(Path(ellipseIn: circle), with: .color(noriColor(NoriGeometry.ribbonBlue)))
+            }
+        }
+    }
+
+    /// Matches nori-success/attention.svg: one shared badge pops onto Nori's lower
+    /// right, over the body; success shows a green check, failure a coral "!".
+    private func drawBadge(in context: inout GraphicsContext, progress: Double, succeeded: Bool) {
+        let pop: Double, tilt: Double
+        switch progress {
+        case ..<0.08: (pop, tilt) = (0, -20)
+        case ..<0.22: let s = (progress - 0.08) / 0.14; (pop, tilt) = (1.18 * s, -20 + 26 * s)
+        case ..<0.32: let s = (progress - 0.22) / 0.1; (pop, tilt) = (1.18 - 0.24 * s, 6 - 9 * s)
+        case ..<0.42: let s = (progress - 0.32) / 0.1; (pop, tilt) = (0.94 + 0.06 * s, -3 + 3 * s)
+        default: (pop, tilt) = (1, 0)
+        }
+        guard pop > 0 else { return }
+        let ink = GraphicsContext.Shading.color(noriColor(NoriGeometry.ink))
+        let ice = GraphicsContext.Shading.color(noriColor(NoriGeometry.body))
+        context.drawLayer { badge in
+            badge.opacity = progress > 0.9 ? (1 - progress) / 0.1 : 1
+            badge.translateBy(x: 222, y: 204)
+            badge.rotate(by: .degrees(tilt))
+            badge.scaleBy(x: 1.3 * pop, y: 1.3 * pop)
+            let disc = Path(ellipseIn: CGRect(x: -42, y: -42, width: 84, height: 84))
+            badge.fill(disc, with: .color(noriColor(succeeded ? NoriGeometry.ribbonSuccess : NoriGeometry.ribbonFail)))
+            badge.stroke(disc, with: ink, lineWidth: 4)
+            if succeeded {
+                let check = Path { path in
+                    path.addLines([CGPoint(x: -17, y: -1), CGPoint(x: -5, y: 11), CGPoint(x: 17, y: -12)])
+                }
+                badge.stroke(check, with: ice, style: StrokeStyle(lineWidth: 10, lineCap: .round, lineJoin: .round))
+            } else {
+                badge.fill(Path(roundedRect: CGRect(x: -5.5, y: -22, width: 11, height: 25), cornerRadius: 5.5), with: ice)
+                badge.fill(Path(ellipseIn: CGRect(x: -6, y: 8, width: 12, height: 12)), with: ice)
             }
         }
     }
@@ -148,26 +229,24 @@ struct HeaderBrandIconView: View {
     var isWorking = false
     var reactionID = 0
     var reactionMood: NoriMood = .success
+    /// Cleaning and uninstalling share the tidying animation.
+    var isTidying = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var gaze: CGSize = .zero
     @State private var playing = false
     @State private var playedMood: NoriMood = .success
     @State private var playID = 0
-    @State private var pulse = false
-    @State private var nudge: CGFloat = 0
 
     private var mood: NoriMood {
         if playing { return playedMood }
+        if isTidying { return .tidying }
         if isSearching || isWorking { return .working }
         return .idle
     }
 
     var body: some View {
-        NoriMascotView(mood: mood, size: size, gaze: gaze)
-            .scaleEffect(pulse ? 1.18 : 1)
-            .offset(x: nudge)
-            .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.62), value: pulse)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.08), value: nudge)
+        NoriMascotView(mood: mood, size: size, gaze: gaze, bleed: 0.7)
+            .id(playing ? playID : 0)
             .contentShape(Rectangle())
             .allowsHitTesting(true)
             .onContinuousHover { phase in
@@ -186,35 +265,17 @@ struct HeaderBrandIconView: View {
                 playedMood = reactionMood
                 playID = id
                 playing = !reduceMotion
-                pulse = false
-                nudge = 0
             }
             .onChange(of: reduceMotion) { reduced in
-                if reduced { playing = false; pulse = false; nudge = 0; gaze = .zero }
+                if reduced { playing = false; gaze = .zero }
             }
             .task(id: playID) {
                 guard playing else { return }
-                do {
-                    if playedMood == .success {
-                        pulse = true
-                        try await Task.sleep(nanoseconds: 280_000_000)
-                        pulse = false
-                        try await Task.sleep(nanoseconds: 160_000_000)
-                        pulse = true
-                        try await Task.sleep(nanoseconds: 420_000_000)
-                        pulse = false
-                        try await Task.sleep(nanoseconds: 500_000_000)
-                    } else {
-                        for step in [CGFloat(-2.5), 2.5, -1.5, 1.5, 0] {
-                            nudge = step
-                            try await Task.sleep(nanoseconds: 90_000_000)
-                        }
-                        try await Task.sleep(nanoseconds: 280_000_000)
-                    }
-                } catch { return }
+                let duration = playedMood == .success
+                    ? NoriMotion.celebrationDuration : NoriMotion.failureDuration
+                do { try await Task.sleep(nanoseconds: UInt64((duration + 0.1) * 1_000_000_000)) }
+                catch { return }
                 playing = false
-                nudge = 0
-                pulse = false
             }
             .accessibilityHidden(true)
     }

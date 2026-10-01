@@ -51,6 +51,7 @@ struct ScreenshotEditorView: View {
     @State private var pendingTextAt: CGPoint?
     @State private var pendingTextInput = ""
     @State private var feedbackKey: String?
+    @State private var previewAvailableSize = CGSize(width: 640, height: 320)
     @ObservedObject private var l10n = L10n.shared
 
     private let preferences: ScreenshotPreferences
@@ -64,28 +65,12 @@ struct ScreenshotEditorView: View {
         _exportOptions = State(initialValue: preferences.loadExportOptions())
     }
 
-    private static let previewMax = CGSize(width: 1100, height: 620)
-
     /// 截图在预览里的尺寸：连同预设的留白、标题栏和画幅一起放进预览区，
     /// 比例越"高"的画幅，截图本身缩得越小。
     private var displaySize: CGSize {
-        let maxW = Self.previewMax.width
-        let maxH = Self.previewMax.height
-        let size = image.size
-        var scale = min(1, maxW / size.width, maxH / size.height)
-        // 两轮迭代足够：布局尺寸对内容尺寸近似线性。
-        for _ in 0..<2 {
-            let content = CGSize(width: size.width * scale, height: size.height * scale)
-            let canvas = PresetLayout.compute(contentSize: content, composition: composition).canvasSize
-            let fit = min(1, maxW / canvas.width, maxH / canvas.height)
-            if fit >= 0.999 { break }
-            scale *= fit
-        }
-        return CGSize(width: floor(size.width * scale), height: floor(size.height * scale))
-    }
-
-    private var previewLayout: PresetLayout {
-        PresetLayout.compute(contentSize: displaySize, composition: composition)
+        ScreenshotEditorSizing.previewContentSize(imageSize: image.size,
+                                                  available: previewAvailableSize,
+                                                  composition: composition)
     }
 
     private var exportSize: CGSize {
@@ -107,15 +92,15 @@ struct ScreenshotEditorView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            toolBar
-            canvasArea
-            presetBar
-            actionBar
+            ScrollView(.horizontal, showsIndicators: false) {
+                toolBar.fixedSize(horizontal: true, vertical: false)
+            }.frame(height: 28)
+            canvasArea.layoutPriority(-1)
+            presetBar.fixedSize(horizontal: false, vertical: true)
+            actionBar.fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
-        .frame(minWidth: max(640, previewLayout.canvasSize.width + 24),
-               idealWidth: max(640, previewLayout.canvasSize.width + 24),
-               minHeight: previewLayout.canvasSize.height + 190)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: composition) { value in preferences.save(value) }
         .onChange(of: exportOptions) { value in preferences.save(value) }
         .onAppear {
@@ -194,16 +179,23 @@ struct ScreenshotEditorView: View {
     }
 
     private var canvasArea: some View {
-        Group {
-            if composition.isPlain {
-                editorCanvas
-            } else {
-                PresetFrameView(composition: composition, contentSize: displaySize) {
+        GeometryReader { geometry in
+            let canvasSize = PresetLayout.compute(contentSize: displaySize, composition: composition).canvasSize
+            Group {
+                if composition.isPlain {
                     editorCanvas
+                } else {
+                    PresetFrameView(composition: composition, contentSize: displaySize) {
+                        editorCanvas
+                    }
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .modifier(ScreenshotPreviewOverflowClip(needed: canvasSize.width > geometry.size.width
+                                                    || canvasSize.height > geometry.size.height))
+            .onAppear { previewAvailableSize = geometry.size }
+            .onChange(of: geometry.size) { previewAvailableSize = $0 }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var dragGesture: some Gesture {
@@ -397,49 +389,54 @@ struct ScreenshotEditorView: View {
 
     private var actionBar: some View {
         HStack(spacing: 8) {
-            Button {
-                showFeedback(copyToPasteboard() ? "shot.copied" : "shot.failed")
-            } label: {
-                Label(l10n.t("common.copy"), systemImage: "doc.on.doc")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            Button {
-                showFeedback(saveToDownloads() ? "shot.saved" : "shot.failed")
-            } label: {
-                Label(l10n.t("shot.save"), systemImage: "square.and.arrow.down")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            Button {
-                saveAs()
-            } label: {
-                Label(l10n.t("shot.saveAs"), systemImage: "folder")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            Divider().frame(height: 18)
-            Picker("", selection: $exportOptions.scale) {
-                ForEach(ScreenshotExportScale.allCases, id: \.self) { scale in
-                    Text(l10n.t(scale.l10nKey)).tag(scale)
+            ScrollView(.horizontal, showsIndicators: true) {
+                HStack(spacing: 8) {
+                    Button {
+                        showFeedback(copyToPasteboard() ? "shot.copied" : "shot.failed")
+                    } label: {
+                        Label(l10n.t("common.copy"), systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    Button {
+                        showFeedback(saveToDownloads() ? "shot.saved" : "shot.failed")
+                    } label: {
+                        Label(l10n.t("shot.save"), systemImage: "square.and.arrow.down")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    Button {
+                        saveAs()
+                    } label: {
+                        Label(l10n.t("shot.saveAs"), systemImage: "folder")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    Divider().frame(height: 18)
+                    Picker("", selection: $exportOptions.scale) {
+                        ForEach(ScreenshotExportScale.allCases, id: \.self) { scale in
+                            Text(l10n.t(scale.l10nKey)).tag(scale)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(width: 96)
+                    .help(l10n.t("shot.export.scale"))
+                    Picker("", selection: $exportOptions.format) {
+                        ForEach(ScreenshotExportFormat.allCases, id: \.self) { format in
+                            Text(l10n.t(format.l10nKey)).tag(format)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .frame(width: 80)
+                    .help(l10n.t("shot.export.format"))
+                    if let feedbackKey {
+                        Text(l10n.t(feedbackKey))
+                            .font(.system(size: 10))
+                            .foregroundStyle(feedbackKey == "shot.failed" ? Color.warning : Color.moleAccentText)
+                    }
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .frame(width: 96)
-            .help(l10n.t("shot.export.scale"))
-            Picker("", selection: $exportOptions.format) {
-                ForEach(ScreenshotExportFormat.allCases, id: \.self) { format in
-                    Text(l10n.t(format.l10nKey)).tag(format)
-                }
-            }
-            .pickerStyle(.menu)
-            .labelsHidden()
-            .frame(width: 80)
-            .help(l10n.t("shot.export.format"))
-            if let feedbackKey {
-                Text(l10n.t(feedbackKey))
-                    .font(.system(size: 10))
-                    .foregroundStyle(feedbackKey == "shot.failed" ? Color.warning : Color.moleAccentText)
-            }
-            Spacer()
+            .frame(height: 46)
             Button(l10n.t("common.done")) {
                 guard copyToPasteboard() else {
                     showFeedback("shot.failed")
@@ -448,6 +445,7 @@ struct ScreenshotEditorView: View {
                 onClose()
             }
             .buttonStyle(PrimaryButtonStyle())
+            .fixedSize(horizontal: true, vertical: false)
         }
     }
 
@@ -542,6 +540,16 @@ struct ScreenshotEditorView: View {
 }
 
 // MARK: - 标注画布（Canvas 绘制）
+
+/// Minimum-size frame chrome can exceed an exceptionally short viewport. In that case
+/// clip the preview region so its drawing does not cover the fixed editing controls.
+private struct ScreenshotPreviewOverflowClip: ViewModifier {
+    let needed: Bool
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if needed { content.clipped() } else { content }
+    }
+}
 
 struct AnnotationCanvas: View {
     let strokes: [Stroke]

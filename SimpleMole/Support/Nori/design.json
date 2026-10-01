@@ -1,7 +1,7 @@
 {
   "name": "Nori",
   "canvas": 256,
-  "colors": {"body": "BFEAF2", "ink": "10283F", "ribbonBlue": "69C7DD", "ribbonGold": "F2C66D", "ribbonLilac": "B8A7DF"},
+  "colors": {"body": "BFEAF2", "ink": "10283F", "ribbonBlue": "69C7DD", "ribbonGold": "F2C66D", "ribbonLilac": "B8A7DF", "ribbonFail": "E56672", "ribbonSuccess": "5FC98A", "blush": "F4A6B8"},
   "body": [
     ["M", 72, 218],
     ["C", 36, 209, 25, 186, 29, 150],

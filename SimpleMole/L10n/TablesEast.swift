@@ -5,6 +5,10 @@ import Foundation
 extension L10nTables {
     static let zhHant: [String: String] = [
         "window.title": "Nori",
+        "header.task.cleaning": "清理中…",
+        "header.task.uninstalling": "正在解除安裝 %@",
+        "header.task.scanning": "掃描中…",
+        "header.task.working": "處理中…",
         "tab.cleanup": "清理",
         "tab.uninstall": "軟體",
         "tab.devenv": "Dev環境",
@@ -211,6 +215,10 @@ extension L10nTables {
 
     static let ja: [String: String] = [
         "window.title": "Nori",
+        "header.task.cleaning": "クリーンアップ中…",
+        "header.task.uninstalling": "%@ をアンインストール中",
+        "header.task.scanning": "スキャン中…",
+        "header.task.working": "処理中…",
         "tab.cleanup": "クリーンアップ",
         "tab.uninstall": "アプリ",
         "tab.devenv": "Dev環境",

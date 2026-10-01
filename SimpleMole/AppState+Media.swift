@@ -152,19 +152,15 @@ extension AppState {
     /// 删除清单执行：移入废纸篓（可恢复），并同步清单与缓存。
     func deleteAnalysisFiles(_ paths: [String]) {
         guard !isBusy, !isDeletingAnalysisFiles, !paths.isEmpty else { return }
+        // Capture the confirmed current inventory and identities before yielding.
+        let plan = AnalysisFileDeletionPlan(
+            requestedPaths: paths,
+            inventoryPaths: Set(analysisFileItems(for: analyzeMode).map(\.path)))
         isDeletingAnalysisFiles = true
         Task {
-            var removed: Set<String> = []
-            var failed = 0
-            for path in paths {
-                do {
-                    try FileManager.default.trashItem(
-                        at: URL(fileURLWithPath: path), resultingItemURL: nil)
-                    removed.insert(path)
-                } catch {
-                    failed += 1
-                }
-            }
+            let applied = await Task.detached(priority: .utility) { plan.execute() }.value
+            let removed = applied.removedPaths
+            let failed = applied.failed + applied.skipped
             analyzeLargeFiles.removeAll { removed.contains($0.path) }
             analyzeMedia.removeAll { removed.contains($0.path) }
             analyzeEntries.removeAll { removed.contains($0.path) }
@@ -179,6 +175,7 @@ extension AppState {
             log(summary)
             if failed == 0, !removed.isEmpty { noteHeaderReaction(.success) }
             else if failed > 0 { noteHeaderReaction(.attention) }
+            resampleAfterMutation()
         }
     }
 
@@ -274,6 +271,7 @@ extension AppState {
         }
         log(statusText)
         applySlimOutcomes(slimmed)
+        resampleAfterMutation()
     }
 
     /// 就地更新清单，并让涉及目录的缓存失效，下次进入时重新统计。

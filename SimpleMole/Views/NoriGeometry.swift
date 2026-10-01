@@ -13,6 +13,9 @@ enum NoriGeometry {
     static let ribbonBlue: UInt32 = 0x69C7DD
     static let ribbonGold: UInt32 = 0xF2C66D
     static let ribbonLilac: UInt32 = 0xB8A7DF
+    static let ribbonFail: UInt32 = 0xE56672
+    static let ribbonSuccess: UInt32 = 0x5FC98A
+    static let blush: UInt32 = 0xF4A6B8
     static func bodyPath() -> CGPath {
         let path = CGMutablePath()
         path.move(to: CGPoint(x: 72, y: 218))

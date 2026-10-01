@@ -3,7 +3,7 @@
 No image dependencies. Run from any directory; only owned generated files change.
 """
 import json
-from nori_scenes import SCENE_LABELS, SCENE_RULES, SCENE_CSS, working_scene, extra_scene
+from nori_scenes import SCENE_LABELS, SCENE_RULES, scene_css, working_scene, extra_scene
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,41 +22,36 @@ styles = '''
 @keyframes blink {0%,43%,49%,100%{transform:scaleY(1)}46%{transform:scaleY(.08)}}
 @keyframes work {0%,100%{transform:translateY(0) scale(1,1)}25%{transform:translateY(0) scale(1.055,.945)}55%{transform:translateY(-3px) scale(.96,1.04)}80%{transform:translateY(0) scale(1.025,.975)}}
 @keyframes workGaze {0%,100%{transform:translateX(-4px)}50%{transform:translateX(4px)}}
-@keyframes bored {0%,20%,100%{transform:rotate(0deg) scale(1)}40%,60%{transform:rotate(-5deg) scale(1.03,.97)}80%{transform:rotate(3deg) scale(.99,1.01)}}
-@keyframes glance {0%,20%,100%{transform:translate(0,0)}40%,60%{transform:translate(-7px,2px)}80%{transform:translate(5px,0)}}
-@keyframes breathe {0%,100%{transform:scale(1)}50%{transform:scale(1.012,.988)}}
 @keyframes celebrate {0%,100%{transform:translateY(0) scale(1)}15%{transform:scale(1.12,.88)}38%{transform:translateY(-3px) scale(.965,1.035)}65%{transform:scale(1.07,.93)}82%{transform:scale(.98,1.02)}}
-@keyframes notice {0%,100%{transform:rotate(0deg)}25%{transform:rotate(-5deg)}60%{transform:rotate(5deg)}}
-@keyframes ribbon {0%,12%{opacity:0;transform:translate(0,0) rotate(0deg)}22%{opacity:1}100%{opacity:0;transform:translate(var(--dx),var(--dy)) rotate(var(--turn))}}
-.ribbon{opacity:0}
 '''
+# Static is the single resting placeholder for every tab before a task starts:
+# the body holds still and only the eyes blink.
 rules = {
- 'static': '',
- 'idle': '.jelly{animation:breathe 6s ease-in-out infinite}.eyelid{animation:blink 6s ease-in-out infinite}',
- 'blink': '.eyelid{animation:blink 3.8s ease-in-out infinite}',
+ 'static': '.eyelid{animation:blink 4.2s ease-in-out infinite}',
  'working': '.jelly{animation:work 1.35s ease-in-out infinite}.gaze{animation:workGaze 2.7s ease-in-out infinite}.eyelid{animation:blink 5.4s ease-in-out infinite}',
- 'bored': '.jelly{animation:bored 8s ease-in-out infinite}.gaze{animation:glance 8s ease-in-out infinite}.eyelid{animation:blink 7s ease-in-out infinite}',
- 'success': '.jelly{animation:celebrate 1.4s ease-in-out 1}.ribbon{animation:ribbon 1.4s ease-out 1 both}',
- 'attention': '.jelly{animation:notice .8s ease-in-out 1}',
+ 'success': '.jelly{animation:celebrate 1.4s ease-in-out 1}.gaze{animation:nori-lookBadge 1.9s ease-in-out 1 both}.eyelid{animation:nori-happy 1.9s ease-in-out 1 both}',
+ 'attention': '.jelly{animation:nori-sad 1.9s ease-in-out 1 both}.gaze{animation:nori-lookBadge 1.9s ease-in-out 1 both}',
 }
-labels = {'static':'静态','idle':'待机呼吸','blink':'眨眼','working':'工作中','bored':'无聊侧望','success':'完成庆祝','attention':'需要关注'}
+labels = {'static':'静态','working':'工作中','success':'成功','attention':'失败'}
 rules.update(SCENE_RULES)
 labels.update(SCENE_LABELS)
-styles += SCENE_CSS
-# CSS transforms are on inner groups; static outer transforms remain under Reduce Motion.
-confetti = ''.join(f'<g transform="translate({x} {y})"><g class="ribbon" style="--dx:{dx}px;--dy:{dy}px;--turn:{turn}deg"><rect x="-3" y="-7" width="6" height="14" rx="2" fill="#{colors[color]}"/></g></g>' for x,y,dx,dy,turn,color in [
- (70,80,-46,-25,-120,'ribbonBlue'),(90,54,-37,-28,100,'ribbonGold'),(128,42,-12,-30,-80,'ribbonLilac'),(177,44,15,-30,110,'ribbonBlue'),(211,63,25,-30,-120,'ribbonGold'),(218,106,20,8,140,'ribbonLilac')])
+styles += scene_css(colors)
+# Reduced motion keeps only the resting figure; the orbit props disappear so
+# a frozen half-drawn ring never reads as an error.
+reduced = ('\n@media(prefers-reduced-motion:reduce){*{animation:none!important}'
+           '.steam,.orbit-prop{display:none}}')
 for name, rule in rules.items():
- css = styles + rule + '\n@media(prefers-reduced-motion:reduce){*{animation:none!important}.ribbon,.steam,.mirror-glint,.key-fly,.key-drop{display:none}}'
+ css = styles + rule + reduced
  scene = working_scene(figure, colors) if name == 'working' else extra_scene(name, figure, colors, body, eyes)
  svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="nori-{name}-title">
 <title id="nori-{name}-title">Nori · {labels[name]}</title>
 <style>{css}</style>
 {scene}
-{confetti if name == 'success' else ''}
 </svg>
 '''
  (OUT / 'Animations' / f'nori-{name}.svg').write_text(svg)
+for retired in ('idle', 'bored', 'mirror', 'analyzing', 'blink', 'inspecting', 'uninstalling'):
+ (OUT / 'Animations' / f'nori-{retired}.svg').unlink(missing_ok=True)
 (OUT / 'Nori.svg').write_text(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">{figure}</svg>\n')
 # The full-bleed, UNMASKED foreground for Icon Composer; masking belongs to macOS.
 (OUT / 'AppIcon.icon/Assets/Nori.svg').write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><g transform="translate(92 104) scale(3.25)">{figure}</g></svg>\n')

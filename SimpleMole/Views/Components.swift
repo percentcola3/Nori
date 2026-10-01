@@ -97,28 +97,35 @@ struct MoleSwitchToggleStyle: ToggleStyle {
     }
 }
 
+struct ActionGlassChrome: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *), !reduceTransparency {
+            content
+                .glassEffect(.regular.interactive(!reduceMotion), in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1).allowsHitTesting(false))
+        } else {
+            content
+                .background(Capsule().fill(Color.glassOpaque))
+                .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1).allowsHitTesting(false))
+        }
+    }
+}
+
 struct PrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(isEnabled ? Color.moleOnAccent : Color.secondary)
-            .padding(.horizontal, 14)
-            .frame(height: 30)
-            .background(
-                Capsule()
-                    .fill(isEnabled
-                          ? Color.moleAccent.opacity(configuration.isPressed ? 0.55 : 0.72)
-                          : Color.surface2)
-                    .shadow(color: isEnabled
-                            ? Color.moleAccent.opacity(configuration.isPressed ? 0.10 : 0.18)
-                            : .clear,
-                            radius: configuration.isPressed ? 2 : 5, y: 1)
-            )
-            .overlay(Capsule().strokeBorder(isEnabled
-                                           ? Color.moleAccentText.opacity(0.22)
-                                           : Color.hairline, lineWidth: 1))
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(isEnabled ? Color.primary : Color.secondary)
+            .padding(.horizontal, 20)
+            .frame(minHeight: 36)
+            .modifier(ActionGlassChrome())
+            .opacity(isEnabled ? 1 : 0.5)
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
     }
 }
@@ -225,17 +232,7 @@ struct MoleSelectableRowButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, verticalPadding)
-            .background {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(backgroundColor(isPressed: configuration.isPressed))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(isSelected
-                                  ? AnyShapeStyle(Color.moleAccentText.opacity(0.34))
-                                  : AnyShapeStyle(.separator.opacity(0.30)),
-                                  lineWidth: 1)
-            }
+            .modifier(ListRowGlass(selected: isSelected))
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .opacity(isEnabled ? 1 : 0.45)
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed,
@@ -243,11 +240,29 @@ struct MoleSelectableRowButtonStyle: ButtonStyle {
             .animation(reduceMotion ? nil : MoleMotion.selection, value: isSelected)
     }
 
-    private func backgroundColor(isPressed: Bool) -> Color {
-        if isSelected {
-            return Color.moleAccent.opacity(isPressed ? 0.24 : 0.16)
+
+}
+
+/// 清理、Agent 和分析共用的单层列表玻璃；布局先完成，再包住内容。
+struct ListRowGlass: ViewModifier {
+    var selected = false
+    var interactive = true
+    @Namespace private var namespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(macOS 26.0, *), !reduceTransparency {
+            content
+                .glassEffect(.regular.tint(selected ? Color.moleAccent.opacity(0.20) : .clear)
+                    .interactive(interactive && !reduceMotion), in: RoundedRectangle(cornerRadius: 9))
+                .glassEffectID("row", in: namespace)
+                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+        } else {
+            content.background(GlassSurface(cornerRadius: 9, usesSystemGlass: false))
+                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(
+                    selected ? Color.moleAccent : Color.hairline, lineWidth: selected ? 1.5 : 1))
         }
-        return isPressed ? Color.surface3 : Color.surface2
     }
 }
 
@@ -367,6 +382,8 @@ struct PillPicker: View {
                                 )
                                 .glassEffectID(index, in: selectionNamespace)
                                 .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+                                // 裁掉系统玻璃外缘的深色轮廓，保留胶囊内部的折射与高光。
+                                .clipShape(Capsule().inset(by: 0.5))
                                 .contentShape(Capsule())
                         } else {
                             Text(items[index])
@@ -620,12 +637,12 @@ struct EmptyStateView: View {
     var subtitle: String?
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 14) {
             Image(systemName: symbol)
-                .font(.system(size: 26, weight: .light))
+                .font(.system(size: 42, weight: .light))
                 .foregroundStyle(.tertiary)
             Text(title)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(.secondary)
             if let subtitle {
                 Text(subtitle)

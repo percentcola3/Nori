@@ -7,7 +7,7 @@ enum CleanupCache {
     // changes. In particular, the cleanup page now includes all ordinary
     // top-level Trash entries and the expanded AI safe-cache bridge; restoring
     // an older snapshot would silently hide those candidates.
-    private static let version = 20
+    private static let version = 23
     private static let maximumAge: TimeInterval = 5 * 60
 
     private static var cacheURL: URL {
@@ -33,6 +33,7 @@ enum CleanupCache {
             var applyRoute: CleanupApplyRoute
             var activityGuard: CleanupActivityGuard
             var reasonKey: String
+            var activityOwners: [String] = []
             /// 年龄门（秒）。旧缓存缺省 0 = 不按活跃时间过滤。
             var retention: TimeInterval = 0
         }
@@ -56,6 +57,7 @@ enum CleanupCache {
                                         source: $0.source, risk: $0.risk,
                                         disposal: $0.disposal, applyRoute: $0.applyRoute,
                                         activityGuard: $0.activityGuard, reasonKey: $0.reasonKey,
+                                        activityOwners: $0.activityOwners,
                                         retention: $0.retention)
                               },
                               signatures: signatures(for: categories))
@@ -89,13 +91,15 @@ enum CleanupCache {
                 return nil
             }
         }
-        let categories = payload.categories.map {
-            CleanupCategory(name: $0.name, paths: $0.paths, bytes: $0.bytes,
-                            pathBytes: $0.pathBytes,
-                            source: $0.source, risk: $0.risk,
-                            disposal: $0.disposal, applyRoute: $0.applyRoute,
-                            activityGuard: $0.activityGuard, retention: $0.retention,
-                            reasonKey: $0.reasonKey)
+        let categories = payload.categories.map { saved in
+            var category = CleanupCategory(name: saved.name, paths: saved.paths, bytes: saved.bytes,
+                            pathBytes: saved.pathBytes,
+                            source: saved.source, risk: saved.risk,
+                            disposal: saved.disposal, applyRoute: saved.applyRoute,
+                            activityGuard: saved.activityGuard, retention: saved.retention,
+                            reasonKey: saved.reasonKey)
+            category.activityOwners = saved.activityOwners
+            return category
         }
         return (categories, age)
     }

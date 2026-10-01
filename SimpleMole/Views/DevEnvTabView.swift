@@ -1,661 +1,82 @@
 import SwiftUI
 
-/// 开发环境：识别版本管理器下的运行时版本（含使用中标记）与工具本体，
-/// 支持勾选清理不再使用的旧版本（移入废纸篓）。
+/// A developer workspace with automatic read-only refresh and explicit management actions.
 struct DevEnvTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// 环境变量体检中勾选待清理的行。
-    @State private var envSelection: Set<String> = []
+    @Namespace private var glassNamespace
+    @State private var panelSearchStates: [DeveloperWorkspaceSearchSource: DeveloperWorkspaceSearchState] = [:]
+
+    private var isSearching: Bool {
+        state.isScanningEnv || state.isRefreshingGc || state.devWorkspaceRefreshPending
+            || DeveloperWorkspaceSearchSource.allCases.contains { source in
+                guard let search = panelSearchStates[source] else { return true }
+                return search.refreshToken != state.devWorkspaceRefreshToken || search.isSearching
+            }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            // 状态文本与工具栏共用一行：状态居左，操作按钮靠右。
-            HStack(alignment: .center, spacing: 8) {
-                // 数量统计已移除：仅在加载/为空/出错等有意义的状态时展示。
-                if !state.devEnvStatus.isEmpty {
-                    Text(state.devEnvStatus)
+            header
+            ScrollView {
+                LiquidGlassGroup {
+                    VStack(alignment: .leading, spacing: 16) {
+                        DeveloperWorkspaceSection(id: "shell", symbol: "slider.horizontal.3",
+                                                  title: DevWorkspaceText.choose("环境与 Shell", "Environment & Shell")) { isExpanded in
+                            DeveloperShellPanel(refreshToken: state.devWorkspaceRefreshToken, isExpanded: isExpanded)
+                        }
+                        DeveloperWorkspaceSection(id: "network", symbol: "network",
+                                                  title: DevWorkspaceText.choose("网络与 hosts", "Network & hosts")) { isExpanded in
+                            DeveloperNetworkPanel(state: state, refreshToken: state.devWorkspaceRefreshToken, isExpanded: isExpanded)
+                        }
+                        DeveloperWorkspaceSection(id: "runtime", symbol: "shippingbox",
+                                                  title: DevWorkspaceText.choose("运行时清理", "Runtime cleanup")) { isExpanded in
+                            DeveloperRuntimePanel(state: state, isExpanded: isExpanded)
+                        }
+                        DeveloperWorkspaceSection(id: "cli", symbol: "terminal",
+                                                  title: DevWorkspaceText.choose("CLI 工具", "CLI tools")) { isExpanded in
+                            DeveloperCLIPanel(refreshToken: state.devWorkspaceRefreshToken, isExpanded: isExpanded)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if isSearching {
+                HStack(spacing: 8) {
+                    NoriStatusAnimation(mood: .working, size: 36, assetName: "nori-working")
+                    Text(DevWorkspaceText.choose("检索中", "Searching"))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 12)
-                Menu {
-                    Button {
-                        state.showSimulatorDevices = true
-                    } label: {
-                        Label(l10n.t("sim.title"), systemImage: "iphone.gen3")
-                    }
-                    Button {
-                        state.showDockerDetails = true
-                    } label: {
-                        Label(l10n.t("docker.details.title"), systemImage: "shippingbox.circle")
-                    }
-                } label: {
-                    Label(l10n.t("devenv.resourceManagers"), systemImage: "square.grid.2x2")
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                Button { state.scanDevEnv() } label: {
-                    Label(state.isScanningEnv ? l10n.t("common.scanning") : l10n.t("common.rescan"),
-                          systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(state.isBusy)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 8)
-            .sheet(isPresented: $state.showSimulatorDevices) {
-                SimulatorDevicesView(store: state.simulatorInventory,
-                                     canMutate: !state.isBusy)
-            }
-            .sheet(isPresented: $state.showDockerDetails) {
-                DockerDetailsView(store: state.dockerInventory)
-            }
-
-            if state.isScanningEnv {
-                NoriScanActivity(text: state.devEnvStatus, assetName: "nori-typing", quiet: true)
-                    .transition(reduceMotion ? .opacity : .moleStateSwap)
-            } else if state.devEnvEntries.isEmpty && state.gcActions.isEmpty {
-                EmptyStateView(symbol: "cpu",
-                               title: state.isScanningEnv ? l10n.t("devenv.status.scanning") : l10n.t("devenv.status.empty"),
-                               subtitle: state.isScanningEnv ? nil : l10n.t("devenv.empty.subtitle"))
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(state.devEnvManagers, id: \.manager) { group in
-                            VStack(alignment: .leading, spacing: 4) {
-                                sectionHeader(title: group.manager,
-                                              count: group.entries.count,
-                                              bytes: group.entries.reduce(0) { $0 + $1.bytes })
-                                ForEach(group.entries) { entry in
-                                    DevEnvRowView(entry: entry, isSelected: state.devEnvSelection.contains(entry.path)) {
-                                        toggleSelection(entry)
-                                    }
-                                }
-                            }
-                        }
-                        if !nodePackageGcActions.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                sectionTitle(l10n.t("devenv.nodeCaches"))
-                                ForEach(nodePackageGcActions) { action in
-                                    GcActionRowView(action: action,
-                                                    isRunning: state.gcRunningId == action.id,
-                                                    anyRunning: state.gcRunningId != nil) {
-                                        state.runGc(action)
-                                    }
-                                }
-                                Text(l10n.t("devenv.nodeCaches.hint"))
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                        if !state.devEnvManagerEntries.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                sectionHeader(title: l10n.t("devenv.tools"),
-                                              count: state.devEnvManagerEntries.count,
-                                              bytes: state.devEnvManagerEntries.reduce(0) { $0 + $1.bytes })
-                                ForEach(state.devEnvManagerEntries) { entry in
-                                    HStack(spacing: 8) {
-                                        Image(systemName: "wrench.and.screwdriver")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(Color.moleAccentText)
-                                            .frame(width: 20)
-                                        Text(entry.name)
-                                            .font(.system(size: 12, weight: .medium))
-                                        Spacer()
-                                        Text(ByteFormat.format(entry.bytes))
-                                            .font(.system(size: 10).monospacedDigit())
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7)
-                                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
-                                }
-                                Text(l10n.t("devenv.tools.hint"))
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                        if !state.dockerDfRows.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "shippingbox.circle.fill")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(Color.moleAccentText)
-                                    Text("Docker")
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                    Button(l10n.t("docker.details.open")) {
-                                        state.showDockerDetails = true
-                                    }
-                                    .buttonStyle(SecondaryButtonStyle())
-                                    .controlSize(.small)
-                                }
-                                .padding(.horizontal, 4)
-                                ForEach(state.dockerDfRows) { row in
-                                    HStack(spacing: 8) {
-                                        Text(row.type)
-                                            .font(.system(size: 12, weight: .medium))
-                                        Spacer()
-                                        Text("\(row.count) · \(row.size)")
-                                            .font(.system(size: 10).monospacedDigit())
-                                            .foregroundStyle(.secondary)
-                                        if row.reclaimable != "0B" && !row.reclaimable.isEmpty {
-                                            SizeBadge(text: "\(row.reclaimable)")
-                                        }
-                                    }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7)
-                                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
-                                }
-                            }
-                        }
-                        if state.shellAudited {
-                            VStack(alignment: .leading, spacing: 4) {
-                                sectionTitle(l10n.t("audit.shell.title"))
-                                if state.shellIssues.isEmpty {
-                                    auditEmptyRow(l10n.t("audit.shell.empty"))
-                                } else {
-                                    ForEach(state.shellIssues) { issue in
-                                        HStack(spacing: 8) {
-                                            Text(issue.kind)
-                                                .font(.system(size: 9, weight: .semibold))
-                                                .foregroundStyle(Color.warning)
-                                                .padding(.horizontal, 5)
-                                                .padding(.vertical, 1)
-                                                .background(Capsule().fill(Color.warning.opacity(0.12)))
-                                            VStack(alignment: .leading, spacing: 1) {
-                                                Text(issue.location)
-                                                    .font(.system(size: 10, design: .monospaced))
-                                                    .foregroundStyle(.secondary)
-                                                    .lineLimit(1)
-                                                    .truncationMode(.middle)
-                                                Text(issue.detail)
-                                                    .font(.system(size: 9, design: .monospaced))
-                                                    .foregroundStyle(.tertiary)
-                                                    .lineLimit(1)
-                                                    .truncationMode(.middle)
-                                            }
-                                            Spacer()
-                                            Button {
-                                                state.openInEditor(issue.file)
-                                            } label: {
-                                                Label(l10n.t("audit.open"), systemImage: "arrow.up.right")
-                                            }
-                                            .buttonStyle(SecondaryButtonStyle())
-                                            .controlSize(.small)
-                                            .labelStyle(.iconOnly)
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
-                                    }
-                                }
-                                Text(l10n.t("audit.shell.hint"))
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                        if state.netAudited {
-                            VStack(alignment: .leading, spacing: 4) {
-                                sectionTitle(l10n.t("audit.net.title"))
-                                if state.netProxies.isEmpty && state.netHosts.isEmpty {
-                                    auditEmptyRow(l10n.t("audit.net.empty"))
-                                } else {
-                                    ForEach(state.netProxies) { proxy in
-                                        HStack(spacing: 8) {
-                                            Text(proxy.kind)
-                                                .font(.system(size: 9, weight: .semibold))
-                                                .foregroundStyle(Color.warning)
-                                                .padding(.horizontal, 5)
-                                                .padding(.vertical, 1)
-                                                .background(Capsule().fill(Color.warning.opacity(0.12)))
-                                            Text(proxy.service)
-                                                .font(.system(size: 12, weight: .medium))
-                                            Spacer()
-                                            Text(proxy.endpoint)
-                                                .font(.system(size: 10).monospacedDigit())
-                                                .foregroundStyle(.secondary)
-                                            if state.netFixRunning {
-                                                ProgressView().controlSize(.mini)
-                                            } else {
-                                                Button { state.disableProxy(proxy) } label: {
-                                                    Label(l10n.t("audit.fixProxy"), systemImage: "xmark.shield")
-                                                }
-                                                .buttonStyle(SecondaryButtonStyle())
-                                                .controlSize(.small)
-                                                .labelStyle(.iconOnly)
-                                            }
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
-                                    }
-                                    ForEach(state.netHosts, id: \.self) { line in
-                                        HStack(spacing: 8) {
-                                            Text("hosts")
-                                                .font(.system(size: 9, weight: .semibold))
-                                                .foregroundStyle(Color.warning)
-                                                .padding(.horizontal, 5)
-                                                .padding(.vertical, 1)
-                                                .background(Capsule().fill(Color.warning.opacity(0.12)))
-                                            Text(line)
-                                                .font(.system(size: 10, design: .monospaced))
-                                                .foregroundStyle(.secondary)
-                                                .lineLimit(1)
-                                                .truncationMode(.middle)
-                                            Spacer()
-                                            Button {
-                                                state.openInEditor("/etc/hosts")
-                                            } label: {
-                                                Label(l10n.t("audit.open"), systemImage: "arrow.up.right")
-                                            }
-                                            .buttonStyle(SecondaryButtonStyle())
-                                            .controlSize(.small)
-                                            .labelStyle(.iconOnly)
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 6)
-                                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
-                                    }
-                                }
-                                Text(l10n.t("audit.net.hint"))
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                        networkToolsSection
-                        envAuditSection
-                        if !generalGcActions.isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(spacing: 6) {
-                                    Text(l10n.t("gc.title"))
-                                        .font(.system(size: 11, weight: .semibold))
-                                        .foregroundStyle(.secondary)
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 4)
-                                ForEach(generalGcActions) { action in
-                                    GcActionRowView(action: action,
-                                                    isRunning: state.gcRunningId == action.id,
-                                                    anyRunning: state.gcRunningId != nil) {
-                                        state.runGc(action)
-                                    }
-                                }
-                                Text(l10n.t("gc.subtitle"))
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                }
-            }
-
-            if !state.devEnvEntries.isEmpty {
-                Divider()
-                HStack {
-                    Text(state.devEnvSelection.isEmpty
-                         ? l10n.t("devenv.apply.hint")
-                         : l10n.tf("devenv.apply.selected", state.devEnvSelection.count,
-                                   ByteFormat.format(state.devEnvSelectedBytes)))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button { state.applyDevEnvCleanup() } label: {
-                        Label(l10n.t("devenv.apply"), systemImage: "trash.fill")
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .labelStyle(.iconOnly)
-                    .disabled(state.devEnvSelection.isEmpty || state.isBusy)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(DevWorkspaceText.choose("检索中", "Searching"))
+                .accessibilityIdentifier("dev-workspace-search-activity")
             }
         }
-        // 扫描中 → 环境列表/空态 的整块互换走弹簧过渡。
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isScanningEnv)
-    }
-
-    private var nodePackageGcActions: [GcAction] {
-        state.gcActions.filter { ["npm", "pnpm", "yarn"].contains($0.id) }
-    }
-
-    private var generalGcActions: [GcAction] {
-        state.gcActions.filter { !["npm", "pnpm", "yarn"].contains($0.id) }
-    }
-
-    private func toggleSelection(_ entry: DevEnvEntry) {
-        guard entry.kind == "runtime" else { return }
-        if state.devEnvSelection.contains(entry.path) {
-            state.devEnvSelection.remove(entry.path)
-        } else {
-            state.devEnvSelection.insert(entry.path)
+        .environment(\.liquidNamespace, glassNamespace)
+        .onPreferenceChange(DeveloperWorkspaceSearchKey.self) { searches in
+            panelSearchStates = searches
+        }
+        .sheet(isPresented: $state.showSimulatorDevices) {
+            SimulatorDevicesView(store: state.simulatorInventory, canMutate: !state.isBusy)
+        }
+        .sheet(isPresented: $state.showDockerDetails) {
+            DockerDetailsView(store: state.dockerInventory)
         }
     }
 
-    private func sectionTitle(_ title: String) -> some View {
-        HStack(spacing: 6) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
+    private var header: some View {
+        HStack(spacing: 12) {
+            Text(DevWorkspaceText.choose("开发者工作台", "Developer workspace"))
+                .font(.system(size: 15, weight: .semibold))
             Spacer()
         }
-        .padding(.horizontal, 4)
-    }
-
-    // MARK: 网络与服务修复（原系统优化页分流）
-
-    private var networkToolsSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                sectionTitle(l10n.t("nettool.section"))
-                if state.isNetworkToolRunning {
-                    ProgressView().controlSize(.mini)
-                } else if !state.networkToolStatus.isEmpty {
-                    Text(state.networkToolStatus)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            HStack(spacing: 6) {
-                Button { state.runAdminNetworkTask("dns") } label: {
-                    Label(l10n.t("nettool.dns"), systemImage: "arrow.triangle.2.circlepath")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .controlSize(.small)
-                .disabled(state.isNetworkToolRunning)
-
-                Button { state.runAdminNetworkTask("network-stack") } label: {
-                    Label(l10n.t("nettool.network-stack"), systemImage: "network.badge.shield.half.filled")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .controlSize(.small)
-                .disabled(state.isNetworkToolRunning)
-
-                Button { state.runServiceRepair("quicklook") } label: {
-                    Label(l10n.t("nettool.quicklook"), systemImage: "eye")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .controlSize(.small)
-                .disabled(state.isNetworkToolRunning)
-
-                Button { state.runServiceRepair("iconservices") } label: {
-                    Label(l10n.t("nettool.iconservices"), systemImage: "square.grid.2x2")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .controlSize(.small)
-                .disabled(state.isNetworkToolRunning)
-
-                Button { state.runServiceRepair("launchservices") } label: {
-                    Label(l10n.t("nettool.launchservices"), systemImage: "arrow.triangle.swap")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .controlSize(.small)
-                .disabled(state.isNetworkToolRunning)
-
-                Spacer()
-
-                Button { state.resetNetworkEnvironment() } label: {
-                    Label(l10n.t("nettool.reset.title"), systemImage: "arrow.counterclockwise.circle")
-                }
-                .buttonStyle(DangerButtonStyle())
-                .controlSize(.small)
-                .disabled(state.isNetworkToolRunning)
-            }
-        }
-        .padding(.horizontal, 4)
-    }
-
-    // MARK: 环境变量体检
-
-    private var envAuditSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                sectionTitle(l10n.t("envaudit.title"))
-                if state.isShellEnvFixing {
-                    ProgressView().controlSize(.mini)
-                }
-                Spacer()
-                Button { state.scanShellEnv() } label: {
-                    Label(l10n.t("envaudit.scan"), systemImage: "magnifyingglass")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .controlSize(.small)
-                .disabled(state.isShellEnvFixing)
-            }
-            if state.shellEnvAudited {
-                if state.shellEnvIssues.isEmpty {
-                    auditEmptyRow(l10n.t("envaudit.empty"))
-                } else {
-                    ForEach(state.shellEnvIssues) { issue in
-                        envIssueRow(issue)
-                    }
-                    HStack(spacing: 6) {
-                        Text(l10n.tf("envaudit.confirm.message", state.shellEnvIssues.count))
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(2)
-                        Spacer()
-                        Button {
-                            let selected = state.shellEnvIssues.filter { envSelection.contains($0.id) }
-                            state.fixShellEnvIssues(selected)
-                        } label: {
-                            Label(l10n.t("envaudit.fix"), systemImage: "scissors")
-                        }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .controlSize(.small)
-                        .disabled(envSelection.isEmpty || state.isShellEnvFixing)
-                    }
-                    .padding(.horizontal, 4)
-                }
-            }
-        }
-        .padding(.horizontal, 4)
-    }
-
-    private func envIssueRow(_ issue: ShellEnvIssue) -> some View {
-        HStack(spacing: 8) {
-            Toggle("", isOn: Binding(
-                get: { envSelection.contains(issue.id) },
-                set: { selected in
-                    if selected { envSelection.insert(issue.id) } else { envSelection.remove(issue.id) }
-                }))
-                .toggleStyle(.checkbox)
-                .controlSize(.mini)
-                .labelsHidden()
-                .fixedSize()
-                .disabled(state.isShellEnvFixing)
-            Text(reasonText(issue))
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(Color.warning)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(Capsule().fill(Color.warning.opacity(0.12)))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(issue.line)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text(URL(fileURLWithPath: issue.file).lastPathComponent
-                     + ":" + String(issue.lineNumber) + " · " + issue.detail)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer()
-            if issue.replacement != nil {
-                Image(systemName: "pencil.and.list.clipboard")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .help(l10n.t("envaudit.reason.duplicatePath"))
-            } else {
-                Image(systemName: "trash")
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
-    }
-
-    private func reasonText(_ issue: ShellEnvIssue) -> String {
-        switch issue.kind {
-        case .deadPath: return l10n.t("envaudit.reason.deadPath")
-        case .duplicatePath: return l10n.t("envaudit.reason.duplicatePath")
-        case .deadExport: return l10n.tf("envaudit.reason.deadExport", issue.detail)
-        case .deadToolInit: return l10n.t("envaudit.reason.deadToolInit")
-        }
-    }
-
-    private func auditEmptyRow(_ text: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: "checkmark.circle")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.moleAccentText)
-            Text(text)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
-    }
-
-    private func sectionHeader(title: String, count: Int, bytes: UInt64) -> some View {
-        HStack(spacing: 6) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
-            Text(l10n.tf("devenv.versions", count, ByteFormat.format(bytes)))
-                .font(.system(size: 10).monospacedDigit())
-                .foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .padding(.horizontal, 4)
-    }
-}
-
-/// 官方 GC 命令行：工具名 + 命令原文，右侧运行按钮。
-private struct GcActionRowView: View {
-    let action: GcAction
-    let isRunning: Bool
-    let anyRunning: Bool
-    let onRun: () -> Void
-    @ObservedObject private var l10n = L10n.shared
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.moleAccentText)
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(action.id)
-                    .font(.system(size: 12, weight: .medium))
-                Text(action.command)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer()
-            if isRunning {
-                ProgressView()
-                    .controlSize(.mini)
-            } else {
-                if action.bytes > 0 {
-                    SizeBadge(text: ByteFormat.format(action.bytes))
-                }
-                Button(action: onRun) { Label(l10n.t("gc.run"), systemImage: "play.fill") }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .controlSize(.small)
-                    .disabled(anyRunning)
-                    .labelStyle(.iconOnly)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
-    }
-}
-
-private struct DevEnvRowView: View {
-    let entry: DevEnvEntry
-    let isSelected: Bool
-    let onToggle: () -> Void
-    @ObservedObject private var l10n = L10n.shared
-
-    var body: some View {
-        Button(action: onToggle) {
-            HStack(spacing: 8) {
-                Group {
-                    if entry.isCurrent {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(Color.warning)
-                            .frame(width: 16)
-                    } else {
-                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 12))
-                            .foregroundStyle(isSelected
-                                ? AnyShapeStyle(Color.moleAccentText) : AnyShapeStyle(.tertiary))
-                            .frame(width: 16)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(entry.versionLabel.isEmpty ? entry.name : entry.versionLabel)
-                        .font(.system(size: 12, weight: .medium))
-                    Text(entry.path)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer()
-                if entry.isBuiltin {
-                    Text(l10n.t("devenv.builtin"))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(.quaternary))
-                } else if entry.isCurrent {
-                    Text(l10n.t("devenv.current"))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(Color.warning)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(Color.warning.opacity(0.14)))
-                }
-                if entry.hasVersionGlobalPackages {
-                    Text(l10n.tf("devenv.globalPackages", ByteFormat.format(entry.relatedBytes)))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(.quaternary))
-                }
-                SizeBadge(text: ByteFormat.format(entry.bytes), prominent: isSelected)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(MoleSelectableRowButtonStyle(
-            isSelected: isSelected,
-            verticalPadding: 7))
+        .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 12)
     }
 }
 

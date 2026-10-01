@@ -11,10 +11,10 @@ struct NoriBrandTests {
             for frame in 0..<2400 {
                 let p = NoriMotion.pose(for: mood, elapsed: Double(frame) / 60)
                 precondition((0.87...1.13).contains(p.scaleX) && (0.87...1.13).contains(p.scaleY))
-                precondition((-22.01...0.01).contains(p.offsetY))
+                precondition((-22.01...4.01).contains(p.offsetY))
                 precondition((-5.01...5.01).contains(p.rotation))
                 precondition((0.079...1.001).contains(p.eyeOpen))
-                precondition((0...1).contains(p.confetti))
+                precondition((0...1).contains(p.prop))
                 // No deformations may move the mascot beyond its own 256px canvas.
                 let transform = CGAffineTransform(translationX: 132, y: 218 + p.offsetY)
                     .rotated(by: p.rotation * .pi / 180).scaledBy(x: p.scaleX, y: p.scaleY)
@@ -24,13 +24,16 @@ struct NoriBrandTests {
                 precondition(CGRect(x: 0, y: 0, width: 256, height: 256).contains(bounds), "clipped \(mood) at \(frame): \(bounds)")
             }
         }
-        for time in [1.4, 2.0, 20.0] {
+        for time in [1.9, 2.4, 20.0] {
             precondition(NoriMotion.pose(for: .success, elapsed: time) == NoriPose(), "success must settle once")
             precondition(NoriMotion.pose(for: .attention, elapsed: time) == NoriPose(), "attention must settle once")
         }
         precondition(NoriMotion.pose(for: .working, elapsed: 0.74) != NoriPose())
         precondition(NoriMotion.pose(for: .blink, elapsed: 3.8 * 0.46).eyeOpen < 0.1)
-        precondition(NoriMotion.pose(for: .success, elapsed: 0.7).confetti > 0)
+        precondition(NoriMotion.pose(for: .success, elapsed: 0.7).prop > 0)
+        precondition(NoriMotion.pose(for: .attention, elapsed: 1.0).prop > 0)
+        precondition(NoriMotion.pose(for: .success, elapsed: 0.7).eyeOpen < 0.5, "success squints happily")
+        precondition(NoriMotion.pose(for: .attention, elapsed: 1.1).gazeY > 0, "failure looks down at its badge")
         var feedback = NoriScanFeedback()
         precondition(!feedback.update(scanning: false, succeeded: true))
         precondition(!feedback.update(scanning: true, succeeded: true))

@@ -9,6 +9,8 @@ final class HotKeyCenter {
     private var hotKeys: [UInt32: EventHotKeyRef] = [:]
     private var handlers: [UInt32: () -> Void] = [:]
     private var eventHandlerRef: EventHandlerRef?
+    private var localMonitor: Any?
+    private var combinations: [UInt32: HotKeyCombo] = [:]
     private var nextID: UInt32 = 0
 
     /// 注册一个热键；`id` 仅作调用方语义标识，变更热键组合时整体重注册。
@@ -17,16 +19,18 @@ final class HotKeyCenter {
                   keyCode: UInt32,
                   modifiers: UInt32,
                   handler: @escaping () -> Void) -> Bool {
-        installEventHandlerIfNeeded()
+        guard installEventHandlerIfNeeded() else { return false }
         let slot = nextID
         nextID += 1
         let hotKeyID = EventHotKeyID(signature: OSType(0x534D_484B), id: slot) // "SMHK"
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID,
-                                         GetApplicationEventTarget(), 0, &ref)
+                                         GetEventDispatcherTarget(), 0, &ref)
         guard status == noErr, let ref else { return false }
         hotKeys[slot] = ref
         handlers[slot] = handler
+        combinations[slot] = HotKeyCombo(keyCode: keyCode, modifiers: modifiers)
+        installLocalMonitorIfNeeded()
         return true
     }
 
@@ -34,16 +38,20 @@ final class HotKeyCenter {
         for ref in hotKeys.values { UnregisterEventHotKey(ref) }
         hotKeys.removeAll()
         handlers.removeAll()
+        combinations.removeAll()
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        localMonitor = nil
         nextID = 0
     }
 
-    private func installEventHandlerIfNeeded() {
-        guard eventHandlerRef == nil else { return }
+    private func installEventHandlerIfNeeded() -> Bool {
+        guard eventHandlerRef == nil else { return true }
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                       eventKind: UInt32(kEventHotKeyPressed))
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, userData -> OSStatus in
-            guard let userData, let event else { return noErr }
+        // 在 AppKit 分发前接收全局热键，主窗口、编辑器和覆盖层共用同一入口。
+        let status = InstallEventHandler(GetEventDispatcherTarget(), { _, event, userData -> OSStatus in
+            guard let userData, let event else { return OSStatus(eventNotHandledErr) }
             var hotKeyID = EventHotKeyID()
             let status = GetEventParameter(event,
                                            UInt32(kEventParamDirectObject),
@@ -52,11 +60,28 @@ final class HotKeyCenter {
                                            MemoryLayout<EventHotKeyID>.size,
                                            nil,
                                            &hotKeyID)
-            guard status == noErr else { return noErr }
+            guard status == noErr, hotKeyID.signature == OSType(0x534D_484B) else {
+                return OSStatus(eventNotHandledErr)
+            }
             Unmanaged<HotKeyCenter>.fromOpaque(userData).takeUnretainedValue().fire(slot: hotKeyID.id)
             return noErr
         }, 1, &eventType, selfPtr, &eventHandlerRef)
         if status != noErr { eventHandlerRef = nil }
+        return status == noErr
+    }
+
+    private func installLocalMonitorIfNeeded() {
+        guard localMonitor == nil else { return }
+        // Carbon 已消费的热键不会成为 keyDown；只处理仍送到前台窗口的按键。
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            let combo = HotKeyCombo(keyCode: UInt32(event.keyCode), modifierFlags: event.modifierFlags)
+            guard let slot = self.combinations.first(where: { $0.value == combo })?.key else {
+                return event
+            }
+            if !event.isARepeat { self.fire(slot: slot) }
+            return nil
+        }
     }
 
     private func fire(slot: UInt32) {
@@ -213,7 +238,8 @@ extension HotKeyCombo {
 /// 交互式截图：调系统 screencapture -i（区域/窗口选择体验与系统一致），
 /// 完成后读取为内存图片并立即清理私有临时目录。需要屏幕录制权限（首次系统会弹授权）。
 enum ScreenShotService {
-    static func captureInteractive(completion: @escaping (NSImage?) -> Void) {
+    @discardableResult
+    static func captureInteractive(completion: @escaping (NSImage?) -> Void) -> Process? {
         let fileManager = FileManager.default
         let directory = fileManager.temporaryDirectory
             .appendingPathComponent("com.nori.screenshot.\(UUID().uuidString)", isDirectory: true)
@@ -223,7 +249,7 @@ enum ScreenShotService {
                                             attributes: [.posixPermissions: 0o700])
         } catch {
             completion(nil)
-            return
+            return nil
         }
         let url = directory.appendingPathComponent("capture.png")
         let process = Process()
@@ -243,11 +269,14 @@ enum ScreenShotService {
         } catch {
             try? fileManager.removeItem(at: directory)
             DispatchQueue.main.async { completion(nil) }
+            return nil
         }
+        return process
     }
 
     /// 定比例区域截取：`rect` 为全局屏幕坐标（点）。需要屏幕录制权限。
-    static func captureRegion(_ rect: CGRect, completion: @escaping (NSImage?) -> Void) {
+    @discardableResult
+    static func captureRegion(_ rect: CGRect, completion: @escaping (NSImage?) -> Void) -> Process? {
         let fileManager = FileManager.default
         let directory = fileManager.temporaryDirectory
             .appendingPathComponent("com.nori.screenshot.\(UUID().uuidString)", isDirectory: true)
@@ -257,7 +286,7 @@ enum ScreenShotService {
                                             attributes: [.posixPermissions: 0o700])
         } catch {
             completion(nil)
-            return
+            return nil
         }
         let url = directory.appendingPathComponent("capture.png")
         let region = "\(Int(rect.origin.x)),\(Int(rect.origin.y)),\(Int(rect.width)),\(Int(rect.height))"
@@ -278,6 +307,8 @@ enum ScreenShotService {
         } catch {
             try? fileManager.removeItem(at: directory)
             DispatchQueue.main.async { completion(nil) }
+            return nil
         }
+        return process
     }
 }

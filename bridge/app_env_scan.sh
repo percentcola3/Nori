@@ -18,6 +18,16 @@ dir_bytes() {
     printf '%s' "$size"
 }
 
+# The workspace refreshes on each visit. Read-only manager roots often contain
+# entire package stores; enumerating them is enough and avoids walking them twice.
+manager_bytes() {
+    if [[ "${NORI_DEV_SCAN_FAST:-0}" == "1" ]]; then
+        printf '0'
+    else
+        dir_bytes "$1"
+    fi
+}
+
 # emit_version <manager> <version> <dir> <active_dir> [protected_dir]：每个版本一条记录。
 emit_version() {
     local manager="$1" version="$2" dir="$3" active_dir="$4" protected_dir="${5:-}"
@@ -60,7 +70,7 @@ emit_runtime_family() {
 emit_manager_dir() {
     local name="$1" dir="$2"
     [[ -d "$dir" ]] || return 0
-    printf '%s\tmanager\t%s\t%s\n' "$(dir_bytes "$dir")" "$name" "$dir"
+    printf '%s\tmanager\t%s\t%s\n' "$(manager_bytes "$dir")" "$name" "$dir"
 }
 
 # Version-manager-owned runtimes must be removed with their owner command.
@@ -76,7 +86,7 @@ emit_readonly_runtime_family() {
         target="$dir"
         [[ -n "$inner" && -d "$dir/$inner" ]] && target="$dir/$inner"
         printf '%s\tmanager\t%s · %s\t%s\n' \
-            "$(dir_bytes "$target")" "$manager" "$(basename "$dir")" "$target"
+            "$(manager_bytes "$target")" "$manager" "$(basename "$dir")" "$target"
     done < <(find "$root" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort)
 }
 
@@ -96,6 +106,7 @@ emit_runtime_family "nvm" "$HOME/.nvm/versions/node" "node" "" "$nvm_default_dir
 emit_readonly_runtime_family "fnm" "$HOME/Library/Application Support/fnm/node-versions" "installation"
 emit_readonly_runtime_family "volta" "$HOME/.volta/tools/image/node"
 emit_readonly_runtime_family "asdf" "$HOME/.asdf/installs/node"
+emit_readonly_runtime_family "asdf" "$HOME/.asdf/installs/nodejs"
 
 # Homebrew owns Cellar contents. Show formula directories as read-only manager
 # entries instead of routing them through the generic filesystem deleter.
@@ -106,7 +117,7 @@ for prefix in "${brew_prefixes[@]}"; do
     while IFS= read -r dir; do
         [[ -n "$dir" ]] || continue
         printf '%s\tmanager\tHomebrew · %s\t%s\n' \
-            "$(dir_bytes "$dir")" "$(basename "$dir")" "$dir"
+            "$(manager_bytes "$dir")" "$(basename "$dir")" "$dir"
     done < <(find "$cellar" -maxdepth 1 -mindepth 1 -type d -name 'node*' 2>/dev/null | sort)
 done
 
@@ -121,7 +132,7 @@ emit_readonly_runtime_family "rustup" "$HOME/.rustup/toolchains"
 if [[ -d "/Library/Java/JavaVirtualMachines" ]]; then
     while IFS= read -r dir; do
         [[ -n "$dir" ]] || continue
-        bytes=$(dir_bytes "$dir")
+        bytes=$(manager_bytes "$dir")
         printf '%s\tmanager\tJDK · %s\t%s\n' "$bytes" "$(basename "$dir")" "$dir"
     done < <(find "/Library/Java/JavaVirtualMachines" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort)
 fi
@@ -181,7 +192,7 @@ done
 # --- conda 发行版（manager 本体，仅展示）---
 for d in "$HOME/miniconda3" "$HOME/anaconda3" "/opt/miniconda3" "/opt/anaconda3" "$HOME/opt/anaconda3" "$HOME/opt/miniconda3"; do
     [[ -d "$d" ]] || continue
-    printf '%s\tmanager\tConda (%s)\t%s\n' "$(dir_bytes "$d")" "$(basename "$d")" "$d"
+    printf '%s\tmanager\tConda (%s)\t%s\n' "$(manager_bytes "$d")" "$(basename "$d")" "$d"
 done
 
 # --- 工具/包管理器本体（仅展示） ---
@@ -193,5 +204,5 @@ emit_manager_dir "nvm" "$HOME/.nvm"
 if command -v brew >/dev/null 2>&1; then
     brew_prefix=$(brew --prefix 2>/dev/null || true)
     [[ -n "$brew_prefix" && -d "$brew_prefix" ]] && \
-        printf '%s\tmanager\tHomebrew\t%s\n' "$(dir_bytes "$brew_prefix")" "$brew_prefix"
+        printf '%s\tmanager\tHomebrew\t%s\n' "$(manager_bytes "$brew_prefix")" "$brew_prefix"
 fi

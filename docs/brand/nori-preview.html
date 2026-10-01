@@ -1,45 +1,9 @@
-<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nori · 动态形象</title>
-<style>
-:root{color-scheme:dark;--bg:#0b1723;--surface:#12283a;--ink:#edf5f8;--muted:#acc1d0;--line:#2a4255;--accent:#bfeaf2}
-:root.light{color-scheme:light;--bg:#edf3f7;--surface:#fff;--ink:#10283f;--muted:#4b6478;--line:#c7d6e0;--accent:#166c91}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1120px;margin:auto;padding:44px 28px}header{display:flex;align-items:center;gap:24px;margin-bottom:32px}header img{width:148px;height:148px}h1{font-size:42px;letter-spacing:-1.5px;margin:0;font-weight:650}header p{margin:4px 0;color:var(--muted)}.eyebrow{font-size:11px;letter-spacing:2px;color:var(--accent)}.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 24px}button{font:inherit;color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:8px 14px;background:var(--surface);cursor:pointer}button[aria-pressed=true]{border-color:var(--accent);color:var(--accent)}button:focus-visible{outline:3px solid var(--accent);outline-offset:3px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.card{border:1px solid var(--line);background:var(--surface);border-radius:18px;padding:20px;min-width:0}.stage{height:190px;display:flex;align-items:center;justify-content:center}.stage object{color-scheme:normal;width:178px;height:178px;pointer-events:none}.card h2{font-size:16px;font-weight:600;margin:10px 0 4px}.card p{color:var(--muted);font-size:13px;margin:0;min-height:42px}.tag{font:11px ui-monospace,monospace;color:var(--muted)}.scene-replay{font-size:12px;padding:4px 9px;margin:8px 6px 0 0}.card a{color:var(--accent);font-size:12px}.sizes{display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-top:20px}.sizes figure{margin:0;text-align:center;min-width:40px}.sizes img{vertical-align:middle}.sizes figcaption{font-size:11px;color:var(--muted);margin-top:5px}.template{background:#fff;border-radius:8px;padding:12px;display:flex;align-items:center;justify-content:center;gap:18px}.template.dark{background:#142b3e}.template.dark img{filter:invert(1)}.notes{color:var(--muted);font-size:13px;margin-top:24px}.files{margin-top:30px;border-top:1px solid var(--line);padding-top:18px}.files a{color:var(--accent)}@media(max-width:740px){.grid{grid-template-columns:repeat(2,1fr)}main{padding:24px 16px}}@media(max-width:460px){.grid{grid-template-columns:1fr}header{gap:12px}header img{width:96px;height:96px}h1{font-size:34px}.controls button{min-height:44px}.stage{height:180px}}
-</style></head>
-<body><main>
-<header><img src="../../SimpleMole/Support/AppIcon-1024.png" alt="Nori App 图标"><div><div class="eyebrow">NORI / MAC COMPANION</div><h1>安静守护，轻轻回应。</h1><p>冰蓝小伙伴 · 果冻形变 · 轻量反馈</p></div></header>
-<div class="controls" aria-label="预览控制"><button id="theme" aria-pressed="false">浅色背景</button><button id="pause" aria-pressed="false">暂停动画</button><button id="reduce" aria-pressed="false">减少动态效果</button><button id="replay">重播庆祝与提醒</button></div>
-<div class="grid">
-<section class="card"><div class="stage"><object data="../../SimpleMole/Support/Nori/Animations/nori-idle.svg" type="image/svg+xml" aria-label="待机呼吸动画"></object></div><span class="tag">IDLE / 6s loop</span><h2>安静待机</h2><p>轻轻呼吸，偶尔眨眼。适合标题栏与欢迎界面。</p><a href="../../SimpleMole/Support/Nori/Animations/nori-idle.svg" download>下载 SVG</a></section>
-<section class="card"><div class="stage"><object data="../../SimpleMole/Support/Nori/Animations/nori-working.svg" type="image/svg+xml" aria-label="工作中动画"></object></div><span class="tag">WORKING / 1.8s orbit</span><h2>认真工作</h2><p>三色彩带前后环绕，像一枚小小的 loading。适合扫描和处理任务。</p><a href="../../SimpleMole/Support/Nori/Animations/nori-working.svg" download>下载 SVG</a></section>
-<section class="card"><div class="stage"><object data="../../SimpleMole/Support/Nori/Animations/nori-blink.svg" type="image/svg+xml" aria-label="眨眼动画"></object></div><span class="tag">BLINK / 3.8s loop</span><h2>眨一下眼</h2><p>身体保持安静，用最小动作表达陪伴感。</p><a href="../../SimpleMole/Support/Nori/Animations/nori-blink.svg" download>下载 SVG</a></section>
-<section class="card"><div class="stage"><object data="../../SimpleMole/Support/Nori/Animations/nori-bored.svg" type="image/svg+xml" aria-label="无聊侧望动画"></object></div><span class="tag">BORED / 8s loop</span><h2>有点无聊</h2><p>慢慢歪头，左右看看。适合空状态或等待用户输入。</p><a href="../../SimpleMole/Support/Nori/Animations/nori-bored.svg" download>下载 SVG</a></section>
-<section class="card"><div class="stage"><object data="../../SimpleMole/Support/Nori/Animations/nori-success.svg" type="image/svg+xml" aria-label="成功庆祝动画" data-once></object></div><span class="tag">SUCCESS / 1.4s once</span><h2>完成啦</h2><p>果冻回弹与六枚短彩带。只在确认成功时播放一次。</p><a href="../../SimpleMole/Support/Nori/Animations/nori-success.svg" download>下载 SVG</a></section>
-<section class="card"><div class="stage"><object data="../../SimpleMole/Support/Nori/Animations/nori-attention.svg" type="image/svg+xml" aria-label="需要关注动画" data-once></object></div><span class="tag">ATTENTION / 0.8s once</span><h2>看看这里</h2><p>轻轻摇一下。适合权限提示，配合明确的说明文字。</p><a href="../../SimpleMole/Support/Nori/Animations/nori-attention.svg" download>下载 SVG</a></section>
-<section class="card"><div class="stage"><object data="../../SimpleMole/Support/Nori/Animations/nori-typing.svg" type="image/svg+xml" aria-label="键帽飞舞动画"></object></div><span class="tag">TYPING / 2.6s loop</span><h2>键帽飞舞</h2><p>几颗键帽轻轻飞开，身体只眨眼。适合优化和开发环境正在跑的时候。</p><a href="../../SimpleMole/Support/Nori/Animations/nori-typing.svg" download>下载 SVG</a></section>
-<section class="card"><div class="stage"><object data="../../SimpleMole/Support/Nori/Animations/nori-analyzing.svg" type="image/svg+xml" aria-label="键帽掉落动画"></object></div><span class="tag">ANALYZING / 2.2s loop</span><h2>键帽掉落</h2><p>键帽从头顶落下。适合磁盘分析进行中。</p><a href="../../SimpleMole/Support/Nori/Animations/nori-analyzing.svg" download>下载 SVG</a></section>
-<section class="card"><div class="stage"><object data="../../SimpleMole/Support/Nori/Animations/nori-coffee.svg" type="image/svg+xml" aria-label="先喝口咖啡动画"></object></div><span class="tag">COFFEE / 3.2s loop</span><h2>先喝口咖啡</h2><p>端起一小口，眯一下眼，热气慢慢升起。适合还没开始、等你动手。</p><button type="button" class="scene-replay" data-scene="coffee">喝一口</button> <a href="../../SimpleMole/Support/Nori/Animations/nori-coffee.svg" download>下载 SVG</a></section>
-<section class="card"><div class="stage"><object data="../../SimpleMole/Support/Nori/Animations/nori-mirror.svg" type="image/svg+xml" aria-label="今天也很精神动画"></object></div><span class="tag">MIRROR / 6s loop</span><h2>今天也很精神</h2><p>举起小镜子，歪头看看自己；倒影跟着轻轻动。适合整理完成或个性展示。</p><button type="button" class="scene-replay" data-scene="mirror">照一照</button> <a href="../../SimpleMole/Support/Nori/Animations/nori-mirror.svg" download>下载 SVG</a></section>
-</div>
-<section class="files"><h2>小尺寸与菜单栏</h2><div class="sizes"><figure><img src="../../SimpleMole/Support/AppIcon-1024.png" width="16" height="16" alt="16像素 App 图标"><figcaption>16px</figcaption></figure><figure><img src="../../SimpleMole/Support/AppIcon-1024.png" width="32" height="32" alt="32像素 App 图标"><figcaption>32px</figcaption></figure><figure><img src="../../SimpleMole/Support/AppIcon-1024.png" width="64" height="64" alt="64像素 App 图标"><figcaption>64px</figcaption></figure><figure><span class="template"><img src="../../SimpleMole/Support/MenuBarIconTemplate.png" width="18" height="18" alt="浅色菜单栏模板"><img src="../../SimpleMole/Support/MenuBarIconTemplate@2x.png" width="18" height="18" alt="Retina 菜单栏模板"></span><figcaption>菜单栏 18pt · 1× / 2×</figcaption></figure><figure><span class="template dark"><img src="../../SimpleMole/Support/MenuBarIconTemplate@2x.png" width="18" height="18" alt="深色菜单栏模板"></span><figcaption>深色菜单栏</figcaption></figure></div>
-<p class="notes">动画自动尊重系统“减少动态效果”。菜单栏保持静态；庆祝不是进度条，也不替代状态文字。SVG 均为透明背景、自包含、无脚本。</p><a href="../../SimpleMole/Support/Nori/Animations/nori-static.svg" download>下载静态 SVG</a> · <a href="nori-design.md">设计与使用说明</a></section>
-</main>
-<script>
-const root=document.documentElement;
-const objects=[...document.querySelectorAll('object')];
-const media=matchMedia('(prefers-reduced-motion: reduce)');
-let reduced=media.matches,paused=false;
-function apply(){
- document.getElementById('pause').setAttribute('aria-pressed',String(paused));
- document.getElementById('pause').textContent=paused?'继续动画':'暂停动画';
- document.getElementById('reduce').setAttribute('aria-pressed',String(reduced));
- objects.forEach(o=>{const doc=o.contentDocument;if(!doc)return;let style=doc.getElementById('preview-control');if(!style){style=doc.createElementNS('http://www.w3.org/2000/svg','style');style.id='preview-control';doc.documentElement.append(style);}style.textContent=reduced?'*{animation:none!important}.ribbon,.steam,.mirror-glint,.key-fly,.key-drop{display:none}':paused?'*{animation-play-state:paused!important}':'';});
-}
-objects.forEach(o=>o.addEventListener('load',apply));
-document.getElementById('pause').onclick=()=>{paused=!paused;apply()};
-document.getElementById('reduce').onclick=()=>{reduced=!reduced;apply()};
-document.getElementById('theme').onclick=e=>{root.classList.toggle('light');const light=root.classList.contains('light');e.currentTarget.setAttribute('aria-pressed',String(light));e.currentTarget.textContent=light?'深色背景':'浅色背景'};
-document.getElementById('replay').onclick=()=>{objects.filter(o=>o.hasAttribute('data-once')).forEach(o=>{o.contentDocument?.getAnimations().forEach(a=>{a.currentTime=0;if(!paused&&!reduced)a.play();});});};
-document.querySelectorAll('.scene-replay').forEach(button=>button.addEventListener('click',()=>{const doc=button.closest('.card').querySelector('object').contentDocument;doc?.getAnimations().forEach(a=>{a.currentTime=0;if(!paused&&!reduced)a.play();});}));
-media.addEventListener('change',()=>{reduced=media.matches;apply()});apply();
-</script></body></html>
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="refresh" content="0; url=nori-animations.html">
+<title>Nori 动效总览</title>
+</head>
+<body><a href="nori-animations.html">Nori 动效总览</a></body>
+</html>

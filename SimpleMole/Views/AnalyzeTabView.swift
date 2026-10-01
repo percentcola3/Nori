@@ -3,13 +3,13 @@ import QuickLook
 import SwiftUI
 
 /// 全盘扫描结果按 大文件 / 重复文件 / 视频 / 图片 聚焦展示。
-/// 进入页面不主动扫描：空态是占位插画和分体扫描按钮。下拉只改待执行的类型，
-/// 主按钮才开始对应扫描。不提供扫描范围选择与目录层级浏览。
+/// 进入页面不主动扫描：空态是占位插画和分体扫描按钮。点选下拉类型立即扫描，
+/// 主按钮再次扫描当前类型。不提供扫描范围选择与目录层级浏览。
 struct AnalyzeTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var expandedSections: Set<AnalyzeSection> = []
+    @State private var expandedSections: Set<AnalyzeSection> = [.largeFiles, .videos, .images]
     @State private var previewURL: URL?
     @State private var showTrashConfirmation = false
     /// 大文件/视频删除的待确认清单（单行或批量）。
@@ -23,52 +23,63 @@ struct AnalyzeTabView: View {
     }
 
     private var hasResults: Bool {
-        !state.analyzeLargeFiles.isEmpty || !state.analyzeMedia.isEmpty
-            || !state.duplicateGroups.isEmpty
+        // 按当前分类判断空态，其他分类的结果不能挤掉本页的 SVG 占位。
+        switch state.analyzeMode {
+        case .largeFiles:
+            return !state.analyzeLargeFiles.isEmpty
+        case .videos:
+            return state.analyzeMedia.contains { $0.kind == .video }
+        case .images:
+            return state.analyzeMedia.contains { $0.kind == .image }
+        case .duplicates:
+            return !state.duplicateGroups.isEmpty
+        }
+    }
+
+    private var presentationPhase: Int {
+        if scanning && !hasResults { return 1 }
+        return hasResults ? 2 : 0
     }
 
     var body: some View {
+        NoriPageTransition(phase: presentationPhase) {
         VStack(spacing: 0) {
-            toolbar
-            if state.isAnalyzing && !hasResults && state.duplicateGroups.isEmpty {
+            if hasResults { toolbar }
+            if scanning && !hasResults {
                 // 扫描中只保留 SVG 动画：下方展示当前正在分析的目录，
                 // 取消按钮也在动画之下，工具栏不再出现。
-                VStack(spacing: 16) {
-                    NoriStatusAnimation(mood: .working, size: 156, assetName: "nori-analyzing")
-                    Text(displayCurrentPath)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: 460)
-                        .animation(nil, value: displayCurrentPath)
-                    Button {
-                        state.cancelAnalyze()
-                    } label: {
-                        Label(l10n.t("common.cancel"), systemImage: "xmark.circle")
+                if state.isScanningDuplicates {
+                    DuplicateScanActivity(progress: state.duplicateScanProgress,
+                                          onCancel: state.cancelDuplicateScan)
+                        } else {
+                    NoriPlaceholderStage { size in
+                        NoriStatusAnimation(mood: .working, size: size, assetName: "nori-disk")
+                        Text(displayCurrentPath)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: 460)
+                            .animation(nil, value: displayCurrentPath)
+                        Button {
+                            state.cancelAnalyze()
+                        } label: {
+                            Label(l10n.t("common.cancel"), systemImage: "xmark.circle")
+                        }
+                        .buttonStyle(SecondaryButtonStyle())
+                        .controlSize(.small)
                     }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .controlSize(.small)
-                }
-                .padding(24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
+                    }
             } else if !scanning && !hasResults {
                 // 进入分析页不主动扫描：SVG 占位 + 带下拉面板的扫描按钮，
                 // 面板里选择 大文件/图片/视频/重复文件 后按类型触发分析。
-                VStack(spacing: 18) {
-                    NoriStatusAnimation(mood: .idle, size: 120, assetName: "nori-coffee")
+                NoriPlaceholderStage { size in
+                    NoriIdlePlaceholder(state: state, size: size)
                     scanSplitButton
-                    Text(l10n.t(state.analyzeMode.detailKey))
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 320)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
                 ScrollView {
+                    LiquidGlassGroup {
                     LazyVStack(spacing: 12) {
                         switch state.analyzeMode {
                         case .largeFiles, .videos:
@@ -77,7 +88,7 @@ struct AnalyzeTabView: View {
                             if items.isEmpty {
                                 modeEmptyHint(state.analyzeMode.section ?? .largeFiles)
                             } else {
-                                analysisFileList(items)
+                                analysisFileSection(items)
                             }
                         case .images:
                             // 图片：唯一保留瘦身（降分辨率压缩）的分类。
@@ -92,20 +103,21 @@ struct AnalyzeTabView: View {
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 4)
                     // 扫描中清单持续增长，避免逐帧追赶尚未稳定的结果。
                     .animation(reduceMotion || scanning ? nil : MoleMotion.panel,
                                value: state.analyzeLargeFiles.map(\.path))
                     .animation(reduceMotion || scanning ? nil : MoleMotion.panel,
                                value: state.analyzeMode)
+                    }
                 }
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
             }
 
-            if !state.isAnalyzing && (hasResults || state.isScanningDuplicates) {
+            if !scanning && hasResults {
                 Divider()
                 footer
             }
+        }
         }
         .sheet(isPresented: $state.showSlimSheet) {
             SlimOptionsSheet(state: state)
@@ -139,18 +151,15 @@ struct AnalyzeTabView: View {
             Text(l10n.t("analyze.delete.confirm.msg"))
         }
         // 扫描中 → 结果/空态 的整块互换走弹簧过渡。
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isAnalyzing)
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: hasResults)
         .overlayPreferenceValue(ScanButtonAnchorKey.self) { anchor in
             scanMenuOverlay(anchor)
         }
     }
 
     private func toggleExpanded(_ section: AnalyzeSection) {
-        if expandedSections.contains(section) {
-            expandedSections.remove(section)
-        } else {
-            expandedSections.insert(section)
+        withAnimation(reduceMotion ? nil : MoleMotion.panel) {
+            if expandedSections.contains(section) { expandedSections.remove(section) }
+            else { expandedSections.insert(section) }
         }
     }
 
@@ -194,14 +203,35 @@ struct AnalyzeTabView: View {
     // MARK: 大文件/视频平铺删除清单
 
     /// 不套卡片的全量平铺清单：行间细线分隔，每行勾选 + 定位 + 删除。
-    private func analysisFileList(_ items: [AnalysisFileItem]) -> some View {
-        LazyVStack(spacing: 0) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                if index > 0 {
-                    Divider().padding(.leading, 42)
+    private func analysisFileSection(_ items: [AnalysisFileItem]) -> some View {
+        let section: AnalyzeSection = state.analyzeMode == .videos ? .videos : .largeFiles
+        return VStack(spacing: 8) {
+            Button { toggleExpanded(section) } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: section.symbol).foregroundStyle(Color.moleAccentText)
+                    Text(l10n.t(section.titleKey)).font(.system(size: 12, weight: .semibold))
+                    Text("\(items.count)").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(ByteFormat.format(items.reduce(0) { $0 + $1.size }))
+                        .font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary)
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                        .rotationEffect(.degrees(expandedSections.contains(section) ? 0 : -90))
                 }
-                analysisFileRow(item)
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .modifier(ListRowGlass())
             }
+            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
+            if expandedSections.contains(section) {
+                analysisFileList(items).padding(.leading, 14).transition(.molePanelReveal)
+            }
+        }
+        .clipped()
+    }
+
+    private func analysisFileList(_ items: [AnalysisFileItem]) -> some View {
+        LazyVStack(spacing: 8) {
+            ForEach(items) { item in analysisFileRow(item) }
         }
     }
 
@@ -251,9 +281,10 @@ struct AnalyzeTabView: View {
             .disabled(state.isBusy || state.isDeletingAnalysisFiles)
             .help(l10n.t("analyze.delete.one"))
         }
-        .padding(.horizontal, 2)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
         .contentShape(Rectangle())
+        .modifier(ListRowGlass(selected: isSelected))
     }
 
     private var toolbar: some View {
@@ -276,7 +307,7 @@ struct AnalyzeTabView: View {
         .padding(.bottom, 8)
     }
 
-    /// 主操作 + 下拉箭头。箭头只改待扫描类型，主区域才开始这一类扫描。
+    /// 主操作扫描当前类型；箭头打开菜单，选择类型后立即扫描。
     private var scanSplitButton: some View {
         AnalyzeScanSplitButton(
             title: l10n.t(state.analyzeMode.actionKey),
@@ -323,10 +354,11 @@ struct AnalyzeTabView: View {
         }
     }
 
-    /// 下拉只切换待执行的扫描，不开始遍历。
+    /// 点选类型即开始对应扫描，包括重新选择当前类型。
     private func chooseAnalyzeMode(_ mode: AnalyzeMode) {
+        guard !state.isBusy else { return }
         state.analyzeMode = mode
-        setScanMenuOpen(false)
+        runSelectedScan()
     }
 
     private func setScanMenuOpen(_ open: Bool) {
@@ -481,7 +513,7 @@ private struct AnalyzeScanSplitButton: View {
             .disabled(!enabled)
 
             Rectangle()
-                .fill(Color.moleOnAccent.opacity(0.28))
+                .fill(Color.hairline)
                 .frame(width: 1, height: 18)
 
             Button(action: onToggleMenu) {
@@ -494,9 +526,8 @@ private struct AnalyzeScanSplitButton: View {
             .disabled(!enabled)
             .accessibilityLabel(accessibilityMenu)
         }
-        .foregroundStyle(Color.moleOnAccent)
-        .background(Capsule().fill(Color.moleAccent))
-        .clipShape(Capsule())
+        .foregroundStyle(Color.primary)
+        .modifier(ActionGlassChrome())
         .opacity(enabled ? 1 : 0.45)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: menuOpen)
     }
@@ -505,12 +536,12 @@ private struct AnalyzeScanSplitButton: View {
 private struct SplitSegmentStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(Color.white.opacity(configuration.isPressed ? 0.16 : 0))
+            .opacity(configuration.isPressed ? 0.65 : 1)
             .contentShape(Rectangle())
     }
 }
 
-/// 扫描类型面板：标题加说明。点选只改变主按钮将要执行的扫描。
+/// 扫描类型面板：标题加说明，点选后立即执行对应扫描。
 /// 选中态是液态玻璃透镜，在条目之间做 matchedGeometry 过渡；面板本身也是玻璃，
 /// 不再铺实色底。
 private struct AnalyzeScanMenu: View {

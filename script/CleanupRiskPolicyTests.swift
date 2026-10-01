@@ -16,6 +16,7 @@ struct CleanupRiskPolicyTests {
         try testDefaults()
         try testCoreClassification(home: policyHome)
         try testSourceMappings(home: policyHome)
+        try testUninstalledAgentResidual(home: policyHome)
         try testRuntimeReassessment(home: policyHome)
         try testPathSelection()
         try testLongTailMerging(home: policyHome)
@@ -580,6 +581,26 @@ struct CleanupRiskPolicyTests {
                    restored.reasonKey == category.reasonKey,
                    "cache lost risk metadata")
 
+        let residualPath = fixture.appendingPathComponent(".kiro/session/history.json")
+        try FileManager.default.createDirectory(at: residualPath.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data("retained history".utf8).write(to: residualPath)
+        var residual = CleanupCategory(name: "Kiro leftovers", paths: [residualPath.path], bytes: 16,
+            source: .appLeftover, risk: .warning, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .aiAgent,
+            reasonKey: "cleanup.risk.agentLeftover")
+        residual.activityOwners = ["Kiro", "com.kiro.desktop"]
+        let residualCacheURL = fixture.appendingPathComponent("cleanup-cache-agent.json")
+        CleanupCache.save([residual], to: residualCacheURL)
+        let cachedResidual = try unwrap(CleanupCache.restore(from: residualCacheURL)?.categories.first,
+                                        "Agent residual cache round trip")
+        try expect(cachedResidual.activityOwners == residual.activityOwners && cachedResidual.risk == .warning
+                   && !cachedResidual.selected && cachedResidual.canSelect,
+                   "cache lost Agent owners or restored a default-selected residual")
+        try expect(!CleanupRiskPolicy.isEligible(cachedResidual, mode: .manual,
+                   running: RunningApplicationSnapshot(processNames: ["Kiro"])),
+                   "restored Agent residual lost its running-owner guard")
+
         // An empty, successful scan is a real result. It must be persisted so
         // Quick Clean can report a healthy machine without replaying the full
         // filesystem walk on every invocation.
@@ -603,6 +624,47 @@ struct CleanupRiskPolicyTests {
         try Data(json.utf8).write(to: cacheURL, options: .atomic)
         try expect(CleanupCache.restore(from: cacheURL) == nil,
                    "old cache version was restored without risk metadata")
+    }
+
+    private static func testUninstalledAgentResidual(home: String) throws {
+        for path in [home + "/.codex", home + "/.gemini/tmp",
+                     home + "/Library/Application Support/Codex", home + "/.config/opencode"] {
+            let descriptor = CleanupRiskPolicy.uninstalledAgentLeftover(path: path, homeDirectory: home)
+            try expect(descriptor.source == .appLeftover && descriptor.risk == .warning
+                       && descriptor.disposal == .permanentDelete && descriptor.applyRoute == .genericTrash
+                       && descriptor.activityGuard == .aiAgent,
+                       "uninstalled Agent history must be manually cleanable Warning: \(path)")
+        }
+        try expect(CleanupRiskPolicy.uninstalledAgentLeftover(path: home + "/Documents",
+                                                              homeDirectory: home).risk == .protected,
+                   "unrecognized user data received Agent residual authority")
+        var residual = CleanupCategory(name: "Codex leftovers", paths: [home + "/.codex"], bytes: 64,
+            source: .appLeftover, risk: .warning, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .aiAgent, reasonKey: "cleanup.risk.agentLeftover")
+        residual.activityOwners = ["codex"]
+        let idle = RunningApplicationSnapshot(processNames: ["Finder"])
+        try expect(!residual.selected && residual.canSelect,
+                   "whole Agent residual was preselected or protected")
+        try expect(CleanupRiskPolicy.isEligible(residual, mode: .manual, running: idle)
+                   && !CleanupRiskPolicy.isEligible(residual, mode: .quickClean, running: idle)
+                   && !CleanupRiskPolicy.isEligible(residual, mode: .automatic, running: idle),
+                   "whole Agent residual escaped the manual-only policy")
+        try expect(!CleanupRiskPolicy.isEligible(residual, mode: .manual, running: .unavailable)
+                   && !CleanupRiskPolicy.isEligible(residual, mode: .manual,
+                       running: RunningApplicationSnapshot(processNames: ["codex"])),
+                   "whole Agent residual bypassed its process guard")
+        let manual = CleanupCategory.manualCleanupCandidates(from: [residual])
+        try expect(manual.count == 1 && !manual[0].selected,
+                   "manual display filtering dropped or selected an Agent residual")
+        residual.selected = true
+        try expect(CleanupCategory.manualCleanupCandidates(from: [residual]).first?.allSelected == true,
+                   "manual display filtering cleared the user's residual selection")
+        try expect(CleanupCategory.safeCleanupCandidates(from: [residual]).isEmpty,
+                   "Agent residual was admitted to Safe-only cleanup")
+        var unrelated = residual
+        unrelated.reasonKey = "cleanup.risk.appLeftover"
+        try expect(CleanupCategory.manualCleanupCandidates(from: [unrelated]).isEmpty,
+                   "manual Agent exception admitted unrelated Warning filesystem data")
     }
 
     private static func testNetmonParsing() throws {

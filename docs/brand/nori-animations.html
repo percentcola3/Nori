@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8">
+<title>Nori 动效总览</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+    background: linear-gradient(160deg, #0e1420 0%, #131b2a 100%);
+    color: #d7e0ea; padding: 36px 40px; min-height: 100vh;
+  }
+  h1 { font-size: 22px; font-weight: 700; color: #eaf2fa; letter-spacing: .3px; }
+  h1 .accent { color: #7fd6e8; }
+  h2 { font-size: 13px; font-weight: 650; color: #8b99a8; margin: 30px 0 12px; letter-spacing: .4px; }
+  .sub { font-size: 12.5px; color: #8b99a8; margin: 6px 0 8px; line-height: 1.6; }
+  .controls { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 16px 0; font-size: 12px; }
+  .controls button { color: #bfeaf2; background: #203449; border: 1px solid #415b70; border-radius: 99px; padding: 6px 14px; cursor: pointer; }
+  .controls label { display: flex; align-items: center; gap: 6px; }
+  .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .card {
+    background: rgba(255,255,255,0.035); border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 16px; padding: 18px 16px 16px;
+    display: flex; flex-direction: column; align-items: center;
+  }
+  .svgbox {
+    width: 190px; height: 190px; border-radius: 14px; position: relative;
+    background: radial-gradient(circle at 50% 42%, rgba(127,214,232,0.07), rgba(255,255,255,0.015) 70%);
+    display: flex; align-items: center; justify-content: center; margin-bottom: 14px;
+  }
+  .svgbox object { width: 168px; height: 168px; color-scheme: normal; }
+  .header-preview {
+    position: absolute; left: 10px; bottom: 10px; display: flex; align-items: center; gap: 6px;
+    padding: 4px 9px 4px 6px; border-radius: 99px; background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.1); font-size: 11px; font-weight: 600; color: #eaf2fa;
+  }
+  .header-preview object { width: 20px; height: 20px; }
+  .replay {
+    position: absolute; right: 10px; top: 10px; font: inherit; font-size: 10.5px; color: #7fd6e8;
+    background: rgba(127,214,232,.1); border: 1px solid rgba(127,214,232,.3); border-radius: 99px;
+    padding: 2px 9px; cursor: pointer;
+  }
+  .meta { width: 100%; }
+  .row1 { display: flex; align-items: center; justify-content: space-between; }
+  .name { font-size: 14px; font-weight: 650; color: #eaf2fa; }
+  .badge { font-size: 10px; font-weight: 600; padding: 2px 9px; border-radius: 99px; }
+  .badge.use { background: rgba(98,196,122,.16); color: #7ddb9a; border: 1px solid rgba(98,196,122,.35); }
+  .badge.idle { background: rgba(240,180,90,.13); color: #f0c07a; border: 1px solid rgba(240,180,90,.35); }
+  .file { font-family: ui-monospace, "SF Mono", monospace; font-size: 10px; color: #64748b; margin: 3px 0 10px; }
+  .field { font-size: 11.5px; line-height: 1.5; color: #aab7c4; margin-top: 5px; }
+  .field .label {
+    display: inline-block; font-size: 10px; color: #7fd6e8; border: 1px solid rgba(127,214,232,.3);
+    border-radius: 4px; padding: 0 5px; margin-right: 7px; vertical-align: 1px;
+  }
+</style>
+</head>
+<body>
+<h1>Nori 动效总览 · <span class="accent">占位 · 扫描 · 结果 · 闲置</span></h1>
+<div class="sub">「工作中」保留标志性环绕；其余活动以 Nori 自身的弹跳、摇摆、浮动、呼吸与回弹表达正在处理。角色大小与基线统一，圆点、波纹和短弧留出间隔，不再描绘业务场景。成功和失败仍在顶部栏播放；任务开始前各 tab 共用一个闲置动效。</div>
+<div class="controls">
+  <button id="pause" type="button">暂停</button>
+  <label><input id="reduced" type="checkbox">减少动态效果</label>
+  <label>定格位置 <input id="phase" type="range" min="0" max="100" value="0" aria-label="动画定格位置"></label>
+</div>
+
+<h2>占位</h2>
+<div class="grid" id="rest"></div>
+<h2>扫描 / 执行中</h2>
+<div class="grid" id="scan"></div>
+<h2>任务结果（顶部栏）</h2>
+<div class="grid" id="result"></div>
+<h2>闲置（tab 占位 · 灵动岛）</h2>
+<div class="grid" id="idle"></div>
+
+<script>
+const base = '../../SimpleMole/Support/Nori/Animations/';
+let paused = false;
+let inspecting = false;
+const pause = document.getElementById('pause');
+const reduced = document.getElementById('reduced');
+const phase = document.getElementById('phase');
+function applyPlayback() {
+  for (const object of document.querySelectorAll('.svgbox object')) {
+    const doc = object.contentDocument;
+    if (!doc?.documentElement) continue;
+    let style = doc.getElementById('preview-motion');
+    if (!style) {
+      style = doc.createElementNS('http://www.w3.org/2000/svg', 'style');
+      style.id = 'preview-motion';
+      doc.documentElement.appendChild(style);
+    }
+    style.textContent = reduced.checked
+      ? '*{animation:none!important}.steam,.orbit-prop{display:none}' : '';
+    for (const animation of doc.getAnimations()) {
+      if (paused) {
+        animation.pause();
+        if (inspecting) {
+          const timing = animation.effect.getTiming();
+          animation.currentTime = Number(timing.duration) * Number(phase.value) / 100 + timing.delay;
+        }
+      } else { animation.play(); }
+    }
+    const jelly = doc.querySelector('.jelly');
+    object.dataset.pose = jelly ? doc.defaultView.getComputedStyle(jelly).transform : '';
+    object.dataset.accents = Array.from(doc.querySelectorAll('.orbit-prop'))
+      .map(element => doc.defaultView.getComputedStyle(element).display).join(',');
+  }
+  pause.textContent = paused ? '继续' : '暂停';
+}
+pause.onclick = () => { paused = !paused; inspecting = false; applyPlayback(); };
+reduced.onchange = applyPlayback;
+phase.oninput = () => { paused = true; inspecting = true; applyPlayback(); };
+const items = [
+  ['rest', 'static', '静态 · Static', '身体不动，只有眨眼；合并原来的待机、无聊、照镜子、眨眼', '降级替补：没指定动画的占位、减少动态效果、App 失活'],
+  ['scan', 'working', '工作中 · Working', '三色缎带环绕，唯一保留旋转的标志性 loading', '硬盘清理扫描与执行；Agent 清理执行'],
+  ['scan', 'typing', '跃动 · Hop', '双拍弹跳：落地挤压、跃起伸展，下方三点跟随节拍', '开发环境检索'],
+  ['scan', 'agent', '摇摆 · Sway', '左右轻摆并伸缩，下方三点依次明暗交替', 'Agent 扫描'],
+  ['scan', 'disk', '浮动 · Float', '浮起回落与果冻形变，下方两圈居中的波纹错拍扩散', '磁盘分析全盘扫描'],
+  ['scan', 'apps', '呼吸 · Breathe', '舒展呼吸，两侧短弧同步张合', '软件 tab 首次载入（之后静默刷新，不再展示）'],
+  ['scan', 'tidying', '脉动 · Pulse', '短促挤压回弹，下方三点轻轻起伏', '清理中、卸载中共用；顶部栏只播放角色形变'],
+  ['result', 'success', '成功 · Success', '右下角弹出绿色「✓」圆标，盖住一点身体，同时彩纸炸开；Nori 跳一下、眯眼看向图标', '任务成功完成时在顶部栏播放', true],
+  ['result', 'attention', '失败 · Failure', '右下角弹出珊瑚红「!」圆标，盖住一点身体；Nori 微微垂下、低头看向图标', '任务失败或部分失败时在顶部栏播放', true],
+  ['idle', 'coffee', '喝咖啡 · Coffee', '举起无把手的小杯抿一口，眯眼，两缕热气升起', 'tab 占位（打开窗口随机选一个）、灵动岛空闲时轮换'],
+  ['idle', 'doze', '打盹 · Doze', '闭眼慢呼吸，Z 字依次飘起', 'tab 占位（打开窗口随机选一个）、灵动岛空闲时轮换'],
+  ['idle', 'humming', '哼歌 · Humming', '眯眼左右轻晃，音符飘起', 'tab 占位（打开窗口随机选一个）、灵动岛空闲时轮换'],
+  ['idle', 'bubble', '吹泡泡 · Bubble', '泡泡从脚边升起，眼睛追着看，到顶破掉', 'tab 占位（打开窗口随机选一个）、灵动岛空闲时轮换'],
+];
+for (const [group, file, name, design, usage, oneShot] of items) {
+  const src = base + 'nori-' + file + '.svg';
+  const used = true;
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `<div class="svgbox"><object data="${src}" type="image/svg+xml" role="img" aria-label="${name}"></object>
+    ${oneShot ? `<button class="replay">重播</button>
+      <div class="header-preview"><object data="${src}" type="image/svg+xml" aria-hidden="true"></object>顶部栏 20pt</div>` : ''}</div>
+    <div class="meta"><div class="row1"><span class="name">${name}</span>
+    <span class="badge ${used ? 'use' : 'idle'}">${used ? '使用中' : '闲置'}</span></div>
+    <div class="file">nori-${file}.svg</div>
+    <div class="field"><span class="label">设计</span>${design}</div>
+    <div class="field"><span class="label">使用</span>${usage}</div></div>`;
+  const replay = card.querySelector('.replay');
+  if (replay) replay.onclick = () => card.querySelectorAll('object').forEach(object => {
+    object.data = src + '?t=' + Date.now();
+  });
+  card.querySelectorAll('object').forEach(object => object.onload = applyPlayback);
+  document.getElementById(group).appendChild(card);
+}
+</script>
+</body>
+</html>

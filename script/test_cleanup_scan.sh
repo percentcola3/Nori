@@ -2,7 +2,8 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-scan-build.XXXXXX")"
-FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/.cleanup-scan-fixture.XXXXXX")"
+FIXTURE_ROOT="${NORI_CLEANUP_FIXTURE_ROOT:-$ROOT_DIR}"
+FIXTURE_DIR="$(mktemp -d "$FIXTURE_ROOT/.cleanup-scan-fixture.XXXXXX")"
 trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 swiftc -O -target "$(uname -m)-apple-macos13.0" \
     -module-cache-path "$TEST_DIR/module-cache" \
@@ -10,6 +11,8 @@ swiftc -O -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentProjectStorage.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \

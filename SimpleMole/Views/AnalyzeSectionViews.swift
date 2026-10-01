@@ -14,74 +14,53 @@ struct SlimSectionCard: View {
     let onScheduleDirectory: (String) -> Void
     @ObservedObject private var l10n = L10n.shared
 
-    private static let previewCount = 5
-
-    private var visibleCandidates: [SlimCandidate] {
-        isExpanded ? candidates : Array(candidates.prefix(Self.previewCount))
-    }
-
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 8) {
             header
-            ForEach(visibleCandidates) { candidate in
-                let directory = (candidate.path as NSString).deletingLastPathComponent
-                SlimCandidateRow(
-                    candidate: candidate,
-                    isSelected: state.slimSelection.contains(candidate.path),
-                    disabled: state.isBusy,
-                    onToggle: { state.toggleSlimSelection(candidate) },
-                    onReveal: { state.revealPath(candidate.path) },
-                    onAutoClean: { onScheduleDirectory(directory) },
-                    autoCleanCovered: state.autoCleanupRuleCovering(directory: directory) != nil
-                )
-            }
-            if candidates.count > Self.previewCount {
-                Button(action: onToggleExpand) {
-                    Label(isExpanded ? l10n.t("analyze.section.collapse")
-                                     : l10n.tf("analyze.section.showAll", candidates.count),
-                          systemImage: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10))
+            if isExpanded {
+                LazyVStack(spacing: 8) {
+                    ForEach(candidates) { candidate in
+                        let directory = (candidate.path as NSString).deletingLastPathComponent
+                        SlimCandidateRow(candidate: candidate,
+                            isSelected: state.slimSelection.contains(candidate.path),
+                            disabled: state.isBusy,
+                            onToggle: { state.toggleSlimSelection(candidate) },
+                            onReveal: { state.revealPath(candidate.path) },
+                            onAutoClean: { onScheduleDirectory(directory) },
+                            autoCleanCovered: state.autoCleanupRuleCovering(directory: directory) != nil)
+                    }
                 }
-                .buttonStyle(MolePlainButtonStyle())
-                .disabled(state.isBusy)
+                .padding(.leading, 14)
+                .transition(.molePanelReveal)
             }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.hairline, lineWidth: 1))
+        .clipped()
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             Button(action: onToggleExpand) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 14)
+                HStack(spacing: 8) {
+                    Image(systemName: section.symbol)
+                        .font(.system(size: 11)).foregroundStyle(Color.moleAccentText)
+                    Text(l10n.t(section.titleKey))
+                        .font(.system(size: 12, weight: .semibold))
+                    Text(summary).font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
+                }
+                .contentShape(Rectangle())
             }
-            .buttonStyle(MolePlainButtonStyle())
-            .disabled(state.isBusy)
-            .accessibilityLabel(l10n.t(isExpanded ? "analyze.section.collapse"
-                                                 : "analyze.section.expand"))
-            Image(systemName: section.symbol)
-                .font(.system(size: 11))
-                .foregroundStyle(Color.moleAccentText)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(l10n.t(section.titleKey))
-                    .font(.system(size: 12, weight: .semibold))
-                Text(summary)
-                    .font(.system(size: 10).monospacedDigit())
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer(minLength: 6)
-            Button(l10n.t("slim.selectAll")) {
-                state.toggleSelectAllSlimCandidates(in: section)
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .controlSize(.small)
-            .disabled(state.isBusy)
+            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
+            Button(l10n.t("slim.selectAll")) { state.toggleSelectAllSlimCandidates(in: section) }
+                .buttonStyle(.plain).font(.system(size: 10))
+                .disabled(state.isBusy)
         }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .modifier(ListRowGlass())
     }
 
     private var summary: String {
@@ -108,12 +87,15 @@ struct DuplicatesSectionCard: View {
     let onPreview: (String) -> Void
     @ObservedObject private var l10n = L10n.shared
 
+    @State private var collapsedGroups: Set<String> = []
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var working: Bool {
         state.isScanningDuplicates || state.isDeletingDuplicates
     }
 
     var body: some View {
-        VStack(spacing: 6) {
+        LazyVStack(spacing: 8) {
             headerRow
             statusLine
             if state.duplicateMode == .similarImages && !state.duplicateGroups.isEmpty {
@@ -124,9 +106,6 @@ struct DuplicatesSectionCard: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(Array(state.duplicateGroups.enumerated()), id: \.element.id) { index, group in
-                if index > 0 {
-                    Divider().padding(.leading, 2)
-                }
                 groupSection(group, index: index)
             }
             if state.duplicateGroups.isEmpty {
@@ -222,32 +201,54 @@ struct DuplicatesSectionCard: View {
         }
     }
 
-    /// 分组平铺：组头一行 + 成员行，无背景容器。
+    /// 与清理页相同：分组标题 + 缩进成员，使用同一个展开节奏。
     private func groupSection(_ group: DuplicateFileGroup, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(l10n.tf(state.duplicateMode == .exact
-                             ? "duplicates.group.exact" : "duplicates.group.similar",
-                             index + 1, group.members.count))
-                    .font(.system(size: 11, weight: .semibold))
-                Spacer()
-                Text(l10n.t("duplicates.keepOne"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+        let collapsed = collapsedGroups.contains(group.id)
+        // One linear count per group; each visible row then makes a constant-time decision.
+        let unselectedCount = group.members.reduce(0) {
+            $0 + (state.duplicateSelection.contains($1.path) ? 0 : 1)
+        }
+        return VStack(spacing: 8) {
+            Button {
+                withAnimation(reduceMotion ? nil : MoleMotion.panel) {
+                    if collapsed { collapsedGroups.remove(group.id) }
+                    else { collapsedGroups.insert(group.id) }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text(l10n.tf(state.duplicateMode == .exact
+                        ? "duplicates.group.exact" : "duplicates.group.similar", index + 1, group.members.count))
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Text(l10n.t("duplicates.keepOne")).font(.system(size: 10)).foregroundStyle(.secondary)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(collapsed ? -90 : 0))
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .contentShape(Rectangle())
+                .modifier(ListRowGlass())
             }
-            .padding(.top, 2)
-            ForEach(group.members) { member in
-                DuplicateFileRow(
-                    member: member,
-                    isSelected: state.duplicateSelection.contains(member.path),
-                    canSelect: state.canSelectDuplicate(member, group: group),
-                    disabled: state.isBusy,
-                    onToggle: { state.toggleDuplicateSelection(member) },
-                    onPreview: { onPreview(member.path) }
-                )
+            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
+            if !collapsed {
+                LazyVStack(spacing: 8) {
+                    ForEach(group.members) { member in
+                        DuplicateFileRow(member: member,
+                            isSelected: state.duplicateSelection.contains(member.path),
+                            canSelect: DuplicateSelectionPolicy.canSelect(
+                                isSelected: state.duplicateSelection.contains(member.path),
+                                unselectedCount: unselectedCount), disabled: state.isBusy,
+                            onToggle: { state.toggleDuplicateSelection(member) },
+                            onPreview: { onPreview(member.path) })
+                    }
+                }
+                .padding(.leading, 14)
+                .transition(.molePanelReveal)
             }
         }
+        .clipped()
     }
+
 }
 
 /// 重复组内的一行：勾选删除、预览、在 Finder 中显示。

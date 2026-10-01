@@ -1,189 +1,148 @@
 # Nori
 
-安静守护 Mac 的原生工具：菜单栏常驻（点击直达主窗口）+ 灵动岛 + 主窗口（硬盘清理 / 磁盘分析 / 应用卸载 / 开发环境 / 进程清理 / 端口清理 / 图片瘦身 / 截图 / 剪贴板）。支持 12 种语言，默认跟随系统语言，可随时手动切换。
+**A quieter, cleaner Mac.**
 
-## 多语言
+A native, lightweight macOS companion that helps you reclaim disk space, keep an eye on your Mac, and make everyday work a little easier. Nori brings a Dynamic Island-inspired interface and Liquid Glass to a practical set of cleanup, developer, AI agent, and productivity tools.
 
-支持：简体中文、繁體中文、English、日本語、한국어、Deutsch、Français、Español、Português、Italiano、Русский、Türkçe。
+[Download the latest release](https://github.com/percentcola3/sweep/releases/latest) · [简体中文](README.zh-CN.md) · [Development guide](docs/development.md)
 
-- **自动识别**：默认 `auto`，按系统偏好语言（含区域变体归一，如 pt-BR → pt、zh-TW → 繁中）匹配；回到前台会重新解析。
-- **手动切换**：主窗口“设置”标签中的语言选项，选择即持久化（`SMLanguage`）并即时刷新全部界面、状态栏文案与应用菜单。
-- 语言表内置代码（`SimpleMole/L10n/`，覆盖 12 种语言），缺失键回退英文；格式化占位符保持一致。
+![Nori overview in English](docs/screenshots/en/overview.png)
 
-## 定位
+Nori is inspired by [Mole](https://github.com/tw93/Mole), the excellent Mac cleanup tool by [tw93](https://github.com/tw93). Its Swift and SwiftUI interface, native core services, and focused helper scripts bring that spirit to a visual Mac companion. Audited Mole helper libraries are included with attribution under GPL v3.
 
-Nori 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、磁盘分析、应用卸载和系统优化由 Swift `NativeCore` 直接实现；Mole 的库代码只为尚未原生迁移的特色 bridge 提供基础能力：
+## Why Nori
 
-- **核心路径原生化**。`NativeCore` 使用 `FileManager`、`Bundle`、`NSWorkspace` 和 `Process` 完成候选扫描、大小分析、应用身份校验、废纸篓/永久删除和优化命令。每条待删除路径携带扫描时的 `device:inode:mtime`，执行前再次读取并比对；软链接、保护目录、白名单和运行中的应用默认跳过。`vendor/mole/` 仍随仓库提供给 AI、Xcode、开发缓存清理、图片和其他尚未原生迁移的桥接能力，上游版本记录在 `vendor/mole/UPSTREAM_COMMIT`，许可证见 `vendor/mole/LICENSE`。
-- **UI 层为 Swift + SwiftUI 原生实现**。周期指标（CPU / 内存 / 网络 / 磁盘）走系统 API；进程排行按需读取一次 `/bin/ps`。耗时扫描和清理通过日志抽屉展示阶段状态与聚合结果，结构化清单在完成后一次性更新，避免逐行 UI 调度拖慢文件扫描。
+- **Made for macOS.** A native Swift + SwiftUI app with a menu bar home, a compact island, and Liquid Glass on macOS 26 and later.
+- **Space where it matters.** Find rebuildable application caches, developer downloads, and old build artifacts. A developer Mac can accumulate tens of GB of reclaimable data; your results depend on what is actually on disk.
+- **Understands your tools.** Dedicated developer and AI agent inventories distinguish disposable caches from sessions, credentials, and project data.
+- **A quiet guardian.** Watch CPU, memory, disk, network, and battery information without keeping the main window open.
+- **Useful every day.** Scheduled folder cleanup, local clipboard history, and configurable screenshot shortcuts live in the same app.
 
-## 功能面
+## Reclaim disk space
 
-| 页面 | 能力 | 引擎路径 |
-| --- | --- | --- |
-| 硬盘清理 | 快速扫描常用缓存，深度扫描补充更多应用目录与历史残留；只展示 Safe 垃圾，归入缓存、卸载残留、废纸篓、开发者缓存、AI 缓存五个可折叠大类（默认只展开最大分组），支持分类/子项勾选；同一分组内小于 100MB 的长尾小项自动合并为「其他」。开发者缓存与构建产物默认按 **7 天未活跃**门槛推荐（活跃条目保留可见、默认不勾选），支持 npm/Yarn/pip/Gradle 等自定义缓存位置。Safe 垃圾默认全部勾选，一键清理**永久删除**所选；执行前会用最新进程快照与年龄证据重新评估，运行中或重新活跃的路径自动跳过并计入「已跳过」 | `NativeCore.scanCleanup/applyCleanup` + `CleanupScanWorker` + `CleanupAgePolicy`；AI/Xcode 缓存共用原生统计 |
-| 磁盘分析 | 统一扫描范围：用户空间（默认当前用户主目录）、根目录、自定义目录；支持取消、逐层浏览和缓存复用，避免符号链接循环与硬链接重复计量 | `NativeCore.scanAnalyze` + `DiskAnalysisWorker` |
-| 重复文件 / 相似图片 | 从磁盘分析页打开，单独选择多个普通文件目录；精确重复采用大小、采样、完整 SHA-256 分级检测，不限于大文件列表；相似静态图片按感知特征分组，展示尺寸、参考清晰度并支持原图预览。默认不勾选，每组至少保留一份，移入废纸篓前复核选中项和保留项 | `DuplicateScanner` + `SimilarImageScanner` + `DuplicateDeletionPlan` + `NativeCore.applyCleanup` |
-| 应用卸载 | 列出 `/Applications`、用户 Applications 和 Setapp 应用；按 Bundle ID 精确生成缓存、日志和需复核数据明细，应用本体与关联路径在串行队列中逐项复验身份后移入废纸篓 | `NativeCore.scanInstalledApps` + `NativeCore.uninstallPlan/applyUninstall` |
-| 系统优化 | 刷新 DNS、Quick Look、LaunchServices，清理 30 天以前的保存状态，并只读检查 Spotlight 状态；每项独立显示 applied/unchanged/unavailable/failed | `NativeCore.runOptimize` |
-| 状态监控 | 菜单栏和主窗口实时显示 CPU、内存、磁盘容量与读写、网络速率；可读取电池电量/健康/循环次数，灵动岛的内存榜也走原生进程快照 | `SystemMetrics.sample` + IOKit / Mach / sysctl / statfs / getifaddrs |
-| 开发环境 | 识别 nvm 版本（默认/使用中锁定，可勾选清理旧版本）；fnm/Volta/asdf/pyenv/rbenv/rustup/Homebrew/JDK 版本及 Bun/Deno 等工具只读展示，版本移除交给各自管理器 | `app_env_scan.sh` + `app_apply.sh` |
-| 进程/端口 | NSWorkspace 应用级管理、高级 PID 模式、lsof 监听端口 | 原生 + `app_runtime.sh` |
-| 流量监控 | 通用应用流量排行（总量 / 下载 / 上传）、实时速率、当前连接、物理接口与隧道独立计数；无需代理客户端配置 | `TrafficMonitorStore` + `app_netmon.sh` |
-| 图片瘦身 | 图片清单、压缩（副本/替换）、重复图清理 | `app_{image,slim}_*.sh` |
-| 白名单 | `~/.config/mole/whitelist` 的 GUI 维护，clean / purge / 全部桥接清理共用 | `load_mole_whitelist` / `is_path_whitelisted` |
+Quick Scan finds common cleanup targets; Deep Scan looks through additional application caches and containers. Review sizes by category, expand individual items, and choose what to remove.
 
-卸载残留采用“证据优先”策略：应用仍在废纸篓时，用它的 Bundle ID 精确反查对应的用户缓存和日志；应用已经被手动删除且废纸篓也已清空时，不凭目录名猜测归属，而把可疑的大目录留给“磁盘分析”或后续深度审查。这样首屏可以保持快速，也不会把仍被其他应用使用的同名目录当成垃圾。
+Nori recognizes application and browser caches, logs, diagnostic reports, Trash, developer caches, AI caches, and verified uninstall leftovers. Developer caches and build artifacts are recommended after **seven days without activity**. Recently used items stay visible without being selected by default, and running applications or reopened files can cause an item to be skipped before cleanup.
 
-重复扫描跳过应用包、图库、用户 Library、隐藏及受管理目录、符号链接和未下载的云文件。可比较导出到普通目录的 IM 附件，不扫描或改写微信内部数据。相似分组只供人工判断，不证明内容相同；移入废纸篓不立即释放空间，文件大小合计也不代表 APFS 克隆或快照存在时的实际释放量。
+![Disk cleanup in English](docs/screenshots/en/cleanup.png)
 
-快速扫描先按预设路径发现缓存，完成风险分类、白名单过滤和路径去重后，再以最多 8 个工作线程统计实际磁盘占用。文件遍历预算为整体 45 秒、单目录 8 秒；遇到慢目录时保留已完成的结果，并提示尚未统计完的目录数。预算在遍历间检查，底层文件系统阻塞时可能超出预算，不承诺所有机器都在固定时间内完成。
+The main cleanup action **permanently deletes** the selected disposable files after confirmation. Disk analysis helps you investigate larger files yourself; exact duplicates and similar images can be reviewed and moved to Trash while keeping at least one copy. App uninstall also previews the app and its associated data before moving confirmed items to Trash.
 
-深度扫描会补充应用容器和更多 Application Support 缓存，取消单目录时间限制，用户可随时取消。超时、无法读取或被取消的统计不会按完整容量展示，也不会写入完整结果缓存。页面可复用最近 5 分钟的完整快照，明确点击“快速扫描”或“深度扫描”会重新扫描。日志抽屉记录目录发现、容量统计耗时和未完成数量，便于实机比较。
+## Built for developer Macs
 
-扫描回归与吞吐测试：`bash script/test_cleanup_scan.sh`。它只创建独立测试目录，不启动 GUI、不扫描真实用户缓存；覆盖重叠目录、保护路径、深度补充、取消、部分结果、硬链接和大输出量进程读取。
+Package managers and build systems leave more behind than ordinary app caches. Nori recognizes these environments and provides targeted cleanup:
 
-清理与磁盘分析的完整策略（统一规则模型、7 天活跃门、快速/深度分析、处置语义、已知边界）见 [docs/cleanup-strategy.md](docs/cleanup-strategy.md)；与最初重写方案的有意偏差及安全论证见 [docs/decision-records.md](docs/decision-records.md)。删除出口静态审计：`bash script/audit_destructive_sinks.sh`（已并入 `script/test.sh`）。
+| Environment | What Nori can clean or manage |
+| --- | --- |
+| Xcode, SwiftPM, Carthage | DerivedData, downloaded package/build caches, Xcode caches, simulator caches, test-device clones, and unavailable simulators. Xcode archives stay protected. |
+| Node.js: npm, pnpm, Yarn, Bun, Corepack | Package/download caches and official cache cleanup or store pruning commands. Old nvm versions can move to Trash; current and default versions are protected. |
+| Frontend tooling | Recognized node-gyp, TypeScript, Electron, Turborepo, Vite, Webpack, Parcel, ESLint, and Prettier cache locations. |
+| Python: pip, uv, Poetry, Conda | Package/download caches and available official cleanup commands. Poetry virtual environments are excluded from ordinary cache cleanup. |
+| Java / Android: Gradle | Build caches, daemon logs, worker scratch files, and notification state; module dependencies are treated separately. |
+| Rust / Go | Cargo registry download caches, Go build caches and module download caches; Go’s official cleanup commands are also available. |
+| Homebrew / Ruby | Homebrew downloads and `brew cleanup`; RubyGems cleanup when the tool is installed. |
+| .NET / PHP / other build tools | NuGet and Composer caches, plus recognized Bazel and Zig caches. |
+| Docker | Storage inventory and explicit builder/system pruning through Docker’s own commands. |
 
-### 自动目录清理
+![Developer workspace in English](docs/screenshots/en/developers.png)
 
-从“设置”标签中的“自动清理”进入规则管理。每个目录可选择“容量上限”（超限后按最旧优先清理至阈值）或“保留最近 X 天”；添加后的规则默认关闭，可先预览、手动确认清理，再显式开启。应用常驻期间每小时检查调度，实际扫描至少间隔六小时；执行失败会在下一次小时调度重试。
+The developer workspace also inventories fnm, Volta, asdf, pyenv, rbenv, rustup, Homebrew runtimes, JDKs, Bun, and Deno, alongside shell, network, hosts, and CLI tools. Runtime removal outside nvm is delegated to the owning manager. Custom npm, Yarn, pip, Poetry, Gradle, Cargo, and Go cache locations are recognized when their configuration is available to Nori.
 
-### 顶部刘海与设置
+Dependency stores such as Maven’s local repository, Gradle modules, NuGet packages, Dart’s pub cache, and Cargo source/git trees are **excluded from one-click cleanup**. Dedicated actions use the owning tool where supported; these stores may require downloads or contain locally installed artifacts.
 
-顶部刘海悬停展开彩色进度环：绿色表示健康、橙色表示偏高、红色表示高占用。CPU 和内存支持悬停查看应用排行、单个正常退出，以及闪电按钮智能清理；智能清理只尝试正常退出符合策略的高占用隐藏应用，内存清理同时释放 Nori 自身缓存。右侧箭头直接打开主窗口。
+## Cleanup that understands AI agents
 
-设置始终作为独立标签显示，集中管理语言、自动化、白名单、权限和功能开关。设置弹窗与刘海在 macOS 26 及以上使用原生 Liquid Glass 过渡；较早系统与辅助功能设置保留相应回退。扫描、清理中与清理结果使用 Nori SVG 状态动画，减少动态效果时显示静态图形。
+AI tools accumulate more than cache files. Nori groups each tool’s data so you can see what can be rebuilt, what contains history, and what needs extra care.
 
-## 构建与 GitHub Release
+| Recognized tools | Cleanup and review examples |
+| --- | --- |
+| Claude Code, Claude Desktop | Old CLI versions, statistics/update and desktop caches; review transcripts, file snapshots, plans, attachments, backups, and Cowork VM data. |
+| Codex CLI, Codex App | Temporary files, file logs, model-list and desktop/browser caches; review archived sessions, generated images, log databases, and backups. |
+| Cursor, Cursor CLI | Desktop/update/compile caches and old CLI versions; review checkpoints and inspect chat databases, workspace state, and worktrees separately. |
+| GitHub Copilot CLI | Old versions, logs and caches; review session-state files and command history. |
+| Gemini CLI, Antigravity | Review Gemini session/history data and Antigravity browser recordings; clean recognized Antigravity desktop caches. |
+| OpenCode | Caches and logs; review snapshots, tool output, plans, and legacy session storage. |
+| Grok CLI, pi, Kimi | Recognized old versions, logs, or temporary caches where available; review sessions, input history, plans, and generated attachments. |
+| Factory Droid | Review sessions, logs, cache/temp data, and specifications. |
+| Devin, Windsurf | Desktop caches; inspect shared Cascade history and memories separately. |
+| Zed, Warp | Recognized caches, logs, or hang traces; inspect conversation/state databases separately. |
+| Chrome DevTools MCP | Recognized browser-profile caches; Service Worker storage requires review. |
+| Qoder, Kiro, Trae, Amp, Crush | Identify local data and resources. Unknown or persistent data requires explicit review; Crush also recognizes selected project data and logs. |
 
-需要 macOS 和提供 `swiftc` 的 Xcode 工具链，建议使用完整、稳定的 Xcode 26。特色桥接所需的 Mole 源码已内置，无需另行安装或检出。
+![AI agent cleanup in English](docs/screenshots/en/agents.png)
 
-### 无 Apple 开发者账号的公开发布
+**Review history separately.** Only items classified as disposable are selected by default. Sessions, checkpoints, memories, worktrees, VM data, credentials, and uncertain storage are excluded from that default selection and carry their own risk information. Removing history or credentials can lose work or require signing in again.
 
-GitHub Release 使用项目固定的自签名证书，不要求购买 Apple Developer 计划。公开证书和身份记录位于 `signing/release.cer`、`signing/release.plist`；只有维护者保存私钥。每个版本复用同一份证书和 Bundle ID，发布入口会严格校验身份，不会降级为 ad-hoc：
+The dedicated agent cleanup button applies selected actions immediately, without a second confirmation dialog. Selected file deletions are **permanent**, bypassing Trash; review the selection and back up anything you need before using it.
 
-```bash
-bash script/release_identity.sh ensure
-bash script/package_release.sh
-```
+Nori also inventories supported global **Skills, MCP registrations/local installations, and CLI installations**, shows known consumers of shared resources, and separates unlinking a resource from removing its files. Recognition follows known installation layouts; it does not imply complete coverage of every plugin or custom data directory. See the [agent coverage and evidence matrix](docs/agent-cleanup-research/README.md).
 
-输出为 `dist/Nori-arm64.dmg`（Apple 芯片）和 `dist/Nori-x86_64.dmg`（Intel），每个 DMG 包含对应架构的 `Nori.app` 与 `/Applications` 快捷方式。可通过 `SM_BUILD_ARCHS=arm64` 或 `SM_BUILD_ARCHS=x86_64` 只生成一个架构。
+## Keep folders tidy automatically
 
-`release_identity.sh init` 只用于维护者首次建立发布身份；仓库已有公开证书但本机缺少私钥时，它会拒绝生成替代身份。新维护者或新 Mac 必须通过 `import` 导入原来的加密 PKCS#12 备份。私钥、密码、钥匙串不得提交到 Git。初始化、恢复、备份和安装验证见 [发布签名指南](docs/release-signing.md)。
+Create rules for folders you choose: **keep the last X days** or **stay below a size limit**. Preview a rule before enabling it, or run it manually when you want to check the result.
 
-安装并登录 GitHub CLI 后，可安全配置仓库的两个 Actions secrets：
+![Scheduled folder cleanup in English](docs/screenshots/en/automation.png)
 
-```bash
-bash script/configure_release_secrets.sh
-```
+Rules start disabled. While Nori is running, it checks schedules hourly, with at least six hours between actual scans. Rules work on the folder’s immediate children, protect sensitive/project locations and recently written content, and move approved items to Trash. Emptying Trash is a separate step to reclaim the space.
 
-脚本从 `origin` 推断仓库，也接受 `owner/repository` 参数；秘密通过标准输入上传，临时导出随后删除。如果任一同名 secret 已存在，脚本会拒绝覆盖。Actions 的 **Signed macOS release** 支持默认分支手动构建；推送 `v*` 标签会运行回归检查，生成两个 DMG、校验和及 **draft Release**，由维护者检查后公开。
+## A clipboard you can return to
 
-固定签名有助于跨版本保持同一应用身份，但不能保证所有 macOS 版本保留全部隐私权限。从 ad-hoc 或其他证书签署的版本迁移时，可能需要重新授权。自签名也不等同于 Apple 公证：用户首次打开下载的 App 时可能需要前往“系统设置 → 隐私与安全性”允许打开，再按功能需求授予完全磁盘访问和屏幕录制权限。用户无需安装发布证书。
+Enable local clipboard history for **text, links, files, and images**. Filter by type, pin what you reuse, copy an item again, adjust the history limit, and clear unpinned entries in one action. File entries retain paths rather than duplicating your files.
 
-### 本机开发和测试
+![Clipboard history in English](docs/screenshots/en/clipboard.png)
 
-不持有发布私钥的贡献者，可以创建自己的本地开发身份：
+History is stored on your Mac. Nori skips content marked concealed or transient by cooperating apps; unmarked sensitive text can still enter history, so enable the feature according to your workflow.
+
+## Capture, compose, share
+
+Use **⌘⇧S** for interactive region/window capture and **⌘⇧R** for capture at a chosen aspect ratio. Both shortcuts can be changed in Settings.
+
+![Screenshot editor in English](docs/screenshots/en/screenshot.png)
+
+Annotate with shapes, arrows, freehand strokes, text, or mosaic redaction. Add gradient backgrounds, padding, rounded frames, a Mac window, or an iPhone frame for phone-ratio captures; choose an output aspect ratio and export PNG or JPEG at 1× or 2×. Your last composition and export settings are remembered.
+
+## Your Mac, at a glance
+
+The Dynamic Island-inspired panel stays near the top of the screen. Hover to see CPU and memory rings, view the applications using resources, and open the main window. Its resource actions attempt a normal quit for eligible background apps; memory cleanup can also release Nori’s own caches.
+
+![Nori island in English](docs/screenshots/en/island.png)
+
+The menu bar and main window offer CPU, memory, disk usage and I/O, network rates, battery information, processes, listening ports, and application traffic. Liquid Glass transitions adapt to Reduce Motion, and older macOS versions or Reduce Transparency use fallback surfaces.
+
+*The English and Chinese screenshots show the app’s actual UI components rendered with sample data. Their sizes, histories, and cleanup results are illustrative, not a benchmark or a scan of a personal Mac.*
+
+## Install and update
+
+Requires **macOS 13 Ventura or later**. Native Liquid Glass requires macOS 26 or later.
+
+1. Open [GitHub Releases](https://github.com/percentcola3/sweep/releases/latest).
+2. Download `Nori-arm64.dmg` for Apple silicon or `Nori-x86_64.dmg` for Intel.
+3. Drag `Nori.app` into `/Applications`, replacing an older Nori after quitting it.
+4. Open Nori and use its permission center to grant **Full Disk Access** for cleanup/scanning. **Screen Recording** is requested separately for screenshots.
+
+Public releases reuse the **same pinned signing certificate and `com.nori.app` bundle identifier**. The release scripts verify this identity and fail if it changes or is missing, helping macOS recognize Nori across updates. This is a fixed self-signed identity, **not Apple notarization**, and cannot guarantee that every macOS version preserves all privacy permissions. If macOS blocks the first launch, use **System Settings → Privacy & Security → Open Anyway** when available; you do not need to install the signing certificate.
+
+Upgrading from an ad-hoc/development build, a differently signed app, or the former ForgeSweep bundle identifier may require one-time permission renewal. Read the [signing and upgrade guide](docs/release-signing.md) for identity verification and release validation.
+
+## Languages
+
+English, 简体中文, 繁體中文, 日本語, 한국어, Deutsch, Français, Español, Português, Italiano, Русский, and Türkçe. Nori follows your system language by default; switch instantly in Settings.
+
+## Build and contribute
+
+A Mac and an Xcode toolchain with `swiftc` are required. For a local development build:
 
 ```bash
 bash script/dev_identity.sh --ensure
 bash script/build_and_run.sh
 ```
 
-`build.sh` 优先选择钥匙串中的 `Apple Development` 身份，其次选择本机自签名身份；也可通过 `SM_CODESIGN_IDENTITY` 指定。构建使用 `-O` 与 Swift 跨文件优化，签名前移除本地符号；默认只构建当前架构，输出到 `dist/arm64/Nori.app` 或 `dist/x86_64/Nori.app`。设置 `SM_BUILD_ARCHS="arm64 x86_64"` 可生成两个独立 App。本地开发证书与项目的公开发布证书是不同身份。
+Run the regression suite with `bash script/test.sh`. Local development signatures are separate from the pinned release identity. Architecture, build options, safety policies, and maintenance notes are in the [development guide](docs/development.md); maintainers should follow the [release signing guide](docs/release-signing.md) when packaging public builds.
 
-如果本机 CLT 27 报缺少 `SwiftUIMacros`，且已经安装 macOS 26.5 SDK，可显式选择该 SDK：
+Bug reports and focused contributions are welcome through [Issues](https://github.com/percentcola3/sweep/issues) and pull requests. For cleanup reports, include your macOS version, Nori version, the tool involved, and a redacted path or log when useful.
 
-```bash
-SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk bash script/build_and_run.sh
-```
+## License and acknowledgments
 
-通用 DMG 入口 `bash script/package_dmg.sh` 沿用本机构建的签名选择。桌面脚本默认只构建当前架构，依次尝试 Apple Development、本地自签名身份；若本地身份创建失败且未禁止降级，才会退回 ad-hoc。完成上述本地身份配置后，可以明确禁止该降级：
+Nori is open source under the [GNU General Public License v3.0](LICENSE). Mole’s vendored source retains its [GPL v3 license](vendor/mole/LICENSE); upstream attribution and packaged components are documented in [Third-party notices](THIRD_PARTY_NOTICES.md).
 
-```bash
-SM_ALLOW_ADHOC=0 bash script/package_dmg_to_desktop.sh cleanup-parity
-```
-
-结果位于 `~/Desktop/Nori-<arch>-cleanup-parity.dmg`，并在 Finder 中定位；不传 label 时使用时间戳。公开发行应使用 `package_release.sh`，确保使用仓库固定的发布身份。
-
-仅用于临时测试的 ad-hoc 构建需显式开启：
-
-```bash
-SM_CODESIGN_IDENTITY=- SM_ALLOW_ADHOC=1 bash script/build_and_run.sh
-```
-
-这种签名可能在重编译或更新后要求重新授权，不能用它验证跨版本权限保留。若旧授权已失效，先退出 App，在系统设置中移除旧条目，重新添加实际安装的新版 App 并开启权限。
-
-### 可选的 Apple 公证发布
-
-持有 Developer ID 的维护者仍可使用独立的签名公证流程：
-
-```bash
-SM_CODESIGN_IDENTITY="Developer ID Application: ..." \
-SM_NOTARY_PROFILE="forgesweep" \
-bash script/release.sh
-```
-
-`SM_NOTARY_PROFILE` 是通过 `xcrun notarytool store-credentials` 保存的钥匙串配置名。此流程默认校验并使用 `vendor/mole/UPSTREAM_COMMIT`，分别公证两个架构，生成 `dist/Nori-arm64.zip` 和 `dist/Nori-x86_64.zip`，其中 App 已 stapled。升级 Mole 时应整体更新 `vendor/mole/`、重新审计并运行完整测试；也可通过 `MOLE_SRC=/path/to/Mole` 临时验证上游检出。
-
-## Nori 图标与动态形象
-
-新版品牌采用冰蓝 Nori 形象。已包含同源 SVG、Apple Icon Composer 工程、兼容 ICNS、菜单栏 1×/2× 模板，以及待机、彩带环绕工作、无聊、眨眼、庆祝、提醒、敲键盘、喝咖啡和照镜子动画。产品身份已全面切换为 Nori：Bundle ID 为 `com.nori.app`，可执行文件与构建产物均为 `Nori.app`；旧 ForgeSweep / Simple Mole 的偏好设置与数据目录（Application Support、Caches、Logs）在首次启动时自动迁移。因 Bundle ID 变化，升级后需要重新授予一次完全磁盘访问、屏幕录制等系统权限。发布签名证书沿用已固定的历史身份（标签 "ForgeSweep Release Signing"，指纹不变），GitHub Actions secret 名称保持 `FORGESWEEP_SIGNING_P12_*` 不变，已配置的仓库无需改动。
-
-[设计和调用说明](docs/brand/nori-design.md) · [动画预览](docs/brand/nori-preview.html)
-
-全部资源重建：`bash script/make_nori.sh`；动画与资产验证：`bash script/test_nori.sh`。
-
-
-矢量渲染主图、菜单栏模板、设计记录与 ICNS 分别位于 `SimpleMole/Support/AppIcon-1024.png`、`MenuBarIconTemplate.png`、`AppIcon.prompt.txt` 和 `AppIcon.icns`。更新主图后运行：
-
-```bash
-bash script/make_icon.sh
-```
-
-主窗口应用栏使用无底色 Nori 矢量动画，Dock / Finder 使用彩色 App 图标；菜单栏状态项使用独立的单色 Template 图标，由 macOS 自动适配深浅色。
-
-`dist/<架构>/Nori.app` 内嵌 Swift 主程序、`bridge/` 脚本，以及 `lib/core/`、
-`lib/clean/project.sh` 和 `lib/clean/purge_shared.sh`。构建与桥接回归共用
-`script/stage_bridge_resources.sh`，避免未被调用的 Mole 模块进入成品；
-不再打包 Mole CLI、旧卸载入口或 Go 辅助程序。开源 GitHub Release 使用
-`package_release.sh` 校验固定自签名身份并生成 DMG；可选的 `release.sh`
-流程则校验 Developer ID、TeamIdentifier、公证和 stapling。
-
-## 目录
-
-```
-SimpleMole/   Swift 源码（AppKit 骨架 + SwiftUI 视图 + 服务层）
-bridge/       app_*.sh 桥接脚本（删除边界复用引擎函数）
-vendor/mole/  固定版本的 Mole 桥接支持源码与 GPLv3 许可证
-script/       构建、运行、发布、测试与图标脚本
-signing/      固定发布身份的公开证书与指纹记录（无私钥）
-docs/         发布签名与维护说明
-Support/      Info.plist 与应用图标
-dist/         构建产物（gitignored）
-```
-
-## 验证
-
-```bash
-bash script/test.sh
-```
-
-测试覆盖脚本语法、Plist、受保护路径权限门禁、关键删除身份绑定、GC 退出码、图片计划互斥，并可执行 Swift 构建与签名检查。测试数据只在临时目录内创建。
-
-## 安全约定
-
-- 磁盘清理、全盘分析、卸载残留和图片全目录扫描统一经过权限门禁。未检测到“完全磁盘访问”时只打开 App 内权限中心，不启动扫描；授权后自动恢复用户刚才的操作。后台任务在未授权时安静跳过。
-- Swift 只在实测授权成功后向扫描子进程传递 `FORGESWEEP_FULL_DISK_AUTHORIZED=1`。桥接脚本默认拒绝或跳过 Desktop、Documents、Downloads、Pictures、其他 App 的 Application Support / Containers 等受保护根，避免未来调用点遗漏门禁后触发原生文件夹弹窗。
-- 完全磁盘访问和屏幕录制是 macOS 的两项独立权限：前者一次授权覆盖 Nori 的磁盘扫描，后者仅在使用截图功能时单独请求。开发者签名用于稳定识别 App，不会自动授予这两项权限。
-
-- 所有原生删除计划同时携带确认时捕获的 `device:inode:mtime` 身份，并在最终落盘前复验；桥接删除仍使用 NUL 协议传递，文件名中的空格或换行不会改变边界。
-- 卸载同时绑定应用绝对路径、Bundle ID、应用目录身份和 `Info.plist` 身份；预览与执行都重新扫描并要求精确匹配，拒绝同名应用或中途替换。
-- 卸载队列为每个已确认任务独立保存应用身份与预览快照，实际卸载保持串行并与其他磁盘清理互斥。等待项可取消，执行中的任务不可通过单项取消中断；退出会停止队列，重启不会自动继续删除。
-- 白名单在扫描与执行两侧同时生效（`is_path_whitelisted`），预览与清理结果一致。
-- 手动破坏性操作一律先确认并写明容量估算。硬盘清理只接受 Safe 垃圾并明确提示“永久删除、不可恢复”；卸载、磁盘分析与自动目录规则仍默认使用废纸篓保护。
-- 自动目录规则默认关闭，只处理用户选择目录的第一层子项；容量策略保护最近一小时仍有写入的内容，父规则也不会移走另一个已配置规则的目录。执行侧重新验证规则根目录、直接父子关系、扫描时文件身份和白名单，再移入废纸篓。
-- 原生卸载只自动处理已确认身份的应用本体与用户目录数据；LaunchAgent、LaunchDaemon、PrivilegedHelper 和诊断报告等系统位置只展示为人工复核项，不自动提权删除。
-- 系统清理选择清单使用 NUL 编码、SHA-256、私有权限和执行侧白名单复验，拒绝被替换、软链接或权限过宽的清单。
-- 测试与联调使用 `MOLE_TEST_NO_AUTH=1` 避免真实授权弹窗。
+Thank you to [tw93/Mole](https://github.com/tw93/Mole) for the inspiration and foundational cleanup work.

@@ -50,8 +50,7 @@ struct CleanupTabView: View {
     }
 
     /// 类别列表之外的独立内容源：安装包清单与系统数据库体检。
-    /// 空态与工具栏按钮必须把它们算进来，否则会出现“空态提示 +
-    /// 安装包结果”同屏，或没有任何重新扫描入口。
+    /// 空态必须把它们算进来，避免与安装包结果同时显示。
     private var hasAuxiliaryCleanupContent: Bool {
         state.installerCandidates != nil
             || !state.systemMaintenanceRows.isEmpty
@@ -63,21 +62,19 @@ struct CleanupTabView: View {
         !state.categories.isEmpty || hasAuxiliaryCleanupContent
     }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 8) {
-                Spacer()
-                // 深度/快速两个入口已合并：一次点击先快速扫描，
-                // 未完成的目录自动升级为深度补扫。
-                if state.isCleanupScanning || hasAnyCleanupContent {
-                    quickCleanButton
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
+    private var showsCleanupResults: Bool {
+        hasAnyCleanupContent && state.cleanupOutcomeMood == nil
+    }
 
-            if !state.isCleanupScanning && !state.cleanupDeferredPaths.isEmpty {
+    private var presentationPhase: Int {
+        if state.isApplying || state.isCleanupScanning { return 1 }
+        return showsCleanupResults ? 2 : 0
+    }
+
+    var body: some View {
+        NoriPageTransition(phase: presentationPhase) {
+        VStack(spacing: 0) {
+            if showsCleanupResults && !state.isCleanupScanning && !state.isApplying && !state.cleanupDeferredPaths.isEmpty {
                 Label(l10n.tf("cleanup.scan.deferred", state.cleanupDeferredPaths.count),
                       systemImage: "clock.arrow.circlepath")
                     .font(.system(size: 11))
@@ -88,9 +85,10 @@ struct CleanupTabView: View {
             }
 
             if !state.isCleanupScanning && !state.isApplying, state.cleanupOutcomeMood == .attention {
-                HStack(spacing: 12) {
-                    NoriStatusAnimation(mood: .attention, size: 52)
-                        .id(state.cleanupFeedbackID)
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.warning)
                     Text(state.statusText)
                         .font(.system(size: 12, weight: .medium))
                         .fixedSize(horizontal: false, vertical: true)
@@ -101,24 +99,18 @@ struct CleanupTabView: View {
             }
 
             if state.isApplying {
-                NoriScanActivity(text: state.statusText, quiet: true)
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
+                NoriScanActivity(text: state.statusText, assetName: "nori-tidying", quiet: true)
             } else if state.isCleanupScanning {
                 CleanupScanProgressView(state: state)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
-            } else if state.categories.isEmpty && !hasAuxiliaryCleanupContent {
-                VStack(spacing: 12) {
-                    if state.cleanupOutcomeMood != .attention {
-                        NoriStatusAnimation(mood: .idle, size: 120, assetName: "nori-coffee")
-                    }
+            } else if !showsCleanupResults {
+                NoriPlaceholderStage { size in
+                    NoriIdlePlaceholder(state: state, size: size)
                     quickCleanButton
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
                 ScrollView {
+                    LiquidGlassGroup {
                     LazyVStack(spacing: 12) {
                         ForEach(groupedCategories) { group in
                             VStack(spacing: 8) {
@@ -156,14 +148,15 @@ struct CleanupTabView: View {
                     // 扫描结果入场/移除的液态流动：按 id 变化触发，勾选操作不参与。
                     .animation(reduceMotion ? nil : MoleMotion.panel,
                                value: state.categories.map(\.id))
+                    }
                 }
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
             }
 
-            if !state.isCleanupScanning && hasAnyCleanupContent {
+            if !state.isCleanupScanning && !state.isApplying && showsCleanupResults {
                 Divider()
                 cleanupActions
             }
+        }
         }
         .sheet(item: $autoCleanIntent) { intent in
             AutoCleanupIntentSheet(state: state, intent: intent) {
@@ -175,9 +168,6 @@ struct CleanupTabView: View {
             if done { state.scanSystemMaintenance() }
         }
         // 扫描中 → 结果/空态 的整块互换走弹簧过渡，而不是硬切。
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isApplying)
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isCleanupScanning)
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.categories.isEmpty)
     }
 
     // MARK: 安装包与系统数据库维护（与类别列表同区滚动的独立内容源）
@@ -352,14 +342,7 @@ struct CleanupTabView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(collapsedGroups.contains(group.kind) ? Color.surface1 : Color.surface2)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(Color.hairline, lineWidth: 1)
-        }
+        .modifier(ListRowGlass())
     }
 
     private func groupSelection(_ group: CleanupPresentationGroup) -> Binding<Bool> {
@@ -438,11 +421,11 @@ extension CleanupGroupBucket {
 struct CategoryRowView: View {
     @Binding var category: CleanupCategory
     let selectionEnabled: Bool
+    var highlightsSensitiveData = false
     var coveredPaths: Set<String> = []
     var onAutoClean: (() -> Void)? = nil
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var hovered = false
 
     /// 类目下的路径是否全部已设置定时清理（决定徽标文案）。
     private var fullyScheduled: Bool {
@@ -473,7 +456,11 @@ struct CategoryRowView: View {
                         Text(selectionCountText)
                             .font(.system(size: 10).monospacedDigit())
                             .foregroundStyle(.secondary)
-                        RiskBadge(risk: category.risk)
+                        if sensitive {
+                            Text(l10n.t("agents.risk.high"))
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(Color.danger)
+                        } else { RiskBadge(risk: category.risk) }
                     }
                     .contentShape(Rectangle())
                 }
@@ -555,29 +542,14 @@ struct CategoryRowView: View {
             }
         }
         .clipped()
-        .background(
-            RoundedRectangle(cornerRadius: 9)
-                .fill(cardHighlight)
-                .shadow(color: category.selected
-                            ? Color.moleAccent.opacity(hovered ? 0.12 : 0.07)
-                            : .clear,
-                        radius: hovered ? 9 : 6,
-                        y: 1)
-        )
-        .onHover { hovering in
-            withAnimation(reduceMotion ? nil : MoleMotion.hover) {
-                hovered = hovering
-            }
-        }
+        .modifier(ListRowGlass(selected: category.selected))
         .animation(reduceMotion ? nil : MoleMotion.selection, value: category.selected)
         .opacity(category.risk == .protected ? 0.72 : 1)
     }
 
-    private var cardHighlight: Color {
-        if category.selected {
-            return Color.moleAccent.opacity(hovered ? 0.12 : 0.085)
-        }
-        return hovered ? Color.surface3 : Color.surface2
+    private var sensitive: Bool {
+        highlightsSensitiveData && (category.reasonKey == "agents.reason.showOnly"
+            || category.reasonKey == "agents.reason.undocumented")
     }
 
     private func toggleExpanded() {
@@ -604,6 +576,7 @@ struct CategoryRowView: View {
     }
 
     private var riskColor: Color {
+        if sensitive { return .danger }
         switch category.risk {
         case .safe: return Color.success
         case .warning: return Color.warning

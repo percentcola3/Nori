@@ -14,7 +14,7 @@ struct CleanupScanTests {
         let fm = FileManager.default
         // The production policy excludes /private and /var, including the
         // macOS temporary directory. Use the script's isolated workspace home.
-        let fixture = URL(fileURLWithPath: CommandLine.arguments[1])
+        let fixture = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
         try fm.createDirectory(at: fixture, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: fixture) }
         let home = fixture.appendingPathComponent("home")
@@ -34,6 +34,14 @@ struct CleanupScanTests {
         try write("Library/Application Support/Cursor/User/settings.json")
         try write(".cache/huggingface/models/weights")
         try write(".codex/sessions/history.jsonl")
+        try write("Applications/Codex.app/Contents/Info.plist")
+        try write("Applications/Cursor.app/Contents/Info.plist")
+        try write("Library/Caches/shared-agent-storage/state_5.sqlite")
+        try write("Library/Caches/shared-agent-storage/codex-tui.log")
+        try write("Library/Caches/shared-agent-storage/keep.txt")
+        try Data(("sqlite_home = '" + home.path + "/Library/Caches/shared-agent-storage'\n"
+                  + "log_dir = '" + home.path + "/Library/Caches/shared-agent-storage'\n").utf8)
+            .write(to: home.appendingPathComponent(".codex/config.toml"))
         try write(".npm/_cacache/package")
         try write(".npm/custom-data/keep")
         try write(".pnpm-store/v3/files/keep")
@@ -75,7 +83,8 @@ struct CleanupScanTests {
         try fm.createSymbolicLink(at: home.appendingPathComponent("Library/Application Support/Claude"),
                                   withDestinationURL: outside)
 
-        let quick = await NativeCore.shared.scanCleanup(homeDirectory: home.path)
+        let installedPresence = AgentPresenceContext(applicationDirs: [home.path + "/Applications"], searchPath: [])
+        let quick = await NativeCore.shared.scanCleanup(homeDirectory: home.path, agentPresence: installedPresence)
         let quickPaths = quick.categories.flatMap(\.paths)
         // AI Agent 的缓存与会话归 Agent 专清页，磁盘清理默认流程一律不收。
         expect(!quickPaths.contains(where: {
@@ -86,6 +95,9 @@ struct CleanupScanTests {
         expect(quick.succeeded && quick.deferredPaths.isEmpty, "quick fixture did not complete")
         expect(quickPaths.contains(home.path + "/Library/Caches/com.example.ordinary"), "ordinary cache group lost")
         expect(quickPaths.contains(home.path + "/Library/Caches/com.example.second"), "sibling cache group lost")
+        expect(!quickPaths.contains { $0 == home.path + "/Library/Caches/shared-agent-storage"
+                || $0.hasPrefix(home.path + "/Library/Caches/shared-agent-storage/") },
+               "custom Agent storage leaked through ordinary cache parent cleanup")
         expect(!quickPaths.contains(where: { $0.hasPrefix(home.path + "/Library/Caches/Codex") }),
                "Codex caches must move to the Agent tab")
         expect(CleanupRiskPolicy.core(section: "Caches", path: home.path + "/Library/Caches/Codex",
@@ -138,7 +150,8 @@ struct CleanupScanTests {
         for a in quickPaths {
             expect(!quickPaths.contains { $0 != a && $0.hasPrefix(a + "/") }, "overlapping scan work")
         }
-        let deep = await NativeCore.shared.scanCleanup(homeDirectory: home.path, mode: .deep)
+        let deep = await NativeCore.shared.scanCleanup(homeDirectory: home.path, mode: .deep,
+                                                     agentPresence: installedPresence)
         let deepPaths = Set(deep.categories.flatMap(\.paths))
         expect(deepPaths.isSuperset(of: quickPaths), "deep scan lost quick results")
         expect(deepPaths.contains(home.path + "/Library/Application Support/Example/Cache"), "deep support cache missing")
@@ -148,6 +161,50 @@ struct CleanupScanTests {
                "deep orphan container cache missing")
         expect(!deepPaths.contains(home.path + "/Library/Containers/com.example.other/Data/Library/Caches/entry"),
                "orphan container cache must not be double-listed per child")
+
+        // 数据目录不能充当安装证明。卸载后的历史与凭据进入清理页，仍须人工选择。
+        let orphanHome = fixture.appendingPathComponent("agent-residual-home")
+        func writeResidual(_ relative: String) throws {
+            let url = orphanHome.appendingPathComponent(relative)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: 4, count: 4096).write(to: url)
+        }
+        try writeResidual(".codex/sessions/rollout.jsonl")
+        try writeResidual(".codex/auth.json")
+        try writeResidual(".codex/tmp/probe.log")
+        try writeResidual(".gemini/tmp/session/history.json")
+        try writeResidual(".local/share/opencode/openCode.db")
+        try writeResidual(".local/share/opencode/openCode.db-wal")
+        try writeResidual(".local/share/opencode/log/probe.log")
+        try writeResidual("Library/Application Support/Cursor/Cache/entry")
+        try writeResidual("Library/Application Support/Cursor/User/history.json")
+        let orphanPresence = AgentPresenceContext(applicationDirs: [orphanHome.path + "/Applications"], searchPath: [])
+        let residualScan = await NativeCore.shared.scanCleanup(homeDirectory: orphanHome.path,
+                                                              agentPresence: orphanPresence)
+        expect(residualScan.succeeded && residualScan.deferredPaths.isEmpty,
+               "isolated Agent residual scan did not complete")
+        let residualRoots = [".codex", ".gemini/tmp", ".local/share/opencode",
+                             "Library/Application Support/Cursor"]
+        for relative in residualRoots {
+            let path = orphanHome.path + "/" + relative
+            let category = residualScan.categories.first { $0.paths.contains(path) }
+            expect(category?.source == .appLeftover && category?.risk == .warning
+                   && category?.canSelect == true && category?.selected == false
+                   && category?.activityGuard == .aiAgent && category?.activityOwners.isEmpty == false,
+                   "Agent residual was omitted, default-selected or lost its manual owner guard: " + relative)
+        }
+        expect(CleanupCategory.safeCleanupCandidates(from: residualScan.categories).isEmpty,
+               "uninstalled Agent history entered quick-clean recommendations")
+        expect(CleanupCategory.manualCleanupCandidates(from: residualScan.categories).count
+               == residualScan.categories.count,
+               "manual cleanup filtering omitted scanned Agent residuals")
+        let residualDeep = await NativeCore.shared.scanCleanup(homeDirectory: orphanHome.path,
+            mode: .deep, agentPresence: orphanPresence)
+        let residualDeepPaths = Set(residualDeep.categories.flatMap(\.paths))
+        expect(residualRoots.allSatisfy { residualDeepPaths.contains(orphanHome.path + "/" + $0) },
+               "deep cache-leaf discovery displaced an entire Agent history residual")
+        expect(!residualDeepPaths.contains(orphanHome.path + "/Library/Application Support/Cursor/Cache"),
+               "a narrow Safe cache replaced the manually cleanable whole Agent residual")
         let cancelled = CleanupScanControl(mode: .quick)
         cancelled.cancel()
         let stopped = await NativeCore.shared.scanCleanup(homeDirectory: home.path, control: cancelled)
@@ -345,7 +402,7 @@ struct CleanupScanTests {
                "final content validation must be called and prevent Trash")
         expect(fm.fileExists(atPath: finalGuardFile.path), "final-validation rejection must preserve the file")
 
-        print(String(format: "PASS: catalog, grouping, deep scan, exclusions, cancellation, partial sizes, hardlinks, pipe output, 7-day gate, custom locations, lexical guards, secure fd-walk deletion; 10000 files in %.3fs", benchmark.elapsed))
+        print(String(format: "PASS: catalog, grouping, deep scan, manual Agent residuals, exclusions, cancellation, partial sizes, hardlinks, pipe output, 7-day gate, custom locations, lexical guards, secure fd-walk deletion; 10000 files in %.3fs", benchmark.elapsed))
         print(quick.diagnostics)
         print(deep.diagnostics)
         print(aged.diagnostics)

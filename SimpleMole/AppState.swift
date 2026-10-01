@@ -34,6 +34,7 @@ final class AppState: ObservableObject {
     let islandProcessSampler = ProcessSampler()
     var islandSampling = false
     var lastIslandSample = Date.distantPast
+    private var mutationResampleTask: Task<Void, Never>?
 
     // MARK: 窗口与导航
 
@@ -145,8 +146,11 @@ final class AppState: ObservableObject {
     @Published var agentGroups: [AgentGroupSummary] = []
     @Published var agentSkills: [AgentSkill] = []
     @Published var agentServers: [AgentMCPServer] = []
+    @Published var agentMCPInstallations: [AgentMCPInstallation] = []
+    @Published var agentCLIInstallations: [AgentCLIInstallation] = []
     @Published var agentSelectedSkills: Set<String> = []
     @Published var agentSelectedServers: Set<String> = []
+    @Published var agentSelectedMCPInstallations: Set<String> = []
     @Published var agentScanning = false
     @Published var agentApplying = false
     @Published var agentScanComplete = false
@@ -164,6 +168,13 @@ final class AppState: ObservableObject {
     /// Bumps once per finished user task so the title-bar mascot can celebrate or warn.
     @Published var headerReactionID = 0
     @Published var headerReactionMood: NoriMood = .success
+    /// One idle scene shared by every tab's placeholder, re-rolled each time the window opens.
+    @Published private(set) var placeholderScene = NoriStatusAnimation.idleScenes.randomElement() ?? "nori-static"
+
+    func shufflePlaceholderScene() {
+        let others = NoriStatusAnimation.idleScenes.filter { $0 != placeholderScene }
+        placeholderScene = others.randomElement() ?? placeholderScene
+    }
 
     func noteHeaderReaction(_ mood: NoriMood?) {
         guard let mood, mood == .success || mood == .attention else { return }
@@ -263,6 +274,10 @@ final class AppState: ObservableObject {
     @Published var devEnvSelection: Set<String> = []
     @Published var devEnvStatus: String
     @Published var isScanningEnv = false
+    @Published var devWorkspaceRefreshToken = 0
+    @Published var isRefreshingGc = false
+    @Published var devWorkspaceRefreshPending = false
+    var developerWorkspaceRefreshTask: Task<Void, Never>?
 
     // MARK: 包管理 GC（owner 命令，无直接删除）
 
@@ -415,6 +430,8 @@ final class AppState: ObservableObject {
     @Published var duplicateScanFinished = false
     var duplicateScanControl: DuplicateScanControl?
     var duplicateScannedRoots: [String] = []
+    let duplicateScanProgress = DuplicateScanProgressStore()
+    var duplicateScanReclaimableBytes: UInt64 = 0
 
     // MARK: 白名单
 
@@ -486,7 +503,7 @@ final class AppState: ObservableObject {
     @Published private(set) var ratioCaptureHotKeyRegistrationFailed = false
 
     /// 统一的快捷键注册收口：任一开关或组合变化都整体重注册。
-    private func registerScreenshotHotKey() {
+    func registerScreenshotHotKey() {
         HotKeyCenter.shared.unregister()
         screenshotHotKeyRegistrationFailed = false
         ratioCaptureHotKeyRegistrationFailed = false
@@ -647,6 +664,27 @@ final class AppState: ObservableObject {
         isBusyExcludingUninstall || uninstallQueue.hasWork || cleanupQueued
     }
 
+    /// 标题栏展示的当前任务。删除类任务（清理、卸载）共用收纳动效。
+    struct HeaderTask: Equatable {
+        let text: String
+        let tidying: Bool
+    }
+
+    var headerTask: HeaderTask? {
+        if let job = uninstallQueue.activeJob {
+            return HeaderTask(text: l10n.tf("header.task.uninstalling", job.app.name), tidying: true)
+        }
+        if isApplying || agentApplying || isDeletingDuplicates || isDeletingAnalysisFiles
+            || simulatorInventory.isDeleting || cleanupQueued {
+            return HeaderTask(text: l10n.t("header.task.cleaning"), tidying: true)
+        }
+        if isScanning || isAnalyzing || isScanningDuplicates || isScanningEnv || agentScanning || isAutoCleanupScanning || isScanningApps {
+            return HeaderTask(text: l10n.t("header.task.scanning"), tidying: false)
+        }
+        if isBusy { return HeaderTask(text: l10n.t("header.task.working"), tidying: false) }
+        return nil
+    }
+
     var isBusyExcludingUninstall: Bool {
         isScanning || isApplying || isSlimming
             || isScanningEnv
@@ -761,12 +799,8 @@ final class AppState: ObservableObject {
                         // only from the user's quick/deep scan actions.
                         break
                     case .agents:
-                        // 首次进入时自动做一次只读扫描；之后保留结果与选择。
+                        // 与磁盘分析一样，进入页面只刷新权限，扫描由用户点击触发。
                         self.permissionCenter.refresh()
-                        if !self.agentHasScanned, !self.isBusy,
-                           self.permissionCenter.fullDiskAccessGranted {
-                            self.scanAgents()
-                        }
                     case .analyze:
                         // 全盘扫描耗时：tab 激活不自动触发，等用户点击“开始分析”。
                         self.permissionCenter.refresh()
@@ -775,14 +809,7 @@ final class AppState: ObservableObject {
                         // only after the navigation/placeholder has appeared.
                         break
                     case .devenv:
-                        self.permissionCenter.refresh()
-                        if self.devEnvEntries.isEmpty,
-                           self.permissionCenter.fullDiskAccessGranted {
-                            self.scanDevEnv()
-                        }
-                        self.scanGc()
-                        self.scanDockerDf()
-                        self.runConfigAudits()
+                        self.refreshDeveloperWorkspace()
                     case .processes: self.refreshProcesses()
                     case .ports: self.refreshPorts()
                     case .traffic: self.trafficMonitor.tick()
@@ -838,7 +865,6 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
         // 服务启动放在所有存储属性初始化完成之后。
         if clipboardHistoryEnabled { clipboardManager.start() }
-        registerScreenshotHotKey()
         // /Applications is safe to watch at launch. ~/.Trash is registered
         // only after Full Disk Access has been verified for this process.
         startUninstallInventoryMonitoring(includeProtectedPaths: false)
@@ -957,6 +983,24 @@ final class AppState: ObservableObject {
         if networkUploadHistory.count > 60 {
             networkUploadHistory.removeFirst(networkUploadHistory.count - 60)
         }
+    }
+
+    /// 清理、删除、卸载或关闭进程之后，磁盘余量、内存占用和进程排行都已变化。
+    /// 立即重采一次，1.5 秒后再采一次：APFS 回收空间和进程退出都会滞后一点。
+    /// 不写入网络趋势，避免额外采样把固定节拍的曲线挤乱。
+    func resampleAfterMutation() {
+        resampleMetricsNow()
+        mutationResampleTask?.cancel()
+        mutationResampleTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled, let self else { return }
+            self.resampleMetricsNow()
+        }
+    }
+
+    private func resampleMetricsNow() {
+        metrics = SystemMetrics.sample()
+        refreshIslandProcesses(force: true)
     }
 
     // MARK: - 日志
@@ -1200,7 +1244,6 @@ final class AppState: ObservableObject {
             guard let self else { return }
             defer {
                 self.isNetworkToolRunning = false
-                self.networkToolStatus = ""
             }
             guard !testMode else {
                 self.networkToolStatus = self.l10n.t("nettool.status.skipped")
@@ -1384,7 +1427,7 @@ final class AppState: ObservableObject {
             output: "", errorOutput: coreScan.error ?? "",
             exitCode: coreScan.succeeded ? 0 : 1, timedOut: false)
 
-        let combined = CleanupCategory.safeCleanupCandidates(from: coreScan.categories)
+        let combined = CleanupCategory.manualCleanupCandidates(from: coreScan.categories)
         // 安装包清单并入统一扫描：合并后的单一入口也需要它，不再专属于深度模式。
         if !control.isCancelled {
             cleanupProgress.phase = l10n.t("file.installer")
@@ -1442,7 +1485,7 @@ final class AppState: ObservableObject {
     /// performApply 会用最新进程快照重新评估，运行中的路径会计入「已跳过」。
     private func finalizedCleanupCategories(_ source: [CleanupCategory]) -> [CleanupCategory] {
         CleanupCategory.mergingLongTail(
-            CleanupCategory.safeCleanupCandidates(from: source)
+            CleanupCategory.manualCleanupCandidates(from: source)
         ).sorted(by: CleanupCategory.sizeDescending)
     }
 
@@ -1524,7 +1567,7 @@ final class AppState: ObservableObject {
             let selectedCategories = await Task.detached(priority: .utility) {
                 let subsets = source.compactMap(\.selectedSubset)
                 return applyFamily == .clean
-                    ? CleanupCategory.safeCleanupCandidates(from: subsets) : subsets
+                    ? CleanupCategory.manualCleanupCandidates(from: subsets) : subsets
             }.value
             // 用户在清单里逐项勾选后按“清理”就是明确指令：不再弹确认框，
             // 直接执行。安装包与系统维护项同样由这一次点击统一分发。
@@ -1669,6 +1712,7 @@ final class AppState: ObservableObject {
         noteHeaderReaction(NoriHeaderReaction.mood(removed: result.removed, skipped: result.skipped, failed: result.failed))
         cleanupFeedbackID += 1
         analyzeCache.clear()
+        resampleAfterMutation()
         // 报告文案与执行器的实际动作一致：永久删除与移入废纸篓分开表述。
         let key = permanently
             ? "cleanup.execution.summary.permanent"
@@ -1702,14 +1746,32 @@ final class AppState: ObservableObject {
         let stdinData: Data
         switch route {
         case .genericTrash, .developerCacheTrash, .aiTrash, .xcodeTrash:
+            let hasAgentLeftovers = routeCategories.contains { $0.reasonKey == "cleanup.risk.agentLeftover" }
+            let agentSnapshot = hasAgentLeftovers ? await captureRunningApplicationSnapshot() : .unavailable
             let applied = await Task.detached(priority: .utility) {
-                let items = routeCategories.flatMap { category in
+                let home = NSHomeDirectory()
+                let agentLeftovers = routeCategories.filter { $0.reasonKey == "cleanup.risk.agentLeftover" }
+                let agentOutcome = agentLeftovers.isEmpty
+                    ? AgentCleanupExecutor.Outcome(summary: .init(removed: 0, skipped: 0, failed: 0, messages: []), refused: 0)
+                    : AgentCleanupExecutor.execute(agentLeftovers, running: agentSnapshot,
+                                                   home: home, permanent: permanently)
+                let items = routeCategories.filter { $0.reasonKey != "cleanup.risk.agentLeftover" }.flatMap { category in
                     category.paths.compactMap { path -> DeletionPlan.Item? in
                         guard let identity = category.pathIdentities[path], !identity.isEmpty else { return nil }
                         return DeletionPlan.Item(record: path, identity: identity)
                     }
                 }
-                return (NativeCore.shared.applyCleanup(items: items, permanent: permanently), items.count)
+                let generic = items.isEmpty
+                    ? NativeCore.ApplySummary(removed: 0, skipped: 0, failed: 0, messages: [])
+                    : NativeCore.shared.applyCleanup(items: items, permanent: permanently)
+                let agent = agentOutcome.summary
+                return (NativeCore.ApplySummary(
+                    removed: generic.removed + agent.removed,
+                    skipped: generic.skipped + agent.skipped + agentOutcome.refused,
+                    failed: generic.failed + agent.failed,
+                    messages: generic.messages + agent.messages,
+                    removedPaths: generic.removedPaths.union(agent.removedPaths)),
+                    items.count + agentLeftovers.reduce(0) { $0 + $1.paths.count })
             }.value
             let summary = applied.0
             if !summary.messages.isEmpty { log(summary.messages.joined(separator: "\n")) }
@@ -1917,6 +1979,7 @@ final class AppState: ObservableObject {
                 : l10n.tf("proc.status.stillRunning", row.name)
             processQuitFeedback[row.signalToken] = application.isTerminated ? nil : .stillRunning
             refreshNativeProcesses()
+            resampleAfterMutation()
         }
     }
 
@@ -1960,6 +2023,7 @@ final class AppState: ObservableObject {
             ? l10n.tf("proc.status.groupEnded", group.app.name, endedChildren)
             : l10n.tf("proc.status.stillRunning", group.app.name)
         refreshNativeProcesses()
+        resampleAfterMutation()
     }
 
     /// 结束单个子进程（非应用主进程）。
@@ -1982,6 +2046,7 @@ final class AppState: ObservableObject {
                     self.processActionStatus = ended
                         ? self.l10n.t("status.signalSent") : self.l10n.t("status.signalFailed")
                     self.refreshNativeProcesses()
+                    self.resampleAfterMutation()
                 }
             }
     }
@@ -2137,6 +2202,7 @@ final class AppState: ObservableObject {
                             ? self.l10n.t("proc.force.done") : self.l10n.t("status.quitRefused")
                         self.processQuitFeedback[row.signalToken] = application.isTerminated ? nil : .refused
                         self.refreshProcesses(allowAutomaticCleanup: false)
+                        self.resampleAfterMutation()
                     }
                 }
             return
@@ -2170,6 +2236,7 @@ final class AppState: ObservableObject {
                         : self.l10n.t("status.signalFailed")
                     self.runtimeInFlight = false
                     self.refreshProcesses(allowAutomaticCleanup: false)
+                    self.resampleAfterMutation()
                 }
             }
     }
@@ -2197,6 +2264,7 @@ final class AppState: ObservableObject {
                 logFailure(result)
             }
             runtimeInFlight = false
+            resampleAfterMutation()
             guard advancedProcesses else {
                 resetAutomaticProcessCleanup()
                 return
@@ -2217,6 +2285,7 @@ final class AppState: ObservableObject {
                         ? self.l10n.t("status.signalSent")
                         : self.l10n.t("status.signalFailed")
                     self.refreshPorts()
+                    self.resampleAfterMutation()
                 }
             }
     }
@@ -2444,6 +2513,7 @@ final class AppState: ObservableObject {
     private func finishUninstall(_ job: UninstallJob, succeeded: Bool, message: String) {
         uninstallQueue.finish(job.id, succeeded: succeeded, message: message)
         noteHeaderReaction(succeeded ? .success : .attention)
+        resampleAfterMutation()
         statusText = message
         log(message)
     }
@@ -2505,11 +2575,12 @@ final class AppState: ObservableObject {
 
     // MARK: - 开发环境
 
-    func scanDevEnv(announce: Bool = true) {
+    func scanDevEnv(announce: Bool = true, presentingPermissionCenter: Bool = true) {
         guard authorize(.developmentEnvironmentScan,
-                        presentingPermissionCenter: true) else { return }
+                        presentingPermissionCenter: presentingPermissionCenter) else { return }
         guard !isBusy else { return }
-        let scanEnvironment = fullDiskScanEnvironment
+        var scanEnvironment = fullDiskScanEnvironment
+        scanEnvironment["NORI_DEV_SCAN_FAST"] = "1"
         guard scanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
         isScanningEnv = true
         devEnvStatus = l10n.t("devenv.status.scanning")
@@ -2519,16 +2590,24 @@ final class AppState: ObservableObject {
                 timeout: 180)
             isScanningEnv = false
             if announce { noteHeaderReaction(result.succeeded ? .success : .attention) }
-            devEnvEntries = Parsers.devEnvEntries(result.output)
-            devEnvSelection.removeAll()
-            devEnvStatus = devEnvEntries.isEmpty ? l10n.t("devenv.status.none") : ""
+            if result.succeeded {
+                devEnvEntries = Parsers.devEnvEntries(result.output)
+                let selectable = Set(devEnvEntries.filter(DeveloperRuntimePolicy.canClean).map(\.path))
+                devEnvSelection.formIntersection(selectable)
+                devEnvStatus = devEnvEntries.isEmpty ? l10n.t("devenv.status.none") : ""
+            } else {
+                devEnvSelection.removeAll()
+                devEnvStatus = l10n.t("gc.failed")
+            }
             logFailure(result)
         }
     }
 
     func applyDevEnvCleanup() {
         guard !isBusy else { return }
-        let paths = devEnvEntries.filter { devEnvSelection.contains($0.path) }.map(\.path)
+        let paths = devEnvEntries.filter {
+            DeveloperRuntimePolicy.canClean($0) && devEnvSelection.contains($0.path)
+        }.map(\.path)
         guard !paths.isEmpty else {
             devEnvStatus = l10n.t("devenv.selectFirst")
             return
@@ -2556,6 +2635,7 @@ final class AppState: ObservableObject {
                     let summary = Parsers.applySummary(result.output)
                     let fullySucceeded = result.succeeded && summary.failed == 0
                     self.noteHeaderReaction(fullySucceeded ? .success : .attention)
+                    self.resampleAfterMutation()
                     self.statusText = fullySucceeded
                         ? self.l10n.tf("status.envDone", summary.removed)
                         : self.l10n.tf("status.envPartial", summary.failed)
@@ -2573,11 +2653,13 @@ final class AppState: ObservableObject {
     // MARK: - 包管理 GC（owner 命令）
 
     /// 列出本机可用的官方 GC 命令（只读扫描，每次会话最多一次）。
-    func scanGc() {
-        if gcScanned || gcRunningId != nil { return }
+    func scanGc(force: Bool = false) {
+        if (gcScanned && !force) || isRefreshingGc || gcRunningId != nil { return }
         gcScanned = true
+        isRefreshingGc = true
         Task {
             let result = await MoleEngine.shared.runBridge("bin/app_gc_scan.sh", timeout: 60)
+            isRefreshingGc = false
             gcActions = result.output.components(separatedBy: "\n").compactMap { line in
                 let parts = line.components(separatedBy: "\t")
                 guard parts.count >= 2, !parts[0].isEmpty else { return nil }
@@ -2589,7 +2671,7 @@ final class AppState: ObservableObject {
 
     /// 运行一个白名单内的官方 GC 命令，输出逐行流入日志抽屉。
     func runGc(_ action: GcAction) {
-        guard !isBusy else { return }
+        guard !isBusy, !isRefreshingGc else { return }
         confirmation = Confirmation(
             title: l10n.tf("gc.confirm.title", action.id),
             message: l10n.tf("gc.confirm.msg", action.command),
@@ -2604,6 +2686,7 @@ final class AppState: ObservableObject {
                         timeout: 1200, onLine: self.streamLog)
                     self.gcRunningId = nil
                     self.noteHeaderReaction(result.succeeded ? .success : .attention)
+                    self.resampleAfterMutation()
                     self.statusText = result.succeeded
                         ? self.l10n.t("gc.finished")
                         : self.l10n.t("gc.failed")
@@ -2726,6 +2809,7 @@ final class AppState: ObservableObject {
                         "bin/app_snapshots_thin.sh", arguments: [], timeout: 300)
                     self.isThinning = false
                     self.noteHeaderReaction(result.succeeded ? .success : .attention)
+                    self.resampleAfterMutation()
                     if result.succeeded {
                         let names = result.output.components(separatedBy: "\n")
                             .map { $0.trimmingCharacters(in: .whitespaces) }

@@ -16,19 +16,26 @@ struct UninstallTabView: View {
         return pages.indices.contains(state.selectedTab) && pages[state.selectedTab] == .uninstall
     }
 
+    private var presentationPhase: Int {
+        if !isListPresented || state.isRestoringInstalledApps
+            || (!state.installedApps.isEmpty && state.filteredApps.isEmpty
+                && state.uninstallSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            || (state.isScanningApps && state.installedApps.isEmpty) { return 1 }
+        if state.installedApps.isEmpty { return 0 }
+        return state.filteredApps.isEmpty ? 3 : 2
+    }
+
     var body: some View {
+        NoriPageTransition(phase: presentationPhase) {
         VStack(spacing: 0) {
             toolbar
             statusRow
             content
         }
+        }
         .animation(reduceMotion ? nil : MoleMotion.panel,
                    value: state.uninstallQueue.jobs)
         // 扫描中 → 应用列表/空态/无匹配 的整块互换走弹簧过渡。
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: isListPresented)
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isScanningApps)
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.installedApps.isEmpty)
-        .animation(reduceMotion ? nil : MoleMotion.panel, value: state.filteredApps.isEmpty)
         .task(id: isActive) {
             guard isActive else {
                 isListPresented = false
@@ -46,18 +53,10 @@ struct UninstallTabView: View {
         }
     }
 
-    /// 搜索与扫描共用一行：搜索框占满剩余宽度，扫描按钮固定在行尾。
+    /// 清单由目录监听自动刷新，不再提供手动扫描；搜索框独占一行。
     private var toolbar: some View {
         HStack(spacing: 8) {
             searchField
-            Button { state.scanInstalledApps() } label: {
-                Label(state.isScanningApps
-                      ? l10n.t("common.scanning")
-                      : l10n.t("uninstall.scan"),
-                      systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .disabled(state.uninstallQueue.hasWork || state.isScanningApps)
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
@@ -102,12 +101,10 @@ struct UninstallTabView: View {
     private var statusRow: some View {
         HStack(spacing: 8) {
             if let job = statusJob {
-                if job.state.isActive || job.state.isPending {
-                    NoriStatusAnimation(mood: .working, size: 64, assetName: "nori-uninstalling")
-                        .id(job.id)
-                } else if job.state == .failed {
-                    NoriStatusAnimation(mood: .attention, size: 44)
-                        .id(job.id)
+                if job.state == .failed {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.warning)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(job.message?.components(separatedBy: "\n").first ?? job.app.name)
@@ -134,9 +131,6 @@ struct UninstallTabView: View {
                     }
                 }
             } else {
-                if state.isScanningApps && !state.installedApps.isEmpty {
-                    NoriStatusAnimation(mood: .working, size: 64)
-                }
                 if !state.appListStatus.isEmpty {
                     Text(state.appListStatus)
                         .font(.system(size: 11))
@@ -155,11 +149,9 @@ struct UninstallTabView: View {
         if !isListPresented || state.isRestoringInstalledApps
             || (!state.installedApps.isEmpty && state.filteredApps.isEmpty
                 && state.uninstallSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
-            NoriScanActivity(text: l10n.t("uninstall.loading"), quiet: true)
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
+            NoriScanActivity(text: l10n.t("uninstall.loading"), assetName: "nori-apps", quiet: true)
         } else if state.isScanningApps && state.installedApps.isEmpty {
-            NoriScanActivity(text: state.appListStatus, quiet: true)
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
+            NoriScanActivity(text: state.appListStatus, assetName: "nori-apps", quiet: true)
         } else if state.installedApps.isEmpty {
             EmptyStateView(
                 symbol: "app.dashed",
@@ -167,12 +159,10 @@ struct UninstallTabView: View {
                     ? l10n.t("uninstall.status.scanning")
                     : l10n.t("uninstall.status.none"),
                 subtitle: state.isScanningApps ? nil : l10n.t("uninstall.empty.subtitle"))
-            .transition(reduceMotion ? .opacity : .moleStateSwap)
         } else if state.filteredApps.isEmpty {
             EmptyStateView(symbol: "magnifyingglass",
                            title: l10n.t("uninstall.noMatch.title"),
                            subtitle: l10n.t("uninstall.noMatch.subtitle"))
-            .transition(reduceMotion ? .opacity : .moleStateSwap)
         } else {
             ScrollView {
                 LazyVStack(spacing: 7) {
@@ -189,7 +179,6 @@ struct UninstallTabView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)
             }
-            .transition(reduceMotion ? .opacity : .moleStateSwap)
         }
     }
 }

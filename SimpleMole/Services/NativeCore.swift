@@ -147,7 +147,8 @@ final class NativeCore: @unchecked Sendable {
     func scanCleanup(homeDirectory: String = NSHomeDirectory(),
                      progress: CleanupScanProgressSink? = nil,
                      mode: CleanupScanMode = .quick,
-                     control: CleanupScanControl? = nil) async -> CleanupScan {
+                     control: CleanupScanControl? = nil,
+                     agentPresence: AgentPresenceContext? = nil) async -> CleanupScan {
         let control = control ?? CleanupScanControl(mode: mode)
         return await Task.detached(priority: .utility) { [self] in
             let home = URL(fileURLWithPath: homeDirectory, isDirectory: true)
@@ -165,22 +166,26 @@ final class NativeCore: @unchecked Sendable {
                                   ".cache", ".Trash"].map { home.appendingPathComponent($0).path })
             var candidates: [CleanupScanCandidate] = []
             var seen = Set<String>()
+            // 自定义日志/SQLite/XDG 路径同样归 Agent 专清；普通缓存父目录
+            // 不能隐式包住它们并以通用 Safe 规则删除。
+            let agentDataRoots = AgentCatalog.definitions.flatMap {
+                AgentCatalog.dataRoots(for: $0, home: home.path)
+            }.filter { AgentCatalog.isPhysical($0, home: home.path) }
             // 已卸载 AI 工具的数据根：应用本体（bundle 与 PATH 命令）都已找不到，
             // 按磁盘垃圾进入清理清单；Agent 专清页不再展示这些工具。
             for agent in AgentCatalog.definitions
-            where !agent.documented && AgentCatalog.isInstalled(agent, home: home.path)
-                && AgentCatalog.isOrphaned(agent, home: home.path) {
-                for relative in agent.detect {
+            where AgentCatalog.isOrphaned(agent, home: home.path, presence: agentPresence) {
+                for path in AgentCatalog.orphanedDataRoots(agent, home: home.path, presence: agentPresence) {
                     guard !control.shouldStop else { break }
-                    let path = AgentCatalog.absolute(relative, home: home.path)
                     guard self.cleanupPathIsPhysical(URL(fileURLWithPath: path), home: home),
                           seen.insert(path).inserted,
                           !self.matchesWhitelist(path, entries: whitelist) else { continue }
                     candidates.append(CleanupScanCandidate(
                         path: path, name: agent.name + " leftovers",
                         policy: CleanupRiskPolicy.uninstalledAgentLeftover(
-                            path: path, homeDirectory: home.path),
-                        retention: 0))
+                            path: path, homeDirectory: home.path, verifiedPaths: [path]),
+                        retention: 0, activityOwners: AgentCatalog.runtimeOwners(
+                            for: agent, home: home.path, presence: agentPresence)))
                 }
             }
             for (root, label, _, _, retention) in roots {
@@ -193,6 +198,9 @@ final class NativeCore: @unchecked Sendable {
                     guard self.isAllowedCleanupPath(entry, home: home),
                           self.cleanupPathIsPhysical(entry, home: home),
                           !CleanupRiskPolicy.isAgentOwnedPath(path, homeDirectory: home.path),
+                          !agentDataRoots.contains(where: {
+                              path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/")
+                          }),
                           !self.matchesWhitelist(path, entries: whitelist) else { continue }
                     // A precise leaf replaces an overlapping broad parent before
                     // traversal. Never size or offer that parent for deletion.
@@ -263,11 +271,12 @@ final class NativeCore: @unchecked Sendable {
                     (candidates[$0].path, measurements[$0].bytes)
                 })
                 var category = CleanupCategory(name: first.name, paths: indices.map { candidates[$0].path },
-                    bytes: sizes.values.reduce(0, &+), pathBytes: sizes, selected: true,
+                    bytes: sizes.values.reduce(0, &+), pathBytes: sizes, selected: first.policy.risk == .safe,
                     source: first.policy.source, risk: first.policy.risk,
                     disposal: first.policy.disposal, applyRoute: first.policy.applyRoute,
                     activityGuard: first.policy.activityGuard, retention: first.retention,
                     reasonKey: first.policy.reasonKey)
+                category.activityOwners = Array(Set(indices.flatMap { candidates[$0].activityOwners })).sorted()
                 // 7 天活跃门按“可独立清理的单元”逐条生效：活跃条目保留在
                 // 页面上但默认不勾选；证据缺失（时间为空/未来）同样不推荐。
                 if first.retention > 0 {
@@ -306,6 +315,7 @@ final class NativeCore: @unchecked Sendable {
         let policy: CleanupPolicyDescriptor
         /// 年龄门（秒）。0 表示该候选不按活跃时间过滤。
         var retention: TimeInterval = 0
+        var activityOwners: [String] = []
     }
 
     static func nonOverlappingCleanupCandidates(_ input: [CleanupScanCandidate]) -> [CleanupScanCandidate] {
@@ -956,6 +966,59 @@ final class NativeCore: @unchecked Sendable {
         }
         return ApplySummary(removed: removed, skipped: skipped,
                             failed: failed, messages: messages, removedPaths: removedPaths)
+    }
+
+    /// 只解除已验证的 Skill / MCP 启动链接；从不打开或删除链接目标。
+    /// 每级父目录用 O_NOFOLLOW 打开，最终 fstatat 复核链接自身的完整身份。
+    func applyAgentSkillLinks(items: [DeletionPlan.Item], homeDirectory: String,
+                              allowedDirectories: [String] = []) -> ApplySummary {
+        let parents = Set(AgentCatalog.skillDirectories(home: homeDirectory).map(\.path)
+                            + allowedDirectories)
+        var removed = 0, skipped = 0, failed = 0
+        var messages: [String] = []
+        var removedPaths = Set<String>()
+        for item in items {
+            let path = item.record
+            let parent = (path as NSString).deletingLastPathComponent
+            guard DeletionPlan.isLexicallySafePath(path), parents.contains(parent),
+                  !item.identity.isEmpty, AgentCatalog.isSymlink(path),
+                  DeletionPlan.identity(at: path) == item.identity else {
+                skipped += 1
+                messages.append("Skipped changed or unrecognized Agent link: " + path)
+                continue
+            }
+            let components = path.split(separator: "/").map(String.init)
+            var directoryFD = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            var opened = directoryFD >= 0
+            for component in components.dropLast() where opened {
+                let next = openat(directoryFD, component,
+                                  O_RDONLY | O_NOFOLLOW | O_DIRECTORY | O_CLOEXEC)
+                close(directoryFD)
+                directoryFD = next
+                opened = next >= 0
+            }
+            guard opened, let leaf = components.last else {
+                if directoryFD >= 0 { close(directoryFD) }
+                skipped += 1
+                continue
+            }
+            var metadata = stat()
+            let matches = fstatat(directoryFD, leaf, &metadata, AT_SYMLINK_NOFOLLOW) == 0
+                && (metadata.st_mode & S_IFMT) == S_IFLNK
+                && "\(metadata.st_dev):\(metadata.st_ino):\(metadata.st_mtimespec.tv_sec)" == item.identity
+            if !matches {
+                skipped += 1
+            } else if unlinkat(directoryFD, leaf, 0) == 0 {
+                removed += 1
+                removedPaths.insert(path)
+            } else {
+                failed += 1
+                messages.append("Failed to unlink Agent resource: " + path)
+            }
+            close(directoryFD)
+        }
+        return ApplySummary(removed: removed, skipped: skipped, failed: failed,
+                            messages: messages, removedPaths: removedPaths)
     }
 
     /// `device:inode:mtime` 身份串的前两个字段。

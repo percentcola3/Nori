@@ -288,45 +288,52 @@ struct SettingsTabView: View {
 
     @ViewBuilder
     private var screenshotRow: some View {
-        SettingsRow(divider: true) {
-            Toggle(l10n.t("shot.hotkey"), isOn: $state.screenshotHotKeyEnabled)
-                .toggleStyle(MoleSwitchToggleStyle())
-                .controlSize(.small)
-                .tint(Color.moleAccentText)
-                .font(.system(size: 12))
-        }
-        if state.screenshotHotKeyEnabled {
-            SettingsRow(divider: state.screenshotHotKeyRegistrationFailed, vertical: 6) {
-                HotKeyRecorderRow(combo: $state.screenshotHotKey, defaultCombo: .default)
-            }
+        SettingsRow(divider: !state.screenshotHotKeyRegistrationFailed) {
+            shortcutLine(title: l10n.t("shot.hotkey"),
+                         isOn: $state.screenshotHotKeyEnabled,
+                         combo: $state.screenshotHotKey,
+                         defaultCombo: .default)
         }
         if state.screenshotHotKeyRegistrationFailed {
-            SettingsRow(divider: true, vertical: 6) {
-                Label(l10n.t("settings.screenshot.conflict"), systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Color.warning)
-            }
+            SettingsRow(divider: true, vertical: 6) { hotKeyConflict }
         }
-        SettingsRow(divider: state.ratioCaptureHotKeyEnabled
-                    || state.ratioCaptureHotKeyRegistrationFailed) {
-            Toggle(l10n.t("settings.ratiohotkey"), isOn: $state.ratioCaptureHotKeyEnabled)
-                .toggleStyle(MoleSwitchToggleStyle())
-                .controlSize(.small)
-                .tint(Color.moleAccentText)
-                .font(.system(size: 12))
-        }
-        if state.ratioCaptureHotKeyEnabled {
-            SettingsRow(divider: state.ratioCaptureHotKeyRegistrationFailed, vertical: 6) {
-                HotKeyRecorderRow(combo: $state.ratioCaptureHotKey, defaultCombo: .ratioDefault)
-            }
+        SettingsRow(divider: state.ratioCaptureHotKeyRegistrationFailed) {
+            shortcutLine(title: l10n.t("settings.ratiohotkey"),
+                         isOn: $state.ratioCaptureHotKeyEnabled,
+                         combo: $state.ratioCaptureHotKey,
+                         defaultCombo: .ratioDefault)
         }
         if state.ratioCaptureHotKeyRegistrationFailed {
-            SettingsRow(vertical: 6) {
-                Label(l10n.t("settings.screenshot.conflict"), systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Color.warning)
+            SettingsRow(vertical: 6) { hotKeyConflict }
+        }
+    }
+
+    /// 开关和对应快捷键在同一行。按比例截取的快捷键不再单独标成「截图快捷键」。
+    private func shortcutLine(title: String,
+                              isOn: Binding<Bool>,
+                              combo: Binding<HotKeyCombo>,
+                              defaultCombo: HotKeyCombo) -> some View {
+        HStack(spacing: 8) {
+            Toggle(isOn: isOn) {
+                Text(title)
+                    .font(.system(size: 12))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .toggleStyle(MoleSwitchToggleStyle())
+            .controlSize(.small)
+            .tint(Color.moleAccentText)
+            Spacer(minLength: 8)
+            if isOn.wrappedValue {
+                HotKeyRecorderRow(combo: combo, defaultCombo: defaultCombo)
             }
         }
+    }
+
+    private var hotKeyConflict: some View {
+        Label(l10n.t("settings.screenshot.conflict"), systemImage: "exclamationmark.triangle.fill")
+            .font(.system(size: 10.5))
+            .foregroundStyle(Color.warning)
     }
 
     // MARK: 目录清理与定时清理
@@ -474,15 +481,13 @@ private struct HotKeyRecorderRow: View {
     @ObservedObject private var l10n = L10n.shared
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(l10n.t("settings.screenshot.hotkey"))
-                .font(.system(size: 12))
+        HStack(spacing: 6) {
             if needsModifierHint && recording {
                 Text(l10n.t("settings.screenshot.hotkey.needModifier"))
                     .font(.system(size: 10))
                     .foregroundStyle(Color.warning)
+                    .lineLimit(1)
             }
-            Spacer()
             if combo != defaultCombo {
                 Button(l10n.t("settings.screenshot.hotkey.reset")) {
                     combo = defaultCombo

@@ -150,7 +150,7 @@ test_control_motion_contract() {
     local analyze_sections="$ROOT_DIR/SimpleMole/Views/AnalyzeSectionViews.swift"
     local analyze_media="$ROOT_DIR/SimpleMole/Views/MediaSlimViews.swift"
     local cleanup="$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift"
-    local dev_env="$ROOT_DIR/SimpleMole/Views/DevEnvTabView.swift"
+    local dev_env="$ROOT_DIR/SimpleMole/Views/DeveloperRuntimePanel.swift"
     local uninstall="$ROOT_DIR/SimpleMole/Views/UninstallTabView.swift"
 
     /usr/bin/grep -Fq 'static let press = Animation' "$components" || \
@@ -165,8 +165,9 @@ test_control_motion_contract() {
         fail "disk analysis duplicate rows bypass the selectable-row interaction"
     /usr/bin/grep -Fq '.buttonStyle(MoleSelectableRowButtonStyle' "$analyze_media" || \
         fail "disk analysis slim rows bypass the selectable-row interaction"
-    /usr/bin/grep -Fq '.buttonStyle(MoleSelectableRowButtonStyle' "$dev_env" || \
-        fail "development environment rows bypass the selectable-row interaction"
+    /usr/bin/grep -Fq '.toggleStyle(.checkbox)' "$dev_env" && \
+        /usr/bin/grep -Fq 'DeveloperWorkspaceSurface(id: "dev-runtime-" + entry.id, selected: selected' "$dev_env" || \
+        fail "development environment rows lack checkbox semantics or glass selection"
     /usr/bin/grep -Fq '.buttonStyle(MolePlainButtonStyle' "$cleanup" || \
         fail "cleanup detail titles still bypass Button semantics"
     /usr/bin/grep -Fq '.buttonStyle(MoleIconButtonStyle' "$uninstall" || \
@@ -336,10 +337,13 @@ test_island_contract() {
         fail "network is not shown as a throughput meter"
     /usr/bin/grep -Fq 'struct IslandSparkline' "$island" || \
         fail "network throughput has no trend"
-    /usr/bin/grep -Fq 'l10n.t("metric.load")' "$island" || \
-        fail "island is missing the load gauge"
-    /usr/bin/grep -Fq 'l10n.t("metric.uptime")' "$island" || \
-        fail "island is missing the uptime gauge"
+    /usr/bin/grep -Fq 'state.metrics.cpuPercent' "$island" || \
+        fail "island does not surface CPU occupancy"
+    /usr/bin/grep -Fq 'state.metrics.memoryPercent' "$island" || \
+        fail "island does not surface memory occupancy"
+    if /usr/bin/grep -Eq 'l10n\.t\("metric\.(load|uptime|battery|swap)"\)' "$island"; then
+        fail "island still shows load, uptime, battery or swap"
+    fi
     if awk '/private var networkMeter/,/private func rateLine/' "$island" \
         | /usr/bin/grep -Fq 'Circle('; then
         fail "network throughput is still drawn as a ring"
@@ -389,10 +393,9 @@ test_productivity_feature_contract() {
         fail "disk analysis scan control is not a split button"
     /usr/bin/grep -Fq 'ForEach(AnalyzeMode.menuOrder)' "$analyze_view" || \
         fail "scan menu does not list large files, duplicates, videos and images"
-    if awk '/private func chooseAnalyzeMode/,/^    }/' "$analyze_view" \
-        | /usr/bin/grep -Eq 'scanDiskOverview|scanDuplicateFiles'; then
-        fail "choosing a scan option starts the scan instead of only changing the pending action"
-    fi
+    awk '/private func chooseAnalyzeMode/,/^    }/' "$analyze_view" \
+        | /usr/bin/grep -Fq 'runSelectedScan()' || \
+        fail "choosing a scan option does not start the selected scan"
     /usr/bin/grep -Fq 'state.scanDiskOverview(force: true)' "$analyze_view" || \
         fail "the scan button does not start a disk analysis"
     /usr/bin/grep -Fq 'state.scanDuplicateFiles()' "$analyze_view" || \
@@ -427,10 +430,13 @@ test_productivity_feature_contract() {
         fail "glass dialogs do not use native matched-geometry transitions"
     /usr/bin/grep -Fq 'state.visiblePages.map' "$main_window" || \
         fail "visible page settings and tab labels use different data sources"
-    /usr/bin/grep -Fq '!self.isCapturingScreenshot' "$app_delegate" || \
-        fail "screenshot hotkey can start overlapping capture processes"
-    /usr/bin/grep -Fq 'self.editorWindow?.isVisible != true' "$app_delegate" || \
-        fail "closed screenshot editor still blocks future captures"
+    /usr/bin/grep -Fq 'if let process = screenshotProcess, process.isRunning { process.terminate() }' "$app_delegate" || \
+        fail "a new screenshot session does not cancel the previous capture process"
+    /usr/bin/grep -Fq 'guard let self, self.screenshotSession == session else { return }' "$app_delegate" || \
+        fail "a cancelled screenshot session can still present its result"
+    /usr/bin/grep -Fq 'RatioCaptureController.shared.dismiss()' "$app_delegate" && \
+        /usr/bin/grep -Fq 'closeScreenshotEditor()' "$app_delegate" || \
+        fail "a previous ratio overlay or editor blocks the next screenshot session"
     /usr/bin/grep -Fq 'com.nori.screenshot.' "$screenshot_service" || \
         fail "screenshot capture does not use a private temporary directory"
     /usr/bin/grep -Fq 'removeItem(at: directory)' "$screenshot_service" || \
@@ -577,9 +583,11 @@ test_productivity_feature_contract() {
     # 结果页按 大文件/图片/视频/重复文件 子分类一页展示，不再有目录层级浏览。
     local analyze_sections="$ROOT_DIR/SimpleMole/Views/AnalyzeSectionViews.swift"
     local analyze_worker="$ROOT_DIR/SimpleMole/Services/DiskAnalysisWorker.swift"
-    /usr/bin/grep -Fq 'state.slimCandidates(in: section)' "$analyze_view" || \
+    /usr/bin/grep -Fq 'state.slimCandidates(in: .images)' "$analyze_view" || \
         fail "disk analysis results are not rendered as scan sub-categories"
-    /usr/bin/grep -Fq 'state.canSelectDuplicate(member, group: group)' "$analyze_sections" || \
+    /usr/bin/grep -Fq 'DuplicateScanActivity(progress: state.duplicateScanProgress' "$analyze_view" || \
+        fail "duplicate scanning has no animated SVG progress placeholder"
+    /usr/bin/grep -Fq 'canSelect: DuplicateSelectionPolicy.canSelect(' "$analyze_sections" || \
         fail "duplicate groups do not enforce keep-one selection"
     # 子分类在扫描层过滤系统位置：不可清理的文件不进入结果。
     /usr/bin/grep -Fq 'MediaSlimPolicy.isEligible(itemPath, home: home)' "$analyze_worker" || \
@@ -589,8 +597,9 @@ test_productivity_feature_contract() {
         || /usr/bin/grep -Fq 'scanUserSpace' "$app_state"; then
         fail "disk analysis still exposes manual scan-scope selection"
     fi
-    /usr/bin/grep -Fq 'CleanupCategory.safeCleanupCandidates(from:' "$app_state" || \
-        fail "disk cleanup does not centrally exclude Warning and Protected results"
+    /usr/bin/grep -Fq 'CleanupCategory.manualCleanupCandidates(from:' "$app_state" && \
+        /usr/bin/grep -Fq 'CleanupRiskPolicy.isEligible(subset, mode: mode, running: snapshot)' "$app_state" || \
+        fail "manual disk cleanup bypasses its category and runtime eligibility filters"
     /usr/bin/grep -Fq 'environment["SIMPLEMOLE_DELETE_MODE"] = "permanent"' "$app_state" || \
         fail "disk cleanup does not explicitly request permanent deletion"
     # 2026-10 起清理不再弹确认：清单勾选即指令，执行层复核保持不变。
@@ -2254,6 +2263,7 @@ test_owner_managed_runtimes_readonly() {
         "$home/Library/Application Support/fnm/node-versions/v20.1.0/installation"
         "$home/.volta/tools/image/node/20.1.0"
         "$home/.asdf/installs/node/20.1.0"
+        "$home/.asdf/installs/nodejs/20.1.0"
         "$home/.pyenv/versions/3.12.1"
         "$home/.rbenv/versions/3.3.1"
         "$home/.rustup/toolchains/stable-aarch64-apple-darwin"
@@ -2285,7 +2295,7 @@ test_owner_managed_runtimes_readonly() {
         bash "$RUNTIME_DIR/bin/app_apply.sh" < "$plan" 2>&1)
     rc=$?
     set -e
-    [[ "$rc" -ne 0 && "$output" == *"removed=0"* && "$output" == *"failed=6"* ]] || \
+    [[ "$rc" -ne 0 && "$output" == *"removed=0"* && "$output" == *"failed=${#paths[@]}"* ]] || \
         fail "apply sink accepted an owner-managed runtime path: $output"
     for path in "${paths[@]}"; do
         [[ -d "$path" ]] || fail "apply sink removed an owner-managed runtime: $path"
@@ -2461,12 +2471,14 @@ printf 'Nori local regression tests\n'
 test_shell_syntax
 if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_duplicates.sh" || fail "exact duplicate scanning tests"
+    bash "$ROOT_DIR/script/test_duplicate_responsiveness.sh" || fail "duplicate background responsiveness tests"
     bash "$ROOT_DIR/script/test_duplicate_deletion.sh" || fail "duplicate deletion safety tests"
     bash "$ROOT_DIR/script/test_similar_images.sh" || fail "similar image grouping tests"
     bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
+    bash "$ROOT_DIR/script/test_analysis_deletion.sh" || fail "analysis selection identity-bound Trash tests"
     bash "$ROOT_DIR/script/test_agents.sh" || fail "agent cleanup catalog, skills and MCP tests"
     # Agent 专清按用户选择直接永久删除，不弹确认、不进废纸篓；运行态与身份守卫仍在执行器里。
-    /usr/bin/grep -Fq 'AgentCleanupExecutor.execute(requested, running: snapshot, home: home, permanent: true)' \
+    /usr/bin/grep -Eq 'AgentCleanupExecutor\.execute\([^,]+, running: snapshot, home: home, permanent: true[,)]' \
         "$ROOT_DIR/SimpleMole/AppState+Agents.swift" || fail "agent cleanup no longer deletes permanently"
     if /usr/bin/grep -Fq 'confirmation = Confirmation(' "$ROOT_DIR/SimpleMole/AppState+Agents.swift"; then
         fail "agent cleanup asks for confirmation again"

@@ -7,12 +7,15 @@ import SwiftUI
 final class RatioCaptureController {
     static let shared = RatioCaptureController()
     private var window: NSWindow?
+    private var captureProcess: Process?
+    private var session = UUID()
 
     func present(onCapture: @escaping (NSImage?) -> Void) {
-        guard window == nil else { return }
+        dismiss()
+        let session = self.session
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
-            ?? NSScreen.main else { return }
-        let window = NSWindow(contentRect: screen.frame,
+            ?? NSScreen.main else { onCapture(nil); return }
+        let window = RatioCaptureWindow(contentRect: screen.frame,
                               styleMask: .borderless,
                               backing: .buffered, defer: false)
         window.level = .screenSaver
@@ -22,29 +25,46 @@ final class RatioCaptureController {
         window.hasShadow = false
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         let screenFrame = screen.frame
-        window.contentViewController = NSHostingController(rootView: RatioCaptureOverlayView(
+        let hosting = NSHostingController(rootView: RatioCaptureOverlayView(
             screenFrame: screenFrame) { [weak self] localRect in
             // SwiftUI 视图坐标以上左为原点；换算成全局坐标（左下原点）。
             let global = CGRect(x: screenFrame.minX + localRect.minX,
                                 y: screenFrame.maxY - localRect.maxY,
                                 width: localRect.width, height: localRect.height)
-            self?.dismiss()
-            ScreenShotService.captureRegion(global) { image in
+            guard let self, self.session == session else { return }
+            self.window?.orderOut(nil)
+            self.window = nil
+            self.captureProcess = ScreenShotService.captureRegion(global) { [weak self] image in
+                guard let self, self.session == session else { return }
+                self.captureProcess = nil
                 onCapture(image)
             }
         } onCancel: { [weak self] in
-            self?.dismiss()
+            guard let self, self.session == session else { return }
+            self.dismiss()
             onCapture(nil)
-        })
+        }.frame(width: screenFrame.width, height: screenFrame.height))
+        // 覆盖层的尺寸由屏幕决定，不能让 HostingController 按内容固有尺寸缩窗。
+        hosting.sizingOptions = []
+        window.contentViewController = hosting
+        window.setFrame(screenFrame, display: true)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
     }
 
     func dismiss() {
+        session = UUID()
+        if let captureProcess, captureProcess.isRunning { captureProcess.terminate() }
+        captureProcess = nil
         window?.orderOut(nil)
         window = nil
     }
+}
+
+/// Borderless NSWindow 默认不能接收键盘，需显式允许 Enter/Escape。
+private final class RatioCaptureWindow: NSWindow {
+    override var canBecomeKey: Bool { true }
 }
 
 /// 覆盖层：四块暗色遮罩围出选区，选区白描边可拖动，控制条浮在底部。

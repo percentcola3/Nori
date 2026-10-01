@@ -81,6 +81,7 @@ is_owner_managed_runtime_path() {
         "$HOME/Library/Application Support/fnm/node-versions" \
         "$HOME/.volta/tools/image/node" \
         "$HOME/.asdf/installs/node" \
+        "$HOME/.asdf/installs/nodejs" \
         "$HOME/.pyenv/versions" \
         "$HOME/.rbenv/versions" \
         "$HOME/.rustup/toolchains"; do

@@ -350,6 +350,18 @@ struct CleanupCategory: Identifiable, Equatable {
         categories.compactMap(\.safeCleanupCandidate).sorted(by: sizeDescending)
     }
 
+    /// 已卸载 Agent 的整个数据根可能含历史和凭据：只在手动清理中显示，
+    /// 沿用用户的选择，不能像 Safe 缓存一样自动勾选。
+    static func manualCleanupCandidates(from categories: [CleanupCategory]) -> [CleanupCategory] {
+        categories.compactMap { category in
+            if let safe = category.safeCleanupCandidate { return safe }
+            guard category.source == .appLeftover, category.risk == .warning,
+                  category.disposal == .permanentDelete, category.activityGuard == .aiAgent,
+                  category.reasonKey == "cleanup.risk.agentLeftover" else { return nil }
+            return category.retainingPaths(category.paths.filter { (category.pathBytes[$0] ?? 0) > 0 })
+        }.sorted(by: sizeDescending)
+    }
+
     /// 长尾合并的字节阈值与最小项数：小于 100MB 的通用安全项凑满 3 个才合并。
     static let longTailByteThreshold: UInt64 = 100 * 1024 * 1024
     static let longTailMinimumCount = 3
@@ -370,6 +382,7 @@ struct CleanupCategory: Identifiable, Equatable {
         var tailOrder: [CleanupGroupBucket] = []
         for category in categories {
             let mergeable = category.bytes < byteThreshold
+                && category.risk == .safe
                 && category.disposal == .permanentDelete
                 && category.applyRoute == .genericTrash
                 && category.activityGuard != .messenger

@@ -1,50 +1,24 @@
 import AppKit
 import Foundation
 
-enum DuplicateMode: String, CaseIterable, Identifiable {
-    case exact, similarImages
-    var id: String { rawValue }
-}
-
-struct DuplicateImageInfo: Sendable {
-    let width: Int
-    let height: Int
-    let sharpness: Double
-}
-
-struct DuplicateFileRecord: Identifiable, Sendable {
-    let file: DuplicateFile
-    var imageInfo: DuplicateImageInfo? = nil
-    var id: String { file.path }
-    var path: String { file.path }
-    var name: String { file.name }
-    var size: UInt64 { file.size }
-}
-
-struct DuplicateFileGroup: Identifiable, Sendable {
-    let id: String
-    let members: [DuplicateFileRecord]
-}
-
 @MainActor
 extension AppState {
     var duplicateSelectedCount: Int { duplicateSelection.count }
     var duplicateSelectedBytes: UInt64 {
-        duplicateGroups.flatMap(\.members)
-            .filter { duplicateSelection.contains($0.path) }.reduce(0) { $0 + $1.size }
+        guard !duplicateSelection.isEmpty else { return 0 }
+        return duplicateGroups.reduce(0) { total, group in
+            total + group.members.reduce(0) { $0 + (duplicateSelection.contains($1.path) ? $1.size : 0) }
+        }
     }
 
     /// 完全重复组每组保留一份后的可释放量。相似图片组大小不一，不估算。
     var duplicateReclaimableBytes: UInt64 {
         guard duplicateMode == .exact, !duplicateGroups.isEmpty else { return 0 }
-        return duplicateGroups.reduce(0) { total, group in
-            let keeper = group.members.map(\.size).max() ?? 0
-            return total + group.members.reduce(0) { $0 + $1.size } - keeper
-        }
+        return duplicateScanReclaimableBytes
     }
 
     func setDuplicateMode(_ mode: DuplicateMode) {
-        guard !isBusy, duplicateMode != mode else { return }
+        guard !isBusy, !isScanningDuplicates, duplicateMode != mode else { return }
         duplicateMode = mode
         resetDuplicateResults()
     }
@@ -56,6 +30,8 @@ extension AppState {
         duplicateScanFinished = false
         duplicateStatus = ""
         duplicateCoverage = ""
+        duplicateScanReclaimableBytes = 0
+        duplicateScanProgress.reset()
     }
 
     /// 全盘扫描的重复文件子分类：家目录内做内容级比对，系统文件、
@@ -76,49 +52,22 @@ extension AppState {
         let progress: (DuplicateScanProgress) -> Void = { [weak self] event in
             Task { @MainActor [weak self] in
                 guard let self, self.duplicateScanControl === control, !control.isCancelled else { return }
-                let l10n = L10n.shared
-                switch event.phase {
-                case "enumerating":
-                    self.duplicateStatus = l10n.tf("duplicates.status.enumerating", event.scannedFiles)
-                case "similar-images", "similar-grouping":
-                    self.duplicateStatus = l10n.tf("duplicates.status.images", event.processedFiles, event.totalCandidates)
-                default:
-                    self.duplicateStatus = l10n.tf("duplicates.status.hashing", event.processedFiles, event.totalCandidates)
-                }
+                self.duplicateScanProgress.update(event)
             }
         }
         Task {
-            if mode == .exact {
-                let result = await Task.detached(priority: .utility) {
-                    DuplicateScanner.scan(roots: roots, control: control, progress: progress)
-                }.value
-                guard duplicateScanControl === control else { return }
-                let cancelled = result.cancelled || control.isCancelled
-                duplicateGroups = cancelled ? [] : result.groups.map { group in
-                    DuplicateFileGroup(id: group.id, members: group.files.map { DuplicateFileRecord(file: $0) })
-                }
-                finishDuplicateScan(roots: result.roots, scanned: result.files.count,
-                    skipped: result.skippedFiles, partial: result.isPartial,
-                    cancelled: cancelled, error: result.error)
-            } else {
-                let result = await Task.detached(priority: .utility) {
-                    SimilarImageScanner.scan(roots: roots, control: control, progress: progress)
-                }.value
-                guard duplicateScanControl === control else { return }
-                let cancelled = result.cancelled || control.isCancelled
-                duplicateGroups = cancelled ? [] : result.groups.map { group in
-                    DuplicateFileGroup(id: group.id, members: group.files.map { image in
-                        DuplicateFileRecord(file: image.file,
-                            imageInfo: DuplicateImageInfo(width: image.pixelWidth,
-                                height: image.pixelHeight, sharpness: image.sharpnessScore))
-                    })
-                }
-                finishDuplicateScan(roots: result.roots, scanned: result.scannedFiles,
-                    skipped: result.skippedFiles, partial: result.isPartial,
-                    cancelled: cancelled, error: result.error)
-                if result.exactCopiesSkipped > 0 {
-                    duplicateCoverage += " · " + L10n.shared.tf("duplicates.coverage.exactSkipped", result.exactCopiesSkipped)
-                }
+            let result = await Task.detached(priority: .utility) {
+                DuplicateScanWorker.scan(mode: mode, roots: roots, control: control, progress: progress)
+            }.value
+            guard duplicateScanControl === control else { return }
+            let cancelled = result.cancelled || control.isCancelled
+            duplicateScanReclaimableBytes = cancelled ? 0 : result.reclaimableBytes
+            duplicateGroups = cancelled ? [] : result.groups
+            finishDuplicateScan(roots: result.roots, scanned: result.scanned,
+                skipped: result.skipped, partial: result.partial,
+                cancelled: cancelled, error: result.error)
+            if result.exactCopiesSkipped > 0 {
+                duplicateCoverage += " · " + L10n.shared.tf("duplicates.coverage.exactSkipped", result.exactCopiesSkipped)
             }
         }
     }
@@ -128,6 +77,7 @@ extension AppState {
         duplicateScannedRoots = roots
         isScanningDuplicates = false
         duplicateScanControl = nil
+        duplicateScanProgress.reset()
         duplicateScanFinished = true
         duplicateCoverage = L10n.shared.tf("duplicates.coverage", scanned, skipped)
         if partial { duplicateCoverage += " · " + L10n.shared.t("duplicates.coverage.partial") }
@@ -162,20 +112,18 @@ extension AppState {
     /// group/content validation at each final mutation edge.
     func deleteSelectedDuplicates() {
         guard !isBusy, !duplicateSelection.isEmpty else { return }
-        let plan: DuplicateDeletionPlan
-        do {
-            plan = try DuplicateDeletionPlan(groups: duplicateGroups.map {
-                DuplicateDeletionGroup(files: $0.members.map(\.file), requiresExactMatch: duplicateMode == .exact)
-            }, selectedPaths: duplicateSelection, roots: duplicateScannedRoots)
-        } catch {
-            duplicateStatus = L10n.shared.t("duplicates.status.invalidSelection")
-            return
-        }
+        let groups = duplicateGroups
+        let selectedPaths = duplicateSelection
+        let roots = duplicateScannedRoots
+        let mode = duplicateMode
         isDeletingDuplicates = true
         duplicateStatus = L10n.shared.t("duplicates.status.deleting")
         let control = DuplicateScanControl()
         Task {
-            let summary = await Task.detached(priority: .utility) {
+            let summary = await Task.detached(priority: .utility) { () -> NativeCore.ApplySummary? in
+                guard let plan = try? DuplicateDeletionPlan(groups: groups.map {
+                    DuplicateDeletionGroup(files: $0.members.map(\.file), requiresExactMatch: mode == .exact)
+                }, selectedPaths: selectedPaths, roots: roots) else { return nil }
                 let core = NativeCore.shared
                 return core.applyCleanup(items: plan.items, permanent: false, allowedRoots: plan.roots,
                     finalValidation: { path in
@@ -186,10 +134,15 @@ extension AppState {
                     })
             }.value
             isDeletingDuplicates = false
+            guard let summary else {
+                duplicateStatus = L10n.shared.t("duplicates.status.invalidSelection")
+                return
+            }
             resetDuplicateResults()
             duplicateStatus = L10n.shared.tf("duplicates.status.deleted", summary.removed, summary.skipped, summary.failed)
             for message in summary.messages { log(message) }
             analyzeCache.clear()
+            resampleAfterMutation()
         }
     }
 }

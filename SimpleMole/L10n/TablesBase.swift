@@ -6,6 +6,10 @@ enum L10nTables {
     static let en: [String: String] = [
         // 窗口与导航
         "window.title": "Nori",
+        "header.task.cleaning": "Cleaning…",
+        "header.task.uninstalling": "Uninstalling %@",
+        "header.task.scanning": "Scanning…",
+        "header.task.working": "Working…",
         "tab.cleanup": "Cleanup",
         "tab.uninstall": "Apps",
         "tab.devenv": "Dev Env",
@@ -21,6 +25,7 @@ enum L10nTables {
         // 通用
         "common.more": "More",
         "common.cancel": "Cancel",
+        "common.copy": "Copy",
         "common.selectAll": "Select All",
         "common.deselectAll": "Deselect All",
         "common.rescan": "Rescan",
@@ -274,6 +279,10 @@ enum L10nTables {
 
     static let zhHans: [String: String] = [
         "window.title": "Nori",
+        "header.task.cleaning": "清理中…",
+        "header.task.uninstalling": "正在卸载 %@",
+        "header.task.scanning": "扫描中…",
+        "header.task.working": "处理中…",
         "tab.cleanup": "清理",
         "tab.uninstall": "软件",
         "tab.devenv": "Dev环境",
@@ -287,6 +296,7 @@ enum L10nTables {
 
         "common.more": "更多",
         "common.cancel": "取消",
+        "common.copy": "复制",
         "common.selectAll": "全选",
         "common.deselectAll": "取消全选",
         "common.rescan": "重新扫描",

@@ -225,19 +225,21 @@ enum CleanupRiskPolicy {
 
     /// 已卸载 AI 工具的数据残留。与“废纸篓关联残留”不同：这里的存在性
     /// 证据是应用本体（bundle 与 PATH 命令）都已确认不存在，整个数据根
-    /// 目录按磁盘垃圾开放清理；受保护内容检查仍然生效。
+    /// 目录含历史、配置和凭据，手动确认后开放清理，不进入快速或自动清理。
     static func uninstalledAgentLeftover(path: String,
-                                         homeDirectory: String = NSHomeDirectory()) -> CleanupPolicyDescriptor {
+                                         homeDirectory: String = NSHomeDirectory(),
+                                         verifiedPaths: Set<String> = []) -> CleanupPolicyDescriptor {
         guard (path as NSString).isAbsolutePath else {
             return protectedUnknown(source: .appLeftover)
         }
         let normalized = normalize(path)
-        if isProtectedContent(normalized, homeDirectory: homeDirectory) {
-            return protectedDescriptor(source: .appLeftover,
-                                       reasonKey: "cleanup.risk.protectedContent")
+        let roots = agentOwnedRoots(homeDirectory: homeDirectory)
+        guard roots.contains(where: { normalized == $0 || isStrictDescendant(normalized, of: $0) })
+                || verifiedPaths.contains(normalized) else {
+            return protectedUnknown(source: .appLeftover)
         }
-        return .init(source: .appLeftover, risk: .safe, disposal: .permanentDelete,
-                     applyRoute: .genericTrash, activityGuard: .openFile,
+        return .init(source: .appLeftover, risk: .warning, disposal: .permanentDelete,
+                     applyRoute: .genericTrash, activityGuard: .aiAgent,
                      reasonKey: "cleanup.risk.agentLeftover")
     }
 
@@ -419,18 +421,27 @@ enum CleanupRiskPolicy {
             "Codex", "com.openai.codex", "com.todesktop.230313mzl4w4u92",
             "com.todesktop.230313mzl4w4u92.ShipIt", "cursor-compile-cache", "copilot",
             "com.anthropic.claudefordesktop", "com.anthropic.claudefordesktop.ShipIt",
-            "com.google.antigravity", "com.exafunction.windsurf"
+            "com.google.antigravity", "com.exafunction.windsurf", "dev.zed.Zed", "Zed"
         ].map { home + "/Library/Caches/" + $0 }
         let support = [
             "Cursor", "Claude", "Codex", "Antigravity", "Devin", "Windsurf",
-            "Qoder", "Kiro", "Trae"
+            "Qoder", "Kiro", "Trae", "Zed", "dev.warp.Warp-Stable"
         ].map { home + "/Library/Application Support/" + $0 }
         let dotted = [
             ".cache/opencode", ".cache/chrome-devtools-mcp", ".claude", ".codex", ".cursor",
-            ".grok", ".gemini", ".copilot", ".kimi", ".pi", ".factory",
+            ".grok", ".gemini", ".copilot", ".kimi", ".kimi-code", ".pi", ".factory", ".claude.json",
+            ".qoder", ".kiro", ".trae", ".warp", ".devin", ".codeium", ".opencode",
+            ".config/opencode", ".config/amp", ".config/crush", ".config/devin", ".config/zed",
+            ".cache/amp", ".cache/crush", ".cache/.gemini", ".cache/chrome-devtools-mcp-cli",
+            ".local/share/amp", ".local/share/crush", ".local/state/opencode",
             ".local/share/opencode", ".local/share/claude", ".local/share/cursor-agent"
         ].map { home + "/" + $0 }
-        return caches + support + dotted + [home + "/Library/Logs/com.openai.codex"]
+        let logs = ["com.openai.codex", "Zed", "Claude", "warp.log", "warp_preview.log"]
+            .map { home + "/Library/Logs/" + $0 }
+        let warp = ["dev.warp.Warp-Stable", "dev.warp.Warp-Preview"].map {
+            home + "/Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support/" + $0
+        }
+        return caches + support + dotted + logs + warp
     }
 
     static func isAgentOwnedPath(_ path: String,

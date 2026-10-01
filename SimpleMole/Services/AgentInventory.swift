@@ -6,18 +6,19 @@ struct AgentSkill: Identifiable, Equatable, Sendable {
     let name: String
     let summary: String
     let directory: String
-    let usedBy: [String]
+    var usedBy: [String]
     /// 挂靠的 Agent 分组 id；共享目录落到 "shared"。
-    let agentID: String
+    var agentID: String
     let bytes: UInt64
     let identity: String
-    /// 指向别处的链接只展示来源，不作为删除对象。
+    /// 链接清理仅解除关联；identity 绑定链接自身，绝不删除 linkTarget。
     let linked: Bool
     let linkTarget: String?
+    var measurementComplete = true
 }
 
 struct AgentMCPServer: Identifiable, Equatable, Sendable {
-    enum Issue: Equatable, Sendable {
+    enum Issue: Hashable, Sendable {
         case commandMissing(String)
         case plaintextSecret(key: String, masked: String)
         case unreadableConfig
@@ -35,6 +36,21 @@ struct AgentMCPServer: Identifiable, Equatable, Sendable {
     let endpoint: String
     let disabled: Bool
     let issues: [Issue]
+    var installationID: String? = nil
+    var configIdentity: String = ""
+    var configFingerprint: String = ""
+}
+
+/// MCP 安装本体与各 Agent 的注册分开管理。远程服务、临时 npx/uvx 下载和
+/// node/python 等共享运行时不会被误认成可卸载的 MCP 本体。
+struct AgentMCPInstallation: Identifiable, Equatable, Sendable {
+    let id: String
+    let name: String
+    let path: String
+    let bytes: UInt64
+    let identity: String
+    let serverIDs: [String]
+    var measurementComplete = true
 }
 
 struct AgentGroupSummary: Identifiable, Equatable, Sendable {
@@ -54,6 +70,7 @@ struct AgentScanReport: Sendable {
     var categories: [CleanupCategory] = []
     var skills: [AgentSkill] = []
     var servers: [AgentMCPServer] = []
+    var installations: [AgentMCPInstallation] = []
     var complete = true
 }
 
@@ -66,12 +83,37 @@ enum AgentInventory {
                      localize: (String) -> String = { $0 },
                      presence context: AgentPresenceContext? = nil) -> AgentScanReport {
         var report = AgentScanReport()
-        let installed = AgentCatalog.definitions.filter { AgentCatalog.isInstalled($0, home: home) }
+        let installed = AgentCatalog.definitions.filter {
+            AgentCatalog.hasData($0, home: home) || AgentCatalog.isInstalled($0, home: home, presence: context)
+        }
         let orphanedIDs = Set(installed.filter { AgentCatalog.isOrphaned($0, home: home, presence: context) }
             .map(\.id))
         // 已卸载工具不再是“Agent”：数据属于磁盘垃圾，由清理扫描按应用残留收录。
         let active = installed.filter { !orphanedIDs.contains($0.id) }
-        let resolved = active.map { ($0, AgentCatalog.resolve($0, home: home, presence: context)) }
+        let rawResolved = active.map { ($0, AgentCatalog.resolve($0, home: home, presence: context)) }
+        // 同一实体只在一个组产生操作项，但守卫保留所有消费者。
+        var pathOwners: [String: Set<String>] = [:]
+        var pathTiers: [String: AgentTier] = [:]
+        func severity(_ tier: AgentTier) -> Int { tier == .showOnly ? 2 : tier == .review ? 1 : 0 }
+        for (_, targets) in rawResolved {
+            for target in targets {
+                for path in target.paths {
+                    pathOwners[path, default: []].formUnion(target.owners)
+                    if severity(target.tier) > severity(pathTiers[path] ?? .safe) { pathTiers[path] = target.tier }
+                }
+            }
+        }
+        var claimed = Set<String>()
+        let resolved = rawResolved.map { agent, targets in
+            (agent, targets.compactMap { target -> AgentCatalog.ResolvedTarget? in
+                let paths = target.paths.filter { claimed.insert($0).inserted }
+                guard !paths.isEmpty else { return nil }
+                let tier = paths.compactMap { pathTiers[$0] }.max { severity($0) < severity($1) } ?? target.tier
+                let owners = Set(paths.flatMap { Array(pathOwners[$0] ?? []) }).sorted()
+                return AgentCatalog.ResolvedTarget(agentID: target.agentID, tier: tier,
+                    labelKey: target.labelKey, owners: owners, paths: paths)
+            })
+        }
         let allPaths = Array(Set(resolved.flatMap { $0.1.flatMap(\.paths) })).sorted()
         let measurements = CleanupScanWorker.measure(allPaths, control: control) { _, _ in }
         var sizes: [String: UInt64] = [:]
@@ -82,7 +124,11 @@ enum AgentInventory {
 
         report.skills = scanSkills(home: home, control: control, agents: active,
                                    orphanedAgentIDs: orphanedIDs)
-        report.servers = scanMCP(agents: active, home: home)
+        report.servers = scanMCP(agents: active, home: home, presence: context)
+        let allRegistrations = scanMCP(agents: AgentCatalog.definitions, home: home, presence: context)
+        report.installations = mcpInstallations(servers: allRegistrations, home: home, control: control)
+        report.complete = report.complete && report.skills.allSatisfy(\.measurementComplete)
+            && report.installations.allSatisfy(\.measurementComplete)
 
         for (agent, targets) in resolved {
             var merged: [String: CleanupCategory] = [:]
@@ -104,8 +150,8 @@ enum AgentInventory {
                     pathBytes: Dictionary(uniqueKeysWithValues: paths.map { ($0, sizes[$0] ?? 0) }),
                     source: target.tier == .safe ? .aiCache : .aiSession,
                     risk: risk(for: target.tier),
-                    disposal: target.tier == .showOnly ? .none : .permanentDelete,
-                    applyRoute: target.tier == .showOnly ? .none : .aiTrash,
+                    disposal: .permanentDelete,
+                    applyRoute: .aiTrash,
                     activityGuard: .aiAgent,
                     reasonKey: reasonKey(for: target, documented: agent.documented))
                 category.activityOwners = target.owners
@@ -123,6 +169,19 @@ enum AgentInventory {
                 skillIDs: skillIDs, serverIDs: serverIDs,
                 bytes: categories.reduce(0) { $0 &+ $1.bytes }))
         }
+        let sharedSkills = report.skills.filter { $0.agentID == "shared" }
+        if !sharedSkills.isEmpty, !report.groups.contains(where: { $0.id == "shared" }) {
+            report.groups.append(AgentGroupSummary(
+                id: "shared", name: localize("agents.sharedSkills"), documented: true,
+                orphaned: false, categoryIDs: [], skillIDs: sharedSkills.map(\.id), serverIDs: [],
+                bytes: sharedSkills.reduce(0) { $0 &+ $1.bytes }))
+        }
+        if !report.installations.isEmpty {
+            report.groups.append(AgentGroupSummary(
+                id: "shared-mcp", name: localize("agents.sharedMCP"), documented: true,
+                orphaned: false, categoryIDs: [], skillIDs: [], serverIDs: [],
+                bytes: report.installations.reduce(0) { $0 &+ $1.bytes }))
+        }
         report.groups.sort { $0.bytes > $1.bytes }
         return report
     }
@@ -131,7 +190,7 @@ enum AgentInventory {
         switch tier {
         case .safe: return .safe
         case .review: return .warning
-        case .showOnly: return .protected
+        case .showOnly: return .warning
         }
     }
 
@@ -158,28 +217,55 @@ enum AgentInventory {
         let idsByAgentName = Dictionary(agents.map { ($0.name, $0.id) }, uniquingKeysWith: { first, _ in first })
         let orphanedNames = Set(AgentCatalog.definitions
             .filter { orphanedAgentIDs.contains($0.id) }.map(\.name))
+        let codexInstalled = agents.contains { $0.id == "codex" }
+        let codexName = AgentCatalog.definitions.first { $0.id == "codex" }?.name ?? "Codex CLI"
+        let declarations = AgentSkillConfigEditor.scan(home: home)
+        let allLinkUsers = AgentCatalog.skillDirectories(home: home).flatMap { directory in
+            AgentCatalog.childNames(of: directory.path).compactMap { name -> (String, [String])? in
+                let path = directory.path + "/" + name
+                guard AgentCatalog.isSymlink(path) else { return nil }
+                return (URL(fileURLWithPath: path).resolvingSymlinksInPath().path, directory.agentNames)
+            }
+        }
         var skills: [AgentSkill] = []
         for directory in AgentCatalog.skillDirectories(home: home) {
-            if !directory.agentNames.isEmpty,
-               directory.agentNames.allSatisfy({ orphanedNames.contains($0) }) {
-                continue
-            }
-            let ownerID = directory.agentNames.first.flatMap { idsByAgentName[$0] } ?? "shared"
+            let liveUsers = directory.agentNames.filter { idsByAgentName[$0] != nil }
+            let orphanedDirectory = !directory.globallyManaged && !directory.ownerNames.isEmpty
+                && directory.ownerNames.allSatisfy({ orphanedNames.contains($0) }) && liveUsers.isEmpty
+            let ownerID = directory.globallyManaged ? "shared"
+                : directory.ownerNames.first.flatMap { idsByAgentName[$0] } ?? "shared"
             for name in AgentCatalog.childNames(of: directory.path) {
                 let path = directory.path + "/" + name
                 let linked = AgentCatalog.isSymlink(path)
                 let resolved = linked
                     ? URL(fileURLWithPath: path).resolvingSymlinksInPath().path : path
-                guard AgentCatalog.isDirectory(resolved) else { continue }
+                let hasLiveLink = allLinkUsers.contains {
+                    $0.0 == path && $0.1.contains { idsByAgentName[$0] != nil }
+                }
+                let hasLiveDeclaration = codexInstalled
+                    && declarations.contains { $0.references(path) }
+                if orphanedDirectory && (linked || (!hasLiveLink && !hasLiveDeclaration)) { continue }
+                // 悬空链接也要可解除；扫描不跟着链接递归计量。
+                guard linked || AgentCatalog.isDirectory(resolved) else { continue }
                 let manifest = readManifest(resolved + "/SKILL.md")
-                let bytes = linked ? 0 : CleanupScanWorker.measure(path, control: control).bytes
-                skills.append(AgentSkill(
+                let measurement = linked ? nil : CleanupScanWorker.measure(path, control: control)
+                var skill = AgentSkill(
                     path: path, name: manifest.name ?? name, summary: manifest.summary ?? "",
-                    directory: directory.path, usedBy: directory.agentNames, agentID: ownerID,
-                    bytes: bytes,
-                    identity: linked ? "" : (DeletionPlan.identity(at: path) ?? ""),
-                    linked: linked, linkTarget: linked ? resolved : nil))
+                    directory: directory.path, usedBy: liveUsers,
+                    agentID: orphanedDirectory ? "shared" : ownerID,
+                    bytes: measurement?.bytes ?? 0,
+                    identity: DeletionPlan.identity(at: path) ?? "",
+                    linked: linked, linkTarget: linked ? resolved : nil)
+                skill.measurementComplete = measurement?.complete ?? true
+                skills.append(skill)
             }
+        }
+        // 共享本体展示实际使用者；不因某个 Agent 已卸载而漏掉其尚存的挂靠。
+        for index in skills.indices where !skills[index].linked {
+            let users = allLinkUsers.filter { $0.0 == skills[index].path }.flatMap { $0.1 }
+            let explicitUsers = declarations.contains { $0.references(skills[index].path) } ? [codexName] : []
+            skills[index].usedBy = Array(Set(skills[index].usedBy + users + explicitUsers)).sorted()
+            if skills[index].usedBy.count > 1 { skills[index].agentID = "shared" }
         }
         return skills
     }
@@ -216,9 +302,10 @@ enum AgentInventory {
 
     // MARK: - MCP（只读）
 
-    static func scanMCP(agents: [AgentDefinition], home: String) -> [AgentMCPServer] {
+    static func scanMCP(agents: [AgentDefinition], home: String,
+                        presence context: AgentPresenceContext? = nil) -> [AgentMCPServer] {
         var servers: [AgentMCPServer] = []
-        let searchPath = executableSearchPath(home: home)
+        let searchPath = context?.searchPath ?? executableSearchPath(home: home)
         for agent in agents {
             for source in agent.mcpSources {
                 let path = AgentCatalog.absolute(source.path, home: home)
@@ -229,11 +316,14 @@ enum AgentInventory {
                 case .toml(let table): entries = tomlServers(at: path, table: table)
                 }
                 guard let entries else {
-                    servers.append(AgentMCPServer(
+                    var unreadable = AgentMCPServer(
                         id: agent.id + "|" + path, agentName: agent.name, agentID: agent.id,
                         configPath: path, format: source.format,
                         scope: nil, name: (path as NSString).lastPathComponent, remote: false,
-                        endpoint: "", disabled: false, issues: [.unreadableConfig]))
+                        endpoint: "", disabled: false, issues: [.unreadableConfig])
+                    unreadable.configIdentity = DeletionPlan.identity(at: path) ?? ""
+                    unreadable.configFingerprint = AgentMCPConfigEditor.fingerprint(at: path) ?? ""
+                    servers.append(unreadable)
                     continue
                 }
                 for entry in entries {
@@ -293,12 +383,143 @@ enum AgentInventory {
         } else {
             endpoint = ([command ?? ""] + arguments).map(maskToken).joined(separator: " ")
         }
-        return AgentMCPServer(
+        var result = AgentMCPServer(
             id: agent.id + "|" + path + "|" + (entry.scope ?? "") + "|" + entry.name,
             agentName: agent.name, agentID: agent.id, configPath: path, format: format,
             scope: entry.scope, name: entry.name,
             remote: url != nil, endpoint: String(endpoint.prefix(180)), disabled: disabled,
             issues: issues)
+        result.configIdentity = DeletionPlan.identity(at: path) ?? ""
+        result.configFingerprint = AgentMCPConfigEditor.fingerprint(at: path) ?? ""
+        if url == nil, let command {
+            result.installationID = mcpInstallationPath(command: command, arguments: arguments,
+                                                        searchPath: searchPath, home: home)
+        }
+        return result
+    }
+
+    static func mcpInstallations(servers: [AgentMCPServer], home: String,
+                                control: CleanupScanControl = CleanupScanControl(mode: .deep))
+        -> [AgentMCPInstallation] {
+        let grouped = Dictionary(grouping: servers.filter { $0.installationID != nil },
+                                 by: { $0.installationID! })
+        return grouped.sorted(by: { $0.key < $1.key }).compactMap { path, registrations in
+            guard let identity = DeletionPlan.identity(at: path),
+                  isPhysicalInstallation(path, home: home) else { return nil }
+            let measurement = CleanupScanWorker.measure(path, control: control)
+            var installation = AgentMCPInstallation(
+                id: path, name: registrations.first?.name ?? (path as NSString).lastPathComponent,
+                path: path, bytes: measurement.bytes,
+                identity: identity, serverIDs: registrations.map(\.id))
+            installation.measurementComplete = measurement.complete
+            return installation
+        }
+    }
+
+    /// npm 的包目录必须由 package.json 的 name 和 bin 共同证明；不删除 npm/npx/node。
+    static func mcpInstallationPath(command: String, arguments: [String],
+                                    searchPath: [String], home: String) -> String? {
+        let executableName = (command as NSString).lastPathComponent
+        let hostCommands = Set(AgentCatalog.definitions.flatMap {
+            AgentCatalog.installationPresence(for: $0)?.commands ?? []
+        } + ["agent"])
+        if hostCommands.contains(executableName) { return nil }
+        if executableName == "npx" || executableName == "bunx" {
+            var package: String?
+            if let option = arguments.firstIndex(where: { $0 == "-p" || $0 == "--package" }),
+               arguments.indices.contains(option + 1) {
+                package = arguments[option + 1]
+            } else {
+                package = arguments.first { !$0.hasPrefix("-") }
+            }
+            guard var name = package, !name.contains(":"), !name.hasPrefix("/"),
+                  !name.contains("..") else { return nil }
+            if let version = name.dropFirst().lastIndex(of: "@") { name = String(name[..<version]) }
+            guard name.split(separator: "/").count <= 2,
+                  name.unicodeScalars.allSatisfy({ CharacterSet(charactersIn:
+                    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@/_.-").contains($0) })
+            else { return nil }
+            let roots = globalNodeModuleRoots(searchPath: searchPath, home: home)
+            return roots.map { $0 + "/" + name }.first {
+                validNodePackage($0, expectedName: name, home: home)
+            }
+        }
+        let runtimes = ["node", "nodejs", "python", "python3", "python2", "uv", "uvx", "pip", "pipx",
+                        "ruby", "java", "deno", "bun", "npm", "pnpm", "yarn", "sh", "bash", "zsh",
+                        "env", "docker", "podman", "ssh", "git", "curl", "osascript", "open"]
+        if runtimes.contains(executableName) {
+            guard ["node", "nodejs", "bun"].contains(executableName),
+                  let script = arguments.first(where: { $0.hasPrefix("/") }),
+                  let root = nodePackageRoot(containing: script),
+                  validNodePackage(root, expectedName: nil, home: home) else { return nil }
+            return root
+        }
+        guard let resolved = resolveExecutable(command, searchPath: searchPath, home: home),
+              resolved.hasPrefix("/") else { return nil }
+        let physical = URL(fileURLWithPath: resolved).resolvingSymlinksInPath().path
+        if let root = nodePackageRoot(containing: physical),
+           validNodePackage(root, expectedName: nil, home: home) { return root }
+        // 只认 home 中命名明确的 MCP 独立可执行文件；系统工具和宿主 Agent 不做本体卸载。
+        guard (physical as NSString).lastPathComponent.lowercased().contains("mcp"),
+              !AgentCatalog.isDirectory(physical), isPhysicalInstallation(physical, home: home),
+              physical.hasPrefix(home + "/") else { return nil }
+        return physical
+    }
+
+    private static func globalNodeModuleRoots(searchPath: [String], home: String) -> [String] {
+        let prefixes = searchPath.filter { $0.hasSuffix("/bin") }
+            .map { String($0.dropLast(4)) + "/lib/node_modules" }
+        return Array(Set(prefixes + [home + "/.npm-global/lib/node_modules",
+                                      home + "/.local/lib/node_modules",
+                                      home + "/.bun/install/global/node_modules",
+                                      "/opt/homebrew/lib/node_modules", "/usr/local/lib/node_modules"]))
+    }
+
+    private static func nodePackageRoot(containing path: String) -> String? {
+        guard let range = path.range(of: "/node_modules/", options: .backwards) else { return nil }
+        let base = String(path[..<range.upperBound])
+        let parts = path[range.upperBound...].split(separator: "/")
+        guard let first = parts.first else { return nil }
+        let count = first.hasPrefix("@") ? 2 : 1
+        guard parts.count >= count else { return nil }
+        return base + parts.prefix(count).joined(separator: "/")
+    }
+
+    private static func validNodePackage(_ path: String, expectedName: String?, home: String) -> Bool {
+        guard isPhysicalInstallation(path, home: home), AgentCatalog.isDirectory(path),
+              let data = FileManager.default.contents(atPath: path + "/package.json"),
+              let manifest = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let name = manifest["name"] as? String,
+              expectedName == nil || expectedName == name else { return false }
+        let executables: [String]
+        if ["npm", "npx", "node", "pnpm", "yarn", "bun", "typescript"].contains(name)
+            || AgentCLIService.ownsNPMPackage(name) { return false }
+        if let bin = manifest["bin"] as? String { executables = [bin] }
+        else if let bins = manifest["bin"] as? [String: String] {
+            let hostCommands = Set(AgentCatalog.definitions.flatMap {
+                AgentCatalog.installationPresence(for: $0)?.commands ?? []
+            } + ["agent"])
+            guard bins.keys.allSatisfy({ !hostCommands.contains($0) }) else { return false }
+            executables = Array(bins.values)
+        }
+        else { return false }
+        return executables.contains { bin in
+            let executable = URL(fileURLWithPath: path).appendingPathComponent(bin).standardizedFileURL.path
+            return executable.hasPrefix(path + "/") && AgentCatalog.exists(executable)
+                && !AgentCatalog.isSymlink(executable)
+        }
+    }
+
+    static func isPhysicalInstallation(_ path: String, home: String) -> Bool {
+        guard DeletionPlan.isLexicallySafePath(path), AgentCatalog.exists(path),
+              path.hasPrefix(home + "/") || path.hasPrefix("/opt/homebrew/lib/node_modules/")
+                || path.hasPrefix("/usr/local/lib/node_modules/") else { return false }
+        var probe = path
+        while probe != "/" {
+            if AgentCatalog.isSymlink(probe) { return false }
+            probe = (probe as NSString).deletingLastPathComponent
+        }
+        return true
     }
 
     static func jsonServers(at path: String, keyPath: String)
@@ -329,76 +550,51 @@ enum AgentInventory {
         return result
     }
 
-    /// 只解析 MCP 段需要的最小 TOML 子集：段头与 `key = "string" | [..] | bool`。
+    /// 只解析 MCP 段需要的 TOML 子集，跨行字符串和数组不会产生伪段头。
     static func tomlServers(at path: String, table: String)
         -> [(scope: String?, name: String, config: [String: Any])]? {
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8),
+              let statements = AgentTOMLStatements.read(text) else { return nil }
         var order: [String] = []
         var configs: [String: [String: Any]] = [:]
         var currentName: String?
         var currentSub: String?
-        for rawLine in text.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
-            guard !line.isEmpty, !line.hasPrefix("#") else { continue }
-            if line.hasPrefix("[") {
+        var currentTable: [String] = []
+        for statement in statements {
+            if let header = AgentTOMLStatements.header(statement.text) {
+                currentTable = header.path
                 currentName = nil
                 currentSub = nil
-                guard line.hasPrefix("[" + table + "."), line.hasSuffix("]"),
-                      !line.hasPrefix("[[") else { continue }
-                let body = String(line.dropFirst(table.count + 2).dropLast())
-                let parts = splitTomlKey(body)
-                guard let name = parts.first, !name.isEmpty else { continue }
+                guard header.path.first == table else { continue }
+                guard !header.array, header.path.count <= 3 else { return nil }
+                guard header.path.count >= 2 else { continue }
+                let name = header.path[1]
                 currentName = name
-                currentSub = parts.count > 1 ? parts[1] : nil
+                currentSub = header.path.count == 3 ? header.path[2] : nil
                 if configs[name] == nil { order.append(name); configs[name] = [:] }
                 continue
             }
-            guard let name = currentName, let equals = line.firstIndex(of: "=") else { continue }
-            let key = line[..<equals].trimmingCharacters(in: .whitespaces)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-            let value = parseTomlValue(line[line.index(after: equals)...]
-                .trimmingCharacters(in: .whitespaces))
-            if let sub = currentSub {
+            guard let name = currentName else {
+                if let item = AgentTOMLStatements.assignment(statement.text),
+                   item.path.first == table || currentTable == [table] { return nil }
+                continue
+            }
+            guard let item = AgentTOMLStatements.assignment(statement.text),
+                  item.path.count <= (currentSub == nil ? 2 : 1),
+                  let value = AgentTOMLStatements.value(item.value) else { return nil }
+            let key = item.path.last!
+            let sub = currentSub ?? (item.path.count == 2 ? item.path[0] : nil)
+            if let sub {
                 var nested = configs[name]?[sub] as? [String: Any] ?? [:]
+                guard nested[key] == nil else { return nil }
                 nested[key] = value
                 configs[name]?[sub] = nested
             } else {
+                guard configs[name]?[key] == nil else { return nil }
                 configs[name]?[key] = value
             }
         }
         return order.map { (nil, $0, configs[$0] ?? [:]) }
-    }
-
-    private static func splitTomlKey(_ body: String) -> [String] {
-        var parts: [String] = []
-        var current = ""
-        var quoted = false
-        for character in body {
-            if character == "\"" { quoted.toggle(); continue }
-            if character == "." && !quoted { parts.append(current); current = ""; continue }
-            current.append(character)
-        }
-        parts.append(current)
-        return parts.map { $0.trimmingCharacters(in: .whitespaces) }
-    }
-
-    private static func parseTomlValue(_ raw: String) -> Any {
-        if raw == "true" { return true }
-        if raw == "false" { return false }
-        if raw.hasPrefix("\"") || raw.hasPrefix("'") {
-            let quote = raw.first!
-            let body = raw.dropFirst()
-            if let end = body.firstIndex(of: quote) { return String(body[..<end]) }
-            return String(body)
-        }
-        if raw.hasPrefix("["), let end = raw.lastIndex(of: "]") {
-            let inner = raw[raw.index(after: raw.startIndex)..<end]
-            return inner.split(separator: ",").map {
-                $0.trimmingCharacters(in: .whitespaces)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-            }.filter { !$0.isEmpty }
-        }
-        return raw
     }
 
     // MARK: - 检查规则

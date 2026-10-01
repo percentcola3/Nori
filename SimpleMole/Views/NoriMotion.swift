@@ -2,7 +2,7 @@ import Foundation
 
 /// Semantic states shared by native callers and the distributable SVG names.
 enum NoriMood: String, CaseIterable {
-    case idle, blink, working, bored, success, attention
+    case idle, blink, working, bored, success, attention, tidying
 }
 
 struct NoriPose: Equatable {
@@ -13,13 +13,16 @@ struct NoriPose: Equatable {
     var eyeOpen: Double = 1
     var gazeX: Double = 0
     var gazeY: Double = 0
-    var confetti: Double = 0
+    /// Progress of the one-shot result badge (plus confetti on success), or the
+    /// repeating activity-dot wave while tidying.
+    var prop: Double = 0
 }
 
 /// Pure, bounded motion: no timers, random states, perpetual success loops or I/O.
 /// Dimensions use the same 256-point coordinate system as Nori.svg.
 enum NoriMotion {
-    static let celebrationDuration: TimeInterval = 1.4
+    static let celebrationDuration: TimeInterval = 1.9
+    static let failureDuration: TimeInterval = 1.9
 
     static func pose(for mood: NoriMood, elapsed: TimeInterval,
                      reduceMotion: Bool = false) -> NoriPose {
@@ -42,6 +45,16 @@ enum NoriMotion {
             pose.offsetY = interpolate(phase, [(0, 0), (0.25, 0), (0.55, -3), (0.8, 0), (1, 0)])
             pose.gazeX = -4 * cos(t * .pi * 2 / 2.7)
             pose.eyeOpen = blink(at: t, period: 5.4)
+        case .tidying:
+            let phase = t.truncatingRemainder(dividingBy: 1.4) / 1.4
+            let squash = interpolate(phase, [(0, 0), (0.22, 0.085), (0.5, -0.055), (0.76, 0.04), (1, 0)])
+            pose.scaleX += squash
+            pose.scaleY -= squash
+            // Lift before the full stretch so the top stays inside the canvas.
+            pose.offsetY = interpolate(phase, [(0, 0), (0.22, 0), (0.36, -6), (0.5, 0), (1, 0)])
+            pose.gazeY = interpolate(phase, [(0, 0), (0.22, 2), (0.5, -2), (0.76, 1), (1, 0)])
+            pose.eyeOpen = blink(at: t, period: 5.4)
+            pose.prop = phase
         case .bored:
             let phase = t.truncatingRemainder(dividingBy: 8) / 8
             pose.rotation = interpolate(phase, [(0, 0), (0.2, 0), (0.4, -5), (0.6, -5), (0.8, 3), (1, 0)])
@@ -58,10 +71,23 @@ enum NoriMotion {
             pose.scaleX += squash
             pose.scaleY -= squash
             pose.offsetY = interpolate(phase, [(0, 0), (0.15, 0), (0.38, -3), (0.65, 0), (1, 0)])
-            pose.confetti = phase > 0.12 ? (phase - 0.12) / 0.88 : 0
+            pose.eyeOpen = interpolate(phase, [(0, 1), (0.2, 0.42), (0.8, 0.42), (1, 1)])
+            let look = interpolate(phase, [(0, 0), (0.14, 0), (0.3, 1), (0.9, 1), (1, 0)])
+            pose.gazeX = look * 6
+            pose.gazeY = look * 5
+            pose.prop = phase
         case .attention:
-            guard t < 0.8 else { return pose }
-            pose.rotation = interpolate(t / 0.8, [(0, 0), (0.25, -5), (0.6, 5), (1, 0)])
+            guard t < failureDuration else { return pose }
+            let phase = t / failureDuration
+            // Sink a little while the badge pops on, and glance down at it.
+            let sad = interpolate(phase, [(0, 0), (0.3, 1), (0.9, 1), (1, 0)])
+            pose.scaleX += sad * 0.025
+            pose.scaleY -= sad * 0.035
+            pose.offsetY = sad * 3
+            let look = interpolate(phase, [(0, 0), (0.14, 0), (0.3, 1), (0.9, 1), (1, 0)])
+            pose.gazeX = look * 6
+            pose.gazeY = look * 5
+            pose.prop = phase
         }
         return pose
     }

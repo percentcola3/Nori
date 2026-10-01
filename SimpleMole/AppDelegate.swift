@@ -9,7 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: NSWindow?
     private var runtimeTimer: Timer?
     private var autoCleanupTimer: Timer?
-    private var isCapturingScreenshot = false
+    private var screenshotSession = UUID()
+    private var screenshotProcess: Process?
 
     // 灵动岛：codenotch 式顶部刘海悬浮窗。
     private var islandPanel: NSPanel?
@@ -38,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         runtimeTimer?.tolerance = 0.2
         setupScreenshotPipeline()
+        appState.registerScreenshotHotKey()
         // 自动目录规则由应用常驻进程调度；AppState 内部按六小时最小间隔限频。
         autoCleanupTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.appState.runScheduledAutoCleanup() }
@@ -98,64 +100,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupScreenshotPipeline() {
         NotificationCenter.default.publisher(for: .smTakeScreenshot)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self,
-                      !self.isCapturingScreenshot,
-                      self.editorWindow?.isVisible != true else { return }
-                self.appState.permissionCenter.refresh()
-                guard self.appState.permissionCenter.screenRecordingGranted else {
-                    self.showMainWindow()
-                    self.appState.presentPermissionCenter()
-                    return
-                }
-                self.isCapturingScreenshot = true
-                ScreenShotService.captureInteractive { image in
-                    self.isCapturingScreenshot = false
-                    guard let image else { return }
-                    self.openScreenshotEditor(image: image)
-                }
-            }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.beginScreenshot(ratio: false) }
             .store(in: &observables)
         NotificationCenter.default.publisher(for: .smTakeRatioScreenshot)
-            .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
-                guard let self,
-                      !self.isCapturingScreenshot,
-                      self.editorWindow?.isVisible != true else { return }
-                self.appState.permissionCenter.refresh()
-                guard self.appState.permissionCenter.screenRecordingGranted else {
-                    self.showMainWindow()
-                    self.appState.presentPermissionCenter()
-                    return
-                }
-                self.isCapturingScreenshot = true
-                RatioCaptureController.shared.present { [weak self] image in
-                    self?.isCapturingScreenshot = false
-                    guard let image else { return }
-                    self?.openScreenshotEditor(image: image)
-                }
-            }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.beginScreenshot(ratio: true) }
             .store(in: &observables)
+    }
+
+    private func beginScreenshot(ratio: Bool) {
+        appState.permissionCenter.refresh()
+        guard appState.permissionCenter.screenRecordingGranted else {
+            showMainWindow()
+            appState.presentPermissionCenter()
+            return
+        }
+        // 每次触发都是新会话，旧进程/覆盖层/未完成编辑不能挡住新截图。
+        let session = UUID()
+        screenshotSession = session
+        if let process = screenshotProcess, process.isRunning { process.terminate() }
+        screenshotProcess = nil
+        RatioCaptureController.shared.dismiss()
+        closeScreenshotEditor()
+        let completion: (NSImage?) -> Void = { [weak self] image in
+            guard let self, self.screenshotSession == session else { return }
+            self.screenshotProcess = nil
+            guard let image else { return }
+            self.openScreenshotEditor(image: image)
+        }
+        if ratio {
+            RatioCaptureController.shared.present(onCapture: completion)
+        } else {
+            screenshotProcess = ScreenShotService.captureInteractive(completion: completion)
+        }
     }
 
     private func openScreenshotEditor(image: NSImage) {
         NSApp.activate(ignoringOtherApps: true)
+        let targetScreen = editorWindow?.screen ?? cursorScreen
+        var createdWindow = false
         if editorWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 700),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable],
                                   backing: .buffered, defer: false)
             window.title = L10n.shared.t("shot.title")
             window.isReleasedWhenClosed = false
-            window.minSize = NSSize(width: 640, height: 480)
-            window.center()
             observeEditorWindow(window)
             editorWindow = window
+            createdWindow = true
         }
         editorWindow?.contentViewController = NSHostingController(
             rootView: ScreenshotEditorView(image: image) { [weak self] in
                 self?.closeScreenshotEditor()
             })
+        if let window = editorWindow, let screen = targetScreen ?? window.screen {
+            let frame = ScreenshotEditorSizing.windowFrame(
+                visibleFrame: screen.visibleFrame,
+                preferredSize: createdWindow ? NSSize(width: 900, height: 700) : window.frame.size,
+                preferredOrigin: createdWindow ? nil : window.frame.origin)
+            window.minSize = NSSize(width: min(520, frame.width), height: min(360, frame.height))
+            window.setFrame(frame, display: true)
+        }
+        editorWindow?.deminiaturize(nil)
         editorWindow?.makeKeyAndOrderFront(nil)
     }
 
@@ -169,7 +176,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 MosaicCache.shared.clear()
                 // 关闭后释放原图和笔画；窗口外壳保留用于下次快速复用。
                 DispatchQueue.main.async {
-                    window?.contentViewController = nil
+                    // 新截图可能已复用窗口，旧关闭通知不能清空新编辑器。
+                    if window?.isVisible == false { window?.contentViewController = nil }
                 }
             }
             .store(in: &observables)
@@ -534,6 +542,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             observeMainWindow(window)
             mainWindow = window
             createdWindow = true
+        }
+        if createdWindow || mainWindow?.isVisible != true || mainWindow?.isMiniaturized == true {
+            appState.shufflePlaceholderScene()
         }
         restoreMainWindow(to: targetScreen ?? cursorScreen, force: createdWindow)
         mainWindow?.deminiaturize(nil)

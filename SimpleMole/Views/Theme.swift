@@ -105,8 +105,9 @@ extension Color {
 }
 
 extension Color {
+    /// 灵动岛玻璃的着色：浮在任意窗口之上，着色太浅时背后的文字会透上来抢字。
+    static let islandGlassTint = Color(nsColor: srgb(EarthBluePalette.tintDark, 0.62))
     /// 折叠句柄上的短横线提示。
-    static let islandGlassTint = Color(nsColor: srgb(EarthBluePalette.tintDark, 0.28))
     static let islandHandleGrip = Color.white.opacity(0.55)
     /// 折叠手柄的暗色纱罩：半透明，叠在玻璃上加深一档，
     /// 与展开面板保持同一材质观感（不用实底黑遮住玻璃）。
