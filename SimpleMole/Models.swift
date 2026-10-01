@@ -29,6 +29,13 @@ struct MetricsSnapshot: Equatable, Sendable {
     var networkTxMBps: Double = 0
     var uptimeSeconds: UInt64 = 0
     var healthScore: Int = 0
+
+    /// 台式机通常没有电池；百分比为 0 且没有任何电池字段时不展示电池表。
+    var batteryPresent: Bool {
+        batteryPercent > 0 || batteryCharging || batteryCycleCount > 0 || batteryHealthPercent > 0
+    }
+
+    var loadOneMinute: Double { loadAverage.first ?? 0 }
 }
 
 /// 清理扫描的实时状态。进度按原生目录遍历的已完成条目计算，currentPath
@@ -1066,6 +1073,15 @@ enum ByteFormat {
         if bytes >= mib { return String(format: "%.0fM", value / Double(mib)) }
         if bytes >= kib { return String(format: "%.0fK", value / Double(kib)) }
         return "\(bytes)B"
+    }
+
+    /// 吞吐速率。入参是 MB/s；低于 1 MB/s 时改用 KB/s，避免网络表被画成百分比。
+    static func megabytesPerSecond(_ megabytes: Double) -> String {
+        let value = max(0, megabytes)
+        if value < 0.0005 { return "0 KB/s" }
+        if value < 1 { return String(format: "%.0f KB/s", value * 1000) }
+        if value < 10 { return String(format: "%.1f MB/s", value) }
+        return String(format: "%.0f MB/s", value)
     }
 
     /// 解析引擎预览文件中的 "12.5 MB" / "size unknown" 标签。

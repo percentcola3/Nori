@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 菜单栏快捷面板：环形指标双卡 + 内存占用榜（悬停强杀）+ 一键优化。
+/// 菜单栏快捷面板：占用率圆环、网络速率，以及负载和运行时间。
 struct QuickPanelView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
@@ -11,18 +11,63 @@ struct QuickPanelView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            HStack(spacing: 0) {
-                QuickRingCard(title: l10n.t("qp.cpu"),
-                              centerText: String(format: "%.0f%%", state.metrics.cpuPercent),
-                              progress: state.metrics.cpuPercent / 100)
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    QuickRingCard(title: l10n.t("qp.cpu"),
+                                  centerText: String(format: "%.0f%%", state.metrics.cpuPercent),
+                                  progress: state.metrics.cpuPercent / 100)
+
+                    columnDivider(height: 72)
+
+                    QuickRingCard(title: memoryTitle,
+                                  centerText: ByteFormat.memoryShort(state.metrics.memoryUsedBytes),
+                                  progress: state.metrics.memoryPercent / 100)
+
+                    columnDivider(height: 72)
+
+                    QuickRingCard(title: l10n.t("qp.disk"),
+                                  centerText: String(format: "%.0f%%", state.metrics.diskUsedPercent),
+                                  progress: state.metrics.diskUsedPercent / 100)
+                }
 
                 Rectangle()
                     .fill(Color.surface2)
-                    .frame(width: 1, height: 72)
+                    .frame(height: 1)
+                    .padding(.horizontal, 10)
 
-                QuickRingCard(title: memoryTitle,
-                              centerText: ByteFormat.memoryShort(state.metrics.memoryUsedBytes),
-                              progress: state.metrics.memoryPercent / 100)
+                NetworkFlowMeter(downMBps: state.metrics.networkRxMBps,
+                                 upMBps: state.metrics.networkTxMBps,
+                                 downHistory: state.networkHistory,
+                                 upHistory: state.networkUploadHistory)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+
+                Rectangle()
+                    .fill(Color.surface2)
+                    .frame(height: 1)
+                    .padding(.horizontal, 10)
+
+                HStack(alignment: .top, spacing: 0) {
+                    LoadInstrument(load: state.metrics.loadOneMinute,
+                                   cores: state.metrics.logicalCPUCount)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    columnDivider(height: 40)
+                    UptimeInstrument(seconds: state.metrics.uptimeSeconds)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if state.metrics.batteryPresent {
+                        columnDivider(height: 40)
+                        BatteryInstrument(percent: state.metrics.batteryPercent,
+                                          charging: state.metrics.batteryCharging)
+                            .frame(maxWidth: .infinity)
+                    } else if state.metrics.swapTotalBytes > 0 {
+                        columnDivider(height: 40)
+                        SwapInstrument(used: state.metrics.swapUsedBytes,
+                                       total: state.metrics.swapTotalBytes)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
             }
             .background(QuickPanelSectionSurface(cornerRadius: 14))
 
@@ -116,6 +161,12 @@ struct QuickPanelView: View {
         }
     }
 
+    private func columnDivider(height: CGFloat) -> some View {
+        Rectangle()
+            .fill(Color.surface2)
+            .frame(width: 1, height: height)
+    }
+
     /// 内存卡副标题：总量参照（如 "/ 24G"）。
     private var memoryTitle: String {
         guard state.metrics.memoryTotalBytes > 0 else { return l10n.t("qp.mem") }
@@ -166,12 +217,7 @@ private struct QuickRingCard: View {
     var body: some View {
         VStack(spacing: 7) {
             ZStack {
-                Circle()
-                    .stroke(Color.hairline, lineWidth: 5)
-                Circle()
-                    .trim(from: 0, to: CGFloat(max(0, min(1, progress))))
-                    .stroke(Color.moleAccent, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
+                UsageRing(progress: progress, lineWidth: 5)
                 Text(centerText)
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
                     .lineLimit(1)

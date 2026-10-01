@@ -257,22 +257,12 @@ struct MainWindowView: View {
     }
 
     private var metricBar: some View {
-        MetricBar(items: [
-            .init(title: l10n.t("metric.cleanable"), symbol: "trash",
-                  value: state.selectedCount > 0 ? ByteFormat.format(state.selectedBytes) : l10n.t("metric.pending")),
-            .init(title: l10n.t("metric.memory"), symbol: "memorychip",
-                  value: String(format: "%.0f%%", state.metrics.memoryPercent),
-                  progress: state.metrics.memoryPercent / 100),
-            .init(title: l10n.t("metric.disk"), symbol: "internaldrive",
-                  value: state.metrics.diskFreeBytes > 0 ? ByteFormat.format(state.metrics.diskFreeBytes) : "--",
-                  progress: state.metrics.diskUsedPercent / 100),
-            .init(title: l10n.t("metric.network"), symbol: "network",
-                  value: String(format: "↓%.1f ↑%.1f", state.metrics.networkRxMBps, state.metrics.networkTxMBps),
-                  sparkline: state.networkHistory),
-        ])
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
+        SystemInstrumentBar(metrics: state.metrics,
+                            downloadHistory: state.networkHistory,
+                            uploadHistory: state.networkUploadHistory)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
     }
 
     // MARK: 弹窗绑定

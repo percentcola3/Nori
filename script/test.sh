@@ -284,6 +284,19 @@ test_productivity_feature_contract() {
     fi
     /usr/bin/grep -Fq 'ByteFormat.memoryShort(state.metrics.memoryTotalBytes)' "$quick_panel" || \
         fail "quick panel physical memory still uses decimal disk formatting"
+    /usr/bin/grep -Fq 'struct NetworkFlowMeter' "$ROOT_DIR/SimpleMole/Views/Components.swift" || \
+        fail "network throughput has no dedicated meter"
+    if awk '/^struct NetworkFlowMeter/,/^struct LoadInstrument/' \
+        "$ROOT_DIR/SimpleMole/Views/Components.swift" | /usr/bin/grep -Fq 'Circle()'; then
+        fail "network throughput is still drawn as a ring"
+    fi
+    /usr/bin/grep -Fq 'SystemInstrumentBar(metrics:' \
+        "$ROOT_DIR/SimpleMole/Views/MainWindowView.swift" || \
+        fail "main window metrics are not the instrument strip"
+    /usr/bin/grep -Fq 'LoadInstrument' "$quick_panel" || \
+        fail "quick metrics are missing load"
+    /usr/bin/grep -Fq 'UptimeInstrument' "$quick_panel" || \
+        fail "quick metrics are missing uptime"
     /usr/bin/grep -Fq 'static func memoryShort(_ bytes: UInt64)' "$models" || \
         fail "memory has no hardware-capacity formatter"
     /usr/bin/grep -Fq 'internalPages: UInt64(info.internal_page_count)' "$system_metrics" || \

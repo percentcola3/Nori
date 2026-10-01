@@ -19,9 +19,22 @@ extension L10nTables {
         "language.auto": "自動（跟隨系統）",
 
         "metric.cleanable": "可清理",
+        "metric.cpu": "CPU 占用",
         "metric.memory": "記憶體",
         "metric.disk": "磁碟剩餘",
+        "metric.disk.usage": "磁碟占用",
+        "metric.disk.free": "剩餘 %@",
         "metric.network": "網路",
+        "metric.load": "負載",
+        "metric.load.cores": "%d 核",
+        "metric.uptime": "運行時間",
+        "metric.uptime.days": "%d天 %d小時",
+        "metric.uptime.hours": "%d小時 %d分",
+        "metric.uptime.minutes": "%d分鐘",
+        "metric.battery": "電池",
+        "metric.battery.charging": "充電中",
+        "metric.battery.onbattery": "使用電池",
+        "metric.swap": "交換空間",
         "metric.pending": "待掃描",
 
         "common.more": "更多",
@@ -155,6 +168,7 @@ extension L10nTables {
 
         "qp.cpu": "CPU 占用",
         "qp.mem": "記憶體占用",
+        "qp.disk": "磁碟占用",
         "qp.optimize": "一鍵清理",
         "qp.topMemory": "記憶體占用最高",
 

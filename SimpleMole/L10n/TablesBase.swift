@@ -21,9 +21,22 @@ enum L10nTables {
 
         // 指标卡
         "metric.cleanable": "Cleanable",
+        "metric.cpu": "CPU",
         "metric.memory": "Memory",
         "metric.disk": "Disk Free",
+        "metric.disk.usage": "Disk",
+        "metric.disk.free": "%@ free",
         "metric.network": "Network",
+        "metric.load": "Load",
+        "metric.load.cores": "%d cores",
+        "metric.uptime": "Uptime",
+        "metric.uptime.days": "%dd %dh",
+        "metric.uptime.hours": "%dh %dm",
+        "metric.uptime.minutes": "%dm",
+        "metric.battery": "Battery",
+        "metric.battery.charging": "Charging",
+        "metric.battery.onbattery": "On battery",
+        "metric.swap": "Swap",
         "metric.pending": "Not scanned",
 
         // 通用
@@ -265,6 +278,7 @@ enum L10nTables {
         // 快捷面板
         "qp.cpu": "CPU Usage",
         "qp.mem": "Memory Usage",
+        "qp.disk": "Disk Usage",
         "qp.optimize": "Quick Clean",
         "qp.topMemory": "Top Memory",
 
@@ -569,9 +583,22 @@ enum L10nTables {
         "language.auto": "自动（跟随系统）",
 
         "metric.cleanable": "可清理",
-        "metric.memory": "内存",
+        "metric.cpu": "CPU 占用",
+        "metric.memory": "内存占用",
         "metric.disk": "磁盘剩余",
+        "metric.disk.usage": "磁盘占用",
+        "metric.disk.free": "剩余 %@",
         "metric.network": "网络",
+        "metric.load": "负载",
+        "metric.load.cores": "%d 核",
+        "metric.uptime": "运行时间",
+        "metric.uptime.days": "%d天 %d小时",
+        "metric.uptime.hours": "%d小时 %d分",
+        "metric.uptime.minutes": "%d分钟",
+        "metric.battery": "电池",
+        "metric.battery.charging": "充电中",
+        "metric.battery.onbattery": "使用电池",
+        "metric.swap": "交换空间",
         "metric.pending": "待扫描",
 
         "common.more": "更多",
@@ -801,6 +828,7 @@ enum L10nTables {
 
         "qp.cpu": "CPU 占用",
         "qp.mem": "内存占用",
+        "qp.disk": "磁盘占用",
         "qp.optimize": "一键清理",
         "qp.topMemory": "内存占用最高",
 

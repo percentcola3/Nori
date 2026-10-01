@@ -989,78 +989,17 @@ private struct GooeySelectionSurface: View, Animatable {
     }
 }
 
-// MARK: - 紧凑指标条（两行式：标签行 + 数值行，清晰且省纵向空间）
-
-struct MetricBar: View {
-    struct Item {
-        let title: String
-        let symbol: String
-        let value: String
-        var progress: Double?
-        var sparkline: [Double]?
-    }
-
-    let items: [Item]
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(items.indices, id: \.self) { index in
-                CompactMetricItem(item: items[index])
-                if index < items.count - 1 {
-                    Divider().frame(height: 28)
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .frame(height: 56)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
-    }
-}
-
-private struct CompactMetricItem: View {
-    let item: MetricBar.Item
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 5) {
-                Image(systemName: item.symbol)
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.moleAccentText)
-                Text(item.title)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                if let sparkline = item.sparkline, !sparkline.isEmpty {
-                    Sparkline(data: sparkline)
-                        .frame(width: 42, height: 12)
-                } else if let progress = item.progress {
-                    ProgressBar(value: progress)
-                        .frame(width: 42, height: 4)
-                }
-            }
-            Text(item.value)
-                .font(.system(size: 15, weight: .semibold).monospacedDigit())
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .minimumScaleFactor(0.75)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 6)
-    }
-}
-
 struct ProgressBar: View {
     let value: Double
+    var tint: Color = .moleAccent
 
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(.quaternary)
                 Capsule()
-                    .fill(Color.moleAccent)
-                    .frame(width: max(4, proxy.size.width * min(1, max(0, value))))
+                    .fill(tint)
+                    .frame(width: max(3, proxy.size.width * min(1, max(0, value))))
             }
         }
     }
@@ -1068,20 +1007,346 @@ struct ProgressBar: View {
 
 struct Sparkline: View {
     let data: [Double]
+    var secondary: [Double] = []
+    var tint: Color = .moleAccent
+    var secondaryTint: Color = .moleAccentText
 
     var body: some View {
         GeometryReader { proxy in
-            let maxValue = max(data.max() ?? 1, 0.001)
-            Path { path in
-                for (index, sample) in data.enumerated() {
-                    let x = proxy.size.width * CGFloat(index) / CGFloat(max(1, data.count - 1))
-                    let y = proxy.size.height * (1 - CGFloat(sample / maxValue) * 0.9)
-                    if index == 0 { path.move(to: CGPoint(x: x, y: y)) }
-                    else { path.addLine(to: CGPoint(x: x, y: y)) }
-                }
+            let peak = max(data.max() ?? 0, secondary.max() ?? 0, 0.001)
+            stroke(data, in: proxy.size, peak: peak)
+                .stroke(tint, style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
+            if !secondary.isEmpty {
+                stroke(secondary, in: proxy.size, peak: peak)
+                    .stroke(secondaryTint.opacity(0.85),
+                            style: StrokeStyle(lineWidth: 1.1, lineCap: .round, lineJoin: .round))
             }
-            .stroke(Color.moleAccent, style: StrokeStyle(lineWidth: 1.4, lineCap: .round, lineJoin: .round))
         }
+    }
+
+    private func stroke(_ samples: [Double], in size: CGSize, peak: Double) -> Path {
+        var path = Path()
+        guard !samples.isEmpty else { return path }
+        for (index, sample) in samples.enumerated() {
+            let x = size.width * CGFloat(index) / CGFloat(max(1, samples.count - 1))
+            let y = size.height * (1 - CGFloat(sample / peak) * 0.9)
+            if index == 0 { path.move(to: CGPoint(x: x, y: y)) }
+            else { path.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        return path
+    }
+}
+
+// MARK: - 观测仪表
+
+/// 只用于有自然上限的占用率。网络吞吐没有 100%，不要复用这个圆环。
+struct UsageRing: View {
+    var progress: Double
+    var lineWidth: CGFloat = 4.5
+
+    private var tint: Color {
+        if progress >= 0.92 { return .danger }
+        if progress >= 0.75 { return .warning }
+        return .moleAccent
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.hairline, lineWidth: lineWidth)
+            Circle()
+                .trim(from: 0, to: CGFloat(max(0, min(1, progress))))
+                .stroke(tint, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// 网络仪表：下行、上行的绝对速率，旁边是近期走势。没有百分比圆环。
+struct NetworkFlowMeter: View {
+    let downMBps: Double
+    let upMBps: Double
+    let downHistory: [Double]
+    let upHistory: [Double]
+    var showsTitle = true
+    @ObservedObject private var l10n = L10n.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if showsTitle {
+                Text(l10n.t("metric.network"))
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 3) {
+                    rateRow(symbol: "arrow.down",
+                            text: ByteFormat.megabytesPerSecond(downMBps),
+                            tint: .moleAccentText)
+                    rateRow(symbol: "arrow.up",
+                            text: ByteFormat.megabytesPerSecond(upMBps),
+                            tint: .secondary)
+                }
+                Sparkline(data: downHistory.isEmpty ? [0] : downHistory,
+                          secondary: upHistory,
+                          tint: .moleAccent,
+                          secondaryTint: .moleAccentText)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 26)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(l10n.t("metric.network"))
+        .accessibilityValue("\(ByteFormat.megabytesPerSecond(downMBps)) \(ByteFormat.megabytesPerSecond(upMBps))")
+    }
+
+    private func rateRow(symbol: String, text: String, tint: Color) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 10)
+            Text(text)
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+    }
+}
+
+struct LoadInstrument: View {
+    let load: Double
+    let cores: Int
+    @ObservedObject private var l10n = L10n.shared
+
+    private var fraction: Double {
+        guard cores > 0 else { return 0 }
+        return load / Double(cores)
+    }
+
+    private var tint: Color {
+        if fraction >= 1 { return .danger }
+        if fraction >= 0.75 { return .warning }
+        return .moleAccent
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(l10n.t("metric.load"))
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            Text(load.isFinite ? String(format: "%.2f", max(0, load)) : "--")
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .lineLimit(1)
+            ProgressBar(value: min(1, max(0, fraction)), tint: tint)
+                .frame(height: 4)
+            Text(cores > 0 ? l10n.tf("metric.load.cores", cores) : " ")
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(l10n.t("metric.load"))
+        .accessibilityValue(String(format: "%.2f", max(0, load)))
+    }
+}
+
+struct UptimeInstrument: View {
+    let seconds: UInt64
+    @ObservedObject private var l10n = L10n.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(l10n.t("metric.uptime"))
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            Text(formatted)
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Image(systemName: "clock")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color.moleAccentText)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(l10n.t("metric.uptime"))
+        .accessibilityValue(formatted)
+    }
+
+    private var formatted: String {
+        let days = Int(seconds / 86_400)
+        let hours = Int((seconds % 86_400) / 3_600)
+        let minutes = Int((seconds % 3_600) / 60)
+        if days > 0 { return l10n.tf("metric.uptime.days", days, hours) }
+        if hours > 0 { return l10n.tf("metric.uptime.hours", hours, minutes) }
+        return l10n.tf("metric.uptime.minutes", minutes)
+    }
+}
+
+struct BatteryInstrument: View {
+    let percent: Double
+    let charging: Bool
+    @ObservedObject private var l10n = L10n.shared
+
+    var body: some View {
+        VStack(spacing: 4) {
+            UsageRing(progress: percent / 100, lineWidth: 4)
+                .frame(width: 26, height: 26)
+                .overlay {
+                    Image(systemName: charging ? "bolt.fill" : "battery.100")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Color.moleAccentText)
+                }
+            Text(String(format: "%.0f%%", min(100, max(0, percent))))
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+            Text(l10n.t("metric.battery"))
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            Text(l10n.t(charging ? "metric.battery.charging" : "metric.battery.onbattery"))
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(l10n.t("metric.battery"))
+        .accessibilityValue(String(format: "%.0f%%", percent))
+    }
+}
+
+struct SwapInstrument: View {
+    let used: UInt64
+    let total: UInt64
+    @ObservedObject private var l10n = L10n.shared
+
+    private var fraction: Double {
+        guard total > 0 else { return 0 }
+        return Double(used) / Double(total)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(l10n.t("metric.swap"))
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            Text(ByteFormat.memoryShort(used))
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .lineLimit(1)
+            ProgressBar(value: fraction, tint: fraction >= 0.8 ? .warning : .moleAccent)
+                .frame(height: 4)
+            Text(ByteFormat.memoryShort(total))
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(l10n.t("metric.swap"))
+        .accessibilityValue(ByteFormat.memoryShort(used))
+    }
+}
+
+struct RingInstrument: View {
+    let title: String
+    let value: String
+    let caption: String
+    let progress: Double
+
+    var body: some View {
+        VStack(spacing: 3) {
+            UsageRing(progress: progress, lineWidth: 4)
+                .frame(width: 26, height: 26)
+            Text(value)
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(title)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            Text(caption)
+                .font(.system(size: 8))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(value)
+    }
+}
+
+/// 主窗口快捷指标：占用率用圆环，网络用速率，并附带负载、运行时间等读数。
+struct SystemInstrumentBar: View {
+    let metrics: MetricsSnapshot
+    let downloadHistory: [Double]
+    let uploadHistory: [Double]
+    @ObservedObject private var l10n = L10n.shared
+
+    var body: some View {
+        HStack(spacing: 0) {
+            RingInstrument(title: l10n.t("metric.cpu"),
+                           value: percent(metrics.cpuPercent),
+                           caption: metrics.logicalCPUCount > 0
+                               ? l10n.tf("metric.load.cores", metrics.logicalCPUCount) : " ",
+                           progress: metrics.cpuPercent / 100)
+            barDivider
+            RingInstrument(title: l10n.t("metric.memory"),
+                           value: percent(metrics.memoryPercent),
+                           caption: metrics.memoryTotalBytes > 0
+                               ? "\(ByteFormat.memoryShort(metrics.memoryUsedBytes)) / \(ByteFormat.memoryShort(metrics.memoryTotalBytes))"
+                               : " ",
+                           progress: metrics.memoryPercent / 100)
+            barDivider
+            RingInstrument(title: l10n.t("metric.disk.usage"),
+                           value: percent(metrics.diskUsedPercent),
+                           caption: metrics.diskFreeBytes > 0
+                               ? l10n.tf("metric.disk.free", ByteFormat.format(metrics.diskFreeBytes))
+                               : " ",
+                           progress: metrics.diskUsedPercent / 100)
+            barDivider
+            NetworkFlowMeter(downMBps: metrics.networkRxMBps,
+                             upMBps: metrics.networkTxMBps,
+                             downHistory: downloadHistory,
+                             upHistory: uploadHistory)
+                .frame(minWidth: 148, maxWidth: 210)
+                .padding(.horizontal, 8)
+            barDivider
+            LoadInstrument(load: metrics.loadOneMinute, cores: metrics.logicalCPUCount)
+                .frame(minWidth: 64, maxWidth: 88)
+                .padding(.horizontal, 8)
+            barDivider
+            UptimeInstrument(seconds: metrics.uptimeSeconds)
+                .frame(minWidth: 72, maxWidth: 96)
+                .padding(.horizontal, 8)
+            if metrics.batteryPresent {
+                barDivider
+                BatteryInstrument(percent: metrics.batteryPercent, charging: metrics.batteryCharging)
+                    .frame(maxWidth: 78)
+            }
+            if metrics.swapTotalBytes > 0 {
+                barDivider
+                SwapInstrument(used: metrics.swapUsedBytes, total: metrics.swapTotalBytes)
+                    .frame(minWidth: 64, maxWidth: 84)
+                    .padding(.horizontal, 8)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .frame(minHeight: 92)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
+    }
+
+    private var barDivider: some View {
+        Divider().frame(height: 52)
+    }
+
+    private func percent(_ value: Double) -> String {
+        String(format: "%.0f%%", min(100, max(0, value)))
     }
 }
 
