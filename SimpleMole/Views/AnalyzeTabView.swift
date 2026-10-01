@@ -13,6 +13,8 @@ struct AnalyzeTabView: View {
     @State private var duplicatesExpanded = false
     @State private var previewURL: URL?
     @State private var showTrashConfirmation = false
+    /// 大文件/视频删除的待确认清单（单行或批量）。
+    @State private var pendingDeletePaths: [String]?
     /// 从磁盘分析行发起的“按目录定时清理”意图。
     @State private var autoCleanIntent: AutoCleanupIntent?
     @State private var scanMenuOpen = false
@@ -69,15 +71,24 @@ struct AnalyzeTabView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        if let section = state.analyzeMode.section {
-                            // 聚焦模式：只渲染选中的子分类。
-                            let candidates = state.slimCandidates(in: section)
-                            if candidates.isEmpty {
-                                modeEmptyHint(section)
+                        switch state.analyzeMode {
+                        case .largeFiles, .videos:
+                            // 大文件/视频：平铺删除清单，不套卡片。
+                            let items = state.analysisFileItems(for: state.analyzeMode)
+                            if items.isEmpty {
+                                modeEmptyHint(state.analyzeMode.section ?? .largeFiles)
                             } else {
-                                slimSectionCard(section, candidates: candidates)
+                                analysisFileList(items)
                             }
-                        } else {
+                        case .images:
+                            // 图片：唯一保留瘦身（降分辨率压缩）的分类。
+                            let candidates = state.slimCandidates(in: .images)
+                            if candidates.isEmpty {
+                                modeEmptyHint(.images)
+                            } else {
+                                slimSectionCard(.images, candidates: candidates)
+                            }
+                        case .duplicates:
                             duplicatesCard
                         }
                     }
@@ -114,6 +125,19 @@ struct AnalyzeTabView: View {
             }
         } message: {
             Text(trashConfirmationMessage)
+        }
+        .alert(l10n.tf("analyze.delete.confirm.title", pendingDeletePaths?.count ?? 0),
+               isPresented: Binding(
+                get: { pendingDeletePaths != nil },
+                set: { if !$0 { pendingDeletePaths = nil } })) {
+            Button(l10n.t("common.cancel"), role: .cancel) { pendingDeletePaths = nil }
+            Button(l10n.t("analyze.delete.ok"), role: .destructive) {
+                let paths = pendingDeletePaths ?? []
+                pendingDeletePaths = nil
+                state.deleteAnalysisFiles(paths)
+            }
+        } message: {
+            Text(l10n.t("analyze.delete.confirm.msg"))
         }
         // 扫描中 → 结果/空态 的整块互换走弹簧过渡。
         .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isAnalyzing)
@@ -170,6 +194,71 @@ struct AnalyzeTabView: View {
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.hairline, lineWidth: 1))
     }
 
+    // MARK: 大文件/视频平铺删除清单
+
+    /// 不套卡片的全量平铺清单：行间细线分隔，每行勾选 + 定位 + 删除。
+    private func analysisFileList(_ items: [AnalysisFileItem]) -> some View {
+        LazyVStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                if index > 0 {
+                    Divider().padding(.leading, 42)
+                }
+                analysisFileRow(item)
+            }
+        }
+    }
+
+    private func analysisFileRow(_ item: AnalysisFileItem) -> some View {
+        let isSelected = state.analysisFileSelection.contains(item.path)
+        return HStack(spacing: 10) {
+            Button {
+                state.toggleAnalysisFileSelection(item)
+            } label: {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 14))
+                    .foregroundStyle(isSelected ? Color.moleAccentText : Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .disabled(state.isBusy)
+            Image(systemName: state.analyzeMode == .videos ? "film" : "doc")
+                .font(.system(size: 12))
+                .foregroundStyle(Color.moleAccentText)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.name)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+                Text(item.path)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            Text(ByteFormat.format(item.size))
+                .font(.system(size: 10).monospacedDigit())
+                .foregroundStyle(.secondary)
+            Button {
+                state.revealPath(item.path)
+            } label: {
+                Image(systemName: "folder")
+            }
+            .buttonStyle(MoleIconButtonStyle())
+            .help(l10n.t("analyze.reveal"))
+            Button {
+                pendingDeletePaths = [item.path]
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(MoleIconButtonStyle(tint: Color.warning))
+            .disabled(state.isBusy || state.isDeletingAnalysisFiles)
+            .help(l10n.t("analyze.delete.one"))
+        }
+        .padding(.horizontal, 2)
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+    }
+
     private var toolbar: some View {
         HStack(alignment: .center, spacing: 8) {
             if !scanning {
@@ -200,7 +289,7 @@ struct AnalyzeTabView: View {
         ) {
             runSelectedScan()
         } onToggleMenu: {
-            scanMenuOpen.toggle()
+            setScanMenuOpen(!scanMenuOpen)
         }
         .anchorPreference(key: ScanButtonAnchorKey.self, value: .bounds) { $0 }
     }
@@ -210,8 +299,8 @@ struct AnalyzeTabView: View {
         if scanMenuOpen, let anchor {
             GeometryReader { proxy in
                 let frame = proxy[anchor]
-                let width: CGFloat = 336
-                let menuHeight: CGFloat = 292
+                let width: CGFloat = 248
+                let menuHeight: CGFloat = 180
                 let x = min(max(12, frame.maxX - width), max(12, proxy.size.width - width - 12))
                 let spaceBelow = proxy.size.height - frame.maxY
                 let y = spaceBelow >= menuHeight + 12
@@ -220,7 +309,7 @@ struct AnalyzeTabView: View {
                 ZStack(alignment: .topLeading) {
                     Color.black.opacity(0.001)
                         .contentShape(Rectangle())
-                        .onTapGesture { scanMenuOpen = false }
+                        .onTapGesture { setScanMenuOpen(false) }
                     AnalyzeScanMenu(
                         selection: state.analyzeMode,
                         title: { l10n.t($0.titleKey) },
@@ -231,6 +320,7 @@ struct AnalyzeTabView: View {
                     .frame(width: width, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .offset(x: x, y: y)
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
                 }
             }
         }
@@ -239,13 +329,22 @@ struct AnalyzeTabView: View {
     /// 下拉只切换待执行的扫描，不开始遍历。
     private func chooseAnalyzeMode(_ mode: AnalyzeMode) {
         state.analyzeMode = mode
-        scanMenuOpen = false
+        setScanMenuOpen(false)
+    }
+
+    private func setScanMenuOpen(_ open: Bool) {
+        guard scanMenuOpen != open else { return }
+        if reduceMotion {
+            scanMenuOpen = open
+        } else {
+            withAnimation(MoleMotion.panel) { scanMenuOpen = open }
+        }
     }
 
     /// 主按钮按当前类型开扫。重复文件做内容级比对；大文件、图片、视频
     /// 共享一次磁盘走查，结果按所选分类展示。
     private func runSelectedScan() {
-        scanMenuOpen = false
+        setScanMenuOpen(false)
         switch state.analyzeMode {
         case .duplicates:
             guard !state.isBusy, !state.isScanningDuplicates else { return }
@@ -293,18 +392,36 @@ struct AnalyzeTabView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer()
-                if state.duplicateSelectedCount > 0 {
-                    Button { showTrashConfirmation = true } label: {
-                        Label(l10n.t("duplicates.trash"), systemImage: "trash")
+                // 按当前模式分流：大文件/视频＝删除；重复文件＝清理；
+                // 图片＝瘦身（唯一可降分辨率压缩的分类）。
+                switch state.analyzeMode {
+                case .largeFiles, .videos:
+                    if !state.analysisFileSelectedItems.isEmpty {
+                        Button {
+                            pendingDeletePaths = state.analysisFileSelectedItems.map(\.path)
+                        } label: {
+                            Label(l10n.tf("analyze.delete.selected",
+                                          state.analysisFileSelectedItems.count),
+                                  systemImage: "trash")
+                        }
+                        .buttonStyle(DangerButtonStyle())
+                        .disabled(state.isBusy || state.isDeletingAnalysisFiles)
                     }
-                    .buttonStyle(DangerButtonStyle())
-                    .disabled(state.isBusy)
+                case .duplicates:
+                    if state.duplicateSelectedCount > 0 {
+                        Button { showTrashConfirmation = true } label: {
+                            Label(l10n.t("duplicates.trash"), systemImage: "trash")
+                        }
+                        .buttonStyle(DangerButtonStyle())
+                        .disabled(state.isBusy)
+                    }
+                case .images:
+                    Button { state.requestSlim() } label: {
+                        Label(l10n.t("slim.action"), systemImage: "arrow.down.right.and.arrow.up.left")
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(state.slimSelectedCandidates.isEmpty || state.isBusy)
                 }
-                Button { state.requestSlim() } label: {
-                    Label(l10n.t("slim.action"), systemImage: "arrow.down.right.and.arrow.up.left")
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .disabled(state.slimSelectedCandidates.isEmpty || state.isBusy)
             }
         }
         .padding(.horizontal, 16)
@@ -316,6 +433,10 @@ struct AnalyzeTabView: View {
         if !state.slimSelectedCandidates.isEmpty {
             parts.append(l10n.tf("slim.footer.selected", state.slimSelectedCandidates.count,
                                  ByteFormat.format(state.slimSelectedBytes)))
+        }
+        if !state.analysisFileSelectedItems.isEmpty {
+            parts.append(l10n.tf("slim.footer.selected", state.analysisFileSelectedItems.count,
+                                 ByteFormat.format(state.analysisFileSelectedBytes)))
         }
         if state.duplicateSelectedCount > 0 {
             parts.append(l10n.tf("duplicates.selection.count", state.duplicateSelectedCount,
@@ -393,55 +514,118 @@ private struct SplitSegmentStyle: ButtonStyle {
 }
 
 /// 扫描类型面板：标题加说明。点选只改变主按钮将要执行的扫描。
+/// 选中态是液态玻璃透镜，在条目之间做 matchedGeometry 过渡；面板本身也是玻璃，
+/// 不再铺实色底。
 private struct AnalyzeScanMenu: View {
     let selection: AnalyzeMode
     let title: (AnalyzeMode) -> String
     let detail: (AnalyzeMode) -> String
     let onSelect: (AnalyzeMode) -> Void
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(AnalyzeMode.menuOrder) { mode in
-                Button { onSelect(mode) } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(title(mode))
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.primary)
-                        Text(detail(mode))
-                            .font(.system(size: 12))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(mode == selection
-                                  ? Color.moleAccent.opacity(0.14)
-                                  : Color.clear)
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(6)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(menuFill)
-                .shadow(color: .black.opacity(0.18), radius: 24, y: 10)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.hairline, lineWidth: 1)
-        )
+    @Namespace private var selectionNamespace
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    private var menuShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
     }
 
-    private var menuFill: Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-                ? NSColor(srgbRed: 0.16, green: 0.18, blue: 0.22, alpha: 1)
-                : NSColor.white
-        })
+    var body: some View {
+        // 面板玻璃和选中透镜放在同一组里，合成成一块液态玻璃，而不是两层叠色。
+        LiquidGlassGroup {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(AnalyzeMode.menuOrder) { mode in
+                    Button { onSelect(mode) } label: {
+                        scanRow(mode)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(4)
+            .modifier(ScanMenuChrome(reduceMotion: reduceMotion,
+                                     reduceTransparency: reduceTransparency,
+                                     shape: menuShape))
+        }
+        .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
+    }
+
+    private func scanRow(_ mode: AnalyzeMode) -> some View {
+        let selected = mode == selection
+        return VStack(alignment: .leading, spacing: 1) {
+            Text(title(mode))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(selected ? Color.primary : Color.secondary)
+            Text(detail(mode))
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background {
+            if selected {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.clear)
+                    .matchedGeometryEffect(id: "scan-selection", in: selectionNamespace)
+            }
+        }
+        .modifier(ScanSelectionGlass(selected: selected,
+                                     id: mode.rawValue,
+                                     namespace: selectionNamespace,
+                                     reduceMotion: reduceMotion,
+                                     reduceTransparency: reduceTransparency))
+    }
+}
+
+/// 菜单玻璃必须包住内容。实色底会盖住折射，看起来就像玻璃没生效。
+private struct ScanMenuChrome: ViewModifier {
+    var reduceMotion: Bool
+    var reduceTransparency: Bool
+    var shape: RoundedRectangle
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *), !reduceTransparency {
+            content
+                .glassEffect(Glass.regular.interactive(!reduceMotion), in: shape)
+                .overlay {
+                    shape.strokeBorder(Color.hairline, lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+        } else {
+            content.background(GlassSurface(cornerRadius: 14))
+        }
+    }
+}
+
+/// 选中行的玻璃透镜。文字是 glassEffect 的内容，不能把玻璃垫在文字后面。
+private struct ScanSelectionGlass: ViewModifier {
+    var selected: Bool
+    var id: String
+    var namespace: Namespace.ID
+    var reduceMotion: Bool
+    var reduceTransparency: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *), !reduceTransparency, selected {
+            content
+                .glassEffect(
+                    Glass.regular
+                        .tint(Color.accent.opacity(0.22))
+                        .interactive(!reduceMotion),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+                .glassEffectID(id, in: namespace)
+                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+        } else if selected {
+            content.background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.surface2)
+            )
+        } else {
+            content
+        }
     }
 }

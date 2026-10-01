@@ -61,20 +61,25 @@ struct SlimCandidate: Identifiable, Equatable {
     var operation: SlimOperation { SlimOperation.operation(for: path) }
 }
 
-/// 文件瘦身：从磁盘分析的聚合视图发起，逐个压缩/转码/打包；
-/// 结果不变小就丢弃，替换时原件移入废纸篓。
+/// 大文件/视频删除清单里的一行：只有删除路线，不参与瘦身。
+struct AnalysisFileItem: Identifiable, Equatable {
+    let name: String
+    let path: String
+    let size: UInt64
+    var id: String { path }
+}
+
+/// 文件瘦身：只有图片走压缩（降分辨率/重编码）；
+/// 大文件、视频与重复文件保留删除（移入废纸篓）路线。
 @MainActor
 extension AppState {
     func slimCandidates(in section: AnalyzeSection) -> [SlimCandidate] {
         switch section {
-        case .largeFiles:
-            return analyzeLargeFiles.map {
-                SlimCandidate(name: $0.name, path: $0.path, size: $0.size,
-                              kind: MediaSlimPolicy.kind(forPath: $0.path))
-            }
-        case .images, .videos:
-            let kind: MediaKind = section == .images ? .image : .video
-            return analyzeMedia.filter { $0.kind == kind }.map {
+        case .largeFiles, .videos:
+            // 大文件/视频不再提供瘦身候选：它们在页面上走删除清单。
+            return []
+        case .images:
+            return analyzeMedia.filter { $0.kind == .image }.map {
                 SlimCandidate(name: $0.name, path: $0.path, size: $0.size, kind: $0.kind)
             }
         }
@@ -96,6 +101,84 @@ extension AppState {
             slimSelection.remove(candidate.path)
         } else {
             slimSelection.insert(candidate.path)
+        }
+    }
+
+    // MARK: 大文件/视频的删除清单
+
+    /// 大文件/视频模式的平铺清单。
+    func analysisFileItems(for mode: AnalyzeMode) -> [AnalysisFileItem] {
+        switch mode {
+        case .largeFiles:
+            return analyzeLargeFiles.map {
+                AnalysisFileItem(name: $0.name, path: $0.path, size: $0.size)
+            }
+        case .videos:
+            return analyzeMedia.filter { $0.kind == .video }.map {
+                AnalysisFileItem(name: $0.name, path: $0.path, size: $0.size)
+            }
+        case .images, .duplicates:
+            return []
+        }
+    }
+
+    var analysisFileSelectedItems: [AnalysisFileItem] {
+        analysisFileItems(for: analyzeMode).filter { analysisFileSelection.contains($0.path) }
+    }
+
+    var analysisFileSelectedBytes: UInt64 {
+        analysisFileSelectedItems.reduce(0) { $0 &+ $1.size }
+    }
+
+    func toggleAnalysisFileSelection(_ item: AnalysisFileItem) {
+        guard !isBusy else { return }
+        if analysisFileSelection.contains(item.path) {
+            analysisFileSelection.remove(item.path)
+        } else {
+            analysisFileSelection.insert(item.path)
+        }
+    }
+
+    func toggleSelectAllAnalysisFiles() {
+        guard !isBusy else { return }
+        let paths = analysisFileItems(for: analyzeMode).map(\.path)
+        if paths.allSatisfy(analysisFileSelection.contains) {
+            analysisFileSelection.subtract(paths)
+        } else {
+            analysisFileSelection.formUnion(paths)
+        }
+    }
+
+    /// 删除清单执行：移入废纸篓（可恢复），并同步清单与缓存。
+    func deleteAnalysisFiles(_ paths: [String]) {
+        guard !isBusy, !isDeletingAnalysisFiles, !paths.isEmpty else { return }
+        isDeletingAnalysisFiles = true
+        Task {
+            var removed: Set<String> = []
+            var failed = 0
+            for path in paths {
+                do {
+                    try FileManager.default.trashItem(
+                        at: URL(fileURLWithPath: path), resultingItemURL: nil)
+                    removed.insert(path)
+                } catch {
+                    failed += 1
+                }
+            }
+            analyzeLargeFiles.removeAll { removed.contains($0.path) }
+            analyzeMedia.removeAll { removed.contains($0.path) }
+            analyzeEntries.removeAll { removed.contains($0.path) }
+            analysisFileSelection.subtract(removed)
+            for path in removed {
+                analyzeCache.invalidate((path as NSString).deletingLastPathComponent)
+            }
+            isDeletingAnalysisFiles = false
+            let summary = L10n.shared.tf("analyze.delete.done", removed.count, failed)
+            statusText = summary
+            analyzeStatus = summary
+            log(summary)
+            if failed == 0, !removed.isEmpty { noteHeaderReaction(.success) }
+            else if failed > 0 { noteHeaderReaction(.attention) }
         }
     }
 

@@ -383,6 +383,9 @@ final class AppState: ObservableObject {
     @Published var analyzeMode: AnalyzeMode = .largeFiles
     @Published var analyzeMediaSummary = MediaSummary()
     @Published var slimSelection: Set<String> = []
+    /// 大文件/视频删除清单的勾选（移入废纸篓路线）。
+    @Published var analysisFileSelection: Set<String> = []
+    @Published var isDeletingAnalysisFiles = false
     @Published var slimOptions = SlimOptions()
     @Published var showSlimSheet = false
     @Published var isSlimming = false
