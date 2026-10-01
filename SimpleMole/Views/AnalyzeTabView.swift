@@ -51,11 +51,14 @@ struct AnalyzeTabView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else if !scanning && !hasResults {
-                // 空态只保留 SVG 动图：分析入口是工具栏的分段按钮组，
-                // 点任意一段即以该类型开始分析。
-                NoriStatusAnimation(mood: .idle, size: 120, assetName: "nori-coffee")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .transition(reduceMotion ? .opacity : .moleStateSwap)
+                // 进入分析页不主动扫描：SVG 占位 + 带下拉面板的扫描按钮，
+                // 面板里选择 大文件/图片/视频/重复文件 后按类型触发分析。
+                VStack(spacing: 18) {
+                    NoriStatusAnimation(mood: .idle, size: 120, assetName: "nori-coffee")
+                    scanMenuButton(title: l10n.t("analyze.scan.simple"))
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
@@ -158,29 +161,18 @@ struct AnalyzeTabView: View {
     }
 
     private var toolbar: some View {
-        // 分段按钮组独占首行（参考设计：全宽胶囊、白色选中块）；
-        // 状态文字与“重新扫描”收进第二行小条。
-        VStack(spacing: 8) {
-            modeSelector
-            HStack(alignment: .center, spacing: 8) {
-                if !scanning {
-                    Text(scanStatusText)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                Spacer(minLength: 8)
-                // 扫描中的取消在动画下方；未扫描时入口在分段按钮组。
-                if hasResults && !scanning {
-                    Button {
-                        state.scanDiskOverview(force: true)
-                    } label: {
-                        Label(l10n.t("analyze.scan"), systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(state.isBusy)
-                }
+        HStack(alignment: .center, spacing: 8) {
+            if !scanning {
+                Text(scanStatusText)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            // 已有结果后工具栏提供同款下拉扫描按钮；未扫描的入口在空态。
+            if hasResults && !scanning {
+                scanMenuButton(title: l10n.t("analyze.scan"))
             }
         }
         .padding(.horizontal, 16)
@@ -188,44 +180,58 @@ struct AnalyzeTabView: View {
         .padding(.bottom, 8)
     }
 
-    /// 全宽胶囊分段按钮组：选中段白色实心圆角块；重复点击同一段在
-    /// 未扫描时也会开始分析。
-    private var modeSelector: some View {
-        HStack(spacing: 4) {
+    /// 带下拉面板的扫描按钮（GitHub 合并按钮样式）：主按钮视觉 + 右侧
+    /// 下拉箭头，面板里选择分析类型并触发对应效果。
+    private func scanMenuButton(title: String) -> some View {
+        Menu {
             ForEach(AnalyzeMode.allCases) { mode in
-                let isSelected = state.analyzeMode == mode
                 Button {
                     selectMode(mode)
                 } label: {
-                    Text(l10n.t(mode.titleKey))
-                        .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                        .padding(.horizontal, 10)
-                        .frame(maxWidth: .infinity, minHeight: 30)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(isSelected ? Color.white : Color.clear))
+                    if state.analyzeMode == mode {
+                        Label(l10n.t(mode.titleKey), systemImage: "checkmark")
+                    } else {
+                        Text(l10n.t(mode.titleKey))
+                    }
                 }
-                .buttonStyle(MolePlainButtonStyle())
-                .disabled(state.isBusy)
             }
+        } label: {
+            HStack(spacing: 7) {
+                Text(title)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Color.moleOnAccent)
+            .padding(.horizontal, 14)
+            .frame(height: 30)
+            .background(
+                Capsule().fill(Color.moleAccent.opacity(0.72))
+                    .shadow(color: Color.moleAccent.opacity(0.18), radius: 5, y: 1))
+            .overlay(Capsule().strokeBorder(Color.moleAccentText.opacity(0.22), lineWidth: 1))
+            .contentShape(Capsule())
         }
-        .padding(4)
-        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
-            .strokeBorder(Color.hairline, lineWidth: 1))
-        .frame(maxWidth: .infinity)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(state.isBusy)
     }
 
+    /// 面板选项触发各自的分析：重复文件直接做内容级比对（独立于磁盘
+    /// 走查）；大文件/图片/视频共享走查结果，没有时才发起扫描。
     private func selectMode(_ mode: AnalyzeMode) {
         state.analyzeMode = mode
-        // 未扫描时点选即“开始分析”；已有结果时切到重复文件自动跟进比对。
-        if mode == .duplicates, hasResults,
-           !state.isBusy, !state.isScanningDuplicates,
-           !state.duplicateScanFinished {
-            state.scanDuplicateFiles()
-        } else if !hasResults, !scanning {
-            state.scanDiskOverview(force: true)
+        switch mode {
+        case .duplicates:
+            if !state.isBusy, !state.isScanningDuplicates,
+               !state.duplicateScanFinished {
+                state.scanDuplicateFiles()
+            }
+        case .largeFiles, .images, .videos:
+            let hasWalkResults = !state.analyzeLargeFiles.isEmpty
+                || !state.analyzeMedia.isEmpty
+            if !hasWalkResults, !scanning {
+                state.scanDiskOverview(force: true)
+            }
         }
     }
 

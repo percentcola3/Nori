@@ -5,6 +5,7 @@ import Foundation
 enum L10nMediaTables {
     static let en: [String: String] = [
         "analyze.section.largeFiles": "Large files",
+        "analyze.scan.simple": "Scan",
         "analyze.section.images": "Images",
         "analyze.section.videos": "Videos",
         "analyze.section.duplicates": "Duplicates",
@@ -83,6 +84,7 @@ enum L10nMediaTables {
 
     static let zhHans: [String: String] = [
         "analyze.section.largeFiles": "大文件",
+        "analyze.scan.simple": "扫描",
         "analyze.section.images": "图片",
         "analyze.section.videos": "视频",
         "analyze.section.duplicates": "重复文件",
@@ -161,6 +163,7 @@ enum L10nMediaTables {
 
     static let zhHant: [String: String] = [
         "analyze.section.largeFiles": "大檔案",
+        "analyze.scan.simple": "掃描",
         "analyze.section.images": "圖片",
         "analyze.section.videos": "影片",
         "analyze.section.duplicates": "重複檔案",
