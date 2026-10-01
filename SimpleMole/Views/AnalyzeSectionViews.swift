@@ -101,26 +101,20 @@ struct SlimSectionCard: View {
     }
 }
 
-/// 重复文件子分类卡片：疑似重复分组展示，逐个勾选后清理（每组至少保留一份）。
+/// 重复文件清单：不套卡片，标题行 + 模式/状态行 + 全量分组平铺，
+/// 逐个勾选后清理（每组至少保留一份）。
 struct DuplicatesSectionCard: View {
     @ObservedObject var state: AppState
-    let isExpanded: Bool
-    let onToggleExpand: () -> Void
     let onPreview: (String) -> Void
     @ObservedObject private var l10n = L10n.shared
 
-    private static let previewGroups = 2
     private var working: Bool {
         state.isScanningDuplicates || state.isDeletingDuplicates
     }
 
-    private var visibleGroups: [DuplicateFileGroup] {
-        isExpanded ? state.duplicateGroups : Array(state.duplicateGroups.prefix(Self.previewGroups))
-    }
-
     var body: some View {
         VStack(spacing: 6) {
-            header
+            headerRow
             statusLine
             if state.duplicateMode == .similarImages && !state.duplicateGroups.isEmpty {
                 Text(l10n.t("duplicates.similar.hint"))
@@ -129,39 +123,20 @@ struct DuplicatesSectionCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(Array(visibleGroups.enumerated()), id: \.element.id) { index, group in
-                groupCard(group, index: index)
-            }
-            if state.duplicateGroups.count > Self.previewGroups {
-                Button(action: onToggleExpand) {
-                    Label(isExpanded ? l10n.t("analyze.section.collapse")
-                                     : l10n.tf("analyze.section.showAll", state.duplicateGroups.count),
-                          systemImage: isExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 10))
+            ForEach(Array(state.duplicateGroups.enumerated()), id: \.element.id) { index, group in
+                if index > 0 {
+                    Divider().padding(.leading, 2)
                 }
-                .buttonStyle(MolePlainButtonStyle())
-                .disabled(state.isBusy)
+                groupSection(group, index: index)
             }
             if state.duplicateGroups.isEmpty {
                 emptyRow
             }
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.hairline, lineWidth: 1))
     }
 
-    private var header: some View {
+    private var headerRow: some View {
         HStack(spacing: 6) {
-            Button(action: onToggleExpand) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 14)
-            }
-            .buttonStyle(MolePlainButtonStyle())
-            .disabled(state.isBusy)
             Image(systemName: "square.on.square")
                 .font(.system(size: 11))
                 .foregroundStyle(Color.moleAccentText)
@@ -247,8 +222,9 @@ struct DuplicatesSectionCard: View {
         }
     }
 
-    private func groupCard(_ group: DuplicateFileGroup, index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+    /// 分组平铺：组头一行 + 成员行，无背景容器。
+    private func groupSection(_ group: DuplicateFileGroup, index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(l10n.tf(state.duplicateMode == .exact
                              ? "duplicates.group.exact" : "duplicates.group.similar",
@@ -259,6 +235,7 @@ struct DuplicatesSectionCard: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             }
+            .padding(.top, 2)
             ForEach(group.members) { member in
                 DuplicateFileRow(
                     member: member,
@@ -270,8 +247,6 @@ struct DuplicatesSectionCard: View {
                 )
             }
         }
-        .padding(8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
     }
 }
 

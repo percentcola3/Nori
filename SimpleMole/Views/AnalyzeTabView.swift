@@ -10,7 +10,6 @@ struct AnalyzeTabView: View {
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expandedSections: Set<AnalyzeSection> = []
-    @State private var duplicatesExpanded = false
     @State private var previewURL: URL?
     @State private var showTrashConfirmation = false
     /// 大文件/视频删除的待确认清单（单行或批量）。
@@ -172,8 +171,6 @@ struct AnalyzeTabView: View {
     private var duplicatesCard: some View {
         DuplicatesSectionCard(
             state: state,
-            isExpanded: duplicatesExpanded,
-            onToggleExpand: { duplicatesExpanded.toggle() },
             onPreview: { previewURL = URL(fileURLWithPath: $0) })
             .transition(.molePanelReveal)
     }
