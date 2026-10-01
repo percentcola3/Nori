@@ -823,12 +823,20 @@ enum AgentCatalog {
                 return main.lowercased().hasPrefix(prefix.lowercased())
                     && main.lowercased().hasSuffix(ext.lowercased()) ? main : nil
             })
-            return mains.sorted().flatMap { main in
-                ([main] + sqliteCompanionSuffixes.map { main + $0 })
-                    .filter(names.contains)
-                    .map { base + "/" + $0 }
-                    .filter { isPhysical($0, home: home) }
+            var paths: [String] = []
+            for main in mains.sorted() {
+                var family: [String] = [main]
+                for suffix in sqliteCompanionSuffixes {
+                    family.append(main + suffix)
+                }
+                for name in family where names.contains(name) {
+                    let path = base + "/" + name
+                    if isPhysical(path, home: home) {
+                        paths.append(path)
+                    }
+                }
             }
+            return paths
         case .sqliteTree(let root, let prefix, let ext, let maxDepth):
             let base = absolute(root, home: home)
             guard isPhysical(base, home: home) else { return [] }
