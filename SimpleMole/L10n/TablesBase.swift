@@ -32,7 +32,7 @@ enum L10nTables {
         // 硬盘清理
         "cleanup.scan.deferred": "%d folders are unfinished or unreadable. Totals include completed folders only; rescan to retry.",
         "cleanup.scan.deepFollowUp": "Some folders hit the quick-scan time limit; continuing with a full-depth pass…",
-        "cleanup.quickClean": "One-click Safe Clean",
+        "cleanup.quickClean": "Clean",
         "cleanup.progress.scanning": "Scanning",
         "cleanup.progress.done": "Scan complete",
         "cleanup.cancelScan": "Cancel Scan",
@@ -199,10 +199,8 @@ enum L10nTables {
     
         "tab.analyze": "Analyze",
         "analyze.scan": "Rescan",
-        "analyze.start": "Start Analysis",
         "analyze.scanning": "Analyzing… large folders may take a moment",
         "cleanup.refreshing": "Updating remaining sizes…",
-        "analyze.empty.subtitle": "The whole Mac is scanned automatically; results are grouped by category",
     
         "gc.title": "Official GC Commands",
         "gc.subtitle": "Runs each package manager's own cleanup command — no direct deletion",
@@ -289,7 +287,7 @@ enum L10nTables {
 
         "cleanup.scan.deferred": "%d 个目录尚未完成或无法读取；总量只包含已完成目录，重新扫描可重试。",
         "cleanup.scan.deepFollowUp": "部分目录超出快速扫描时限，正在自动深度补扫…",
-        "cleanup.quickClean": "一键安全清理",
+        "cleanup.quickClean": "清理",
         "cleanup.progress.scanning": "正在扫描",
         "cleanup.progress.done": "扫描完成",
         "cleanup.cancelScan": "取消扫描",
@@ -444,10 +442,8 @@ enum L10nTables {
     
         "tab.analyze": "分析",
         "analyze.scan": "重新扫描",
-        "analyze.start": "开始分析",
         "analyze.scanning": "正在分析…大目录可能需要一点时间",
         "cleanup.refreshing": "正在更新剩余占用…",
-        "analyze.empty.subtitle": "进入页面后自动全盘扫描，结果按子分类汇总",
     
         "gc.title": "官方清理命令",
         "gc.subtitle": "运行各包管理器自带的清理命令，不做任何直接删除",

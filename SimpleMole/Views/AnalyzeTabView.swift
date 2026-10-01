@@ -1,8 +1,9 @@
 import QuickLook
 import SwiftUI
 
-/// 全盘扫描结果：按 大文件 / 图片 / 视频 / 重复文件 四个子分类一页展示。
-/// 不提供扫描范围选择与目录层级浏览；系统位置在扫描层就被排除，不再出现。
+/// 全盘扫描结果按 大文件 / 图片 / 视频 / 重复文件 分段聚焦展示：分段按钮组
+/// 既是类型切换也是分析入口。不提供扫描范围选择与目录层级浏览；
+/// 系统位置在扫描层就被排除，不再出现。
 struct AnalyzeTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
@@ -50,25 +51,11 @@ struct AnalyzeTabView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else if !scanning && !hasResults {
-                // 与其他页面的空态一致：用 Nori 的 SVG 动图占位，不重复“尚未分析”文案。
-                // 未扫描时入口放在这里，工具栏不出现“重新扫描”。
-                VStack(spacing: 12) {
-                    NoriStatusAnimation(mood: .idle, size: 120, assetName: "nori-coffee")
-                    Text(l10n.t("analyze.empty.subtitle"))
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 420)
-                    Button {
-                        state.scanDiskOverview(force: true)
-                    } label: {
-                        Label(l10n.t("analyze.start"), systemImage: "magnifyingglass")
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(state.isBusy)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(reduceMotion ? .opacity : .moleStateSwap)
+                // 空态只保留 SVG 动图：分析入口是工具栏的分段按钮组，
+                // 点任意一段即以该类型开始分析。
+                NoriStatusAnimation(mood: .idle, size: 120, assetName: "nori-coffee")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .transition(reduceMotion ? .opacity : .moleStateSwap)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
@@ -80,16 +67,7 @@ struct AnalyzeTabView: View {
                             } else {
                                 slimSectionCard(section, candidates: candidates)
                             }
-                        } else if state.analyzeMode == .duplicates {
-                            duplicatesCard
                         } else {
-                            // 整个磁盘：四个子分类一页展示。
-                            ForEach(AnalyzeSection.allCases) { section in
-                                let candidates = state.slimCandidates(in: section)
-                                if !candidates.isEmpty {
-                                    slimSectionCard(section, candidates: candidates)
-                                }
-                            }
                             duplicatesCard
                         }
                     }
@@ -181,18 +159,8 @@ struct AnalyzeTabView: View {
 
     private var toolbar: some View {
         HStack(alignment: .center, spacing: 8) {
-            // 分析类型下拉：默认整个磁盘；聚焦某个子分类时只展示并只跟进它。
-            Picker(l10n.t("analyze.mode.overview"), selection: $state.analyzeMode) {
-                Text(l10n.t("analyze.mode.overview")).tag(AnalyzeMode.overview)
-                Text(l10n.t("analyze.section.largeFiles")).tag(AnalyzeMode.largeFiles)
-                Text(l10n.t("analyze.section.images")).tag(AnalyzeMode.images)
-                Text(l10n.t("analyze.section.videos")).tag(AnalyzeMode.videos)
-                Text(l10n.t("analyze.section.duplicates")).tag(AnalyzeMode.duplicates)
-            }
-            .pickerStyle(.menu)
-            .controlSize(.small)
-            .fixedSize()
-            .disabled(state.isBusy)
+            // 分析类型分段按钮组：点任意一段即切换聚焦；未扫描时点选即开始分析。
+            modeSelector
             if !scanning {
                 Text(scanStatusText)
                     .font(.system(size: 10))
@@ -201,7 +169,7 @@ struct AnalyzeTabView: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 8)
-            // 扫描中的取消在动画下方；未扫描时入口在空态的“开始分析”。
+            // 扫描中的取消在动画下方；未扫描时入口在分段按钮组。
             // 工具栏只在已有结果且空闲时提供“重新扫描”。
             if hasResults && !scanning {
                 Button {
@@ -216,13 +184,45 @@ struct AnalyzeTabView: View {
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 8)
-        .onChange(of: state.analyzeMode) { mode in
-            // 已有磁盘走查结果后切入重复文件：自动跟进一次内容级比对，
-            // 与“整个磁盘”模式扫描完成后的行为保持一致。
-            guard mode == .duplicates, hasResults,
-                  !state.isBusy, !state.isScanningDuplicates,
-                  !state.duplicateScanFinished else { return }
+    }
+
+    /// 胶囊分段按钮组：选中段浅色填充；重复点击同一段在未扫描时也会开始分析。
+    private var modeSelector: some View {
+        HStack(spacing: 0) {
+            ForEach(AnalyzeMode.allCases) { mode in
+                let isSelected = state.analyzeMode == mode
+                Button {
+                    selectMode(mode)
+                } label: {
+                    Text(l10n.t(mode.titleKey))
+                        .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                        .padding(.horizontal, 12)
+                        .frame(maxWidth: .infinity, minHeight: 26)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(isSelected ? Color.surface3 : Color.clear))
+                }
+                .buttonStyle(MolePlainButtonStyle())
+                .disabled(state.isBusy)
+            }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.surface2))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .strokeBorder(Color.hairline, lineWidth: 1))
+        .frame(maxWidth: 320)
+    }
+
+    private func selectMode(_ mode: AnalyzeMode) {
+        state.analyzeMode = mode
+        // 未扫描时点选即“开始分析”；已有结果时切到重复文件自动跟进比对。
+        if mode == .duplicates, hasResults,
+           !state.isBusy, !state.isScanningDuplicates,
+           !state.duplicateScanFinished {
             state.scanDuplicateFiles()
+        } else if !hasResults, !scanning {
+            state.scanDiskOverview(force: true)
         }
     }
 

@@ -160,7 +160,7 @@ struct CleanupTabView: View {
                 .transition(reduceMotion ? .opacity : .moleStateSwap)
             }
 
-            if !state.isCleanupScanning && !state.categories.isEmpty {
+            if !state.isCleanupScanning && hasAnyCleanupContent {
                 Divider()
                 cleanupActions
             }
@@ -184,34 +184,23 @@ struct CleanupTabView: View {
 
     @ViewBuilder
     private var installerSection: some View {
-        // 安装包只在有清单时渲染；扫描中不出现。
+        // 安装包与普通类目一致：只负责勾选，统一“清理”时分发到废纸篓路线。
         if !state.isCleanupScanning, let installers = state.installerCandidates {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(l10n.t("cleanup.installers.review")).font(.caption).foregroundStyle(.secondary)
-                CategoryRowView(category: Binding(
-                    get: { state.installerCandidates ?? installers },
-                    set: { state.installerCandidates = $0 }),
-                    selectionEnabled: !state.isBusy,
-                    coveredPaths: [])
-                Button(l10n.t("confirm.cleanupPermanent.ok")) { state.applyInstallers() }
-                    .disabled(state.isBusy || state.installerCandidates?.selectedSubset == nil)
-            }
+            CategoryRowView(category: Binding(
+                get: { state.installerCandidates ?? installers },
+                set: { state.installerCandidates = $0 }),
+                selectionEnabled: !state.isBusy,
+                coveredPaths: [])
         }
     }
 
     @ViewBuilder
     private var systemMaintenanceSection: some View {
-        if !state.isCleanupScanning {
-            if state.systemMaintenanceRows.isEmpty {
-                if state.isSystemMaintenanceRunning || !state.systemMaintenanceStatus.isEmpty {
-                    systemMaintenanceHeader
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    systemMaintenanceHeader
-                    ForEach(state.systemMaintenanceRows) { row in
-                        systemMaintenanceRow(row)
-                    }
+        if !state.isCleanupScanning, !state.systemMaintenanceRows.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                systemMaintenanceHeader
+                ForEach(state.systemMaintenanceRows) { row in
+                    systemMaintenanceRow(row)
                 }
             }
         }
@@ -239,63 +228,57 @@ struct CleanupTabView: View {
                 .font(.system(size: 12, weight: .semibold))
             if state.isSystemMaintenanceRunning {
                 ProgressView().controlSize(.mini)
-            } else if !state.systemMaintenanceStatus.isEmpty {
-                Text(state.systemMaintenanceStatus)
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
             }
             Spacer(minLength: 8)
-            Button { state.scanSystemMaintenance() } label: {
-                Label(l10n.t("sysmaint.check"), systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .controlSize(.small)
-            .labelStyle(.iconOnly)
-            .disabled(state.isSystemMaintenanceRunning)
         }
     }
 
+    /// 维护行与类目行一致：整行点击勾选，统一“清理”时逐项执行。
     private func systemMaintenanceRow(_ row: SystemMaintenanceRow) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "cylinder.split.1x2")
-                .font(.system(size: 11))
-                .foregroundStyle(Color.moleAccentText)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(l10n.t(row.item.titleKey))
-                    .font(.system(size: 12, weight: .medium))
-                Text(row.preview.summary)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        let isSelected = state.systemMaintenanceSelection.contains(row.id)
+        return Button {
+            state.toggleSystemMaintenance(row.id)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(isSelected ? Color.moleAccentText : Color.secondary)
+                    .frame(width: 18)
+                Image(systemName: "cylinder.split.1x2")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.moleAccentText)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(l10n.t(row.item.titleKey))
+                        .font(.system(size: 12, weight: .medium))
+                    Text(row.preview.summary)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 8)
             }
-            Spacer(minLength: 8)
-            Button {
-                state.applySystemMaintenance(row.id)
-            } label: {
-                Label(l10n.t("sysmaint.confirm.ok"), systemImage: "wrench.and.screwdriver")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .controlSize(.small)
-            .disabled(state.isSystemMaintenanceRunning || state.isBusy)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 8)
+                .fill(isSelected ? Color.accent.opacity(0.10) : Color.surface1))
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
+        .buttonStyle(MolePlainButtonStyle())
+        .disabled(state.isBusy)
     }
 
     private var cleanupActions: some View {
         HStack(spacing: 8) {
-            // 全选/取消全选由各分组头的开关承担：底部只保留唯一的执行入口。
+            // 全选/取消全选由各分组头的开关承担：底部只保留唯一的执行入口，
+            // 安装包与系统维护项的勾选也由它统一分发。
             Spacer()
             Button { state.applyCleanup() } label: {
                 Label(applyLabel, systemImage: "trash.fill")
             }
             .buttonStyle(PrimaryButtonStyle())
-            .disabled(state.selectedCount == 0 || state.isBusyExcludingUninstall || state.cleanupQueued || !state.cleanupScanComplete)
+            .disabled(!state.hasCleanupSelection || state.isBusyExcludingUninstall || state.cleanupQueued || !state.cleanupScanComplete)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -304,8 +287,10 @@ struct CleanupTabView: View {
     private var applyLabel: String {
         if state.cleanupQueued { return l10n.t("cleanup.queued") }
         if state.isApplying { return l10n.t("cleanup.apply.busy") }
-        if state.selectedCount > 0 {
-            return l10n.tf("cleanup.delete.withCount", ByteFormat.format(state.selectedBytes))
+        if state.hasCleanupSelection {
+            let installerBytes = state.installerCandidates?.selectedSubset?.bytes ?? 0
+            return l10n.tf("cleanup.delete.withCount",
+                           ByteFormat.format(state.selectedBytes + installerBytes))
         }
         return l10n.t("cleanup.delete")
     }

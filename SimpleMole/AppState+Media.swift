@@ -7,18 +7,16 @@ enum AnalyzeSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// 磁盘分析页顶部的分析类型：默认整个磁盘一次性看全部子分类，
-/// 也可以聚焦某一个子类只看它。重复文件的内容级比对只在
-/// 整个磁盘/重复文件两种模式下自动跟进，其余模式跳过这笔开销。
+/// 磁盘分析页顶部分段按钮组选择的类型：每次只聚焦一个子分类，
+/// 内容不重复出现。重复文件的内容级比对只在选中“重复文件”时自动跟进。
 enum AnalyzeMode: String, CaseIterable, Identifiable {
-    case overview
     case largeFiles, images, videos, duplicates
     var id: String { rawValue }
 
-    /// 聚焦模式对应的子分类；overview 没有单一对应。
+    /// 聚焦模式对应的子分类；重复文件没有单一对应。
     var section: AnalyzeSection? {
         switch self {
-        case .overview, .duplicates: return nil
+        case .duplicates: return nil
         case .largeFiles: return .largeFiles
         case .images: return .images
         case .videos: return .videos
@@ -26,7 +24,16 @@ enum AnalyzeMode: String, CaseIterable, Identifiable {
     }
 
     var runsDuplicateComparison: Bool {
-        self == .overview || self == .duplicates
+        self == .duplicates
+    }
+
+    var titleKey: String {
+        switch self {
+        case .largeFiles: return "analyze.section.largeFiles"
+        case .images: return "analyze.section.images"
+        case .videos: return "analyze.section.videos"
+        case .duplicates: return "analyze.section.duplicates"
+        }
     }
 }
 

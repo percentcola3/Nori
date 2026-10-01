@@ -384,7 +384,7 @@ test_productivity_feature_contract() {
         fail "cleanup categories are not sorted by descending size"
     /usr/bin/grep -Fq 'let eligibleCount = eligible.reduce' "$app_state" || \
         fail "cleanup progress does not count the immutable eligible plan"
-    /usr/bin/grep -Fq 'statusText = l10n.tf("status.processing", eligibleCount)' "$app_state" || \
+    /usr/bin/grep -Fq 'eligibleCount + (installers?.paths.count ?? 0) + maintenanceIDs.count' "$app_state" || \
         fail "cleanup progress still reports the pre-policy request count"
     /usr/bin/grep -Fq 'selectionEnabled: state.cleanupScanComplete' "$cleanup_view" || \
         fail "cleanup category selection is not routed through a shared applying-state gate"
@@ -2337,12 +2337,13 @@ test_cleanup_execution_accounting() {
     if printf '%s\n' "$apply_source" | grep -Fq 'cleanupScanComplete = false'; then
         fail "partial cleanup invalidates the scan and disables retry"
     fi
-    installer_source=$(sed -n '/func applyInstallers()/,/func applyCleanup()/p' \
+    # 安装包清理并入统一“清理”分发：勾选后仍走废纸篓（DR-4），不再有独立确认按钮。
+    installer_source=$(sed -n '/private func performApply(/,/private func reportCleanupResult/p' \
         "$ROOT_DIR/SimpleMole/AppState.swift")
+    printf '%s\n' "$installer_source" | grep -Fq '.installerTrash, categories: [installers], mode: mode,' || \
+        fail "unified apply does not dispatch checked installers to the installer route"
     printf '%s\n' "$installer_source" | grep -Fq 'permanently: false' || \
         fail "reviewed installer cleanup must default to Trash (DR-4)"
-    printf '%s\n' "$installer_source" | grep -Fq 'confirm.apply.trash.ok' || \
-        fail "installer cleanup confirmation must say Move to Trash"
     if [[ "${SM_TEST_SKIP_SWIFT:-0}" == "1" ]]; then
         printf 'ok - Cleanup execution accounting tests skipped (SM_TEST_SKIP_SWIFT=1)\n'
         return

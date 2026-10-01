@@ -199,6 +199,8 @@ final class AppState: ObservableObject {
     /// 系统数据库维护行（清理页卡片）：SQLite 压缩、通知历史、使用记录、
     /// 下载隔离历史、窗口保存状态。
     @Published var systemMaintenanceRows: [SystemMaintenanceRow] = []
+    /// 统一“清理”待分发的维护项勾选（行 id）。
+    @Published var systemMaintenanceSelection: Set<String> = []
     @Published var isSystemMaintenanceRunning = false
     @Published var systemMaintenanceStatus = ""
     /// 开发环境：DNS/网络栈/服务修复与出厂重置的执行状态。
@@ -377,7 +379,7 @@ final class AppState: ObservableObject {
     @Published var analyzeLargeFiles: [AnalyzeReport.LargeFile] = []
     @Published var analyzeMedia: [MediaFile] = []
     /// 磁盘分析页当前聚焦的类型；默认整个磁盘（全部子分类一起展示）。
-    @Published var analyzeMode: AnalyzeMode = .overview
+    @Published var analyzeMode: AnalyzeMode = .largeFiles
     @Published var analyzeMediaSummary = MediaSummary()
     @Published var slimSelection: Set<String> = []
     @Published var slimOptions = SlimOptions()
@@ -629,6 +631,12 @@ final class AppState: ObservableObject {
 
     var selectedCount: Int {
         categories.reduce(0) { $0 + $1.selectedPathCount }
+    }
+
+    /// 统一“清理”可分发的勾选：文件系统类目、安装包或系统维护任一存在即可。
+    var hasCleanupSelection: Bool {
+        selectedCount > 0 || installerCandidates?.selectedSubset != nil
+            || !systemMaintenanceSelection.isEmpty
     }
 
     var selectedBytes: UInt64 {
@@ -1104,38 +1112,35 @@ final class AppState: ObservableObject {
         }
     }
 
-    func applySystemMaintenance(_ rowID: String) {
-        guard !isSystemMaintenanceRunning,
-              let row = systemMaintenanceRows.first(where: { $0.id == rowID }) else { return }
-        confirmation = Confirmation(
-            title: l10n.t("sysmaint.confirm.title"),
-            message: l10n.tf("sysmaint.confirm.message", l10n.t(row.item.titleKey), row.preview.summary),
-            confirmLabel: l10n.t("sysmaint.confirm.ok")) { [weak self] in
-                self?.performSystemMaintenance(rowID)
-            }
+    /// 维护项勾选由统一“清理”分发执行，不再有逐项确认按钮。
+    func toggleSystemMaintenance(_ rowID: String) {
+        guard !isBusy else { return }
+        if systemMaintenanceSelection.contains(rowID) {
+            systemMaintenanceSelection.remove(rowID)
+        } else {
+            systemMaintenanceSelection.insert(rowID)
+        }
     }
 
-    private func performSystemMaintenance(_ rowID: String) {
+    /// 执行单个维护项并刷新该行体检结果。
+    private func runSystemMaintenanceTask(_ rowID: String) async {
         guard let row = systemMaintenanceRows.first(where: { $0.id == rowID }) else { return }
         isSystemMaintenanceRunning = true
         systemMaintenanceStatus = l10n.t("sysmaint.status.running")
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            let result = await NativeCore.shared.runMaintenanceTask(
-                id: row.id, preview: row.preview)
-            let fresh = await NativeCore.shared.inspectSystemMaintenance(only: row.id).first
-            if let index = self.systemMaintenanceRows.firstIndex(where: { $0.id == row.id }) {
-                if let fresh, fresh.preview.need != .needed {
-                    self.systemMaintenanceRows.remove(at: index)
-                } else if let fresh {
-                    self.systemMaintenanceRows[index] = fresh
-                }
+        let result = await NativeCore.shared.runMaintenanceTask(
+            id: row.id, preview: row.preview)
+        let fresh = await NativeCore.shared.inspectSystemMaintenance(only: row.id).first
+        if let index = systemMaintenanceRows.firstIndex(where: { $0.id == row.id }) {
+            if let fresh, fresh.preview.need != .needed {
+                systemMaintenanceRows.remove(at: index)
+            } else if let fresh {
+                systemMaintenanceRows[index] = fresh
             }
-            self.isSystemMaintenanceRunning = false
-            self.systemMaintenanceStatus = result.message
-            self.log("\(l10n.t(row.item.titleKey)): \(result.message)")
-            self.noteHeaderReaction(result.state == .failed ? .attention : .success)
         }
+        isSystemMaintenanceRunning = false
+        systemMaintenanceStatus = result.message
+        log("\(l10n.t(row.item.titleKey)): \(result.message)")
+        noteHeaderReaction(result.state == .failed ? .attention : .success)
     }
 
     // MARK: - 网络与系统服务修复（开发环境页）
@@ -1461,70 +1466,55 @@ final class AppState: ObservableObject {
 
     // MARK: - 清理执行
 
-    func applyInstallers() {
-        guard !isBusy, let selection = installerCandidates?.selectedSubset else { return }
-        // 安装包可能是用户唯一的副本：默认移入废纸篓（方案 §5.3）。
-        confirmation = Confirmation(title: l10n.t("file.installer"),
-            message: l10n.tf("cleanup.installers.confirm", selection.paths.count,
-                             ByteFormat.format(selection.bytes)),
-            confirmLabel: l10n.t("confirm.apply.trash.ok")) { [weak self] in
-                guard let self, !self.isBusy else { return }
-                self.isApplying = true
-                Task {
-                    let result = await self.executeCleanupRoute(.installerTrash,
-                        categories: [selection], mode: .manual,
-                        permanently: false)
-                    self.installerCandidates = self.installerCandidates?.retainingPaths(
-                        self.installerCandidates?.paths.filter { FileManager.default.fileExists(atPath: $0) } ?? [])
-                    self.isApplying = false
-                    self.reportCleanupResult(result, permanently: false)
-                }
-            }
-    }
-
     func applyCleanup() {
         guard !isBusyExcludingUninstall, !cleanupQueued, cleanupScanComplete else {
             if !cleanupScanComplete { statusText = l10n.t("log.scanPartial") }
+            return
+        }
+        let installerSelection = installerCandidates?.selectedSubset
+        let maintenanceIDs = systemMaintenanceRows
+            .filter { systemMaintenanceSelection.contains($0.id) }.map(\.id)
+        guard selectedCount > 0 || installerSelection != nil || !maintenanceIDs.isEmpty else {
+            statusText = l10n.t("cleanup.selectNone")
             return
         }
         // Task {} inherits MainActor. Snapshot the selection and move the
         // potentially large filtering/sorting pass off the UI executor.
         let source = categories
         let applyFamily = family
-        let previousStatus = statusText
         isApplying = true
-        statusText = l10n.tf("status.processing", selectedCount)
+        statusText = l10n.tf("status.processing",
+                             selectedCount + (installerSelection?.paths.count ?? 0) + maintenanceIDs.count)
         Task {
             let selectedCategories = await Task.detached(priority: .utility) {
                 let subsets = source.compactMap(\.selectedSubset)
                 return applyFamily == .clean
                     ? CleanupCategory.safeCleanupCandidates(from: subsets) : subsets
             }.value
-            isApplying = false
-            statusText = previousStatus
-            guard !selectedCategories.isEmpty else {
-                statusText = l10n.t("cleanup.selectNone")
-                return
-            }
             // 用户在清单里逐项勾选后按“清理”就是明确指令：不再弹确认框，
-            // 直接执行。执行层的路径/白名单/文件身份/运行中应用复核保持不变。
+            // 直接执行。安装包与系统维护项同样由这一次点击统一分发。
             performApply(categories: selectedCategories,
-                         family: applyFamily, mode: .manual)
+                         family: applyFamily, mode: .manual,
+                         installers: installerSelection, maintenanceIDs: maintenanceIDs)
         }
     }
 
     /// 执行阶段再次读取进程表，并按每个类别自己的 route 分流。扫描来源不会再
-    /// 因为 UI 合并展示而退化成通用删除入口。
+    /// 因为 UI 合并展示而退化成通用删除入口。安装包走废纸篓路线、系统维护
+    /// 逐项执行，都在这同一次“清理”里完成。
     private func performApply(categories requested: [CleanupCategory],
                               family applyFamily: CleanupFamily,
-                              mode: CleanupExecutionMode) {
+                              mode: CleanupExecutionMode,
+                              installers: CleanupCategory? = nil,
+                              maintenanceIDs: [String] = []) {
         if uninstallQueue.activeJob != nil {
             guard pendingCleanup == nil else { return }
             cleanupQueued = true
             statusText = l10n.t("cleanup.queued")
             pendingCleanup = { [weak self] in
                 self?.performApply(categories: requested,
-                                   family: applyFamily, mode: mode)
+                                   family: applyFamily, mode: mode,
+                                   installers: installers, maintenanceIDs: maintenanceIDs)
             }
             return
         }
@@ -1579,8 +1569,9 @@ final class AppState: ObservableObject {
                 skipped: max(0, requestedCount - eligibleCount))
             // The immutable eligible plan, rather than the still-visible UI
             // selection, is the number this execution will actually submit.
-            statusText = l10n.tf("status.processing", eligibleCount)
-            guard !eligible.isEmpty else {
+            statusText = l10n.tf("status.processing",
+                                 eligibleCount + (installers?.paths.count ?? 0) + maintenanceIDs.count)
+            guard !eligible.isEmpty || installers != nil || !maintenanceIDs.isEmpty else {
                 await refreshCleanupInventory(after: applyFamily)
                 isApplying = false
                 reportCleanupResult(executionResult,
@@ -1599,6 +1590,23 @@ final class AppState: ObservableObject {
                 log(String(format: "cleanup route=%@ completed %.2fs", route.rawValue, Date().timeIntervalSince(started)))
                 executionResult.merge(routeResult)
             }
+
+            // 安装包可能是用户唯一的副本：勾选后由统一“清理”分发到废纸篓路线。
+            if let installers {
+                let routeResult = await executeCleanupRoute(
+                    .installerTrash, categories: [installers], mode: mode,
+                    permanently: false)
+                executionResult.merge(routeResult)
+                self.installerCandidates = self.installerCandidates?.retainingPaths(
+                    self.installerCandidates?.paths.filter {
+                        FileManager.default.fileExists(atPath: $0)
+                    } ?? [])
+            }
+            // 系统数据维护：逐项执行并刷新体检结果。
+            for rowID in maintenanceIDs {
+                await runSystemMaintenanceTask(rowID)
+            }
+            systemMaintenanceSelection.removeAll()
 
             await refreshCleanupInventory(after: applyFamily)
             isApplying = false

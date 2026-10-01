@@ -147,7 +147,6 @@ extension L10nTables {
     
         "tab.analyze": "분석",
         "analyze.scan": "분석",
-        "analyze.start": "분석 시작",
         "analyze.scanning": "분석 중… 큰 폴더는 시간이 걸릴 수 있습니다",
     
         "gc.title": "공식 정리 명령",
@@ -353,7 +352,6 @@ extension L10nTables {
     
         "tab.analyze": "Analyse",
         "analyze.scan": "Analysieren",
-        "analyze.start": "Analyse starten",
         "analyze.scanning": "Analysiere… große Ordner können etwas dauern",
     
         "gc.title": "Offizielle GC-Befehle",
@@ -559,7 +557,6 @@ extension L10nTables {
     
         "tab.analyze": "Analyse",
         "analyze.scan": "Analyser",
-        "analyze.start": "Lancer l’analyse",
         "analyze.scanning": "Analyse… les gros dossiers peuvent prendre un moment",
     
         "gc.title": "Commandes GC officielles",

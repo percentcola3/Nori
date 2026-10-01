@@ -148,7 +148,6 @@ extension L10nTables {
     
         "tab.analyze": "分析",
         "analyze.scan": "分析",
-        "analyze.start": "開始分析",
         "analyze.scanning": "正在分析…大目錄可能需要一點時間",
     
         "gc.title": "官方清理命令",
@@ -354,7 +353,6 @@ extension L10nTables {
     
         "tab.analyze": "ディスク分析",
         "analyze.scan": "分析",
-        "analyze.start": "分析を開始",
         "analyze.scanning": "分析中…大きなフォルダには時間がかかります",
     
         "gc.title": "公式クリーンアップコマンド",

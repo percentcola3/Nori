@@ -8,7 +8,6 @@ enum L10nMediaTables {
         "analyze.section.images": "Images",
         "analyze.section.videos": "Videos",
         "analyze.section.duplicates": "Duplicates",
-        "analyze.mode.overview": "Entire disk",
         "analyze.mode.empty": "No results in this category",
         "analyze.section.summary.files": "%ld files · %@",
         "analyze.section.summary.duplicates": "%ld groups · up to %@ reclaimable",
@@ -87,7 +86,6 @@ enum L10nMediaTables {
         "analyze.section.images": "图片",
         "analyze.section.videos": "视频",
         "analyze.section.duplicates": "重复文件",
-        "analyze.mode.overview": "整个磁盘",
         "analyze.mode.empty": "该分类暂无结果",
         "analyze.section.summary.files": "%ld 个文件 · %@",
         "analyze.section.summary.duplicates": "%ld 组 · 最多可释放 %@",
@@ -166,7 +164,6 @@ enum L10nMediaTables {
         "analyze.section.images": "圖片",
         "analyze.section.videos": "影片",
         "analyze.section.duplicates": "重複檔案",
-        "analyze.mode.overview": "整個磁碟",
         "analyze.mode.empty": "該分類暫無結果",
         "analyze.section.summary.files": "%ld 個檔案 · %@",
         "analyze.section.summary.duplicates": "%ld 組 · 最多可釋放 %@",
@@ -240,11 +237,10 @@ enum L10nMediaTables {
         "slim.reason.verify": "zip 驗證失敗"
     ]
 
-    private static func short(_ overview: String, _ empty: String, _ large: String,
+    private static func short(_ empty: String, _ large: String,
                               _ images: String, _ videos: String, _ duplicates: String,
                               _ slim: String, _ start: String) -> [String: String] {
         [
-            "analyze.mode.overview": overview,
             "analyze.mode.empty": empty,
             "analyze.section.largeFiles": large,
             "analyze.section.images": images,
@@ -259,15 +255,15 @@ enum L10nMediaTables {
         switch language {
         case .zhHans: return zhHans
         case .zhHant: return zhHant
-        case .ja: return short("ディスク全体", "この分類の結果はまだありません", "大きなファイル", "画像", "動画", "重複ファイル", "スリム化", "開始")
-        case .ko: return short("전체 디스크", "이 범주에는 아직 결과가 없습니다", "큰 파일", "이미지", "동영상", "중복 파일", "용량 줄이기", "시작")
-        case .de: return short("Gesamte Festplatte", "Noch keine Ergebnisse in dieser Kategorie", "Große Dateien", "Bilder", "Videos", "Duplikate", "Verkleinern", "Starten")
-        case .fr: return short("Disque entier", "Pas encore de résultats dans cette catégorie", "Gros fichiers", "Images", "Vidéos", "Doublons", "Alléger", "Démarrer")
-        case .es: return short("Disco completo", "Aún no hay resultados en esta categoría", "Archivos grandes", "Imágenes", "Vídeos", "Duplicados", "Reducir", "Iniciar")
-        case .pt: return short("Disco inteiro", "Ainda sem resultados nesta categoria", "Arquivos grandes", "Imagens", "Vídeos", "Duplicados", "Reduzir", "Iniciar")
-        case .it: return short("Disco intero", "Ancora nessun risultato in questa categoria", "File grandi", "Immagini", "Video", "Duplicati", "Alleggerisci", "Avvia")
-        case .ru: return short("Весь диск", "В этой категории пока нет результатов", "Большие файлы", "Изображения", "Видео", "Дубликаты", "Сжать", "Начать")
-        case .tr: return short("Tüm disk", "Bu kategoride henüz sonuç yok", "Büyük dosyalar", "Görseller", "Videolar", "Yinelenenler", "Küçült", "Başlat")
+        case .ja: return short("この分類の結果はまだありません", "大きなファイル", "画像", "動画", "重複ファイル", "スリム化", "開始")
+        case .ko: return short("이 범주에는 아직 결과가 없습니다", "큰 파일", "이미지", "동영상", "중복 파일", "용량 줄이기", "시작")
+        case .de: return short("Noch keine Ergebnisse in dieser Kategorie", "Große Dateien", "Bilder", "Videos", "Duplikate", "Verkleinern", "Starten")
+        case .fr: return short("Pas encore de résultats dans cette catégorie", "Gros fichiers", "Images", "Vidéos", "Doublons", "Alléger", "Démarrer")
+        case .es: return short("Aún no hay resultados en esta categoría", "Archivos grandes", "Imágenes", "Vídeos", "Duplicados", "Reducir", "Iniciar")
+        case .pt: return short("Ainda sem resultados nesta categoria", "Arquivos grandes", "Imagens", "Vídeos", "Duplicados", "Reduzir", "Iniciar")
+        case .it: return short("Ancora nessun risultato in questa categoria", "File grandi", "Immagini", "Video", "Duplicati", "Alleggerisci", "Avvia")
+        case .ru: return short("В этой категории пока нет результатов", "Большие файлы", "Изображения", "Видео", "Дубликаты", "Сжать", "Начать")
+        case .tr: return short("Bu kategoride henüz sonuç yok", "Büyük dosyalar", "Görseller", "Videolar", "Yinelenenler", "Küçült", "Başlat")
         case .en, .auto: return en
         }
     }

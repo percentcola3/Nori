@@ -147,7 +147,6 @@ extension L10nTables {
     
         "tab.analyze": "Análisis",
         "analyze.scan": "Analizar",
-        "analyze.start": "Iniciar análisis",
         "analyze.scanning": "Analizando… las carpetas grandes pueden tardar",
     
         "gc.title": "Comandos GC oficiales",
@@ -353,7 +352,6 @@ extension L10nTables {
     
         "tab.analyze": "Análise",
         "analyze.scan": "Analisar",
-        "analyze.start": "Iniciar análise",
         "analyze.scanning": "Analisando… pastas grandes podem demorar",
     
         "gc.title": "Comandos GC oficiais",
@@ -559,7 +557,6 @@ extension L10nTables {
     
         "tab.analyze": "Analisi",
         "analyze.scan": "Analizza",
-        "analyze.start": "Avvia analisi",
         "analyze.scanning": "Analisi… le cartelle grandi possono richiedere tempo",
     
         "gc.title": "Comandi GC ufficiali",
@@ -765,7 +762,6 @@ extension L10nTables {
     
         "tab.analyze": "Анализ",
         "analyze.scan": "Анализировать",
-        "analyze.start": "Начать анализ",
         "analyze.scanning": "Анализ… большие папки могут занять время",
     
         "gc.title": "Официальные команды очистки",
@@ -971,7 +967,6 @@ extension L10nTables {
     
         "tab.analyze": "Analiz",
         "analyze.scan": "Analiz Et",
-        "analyze.start": "Analizi Başlat",
         "analyze.scanning": "Analiz ediliyor… büyük klasörler zaman alabilir",
     
         "gc.title": "Resmî GC Komutları",

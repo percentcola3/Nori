@@ -21,10 +21,6 @@ enum L10nMaintenanceTables {
         "sysmaint.status.clean": "All system databases are healthy.",
         "sysmaint.status.found": "%d item(s) can reclaim space",
         "sysmaint.status.running": "Running maintenance…",
-        "sysmaint.confirm.title": "Run this maintenance item?",
-        "sysmaint.confirm.message": "%@: %@ It runs immediately after you confirm.",
-        "sysmaint.confirm.ok": "Run",
-        "sysmaint.check": "Re-check",
         // 开发环境 · 网络与服务修复
         "nettool.section": "Network & Service Repair",
         "nettool.dns": "Flush DNS Cache",
@@ -78,10 +74,6 @@ enum L10nMaintenanceTables {
         "sysmaint.status.clean": "系统数据库均处于健康范围。",
         "sysmaint.status.found": "%d 项可回收空间",
         "sysmaint.status.running": "正在执行维护…",
-        "sysmaint.confirm.title": "执行这项维护？",
-        "sysmaint.confirm.message": "%@：%@ 确认后立即执行。",
-        "sysmaint.confirm.ok": "执行",
-        "sysmaint.check": "重新体检",
         // 开发环境 · 网络与服务修复
         "nettool.section": "网络与服务修复",
         "nettool.dns": "刷新 DNS 缓存",

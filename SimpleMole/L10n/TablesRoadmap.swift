@@ -5,8 +5,6 @@ enum L10nRoadmapTables {
     static let en: [String: String] = [
 
         "cleanup.queued": "Waiting for uninstall to finish",
-        "cleanup.installers.review": "Installer candidates · select files you no longer need to delete permanently",
-        "cleanup.installers.confirm": "Permanently delete %d selected installers (%@)? Confirm that you no longer need these files. They will not be moved to Trash and cannot be recovered from it.",
         "proc.force.message": "Force quit this app? Unsaved changes may be lost.",
         "proc.force.action": "Force Quit",
         "proc.force.done": "App has exited",
@@ -82,8 +80,6 @@ enum L10nRoadmapTables {
     static let zhHans: [String: String] = [
 
         "cleanup.queued": "等待卸载完成后清理",
-        "cleanup.installers.review": "安装包候选 · 勾选不再需要的文件后永久删除",
-        "cleanup.installers.confirm": "永久删除选中的 %d 个安装包（%@）？请确认这些文件不再需要。删除后不会进入废纸篓，无法从废纸篓恢复。",
         "proc.force.message": "强制结束此应用？未保存的内容可能丢失。",
         "proc.force.action": "强制结束",
         "proc.force.done": "应用已结束",
@@ -159,8 +155,6 @@ enum L10nRoadmapTables {
     static let zhHant: [String: String] = [
 
         "cleanup.queued": "等待解除安裝完成後清理",
-        "cleanup.installers.review": "安裝包候選 · 勾選不再需要的檔案後永久刪除",
-        "cleanup.installers.confirm": "永久刪除選取的 %d 個安裝包（%@）？請確認這些檔案不再需要。刪除後不會進入垃圾桶，無法從垃圾桶復原。",
         "proc.force.message": "強制結束此應用？未儲存的內容可能遺失。",
         "proc.force.action": "強制結束",
         "proc.force.done": "應用已結束",
