@@ -47,7 +47,9 @@ jobs:
           xcrun --sdk macosx --show-sdk-version
           test -s signing/release.cer
           plutil -lint signing/release.plist
+          plutil -lint signing/update.plist
           bash script/verify_release_version.sh "$RELEASE_TAG"
+          bash script/release_appcast.sh check-version --source-info SimpleMole/Support/Info.plist
           if [[ -n "$RELEASE_TAG" ]]; then
             test -s "docs/releases/$RELEASE_TAG.md"
           fi
@@ -60,6 +62,9 @@ jobs:
           bash script/test.sh
           bash script/test_release_version.sh
           bash script/test_install_update.sh
+          bash script/test_app_updates.sh
+          sparkle_dir=$(/usr/bin/python3 script/fetch_sparkle.py)
+          NORI_TEST_SPARKLE_SIGN_TOOL="$sparkle_dir/bin/sign_update" bash script/test_release_appcast.sh
 
       - name: Check continuity with the previous public release
         env:
@@ -68,11 +73,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          previous_tag=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 \
-            --json tagName --jq '.[0].tagName // empty')
+          if gh api "repos/$GH_REPO/releases/latest" --jq '.tag_name' \
+              > "$RUNNER_TEMP/nori-previous-tag" 2> "$RUNNER_TEMP/nori-previous-error"; then
+            previous_tag=$(cat "$RUNNER_TEMP/nori-previous-tag")
+          else
+            # Only an empty stable-release list qualifies as a bootstrap. An
+            # API/network error must not bypass an existing release's checks.
+            previous_tag=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 \
+              --json tagName --jq '.[0].tagName // empty')
+            if [[ -n "$previous_tag" ]]; then
+              echo '::error::Unable to inspect the latest stable Release; refusing to skip continuity checks.'
+              exit 1
+            fi
+          fi
           if [[ -n "$previous_tag" ]]; then
             gh release download "$previous_tag" --pattern RELEASE-IDENTITY.txt --dir "$RUNNER_TEMP/previous-release"
             bash script/verify_release_continuity.sh "$RUNNER_TEMP/previous-release/RELEASE-IDENTITY.txt"
+            bash script/release_appcast.sh check-version \
+              --source-info SimpleMole/Support/Info.plist \
+              --previous-identity "$RUNNER_TEMP/previous-release/RELEASE-IDENTITY.txt"
           else
             echo 'Initial public release: no previous published signing identity.'
           fi
@@ -110,11 +129,46 @@ jobs:
             printf 'Source commit: %s\n' "$GITHUB_SHA"
             printf 'Source ref: %s\n' "$GITHUB_REF"
             bash script/verify_release_version.sh "$RELEASE_TAG"
+            printf 'Update public Ed25519 key: %s\n' "$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' SimpleMole/Support/Info.plist)"
             bash script/verify_release.sh dist/arm64/Nori.app
             bash script/verify_release.sh dist/x86_64/Nori.app
           } > dist/RELEASE-IDENTITY.txt
+
+      - name: Sign and verify architecture-specific update feeds
+        # The Ed25519 private key is separate from the fixed App signing identity.
+        # It is only available to this step and never becomes an artifact/output.
+        env:
+          NORI_SPARKLE_PRIVATE_KEY: ${{ secrets.NORI_SPARKLE_PRIVATE_KEY }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        shell: bash
+        run: |
+          set +x
+          set -euo pipefail
+          if [[ -z "$NORI_SPARKLE_PRIVATE_KEY" ]]; then
+            echo '::error::Configure NORI_SPARKLE_PRIVATE_KEY with the backed-up Sparkle Ed25519 key.'
+            exit 1
+          fi
+          umask 077
+          key_file=$(mktemp "$RUNNER_TEMP/nori-update-key.XXXXXX")
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s' "$NORI_SPARKLE_PRIVATE_KEY" > "$key_file"
+          unset NORI_SPARKLE_PRIVATE_KEY
+          sparkle_dir=$(/usr/bin/python3 script/fetch_sparkle.py)
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' SimpleMole/Support/Info.plist)
+          tag="${RELEASE_TAG:-v$version}"
+          options=(--tag "$tag" --source-info SimpleMole/Support/Info.plist \
+            --dist-dir dist --repository "$GH_REPO" --sign-tool "$sparkle_dir/bin/sign_update" \
+            --private-key-file "$key_file")
+          if [[ -f "docs/releases/$tag.md" ]]; then
+            options+=(--notes-file "docs/releases/$tag.md")
+          fi
+          if [[ -f "$RUNNER_TEMP/previous-release/RELEASE-IDENTITY.txt" ]]; then
+            options+=(--previous-identity "$RUNNER_TEMP/previous-release/RELEASE-IDENTITY.txt")
+          fi
+          bash script/release_appcast.sh generate "${options[@]}"
           cd dist
-          shasum -a 256 Nori-arm64.dmg Nori-x86_64.dmg RELEASE-IDENTITY.txt > SHA256SUMS
+          shasum -a 256 Nori-arm64.dmg Nori-x86_64.dmg appcast-arm64.xml appcast-x86_64.xml RELEASE-IDENTITY.txt > SHA256SUMS
 
       - name: Remove the temporary signing keychain
         if: always()
@@ -132,6 +186,8 @@ jobs:
           path: |
             dist/Nori-arm64.dmg
             dist/Nori-x86_64.dmg
+            dist/appcast-arm64.xml
+            dist/appcast-x86_64.xml
             dist/SHA256SUMS
             dist/RELEASE-IDENTITY.txt
           if-no-files-found: error
@@ -173,4 +229,4 @@ jobs:
           gh release create "$RELEASE_TAG" \
             --verify-tag --draft --title "Nori $RELEASE_TAG" \
             --notes-file "$notes" \
-            Nori-arm64.dmg Nori-x86_64.dmg RELEASE-IDENTITY.txt SHA256SUMS
+            Nori-arm64.dmg Nori-x86_64.dmg appcast-arm64.xml appcast-x86_64.xml RELEASE-IDENTITY.txt SHA256SUMS

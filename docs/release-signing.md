@@ -44,7 +44,7 @@ The importer validates the original certificate pin and matching private key bef
 
 ## GitHub Actions and release assets
 
-Repository Actions secrets are `FORGESWEEP_SIGNING_P12_BASE64` and `FORGESWEEP_SIGNING_P12_PASSWORD`. Keep their legacy names to reuse the existing identity. On a repository without these secrets, `bash script/configure_release_secrets.sh` uploads them from the local archive without logging their values. It refuses to overwrite either existing secret.
+App-signing Actions secrets are `FORGESWEEP_SIGNING_P12_BASE64` and `FORGESWEEP_SIGNING_P12_PASSWORD`. Keep their legacy names to reuse the existing identity. On a repository without these secrets, `bash script/configure_release_secrets.sh` uploads them from the local archive without logging their values. It refuses to overwrite either existing secret. Sparkle archive signing uses the separate `NORI_SPARKLE_PRIVATE_KEY` secret described below.
 
 The **Signed macOS release** workflow uses a GitHub-hosted `macos-15` runner and the stable Xcode 26.2 toolchain. It never creates signing keys and never falls back to ad-hoc signing.
 
@@ -57,11 +57,36 @@ Trust and keychain commands have bounded execution times. A provisioning timeout
 For each release:
 
 1. Commit the complete, tested product source, public signing policy, README/screenshots and release notes. A tag must describe that committed source; do not attach an uncommitted build to an older tag.
-2. Update `CFBundleShortVersionString` and `CFBundleVersion` in `SimpleMole/Support/Info.plist`, and add bilingual `docs/releases/v<version>.md` notes. The workflow rejects a tag that differs from the embedded app version.
+2. Increase both `CFBundleShortVersionString` and `CFBundleVersion` in `SimpleMole/Support/Info.plist`, and add bilingual `docs/releases/v<version>.md` notes. The workflow rejects a tag that differs from the embedded app version, or a version/build that does not exceed the previous public release.
 3. Push reviewed source to the default branch. A manual workflow run on that branch builds an artifact for inspection without creating a Release.
 4. Tag the exact commit, for example `v1.0.0`, and push that tag. The tag workflow creates a draft Release using the checked-in notes. Publishing that draft is a separate maintainer action; an explicit release request can authorize it.
 
-Each Release includes `Nori-arm64.dmg`, `Nori-x86_64.dmg`, `RELEASE-IDENTITY.txt` and `SHA256SUMS`. The identity file records the exact source commit, version, certificate fingerprint and entire verified designated requirement for both architectures. Before importing secrets for a later release, CI compares the repository policy with the latest published identity file. Changing both the certificate and its committed pin cannot silently pass this continuity check. Existing Release attachments are never overwritten automatically.
+Each Release includes `Nori-arm64.dmg`, `Nori-x86_64.dmg`, `appcast-arm64.xml`, `appcast-x86_64.xml`, `RELEASE-IDENTITY.txt` and `SHA256SUMS`. The identity file records the exact source commit, version/build, public update key, certificate fingerprint and entire verified designated requirement for both architectures. Before importing secrets for a later release, CI compares the repository policy with the latest published identity file. Changing both the certificate and its committed pin cannot silently pass this continuity check. Existing Release attachments are never overwritten automatically.
+
+### Sparkle update publishing
+
+Sparkle is pinned to the official release in `vendor/sparkle/release.json`; `script/fetch_sparkle.py` verifies its SHA256 before using the framework or tools. The fixed App certificate remains unchanged. Sparkle's separate Ed25519 signature authenticates the exact downloaded DMG bytes; `SHA256SUMS` alone is not a replacement for that signature.
+
+The public update key is committed as `PublicEDKey` in `signing/update.plist` and embedded as `SUPublicEDKey` in the App. Back up the original private Ed25519 key exported by Sparkle's `generate_keys` tool. Set the repository Actions secret `NORI_SPARKLE_PRIVATE_KEY` to the exported file's complete text, using standard input rather than a command-line value. This is a single Sparkle key, not a PKCS#12 certificate. Do not regenerate it for subsequent releases: clients already installed trust the original public key.
+
+The workflow exposes this secret only to the update-signing step, writes it to a mode-0600 file under `RUNNER_TEMP`, runs the official `sign_update --ed-key-file <file> -p <dmg>`, and removes the file on exit. `release_appcast.sh` independently verifies each signature using CryptoKit and the public key embedded in the built App. It also checks the archive length, App architecture, version/build, minimum macOS version and architecture-specific feed URL. Both feeds are validated before either is written. The upload allowlist contains only the six public assets above.
+
+The two feeds are served directly from the latest published stable GitHub Release:
+
+- `https://github.com/percentcola3/sweep/releases/latest/download/appcast-arm64.xml`
+- `https://github.com/percentcola3/sweep/releases/latest/download/appcast-x86_64.xml`
+
+Each feed's enclosure uses an immutable tagged URL such as `https://github.com/percentcola3/sweep/releases/download/v1.0.1/Nori-arm64.dmg`. Drafts include their candidate feeds, but remain unavailable to installed clients until the maintainer publishes the stable Release. No Pages branch or post-publication write to the default branch is required. Before the first release with these assets is published, update checks can fail because the feeds do not exist; this is not evidence that the installed App is up to date. Versions without Sparkle need one manual installation of a version that includes it.
+
+For local packaging with feeds, provide `RELEASE_TAG`, `SM_SPARKLE_BIN` (the pinned distribution's `bin` directory), and `SM_SPARKLE_PRIVATE_KEY_FILE` (the existing exported key outside `dist`). Without the private-key variable, `package_release.sh` retains its App/DMG-only behavior. After generation, feeds can be checked without the private key:
+
+```bash
+bash script/release_appcast.sh verify --tag v1.0.1 \
+  --source-info SimpleMole/Support/Info.plist --dist-dir dist
+bash script/test_release_appcast.sh
+```
+
+Archive signatures do not make a self-signed App Apple-notarized or guarantee privacy permission retention. Moving to Developer ID or rotating the update key is an explicit migration, not a routine release change.
 
 Check downloads with:
 
@@ -76,16 +101,17 @@ These checks establish file integrity and stable code identity, not Gatekeeper a
 
 ## Local installation updates
 
-`script/install_update.sh` detects the pinned certificate on an installed public release and automatically selects its original keychain for the update. A conflicting identity, missing release private key, ad-hoc opt-in or changed designated requirement stops before replacing the installation. It verifies the staged destination copy, preserves the previous app until the replacement verifies and restores it on an installation-verification failure.
+`script/install_update.sh` detects the pinned certificate on an installed public release and automatically selects its original keychain for the update. A conflicting identity, missing release private key, ad-hoc opt-in or changed designated requirement stops before replacing the installation. Existing stable local and Apple signatures also retain their complete designated requirement by default. It verifies the staged destination copy, preserves the previous app until the replacement verifies and restores it on an installation-verification failure.
 
 For the first migration from a local development build to the fixed public identity:
 
 ```bash
-SM_CODESIGN_IDENTITY=ABF7136A66689BF6437F7C4252A3168401FF33F6 \
+SM_ALLOW_SIGNING_MIGRATION=1 \
+  SM_CODESIGN_IDENTITY=ABF7136A66689BF6437F7C4252A3168401FF33F6 \
   bash script/install_update.sh
 ```
 
-This intentional first change may require reauthorization. Later `install_update.sh` runs preserve the installed public identity without an override. The app remains self-signed; if first launch is blocked, use System Settings → Privacy & Security → Open Anyway where available, without disabling Gatekeeper.
+This explicit migration switch permits a change only from a non-public signature and may require reauthorization. It cannot bypass the fixed identity of an installed public release. Later `install_update.sh` runs preserve the installed public identity without an override. The app remains self-signed; if first launch is blocked, use System Settings → Privacy & Security → Open Anyway where available, without disabling Gatekeeper.
 
 ---
 
@@ -139,14 +165,15 @@ bash script/configure_release_secrets.sh
 
 脚本从 Git `origin` 推断仓库，或接受显式的 `owner/repository` 参数。它验证本地固定身份，经临时私有目录导出，使用标准输入上传秘密，并在结束时删除临时文件。如果下面任一同名 secret 已存在，脚本会拒绝覆盖，防止替换已发布的身份。若上传中断只写入了一个 secret，需先检查仓库现状，再由维护者恢复缺失项，不要直接更换发布证书。
 
-也可在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 手动配置两个 repository secrets：
+也可在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 手动配置以下 repository secrets：
 
 | Secret | 内容 |
 | --- | --- |
 | `FORGESWEEP_SIGNING_P12_BASE64` | 固定发布身份的加密 PKCS#12 文件经过 Base64 编码后的完整内容 |
 | `FORGESWEEP_SIGNING_P12_PASSWORD` | 该 PKCS#12 文件的密码 |
+| `NORI_SPARKLE_PRIVATE_KEY` | Sparkle `generate_keys` 导出的原始 Ed25519 私钥文件完整文本；用于签署更新 DMG，与 App 自签名证书分开 |
 
-两个 secret 分别对应导出目录中的 `signing-certificate.base64` 和 `signing-password` 文件。
+App 证书的两个 secret 分别对应导出目录中的 `signing-certificate.base64` 和 `signing-password` 文件；更新私钥单独备份。
 
 必须备份同一份加密 PKCS#12 和密码。遗失私钥之后，单凭仓库中的公开证书无法恢复签名能力。不要把 `.p12`、`.pfx`、私钥、密码文件、临时钥匙串或 Base64 秘密提交到 Git，也不要放进 Release 附件、CI artifact、缓存或日志。
 
@@ -156,14 +183,24 @@ bash script/configure_release_secrets.sh
 
 1. 先把经过审核的工作流、发布脚本和公开证书推送到仓库默认分支。
 2. 在 **Actions → Signed macOS release → Run workflow** 选择默认分支试跑。手动运行只生成 `Nori-macos` artifact，不发布 GitHub Release。
-3. 下载 artifact，检查 Apple 芯片和 Intel 两个 DMG。先更新 `Info.plist` 中的版本与构建号，并提交 `docs/releases/v<版本>.md` 双语说明；标签必须与 App 内的版本完全一致，例如版本 `1.0.1` 对应 `v1.0.1`。标签指向的源码必须完整包含实际发布功能，不能用旧提交的标签发布未提交的构建。
-4. 标签构建成功后会创建 **draft Release**，附上两个 DMG、`RELEASE-IDENTITY.txt` 和 `SHA256SUMS`，采用仓库中已提交的更新说明。确认构建与安装验证结果后，由维护者公开草稿；明确的发布请求可授权这一步。跨版本授权在另一台 Mac 上尚未验证，应如实记录。
+3. 下载 artifact，检查 Apple 芯片和 Intel 两个 DMG。先递增 `Info.plist` 中的版本与构建号，并提交 `docs/releases/v<版本>.md` 双语说明；标签必须与 App 内的版本完全一致，例如版本 `1.0.1` 对应 `v1.0.1`。CI 会拒绝不高于上一公开版本的版本或构建号。标签指向的源码必须完整包含实际发布功能，不能用旧提交的标签发布未提交的构建。
+4. 标签构建成功后会创建 **draft Release**，附上两个 DMG、`appcast-arm64.xml`、`appcast-x86_64.xml`、`RELEASE-IDENTITY.txt` 和 `SHA256SUMS`，采用仓库中已提交的更新说明。确认构建与安装验证结果后，由维护者公开草稿；明确的发布请求可授权这一步。跨版本授权在另一台 Mac 上尚未验证，应如实记录。
 
-`RELEASE-IDENTITY.txt` 记录源码提交、版本、证书指纹及两个架构的完整 designated requirement。后续 CI 导入秘密前会与最新公开版本的身份记录对比；即使误改了公开证书及其指纹，也不能静默改变已发布身份。`install_update.sh` 遇到已安装的固定公开版本时自动复用原证书，拒绝切回本地/ad-hoc 签名，在替换前对比新旧身份、验证暂存副本，并在安装验签失败时恢复原版本。
+`RELEASE-IDENTITY.txt` 记录源码提交、版本和构建号、公开更新密钥、证书指纹及两个架构的完整 designated requirement。后续 CI 导入秘密前会与最新公开版本的身份记录对比；即使误改了公开证书及其指纹，也不能静默改变已发布身份。已记录的更新公钥也必须保持一致。`install_update.sh` 遇到已安装的固定公开版本时自动复用原证书，拒绝切回本地/ad-hoc 签名，在替换前对比新旧身份、验证暂存副本，并在安装验签失败时恢复原版本。其他已有稳定本地或 Apple 签名也会默认检查完整指定要求；仅从非公开签名主动迁移时可以显式设置 `SM_ALLOW_SIGNING_MIGRATION=1`，这一开关不能绕过已安装公开版本的固定身份保护。
 
 已有同名 Release 时，工作流不会覆盖其附件。排查失败后重试前，先检查是否已经产生该标签的草稿。
 
-CI 使用 `macos-15` 和 `/Applications/Xcode_26.2.app/Contents/Developer`，串行交叉编译 `arm64`、`x86_64` 两种架构。它先跑回归检查并验证版本/身份连续性，再导入私钥、打包和校验，最后清理临时钥匙串；上传范围只包含两个 DMG、公开身份记录与校验和。该工作流不接受 pull request 事件，手动运行限定默认分支。仅向经过审核的分支和标签开放发布权限；建议用 GitHub rulesets 保护默认分支和 `v*` 标签。
+CI 使用 `macos-15` 和 `/Applications/Xcode_26.2.app/Contents/Developer`，串行交叉编译 `arm64`、`x86_64` 两种架构。它先跑回归检查并验证版本/身份连续性，再导入私钥、打包和校验，单独签署更新归档后清理临时钥匙串；上传范围只包含两个 DMG、两个 appcast、公开身份记录与校验和。该工作流不接受 pull request 事件，手动运行限定默认分支。仅向经过审核的分支和标签开放发布权限；建议用 GitHub rulesets 保护默认分支和 `v*` 标签。
+
+### Sparkle 更新源与归档签名
+
+固定 App 证书继续复用。Sparkle 依赖及工具由 `vendor/sparkle/release.json` 固定版本和 SHA256，`script/fetch_sparkle.py` 校验后使用。公开更新公钥存于 `signing/update.plist` 的 `PublicEDKey`，同时嵌入 App 的 `SUPublicEDKey`；私钥只需初始化、导出和备份一次，后续发布必须复用。Ed25519 签名保护下载 DMG 的真实字节，普通 SHA256 清单不能替代更新签名。
+
+CI 只在归档签名步骤提供 `NORI_SPARKLE_PRIVATE_KEY`，用权限 0600 的临时文件交给官方 `sign_update --ed-key-file <文件> -p <DMG>`，结束后删除。`script/release_appcast.sh` 用 CryptoKit 和公开密钥独立验签，并校验实际归档长度、App 单一架构、版本和构建号、最低系统版本以及对应架构的 feed URL。任一架构失败都不会写入新的 feeds，上传范围始终不包含凭据。
+
+App 按编译架构读取 `https://github.com/percentcola3/sweep/releases/latest/download/appcast-arm64.xml` 或 `appcast-x86_64.xml`。feed 内下载链接使用不可变的标签地址，例如 `.../releases/download/v1.0.1/Nori-arm64.dmg`。草稿自带候选 feeds，但用户只会在维护者公开正式 Release 后读到它们，无需 Pages 分支或发布后写入主分支。首个包含 feed 的版本公开前，更新检查可能因文件不存在而失败，不能显示为“已经是最新版本”；不含 Sparkle 的旧版需先手动安装一次新版。
+
+本机需要生成 feeds 时，在打包前设置 `RELEASE_TAG`、`SM_SPARKLE_BIN`（固定依赖的 `bin` 目录）及 `SM_SPARKLE_PRIVATE_KEY_FILE`（`dist` 外已经导出的原密钥文件）。不设置私钥变量时，`package_release.sh` 仍只打包 App/DMG。生成后的 feeds 可以运行上方的 `release_appcast.sh verify` 和 `test_release_appcast.sh` 验证，不需要私钥。Ed25519 更新签名不会让自签名 App 获得 Apple 公证，也不能保证系统隐私授权保留。
 
 CI 签名仅支持一次性的 GitHub-hosted runner。导入脚本先记录 runner 用户已有的钥匙串搜索列表，再把专用发布钥匙串临时加入列表，并使用 `sudo -n` 在管理员域临时加入仅限代码签名的证书信任；此分支不适用于自托管机器。
 

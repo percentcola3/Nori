@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 编译、验证并暂存新版后替换安装。已安装公开版本必须保持固定发布身份；
+# 编译、验证并暂存新版后替换安装。已有稳定签名默认保持身份，公开版本必须保持固定发布身份；
 # 验签或安装失败时保留 / 恢复原版本。
 set +x
 set -euo pipefail
@@ -30,8 +30,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
+ALLOW_SIGNING_MIGRATION="${SM_ALLOW_SIGNING_MIGRATION:-0}"
+case "$ALLOW_SIGNING_MIGRATION" in
+    0|1) ;;
+    *) release_signing_error 'SM_ALLOW_SIGNING_MIGRATION must be 0 or 1' ;;
+esac
+
+read_designated_requirement() {
+    local requirement
+    requirement=$(/usr/bin/codesign -dr - "$1" 2>&1 | /usr/bin/sed -n 's/^designated => //p') || \
+        release_signing_error "could not read the designated requirement: $1"
+    [[ -n "$requirement" ]] || release_signing_error "designated requirement is empty: $1"
+    printf '%s\n' "$requirement"
+}
+
+requirement_matches() {
+    local requirement
+    requirement="$(read_designated_requirement "$1")" || return 2
+    [[ "$requirement" == "$2" ]]
+}
+
 INSTALLED_IS_RELEASE=0
 INSTALLED_SHA1=""
+INSTALLED_REQUIREMENT=""
 if [[ -d "$INSTALLED" ]] && \
    /usr/bin/codesign -d --extract-certificates="$WORK/installed-" "$INSTALLED" >/dev/null 2>&1; then
     INSTALLED_SHA1="$(release_certificate_sha1 "$WORK/installed-0" 2>/dev/null || true)"
@@ -43,6 +64,15 @@ if [[ -d "$INSTALLED" ]]; then
         [[ "$INSTALLED_SHA1" == "$RELEASE_CERT_SHA1" ]] || \
             release_signing_error 'installed release certificate differs from the repository pin; restore the original public policy before updating'
         INSTALLED_IS_RELEASE=1
+    fi
+    if /usr/bin/codesign --verify --deep --strict "$INSTALLED" >/dev/null 2>&1; then
+        INSTALLED_DETAILS=$(/usr/bin/codesign -dvvv "$INSTALLED" 2>&1) || \
+            release_signing_error 'could not inspect the installed valid signature'
+        # Unsigned and ad-hoc installations have no stable certificate identity.
+        # Their per-build cdhash cannot be preserved when installing a new build.
+        if ! printf '%s\n' "$INSTALLED_DETAILS" | /usr/bin/grep -Fxq 'Signature=adhoc'; then
+            INSTALLED_REQUIREMENT="$(read_designated_requirement "$INSTALLED")"
+        fi
     fi
 fi
 REQUESTED_IDENTITY=$(printf '%s' "${SM_CODESIGN_IDENTITY:-}" | /usr/bin/tr '[:lower:]' '[:upper:]')
@@ -89,6 +119,13 @@ if [[ "$USE_RELEASE_IDENTITY" == 1 ]]; then
         bash "$ROOT_DIR/script/verify_release.sh" "$APP_BUNDLE"
     fi
 fi
+NEW_REQUIREMENT="$(read_designated_requirement "$APP_BUNDLE")"
+if [[ -n "$INSTALLED_REQUIREMENT" && "$NEW_REQUIREMENT" != "$INSTALLED_REQUIREMENT" ]]; then
+    if [[ "$INSTALLED_IS_RELEASE" == 1 || "$ALLOW_SIGNING_MIGRATION" != 1 ]]; then
+        release_signing_error 'new build signing identity differs from the installed app; refusing to replace it (an intentional non-public identity migration requires SM_ALLOW_SIGNING_MIGRATION=1)'
+    fi
+    echo 'warning: explicitly migrating the non-public signing identity; macOS permissions may need to be granted again' >&2
+fi
 
 # Verify the actual destination copy before quitting or moving the installed app.
 STAGE_DIR="$(mktemp -d "$INSTALL_DIR/.nori-update.XXXXXX")"
@@ -97,6 +134,13 @@ STAGE_DIR="$(mktemp -d "$INSTALL_DIR/.nori-update.XXXXXX")"
     || { echo "error: staged copy failed codesign verification" >&2; exit 2; }
 if [[ "$USE_RELEASE_IDENTITY" == 1 ]]; then
     bash "$ROOT_DIR/script/verify_release.sh" "$STAGE_DIR/Nori.app"
+fi
+requirement_matches "$STAGE_DIR/Nori.app" "$NEW_REQUIREMENT" || \
+    release_signing_error 'staged copy designated requirement differs from the verified build; refusing to replace the installed app'
+if [[ -n "$INSTALLED_REQUIREMENT" ]]; then
+    /usr/bin/codesign --verify --deep --strict "$INSTALLED" >/dev/null 2>&1 && \
+        requirement_matches "$INSTALLED" "$INSTALLED_REQUIREMENT" || \
+        release_signing_error 'installed signing identity changed while building; refusing to replace it'
 fi
 
 # 优雅退出正在运行的实例，超时后强杀。
@@ -128,6 +172,11 @@ if [[ "$USE_RELEASE_IDENTITY" == 1 ]]; then
         echo "error: installed release identity changed; restoring the previous version" >&2
         exit 2
     fi
+fi
+if ! requirement_matches "$INSTALLED" "$NEW_REQUIREMENT"; then
+    rm -rf "$INSTALLED"
+    echo 'error: installed designated requirement differs from the verified build; restoring the previous version' >&2
+    exit 2
 fi
 
 echo "==> Launching $INSTALLED"

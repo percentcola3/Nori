@@ -26,6 +26,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMenu()
         updateStatusItem()
 
+        AppUpdateController.shared.start { [weak self] in
+            guard let self else { return false }
+            return !self.appState.isBusy && self.appState.confirmation == nil
+                && self.screenshotProcess?.isRunning != true
+                && !RatioCaptureController.shared.isCapturing
+                && self.editorWindow?.isVisible != true
+                && NSApp.modalWindow == nil
+                && !NSApp.windows.contains(where: { $0.attachedSheet != nil })
+        }
+
         // 附件应用：启动只驻留菜单栏；点击图标直接打开高级主窗口。
         runtimeTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -72,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        AppUpdateController.shared.stop()
         autoCleanupTimer?.invalidate()
         runtimeTimer?.invalidate()
         HotKeyCenter.shared.unregister()
@@ -123,20 +134,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screenshotProcess = nil
         RatioCaptureController.shared.dismiss()
         closeScreenshotEditor()
-        let completion: (NSImage?) -> Void = { [weak self] image in
+        let completion: (NSImage?, PresetFrameStyle?) -> Void = { [weak self] image, frame in
             guard let self, self.screenshotSession == session else { return }
             self.screenshotProcess = nil
             guard let image else { return }
-            self.openScreenshotEditor(image: image)
+            self.openScreenshotEditor(image: image, captureFrame: frame)
         }
         if ratio {
-            RatioCaptureController.shared.present(onCapture: completion)
+            RatioCaptureController.shared.present { image, frame in completion(image, frame) }
         } else {
-            screenshotProcess = ScreenShotService.captureInteractive(completion: completion)
+            screenshotProcess = ScreenShotService.captureInteractive { image in completion(image, nil) }
         }
     }
 
-    private func openScreenshotEditor(image: NSImage) {
+    private func openScreenshotEditor(image: NSImage, captureFrame: PresetFrameStyle?) {
         NSApp.activate(ignoringOtherApps: true)
         let targetScreen = editorWindow?.screen ?? cursorScreen
         var createdWindow = false
@@ -151,7 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             createdWindow = true
         }
         editorWindow?.contentViewController = NSHostingController(
-            rootView: ScreenshotEditorView(image: image) { [weak self] in
+            rootView: ScreenshotEditorView(image: image, captureFrame: captureFrame) { [weak self] in
                 self?.closeScreenshotEditor()
             })
         if let window = editorWindow, let screen = targetScreen ?? window.screen {
@@ -198,6 +209,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                            action: #selector(openSettings(_:)),
                                            keyEquivalent: ",")
         settingsItem.target = self
+        let updateItem = appMenu.addItem(withTitle: L10n.shared.t("updates.check"),
+                                        action: #selector(AppUpdateController.checkForUpdatesFromMenu(_:)),
+                                        keyEquivalent: "")
+        updateItem.target = AppUpdateController.shared
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: L10n.shared.t("menu.quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenuItem.submenu = appMenu

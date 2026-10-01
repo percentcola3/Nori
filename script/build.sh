@@ -9,6 +9,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MOLE_SRC="${MOLE_SRC:-$ROOT_DIR/vendor/mole}"
 BUILD_ARCHS="${SM_BUILD_ARCHS:-$(uname -m)}"
+BUILD_OUTPUT_DIR="${SM_OUTPUT_DIR:-$ROOT_DIR/dist}"
 REQUESTED_SIGN_IDENTITY="${SM_CODESIGN_IDENTITY:-}"
 ALLOW_ADHOC="${SM_ALLOW_ADHOC:-0}"
 # Local self-signed development identity created by script/dev_identity.sh.
@@ -160,12 +161,32 @@ resolve_signing_identity() {
 }
 
 resolve_signing_identity
+HOST_ENTITLEMENTS=""
+case "$SIGN_IDENTITY_KIND" in
+    local|adhoc)
+        # Sparkle is non-platform code. Self-signed/ad-hoc code has no Apple
+        # Team ID, so hardened runtime rejects the framework even when both
+        # are signed by the same certificate. This sole host exception was
+        # verified with the pinned public release identity; Apple identities
+        # retain library validation. See docs/sparkle-build.md.
+        HOST_ENTITLEMENTS="$ROOT_DIR/signing/sparkle-selfsigned.entitlements"
+        ;;
+esac
 echo "==> Signing mode: $SIGN_IDENTITY_LABEL"
 if [[ "${SM_BUILD_RESOLVE_ONLY:-0}" == "1" ]]; then
     # Test hook: report the resolved identity without compiling anything.
-    printf 'kind=%s\nlabel=%s\nidentity=%s\n' "$SIGN_IDENTITY_KIND" "$SIGN_IDENTITY_LABEL" "$SIGN_IDENTITY"
+    printf 'kind=%s\nlabel=%s\nidentity=%s\nhost_entitlements=%s\n' \
+        "$SIGN_IDENTITY_KIND" "$SIGN_IDENTITY_LABEL" "$SIGN_IDENTITY" "$HOST_ENTITLEMENTS"
     exit 0
 fi
+if [[ -n "$HOST_ENTITLEMENTS" && ! -f "$HOST_ENTITLEMENTS" ]]; then
+    echo "error: Sparkle self-signed host entitlement is missing" >&2
+    exit 2
+fi
+
+# This verifies the pinned archive and cached contents before returning a path.
+# Resolve-only identity tests above never download dependency code.
+SPARKLE_DIR="$(/usr/bin/python3 "$ROOT_DIR/script/fetch_sparkle.py")"
 
 if [[ ! -d "$MOLE_SRC/lib" ]]; then
     echo "error: vendored bridge support libraries not found at $MOLE_SRC" >&2
@@ -196,15 +217,24 @@ if ! swiftui_sdk_usable "$SWIFT_SDKROOT"; then
 fi
 
 sign_one() {
-    local target="$1"
+    local target="$1" entitlements="${2:-}" preserve_entitlements="${3:-0}"
+    local extra_args=()
+    if [[ -n "$entitlements" ]]; then
+        extra_args=(--entitlements "$entitlements")
+    elif [[ "$preserve_entitlements" == "1" ]]; then
+        extra_args=(--preserve-metadata=entitlements)
+    fi
     if [[ "$SIGN_IDENTITY_KIND" == "adhoc" ]]; then
-        /usr/bin/codesign --force --sign - "$target" >/dev/null
+        /usr/bin/codesign --force --options runtime \
+            ${extra_args[@]+"${extra_args[@]}"} --sign - "$target" >/dev/null
     elif [[ "$SIGN_IDENTITY_KIND" == "developer-id" ]]; then
         /usr/bin/codesign --force --options runtime --timestamp \
+            ${extra_args[@]+"${extra_args[@]}"} \
             --sign "$SIGN_IDENTITY" "$target"
     else
         # bash 3.2 + set -u: guard the possibly-empty array expansion.
         /usr/bin/codesign --force --options runtime --timestamp=none \
+            ${extra_args[@]+"${extra_args[@]}"} \
             ${LOCAL_SIGN_KEYCHAIN_ARGS[@]+"${LOCAL_SIGN_KEYCHAIN_ARGS[@]}"} \
             --sign "$SIGN_IDENTITY" "$target"
     fi
@@ -212,15 +242,17 @@ sign_one() {
 
 # Keep each architecture in its own bundle; local builds default to this Mac.
 for arch in $BUILD_ARCHS; do
-    APP_DIR="$ROOT_DIR/dist/$arch/Nori.app"
+    APP_DIR="$BUILD_OUTPUT_DIR/$arch/Nori.app"
     CONTENTS="$APP_DIR/Contents"
     RESOURCES="$CONTENTS/Resources"
     rm -rf "$APP_DIR"
-    mkdir -p "$CONTENTS/MacOS" "$RESOURCES"
+    mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Frameworks" "$RESOURCES"
 
     echo "==> Compiling Swift app ($arch)"
     SDKROOT="$SWIFT_SDKROOT" swiftc -O -whole-module-optimization -target "$arch-apple-macos13.0" \
         -module-cache-path "$BUILD_TMP/module-cache-$arch" \
+        -F "$SPARKLE_DIR" -framework Sparkle \
+        -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' \
         -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement \
         "$ROOT_DIR"/SimpleMole/*.swift \
         "$ROOT_DIR"/SimpleMole/L10n/*.swift \
@@ -237,6 +269,9 @@ for arch in $BUILD_ARCHS; do
     /usr/bin/strip -x "$CONTENTS/MacOS/Nori"
 
     cp "$ROOT_DIR/SimpleMole/Support/Info.plist" "$CONTENTS/Info.plist"
+    /usr/libexec/PlistBuddy -c \
+        "Set :SUFeedURL https://github.com/percentcola3/sweep/releases/latest/download/appcast-$arch.xml" \
+        "$CONTENTS/Info.plist"
 
     echo "==> Bundling bridge support libraries from $MOLE_SRC"
     bash "$ROOT_DIR/script/stage_bridge_resources.sh" "$MOLE_SRC" "$RESOURCES"
@@ -252,12 +287,23 @@ for arch in $BUILD_ARCHS; do
     fi
 
     cp "$ROOT_DIR/SimpleMole/Support/MenuBarIconTemplate@2x.png" "$RESOURCES/MenuBarIconTemplate@2x.png"
+    mkdir -p "$RESOURCES/Licenses"
+    cp "$ROOT_DIR/vendor/sparkle/LICENSE" "$RESOURCES/Licenses/Sparkle.txt"
     mkdir -p "$RESOURCES/Nori"
     cp "$ROOT_DIR/SimpleMole/Support/Nori/Animations/"*.svg "$RESOURCES/Nori/"
 
-    # Resources contain only shell scripts and images, with no nested executables.
-    sign_one "$CONTENTS/MacOS/Nori"
-    sign_one "$APP_DIR"
+    # Preserve the complete versioned framework and its symlinks. Re-sign
+    # nested code inside-out with the host's resolved identity; --deep is used
+    # only for verification, never for signing.
+    /usr/bin/ditto "$SPARKLE_DIR/Sparkle.framework" "$CONTENTS/Frameworks/Sparkle.framework"
+    SPARKLE_FRAMEWORK="$CONTENTS/Frameworks/Sparkle.framework"
+    sign_one "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Installer.xpc"
+    sign_one "$SPARKLE_FRAMEWORK/Versions/B/XPCServices/Downloader.xpc" "" 1
+    sign_one "$SPARKLE_FRAMEWORK/Versions/B/Autoupdate"
+    sign_one "$SPARKLE_FRAMEWORK/Versions/B/Updater.app"
+    sign_one "$SPARKLE_FRAMEWORK"
+    sign_one "$CONTENTS/MacOS/Nori" "$HOST_ENTITLEMENTS"
+    sign_one "$APP_DIR" "$HOST_ENTITLEMENTS"
     /usr/bin/codesign --verify --deep --strict "$APP_DIR"
 
     SIGN_DETAILS=$(/usr/bin/codesign -dvvv "$APP_DIR" 2>&1)

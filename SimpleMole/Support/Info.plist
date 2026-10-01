@@ -6,6 +6,23 @@
 	<string>Nori</string>
 	<key>CFBundleDisplayName</key>
 	<string>Nori</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+		<string>zh-Hant</string>
+		<string>ja</string>
+		<string>ko</string>
+		<string>de</string>
+		<string>fr</string>
+		<string>es</string>
+		<string>pt</string>
+		<string>it</string>
+		<string>ru</string>
+		<string>tr</string>
+	</array>
 	<key>CFBundleIdentifier</key>
 	<string>com.nori.app</string>
 	<key>CFBundleExecutable</key>
@@ -13,9 +30,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>2</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.0.0</string>
+	<string>1.0.1</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>
@@ -34,5 +51,17 @@
 	<string>Nori scans your Downloads to find leftover installers. Scanning is read-only and nothing leaves your Mac.</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/percentcola3/sweep/releases/latest/download/appcast-arm64.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>9Jd3w9/oemJxehAk3KX49rffGA/Khu8vVrSnWplmoJA=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<false/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUSendProfileInfo</key>
+	<false/>
 </dict>
 </plist>

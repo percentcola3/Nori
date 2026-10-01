@@ -2421,7 +2421,7 @@ test_swift() {
         return
     fi
 
-    local arch
+    local arch sparkle_dir
     local swift_sources=(
         "$ROOT_DIR"/SimpleMole/*.swift
         "$ROOT_DIR"/SimpleMole/L10n/*.swift
@@ -2429,6 +2429,7 @@ test_swift() {
         "$ROOT_DIR"/SimpleMole/Views/*.swift
     )
     arch="$(uname -m)"
+    sparkle_dir="$(/usr/bin/python3 "$ROOT_DIR/script/fetch_sparkle.py")" || fail "Sparkle dependency verification"
     mkdir -p "$TEST_ROOT/swift-module-cache"
     # macOS 27 SDK 的 SwiftUI 宏插件只随完整版 Xcode 分发；CLT 环境探测失败时
     # 回退到仍为非宏实现的 26.x SDK 再做 typecheck（与 build.sh 同一策略）。
@@ -2451,6 +2452,7 @@ test_swift() {
     fi
     SDKROOT="$typecheck_sdkroot" swiftc -typecheck -target "$arch-apple-macos13.0" \
         -module-cache-path "$TEST_ROOT/swift-module-cache" \
+        -F "$sparkle_dir" -framework Sparkle \
         -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement \
         "${swift_sources[@]}" || fail "Swift typecheck"
     pass "Swift typecheck"
@@ -2514,6 +2516,7 @@ test_timeout_fallback
 test_scan_access_boundary
 test_signing_policy_contract
 test_local_signing_identity
+/usr/bin/python3 "$ROOT_DIR/script/test_sparkle.py" || fail "Sparkle dependency and host signing policy"
 bash "$ROOT_DIR/script/test_release_identity.sh" || fail "fixed release identity provisioning"
 bash "$ROOT_DIR/script/test_release_packaging.sh" || fail "fixed release packaging policy"
 test_signing_identity_classification

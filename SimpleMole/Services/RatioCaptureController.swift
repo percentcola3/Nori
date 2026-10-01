@@ -10,11 +10,13 @@ final class RatioCaptureController {
     private var captureProcess: Process?
     private var session = UUID()
 
-    func present(onCapture: @escaping (NSImage?) -> Void) {
+    var isCapturing: Bool { window?.isVisible == true || captureProcess?.isRunning == true }
+
+    func present(onCapture: @escaping (NSImage?, PresetFrameStyle) -> Void) {
         dismiss()
         let session = self.session
         guard let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
-            ?? NSScreen.main else { onCapture(nil); return }
+            ?? NSScreen.main else { onCapture(nil, .none); return }
         let window = RatioCaptureWindow(contentRect: screen.frame,
                               styleMask: .borderless,
                               backing: .buffered, defer: false)
@@ -26,7 +28,7 @@ final class RatioCaptureController {
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         let screenFrame = screen.frame
         let hosting = NSHostingController(rootView: RatioCaptureOverlayView(
-            screenFrame: screenFrame) { [weak self] localRect in
+            screenFrame: screenFrame) { [weak self] localRect, frame in
             // SwiftUI 视图坐标以上左为原点；换算成全局坐标（左下原点）。
             let global = CGRect(x: screenFrame.minX + localRect.minX,
                                 y: screenFrame.maxY - localRect.maxY,
@@ -37,12 +39,12 @@ final class RatioCaptureController {
             self.captureProcess = ScreenShotService.captureRegion(global) { [weak self] image in
                 guard let self, self.session == session else { return }
                 self.captureProcess = nil
-                onCapture(image)
+                onCapture(image, frame)
             }
         } onCancel: { [weak self] in
             guard let self, self.session == session else { return }
             self.dismiss()
-            onCapture(nil)
+            onCapture(nil, .none)
         }.frame(width: screenFrame.width, height: screenFrame.height))
         // 覆盖层的尺寸由屏幕决定，不能让 HostingController 按内容固有尺寸缩窗。
         hosting.sizingOptions = []
@@ -70,7 +72,7 @@ private final class RatioCaptureWindow: NSWindow {
 /// 覆盖层：四块暗色遮罩围出选区，选区白描边可拖动，控制条浮在底部。
 private struct RatioCaptureOverlayView: View {
     let screenFrame: CGRect
-    let onCapture: (CGRect) -> Void
+    let onCapture: (CGRect, PresetFrameStyle) -> Void
     let onCancel: () -> Void
     @State private var ratio: CaptureRatio = CaptureRatio.load()
     @State private var origin: CGPoint?
@@ -155,11 +157,14 @@ private struct RatioCaptureOverlayView: View {
     private var controlBar: some View {
         HStack(spacing: 14) {
             // 比例模板选择：迷你比例预览 + 数值标签，点选即切换。
-            HStack(spacing: 6) {
-                ForEach(CaptureRatio.allCases) { candidate in
-                    ratioChip(candidate)
-                }
-            }
+            PillPicker(items: CaptureRatio.allCases.map { l10n.t($0.l10nKey) },
+                       selection: Binding(get: {
+                           CaptureRatio.allCases.firstIndex(of: ratio) ?? 0
+                       }, set: { index in
+                           ratio = CaptureRatio.allCases[index]
+                           ratio.store()
+                           origin = nil
+                       }))
             Spacer(minLength: 10)
             Button(role: .cancel) {
                 onCancel()
@@ -168,7 +173,7 @@ private struct RatioCaptureOverlayView: View {
             }
             .keyboardShortcut(.cancelAction)
             Button {
-                onCapture(CGRect(origin: selectionOrigin, size: selectionSize))
+                onCapture(CGRect(origin: selectionOrigin, size: selectionSize), ratio.frameStyle)
             } label: {
                 Label(l10n.t("shot.ratio.confirm"), systemImage: "camera.viewfinder")
             }
@@ -176,49 +181,7 @@ private struct RatioCaptureOverlayView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
         .padding(.bottom, 28)
     }
 
-    /// 单个比例模板芯片：按真实宽高比绘制的迷你预览框 + 短标签。
-    private func ratioChip(_ candidate: CaptureRatio) -> some View {
-        let isSelected = candidate == ratio
-        let previewHeight: CGFloat = 16
-        let previewWidth = min(28, max(6, previewHeight * candidate.ratio))
-        return Button {
-            ratio = candidate
-            ratio.store()
-            origin = nil // 换比例回到居中
-        } label: {
-            VStack(spacing: 4) {
-                RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-                    .strokeBorder(isSelected ? Color.moleAccentText : Color.white.opacity(0.65),
-                                  lineWidth: 1.2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 2.5, style: .continuous)
-                            .fill(isSelected ? Color.moleAccent.opacity(0.3)
-                                             : Color.white.opacity(0.08)))
-                    .frame(width: previewWidth, height: previewHeight)
-                Text(candidate.shortLabel)
-                    .font(.system(size: 9, weight: isSelected ? .semibold : .regular)
-                        .monospacedDigit())
-                    .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.72))
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(isSelected ? Color.white.opacity(0.14) : Color.clear))
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder(isSelected ? Color.white.opacity(0.45) : Color.clear,
-                                  lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 9))
-        }
-        .buttonStyle(.plain)
-        .help(l10n.t(candidate.l10nKey))
-    }
 }

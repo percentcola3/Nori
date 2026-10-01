@@ -2,7 +2,7 @@
 
 **A quieter, cleaner Mac.**
 
-A native, lightweight macOS companion that helps you reclaim disk space, keep an eye on your Mac, and make everyday work a little easier. Nori brings a Dynamic Island-inspired interface and Liquid Glass to a practical set of cleanup, developer, AI agent, and productivity tools.
+A native, lightweight companion for **macOS 13 Ventura and later** that helps you reclaim disk space, keep an eye on your Mac, and make everyday work a little easier. Nori brings a Dynamic Island-inspired interface to a practical set of cleanup, developer, AI agent, and productivity tools. Native Liquid Glass is available on macOS 26 and later; earlier systems use compatible materials.
 
 [Download the latest release](https://github.com/percentcola3/sweep/releases/latest) · [简体中文](README.zh-CN.md) · [Development guide](docs/development.md)
 
@@ -12,7 +12,7 @@ Nori is inspired by [Mole](https://github.com/tw93/Mole), the excellent Mac clea
 
 ## Why Nori
 
-- **Made for macOS.** A native Swift + SwiftUI app with a menu bar home, a compact island, and Liquid Glass on macOS 26 and later.
+- **Made for macOS 13+.** A native Swift + SwiftUI app with a menu bar home and a compact island. macOS 26 and later add native Liquid Glass.
 - **Space where it matters.** Find rebuildable application caches, developer downloads, and old build artifacts. A developer Mac can accumulate tens of GB of reclaimable data; your results depend on what is actually on disk.
 - **Understands your tools.** Dedicated developer and AI agent inventories distinguish disposable caches from sessions, credentials, and project data.
 - **A quiet guardian.** Watch CPU, memory, disk, network, and battery information without keeping the main window open.
@@ -99,7 +99,7 @@ Use **⌘⇧S** for interactive region/window capture and **⌘⇧R** for captur
 
 ![Screenshot editor in English](docs/screenshots/en/screenshot.png)
 
-Annotate with shapes, arrows, freehand strokes, text, or mosaic redaction. Add gradient backgrounds, padding, rounded frames, a Mac window, or an iPhone frame for phone-ratio captures; choose an output aspect ratio and export PNG or JPEG at 1× or 2×. Your last composition and export settings are remembered.
+Annotate with shapes, arrows, freehand strokes, text, or mosaic redaction. Choose iPhone/iPad frames or social aspect ratios during fixed-ratio capture. Use the editor’s presets for gradient backgrounds, padding, rounded corners, and Mac-style presentation, then export PNG or JPEG at 1× or 2×. Your last composition and export settings are remembered.
 
 ## Your Mac, at a glance
 
@@ -119,6 +119,8 @@ Requires **macOS 13 Ventura or later**. Native Liquid Glass requires macOS 26 or
 2. Download `Nori-arm64.dmg` for Apple silicon or `Nori-x86_64.dmg` for Intel.
 3. Drag `Nori.app` into `/Applications`, replacing an older Nori after quitting it.
 4. Open Nori and use its permission center to grant **Full Disk Access** for cleanup/scanning. **Screen Recording** is requested separately for screenshots.
+
+Starting with version 1.0.1, Nori checks for updates through Sparkle. Use **Settings → Updates** to check manually or change automatic checking. Downloaded updates are verified with a fixed Ed25519 public key, and installation remains a user choice. Version 1.0.0 needs one manual installation of 1.0.1 or later to gain this feature.
 
 Public releases reuse the **same pinned signing certificate and `com.nori.app` bundle identifier**. The release scripts verify this identity and fail if it changes or is missing, helping macOS recognize Nori across updates. This is a fixed self-signed identity, **not Apple notarization**, and cannot guarantee that every macOS version preserves all privacy permissions. If macOS blocks the first launch, use **System Settings → Privacy & Security → Open Anyway** when available; you do not need to install the signing certificate.
 

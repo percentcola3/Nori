@@ -47,21 +47,22 @@ struct ScreenshotEditorView: View {
     @State private var colorIndex = 0
     @State private var composition: ScreenshotComposition
     @State private var exportOptions: ScreenshotExportOptions
-    @State private var showCompositionOptions = false
     @State private var pendingTextAt: CGPoint?
     @State private var pendingTextInput = ""
     @State private var feedbackKey: String?
     @State private var previewAvailableSize = CGSize(width: 640, height: 320)
     @ObservedObject private var l10n = L10n.shared
 
+    private let captureFrame: PresetFrameStyle?
     private let preferences: ScreenshotPreferences
 
-    init(image: NSImage, preferences: ScreenshotPreferences = ScreenshotPreferences(),
+    init(image: NSImage, captureFrame: PresetFrameStyle? = nil, preferences: ScreenshotPreferences = ScreenshotPreferences(),
          onClose: @escaping () -> Void) {
         self.image = image
+        self.captureFrame = captureFrame
         self.onClose = onClose
         self.preferences = preferences
-        _composition = State(initialValue: preferences.loadComposition())
+        _composition = State(initialValue: preferences.loadEditorComposition(captureFrame: captureFrame))
         _exportOptions = State(initialValue: preferences.loadExportOptions())
     }
 
@@ -81,15 +82,6 @@ struct ScreenshotEditorView: View {
             ?? image.size
     }
 
-    /// iPhone 相框只接受手机比例的截图（cover 剪裁会任意裁掉内容，
-    /// 因此非该比例的图直接禁用，引导走「按比例截取」）。
-    private var canUsePhoneFrame: Bool {
-        let size = exportSize
-        guard size.width > 0, size.height > 0 else { return false }
-        return abs(size.width / size.height - PresetLayout.phoneScreenRatio)
-            / PresetLayout.phoneScreenRatio < 0.02
-    }
-
     var body: some View {
         VStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -103,16 +95,7 @@ struct ScreenshotEditorView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: composition) { value in preferences.save(value) }
         .onChange(of: exportOptions) { value in preferences.save(value) }
-        .onAppear {
-            // 上次停留在 iPhone 相框、但当前图不是手机比例：回退到窗口相框，
-            // 避免打开即是被禁用的组合。
-            guard !canUsePhoneFrame else { return }
-            if composition.frame == .iphone { composition.frame = .macWindow }
-            if composition.preset.frame == .iphone,
-               let fallback = ScreenshotPreset.builtIn(id: "frame") {
-                composition.select(fallback)
-            }
-        }
+
     }
 
     // MARK: 工具条
@@ -281,10 +264,13 @@ struct ScreenshotEditorView: View {
                 .foregroundStyle(.secondary)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(ScreenshotPreset.builtIn) { preset in
-                        let locked = preset.frame == .iphone && !canUsePhoneFrame
+                    ForEach(ScreenshotPreset.editorPresets) { preset in
                         Button {
                             composition.select(preset)
+                            if let captureFrame {
+                                composition.frame = captureFrame
+                                composition.aspect = .free
+                            }
                         } label: {
                             VStack(spacing: 3) {
                                 PresetThumbnail(preset: preset,
@@ -298,91 +284,12 @@ struct ScreenshotEditorView: View {
                             .frame(width: 60)
                         }
                         .buttonStyle(.plain)
-                        .disabled(locked)
-                        .opacity(locked ? 0.35 : 1)
-                        .help(locked ? l10n.t("shot.frame.iphone.locked") : l10n.t(preset.l10nKey))
+                        .help(l10n.t(preset.l10nKey))
                     }
                 }
                 .padding(.vertical, 2)
             }
-            Button {
-                showCompositionOptions.toggle()
-            } label: {
-                Label(l10n.t("shot.options"), systemImage: "slider.horizontal.3")
-            }
-            .buttonStyle(SecondaryButtonStyle())
-            .popover(isPresented: $showCompositionOptions, arrowEdge: .bottom) {
-                compositionOptions
-            }
         }
-    }
-
-    /// 相框与画幅覆盖：对当前预设临时生效，切换预设后恢复预设默认值。
-    /// 选项用可换行的胶囊标签而非分段控件：中文标签较长，分段会截断。
-    private var compositionOptions: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(l10n.t("shot.frame"))
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 78), spacing: 6)], spacing: 6) {
-                ForEach(PresetFrameStyle.allCases, id: \.self) { style in
-                    optionChip(text: l10n.t(style.l10nKey),
-                               icon: style.icon,
-                               isSelected: composition.frame == style,
-                               locked: style == .iphone && !canUsePhoneFrame) {
-                        composition.frame = style
-                    }
-                }
-            }
-            if !canUsePhoneFrame {
-                Text(l10n.t("shot.frame.iphone.locked"))
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Text(l10n.t("shot.aspect"))
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 64), spacing: 6)], spacing: 6) {
-                ForEach(PresetAspect.allCases, id: \.self) { aspect in
-                    optionChip(text: l10n.t(aspect.l10nKey),
-                               icon: aspect.icon,
-                               isSelected: composition.aspect == aspect,
-                               locked: false) {
-                        composition.aspect = aspect
-                    }
-                }
-            }
-        }
-        .padding(14)
-        .frame(width: 372)
-    }
-
-    private func optionChip(text: String, icon: String, isSelected: Bool,
-                            locked: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: locked ? "lock.fill" : icon)
-                    .font(.system(size: 9, weight: .semibold))
-                Text(text)
-                    .font(.system(size: 10.5, weight: isSelected ? .semibold : .regular))
-                    .lineLimit(1)
-            }
-            .foregroundStyle(isSelected ? Color.moleAccentText : Color.secondary)
-            .padding(.horizontal, 9)
-            .frame(maxWidth: .infinity)
-            .frame(height: 26)
-            .background(RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.moleAccent.opacity(0.15) : Color.surface2))
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isSelected ? Color.moleAccentText.opacity(0.30) : Color.hairline,
-                              lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
-        }
-        .buttonStyle(MolePlainButtonStyle())
-        .disabled(locked)
-        .opacity(locked ? 0.45 : 1)
-        .help(locked ? l10n.t("shot.frame.iphone.locked") : text)
     }
 
     // MARK: 操作条
@@ -761,7 +668,7 @@ struct PresetFrameView<Content: View>: View {
 
     @ViewBuilder
     private func card(_ layout: PresetLayout) -> some View {
-        if composition.frame == .iphone {
+        if composition.frame == .iphone || composition.frame == .ipad {
             phoneBody(layout)
         } else {
             windowCard(layout)
@@ -803,7 +710,7 @@ struct PresetFrameView<Content: View>: View {
         let rimShape = RoundedRectangle(cornerRadius: layout.screenCornerRadius + rim, style: .continuous)
         return ZStack(alignment: .topLeading) {
             bodyShape.fill(AnyShapeStyle(bodyFill))
-            phoneSideButtons(layout)
+            if composition.frame == .iphone { phoneSideButtons(layout) }
             // 屏幕黑色包边：浅色截图也能看清屏幕边界
             rimShape.fill(Color.black)
                 .frame(width: layout.contentRect.width + rim * 2,
@@ -817,11 +724,18 @@ struct PresetFrameView<Content: View>: View {
                 .clipShape(screenShape)
                 .offset(x: layout.contentRect.minX - layout.cardRect.minX,
                         y: layout.contentRect.minY - layout.cardRect.minY)
-            Capsule()
-                .fill(Color.black)
-                .frame(width: layout.islandRect.width, height: layout.islandRect.height)
-                .offset(x: layout.islandRect.minX - layout.cardRect.minX,
-                        y: layout.islandRect.minY - layout.cardRect.minY)
+            if composition.frame == .iphone {
+                Capsule()
+                    .fill(Color.black)
+                    .frame(width: layout.islandRect.width, height: layout.islandRect.height)
+                    .offset(x: layout.islandRect.minX - layout.cardRect.minX,
+                            y: layout.islandRect.minY - layout.cardRect.minY)
+            } else {
+                Circle().fill(Color.black)
+                    .frame(width: 8 * layout.chromeScale, height: 8 * layout.chromeScale)
+                    .offset(x: layout.cardRect.width / 2 - 4 * layout.chromeScale,
+                            y: layout.bezelTop / 2 - 4 * layout.chromeScale)
+            }
             bodyShape.strokeBorder(
                 isLight ? Color.black.opacity(0.20) : Color.white.opacity(0.25),
                 lineWidth: max(1, 1.5 * layout.chromeScale))

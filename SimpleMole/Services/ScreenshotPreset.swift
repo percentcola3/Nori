@@ -66,6 +66,7 @@ enum PresetFrameStyle: String, CaseIterable, Hashable {
     /// iPhone 外壳：机身 + 灵动岛 + 侧键；屏幕固定为手机比例，
     /// 截图居中自动剪裁（cover）填满屏幕。
     case iphone
+    case ipad
 
     var l10nKey: String { "shot.frame.\(rawValue)" }
     var icon: String {
@@ -74,6 +75,7 @@ enum PresetFrameStyle: String, CaseIterable, Hashable {
         case .macWindow: return "macwindow"
         case .roundedCard: return "rectangle.inset.filled"
         case .iphone: return "iphone"
+        case .ipad: return "ipad"
         }
     }
 }
@@ -109,9 +111,9 @@ enum PresetAspect: String, CaseIterable, Hashable {
 }
 
 /// 按比例截取的固定画幅：尺寸不可调，只允许拖动选区；
-/// 只有 phone 比例的截图可以在编辑器里套 iPhone 相框。
+/// 设备模板在截取时确定相框，编辑器沿用该选择。
 enum CaptureRatio: String, CaseIterable, Identifiable {
-    case phone, story, post, square, wide
+    case phone, tablet, story, post, square, wide
 
     var id: String { rawValue }
 
@@ -119,6 +121,7 @@ enum CaptureRatio: String, CaseIterable, Identifiable {
     var ratio: CGFloat {
         switch self {
         case .phone: return PresetLayout.phoneScreenRatio
+        case .tablet: return PresetLayout.tabletScreenRatio
         case .story: return 9.0 / 16.0
         case .post: return 4.0 / 5.0
         case .square: return 1
@@ -132,6 +135,7 @@ enum CaptureRatio: String, CaseIterable, Identifiable {
     var shortLabel: String {
         switch self {
         case .phone: return "9:19.5"
+        case .tablet: return "3:4"
         case .story: return "9:16"
         case .post: return "4:5"
         case .square: return "1:1"
@@ -140,6 +144,14 @@ enum CaptureRatio: String, CaseIterable, Identifiable {
     }
 
     private static let storedRawKey = "SMShotCaptureRatio"
+
+    var frameStyle: PresetFrameStyle {
+        switch self {
+        case .phone: return .iphone
+        case .tablet: return .ipad
+        default: return .none
+        }
+    }
 
     static func load(defaults: UserDefaults = .standard) -> CaptureRatio {
         defaults.string(forKey: storedRawKey).flatMap(CaptureRatio.init(rawValue:)) ?? .phone
@@ -223,6 +235,11 @@ struct ScreenshotPreset: Identifiable, Equatable, Hashable {
     static func builtIn(id: String) -> ScreenshotPreset? {
         builtIn.first { $0.id == id }
     }
+
+    /// 设备相框在截取阶段选择，编辑器只提供背景和普通相框预设。
+    static var editorPresets: [ScreenshotPreset] {
+        builtIn.filter { $0.frame != .iphone && $0.frame != .ipad }
+    }
 }
 
 /// 当前编辑器里的组合：预设 + 可临时覆盖的相框/比例。
@@ -289,34 +306,38 @@ struct PresetLayout: Equatable {
 
     /// 主流 iPhone 的屏幕宽高比；外壳的屏幕区域固定为该比例。
     static let phoneScreenRatio: CGFloat = 9.0 / 19.5
+    static let tabletScreenRatio: CGFloat = 3.0 / 4.0
 
     static func compute(contentSize: CGSize, composition: ScreenshotComposition) -> PresetLayout {
         let preset = composition.preset
         let source = CGSize(width: max(1, contentSize.width), height: max(1, contentSize.height))
         let isPhone = composition.frame == .iphone
+        let isTablet = composition.frame == .ipad
+        let isDevice = isPhone || isTablet
+        let screenRatio = isTablet ? Self.tabletScreenRatio : Self.phoneScreenRatio
         // 屏幕尺寸从源图按 cover 推导：保留较小的维度并裁掉另一个维度的两侧，
         // 可见区域始终保持原始分辨率，不会拉伸。
         var width = source.width
         var height = source.height
-        if isPhone {
-            if source.width / source.height > Self.phoneScreenRatio {
-                width = (source.height * Self.phoneScreenRatio).rounded()
+        if isDevice {
+            if source.width / source.height > screenRatio {
+                width = (source.height * screenRatio).rounded()
             } else {
-                height = (source.width / Self.phoneScreenRatio).rounded()
+                height = (source.width / screenRatio).rounded()
             }
         }
         // 以 1000pt 宽为基准缩放相框细节，导出 2x 时线条与点仍成比例。
         // 机身比例对齐真实 iPhone：四边等宽的窄边框（~2.6%），顶部稍高只为
         // 容纳灵动岛；旧版 5.5%/11% 的厚边框是"塑料壳"感的来源。
         let chromeScale = min(4, max(0.5, width / 1000))
-        let bezelSide = isPhone ? (26 * chromeScale).rounded() : 0
-        let bezelTop = isPhone ? (68 * chromeScale).rounded() : 0
+        let bezelSide = isDevice ? ((isTablet ? 36 : 26) * chromeScale).rounded() : 0
+        let bezelTop = isTablet ? bezelSide : isPhone ? (68 * chromeScale).rounded() : 0
         let bezelBottom = bezelSide
         let buttonProtrusion = isPhone ? (16 * chromeScale).rounded() : 0
         let padding = max((preset.paddingRatio * width).rounded(), buttonProtrusion)
         let titleBarHeight: CGFloat = composition.frame == .macWindow
             ? (30 * chromeScale).rounded() : 0
-        let cornerRadius: CGFloat = composition.frame == .none || isPhone
+        let cornerRadius: CGFloat = composition.frame == .none || isDevice
             ? 0 : (14 * chromeScale).rounded()
 
         let cardSize = CGSize(width: width + bezelSide * 2,
@@ -337,10 +358,10 @@ struct PresetLayout: Equatable {
         let contentRect = CGRect(x: cardRect.minX + bezelSide,
                                  y: cardRect.minY + titleBarHeight + bezelTop,
                                  width: width, height: height)
-        let bodyCornerRadius = isPhone ? (0.145 * cardSize.width).rounded() : 0
+        let bodyCornerRadius = isDevice ? ((isTablet ? 0.055 : 0.145) * cardSize.width).rounded() : 0
         // 屏幕圆角 = 机身圆角内缩一个边框；再留一条黑色屏幕包边。
         let screenRim = (3 * chromeScale).rounded()
-        let screenCornerRadius = isPhone
+        let screenCornerRadius = isDevice
             ? max(0, bodyCornerRadius - bezelSide - screenRim) : 0
         let islandWidth = min((240 * chromeScale).rounded(), width * 0.9)
         let islandHeight = min((52 * chromeScale).rounded(), bezelTop)
@@ -452,6 +473,23 @@ struct ScreenshotPreferences {
         }
         if let raw = defaults.string(forKey: Key.aspect), let aspect = PresetAspect(rawValue: raw) {
             composition.aspect = aspect
+        }
+        return composition
+    }
+
+    func loadEditorComposition(captureFrame: PresetFrameStyle?) -> ScreenshotComposition {
+        var composition = loadComposition()
+        if composition.preset.frame == .iphone || composition.preset.frame == .ipad {
+            // 旧版将设备相框作为独立预设保存；现在该预设已不在编辑器里显示。
+            // 改为同样透明的可见「原图」预设，并保存迁移，避免下一次再次加载隐藏项。
+            composition.select(ScreenshotPreset.builtIn(id: "plain") ?? ScreenshotPreset.builtIn[0])
+            save(composition)
+        }
+        if let captureFrame {
+            composition.frame = captureFrame
+            composition.aspect = .free
+        } else if composition.frame == .iphone || composition.frame == .ipad {
+            composition.frame = .none
         }
         return composition
     }

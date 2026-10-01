@@ -59,4 +59,17 @@ SM_LOCAL_SIGN_PASSWORD_FILE="$PASSWORD_FILE" \
 for arch in $BUILD_ARCHS; do
     bash "$ROOT_DIR/script/verify_release.sh" "$ROOT_DIR/dist/$arch/Nori.app"
 done
+if [[ -n "${SM_SPARKLE_PRIVATE_KEY_FILE:-}" ]]; then
+    [[ -n "${SM_SPARKLE_BIN:-}" ]] || release_signing_error 'SM_SPARKLE_BIN is required when signing update feeds'
+    [[ -n "${RELEASE_TAG:-}" ]] || release_signing_error 'RELEASE_TAG is required when signing update feeds'
+    APPCAST_OPTIONS=(--tag "$RELEASE_TAG" --source-info "$ROOT_DIR/SimpleMole/Support/Info.plist"
+        --dist-dir "$ROOT_DIR/dist" --repository "${GH_REPO:-percentcola3/sweep}"
+        --sign-tool "$SM_SPARKLE_BIN/sign_update" --private-key-file "$SM_SPARKLE_PRIVATE_KEY_FILE")
+    if [[ -f "$ROOT_DIR/docs/releases/$RELEASE_TAG.md" ]]; then
+        APPCAST_OPTIONS+=(--notes-file "$ROOT_DIR/docs/releases/$RELEASE_TAG.md")
+    fi
+    # The command validates every requested architecture before writing feeds.
+    # shellcheck disable=SC2086
+    bash "$ROOT_DIR/script/release_appcast.sh" generate "${APPCAST_OPTIONS[@]}" --archs $BUILD_ARCHS
+fi
 echo '==> Release packages verified. These self-signed builds are not Apple-notarized.'

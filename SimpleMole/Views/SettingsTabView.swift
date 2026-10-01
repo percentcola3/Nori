@@ -70,6 +70,7 @@ struct SettingsTabView: View {
             VStack(alignment: .leading, spacing: 18) {
                 pagesSection
                 generalSection
+                UpdateSettingsView(updater: .shared)
                 islandSection
                 maintenanceSection
                 SettingsSection(title: l10n.t("permissions.title")) {

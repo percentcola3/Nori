@@ -170,9 +170,10 @@ final class L10n: ObservableObject {
         let withDuplicates = withMedia.merging(L10nDuplicatesTables.table(for: language)) {
             _, featureValue in featureValue
         }
-        return withDuplicates.merging(L10nMaintenanceTables.table(for: language)) {
+        let withMaintenance = withDuplicates.merging(L10nMaintenanceTables.table(for: language)) {
             _, featureValue in featureValue
         }
+        return withMaintenance.merging(L10nUpdateTables.table(for: language)) { _, value in value }
     }
 }
 

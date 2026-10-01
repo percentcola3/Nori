@@ -18,3 +18,14 @@ status paths run through its native Swift services.
 Nori is distributed under the GNU General Public License v3.0. The complete
 license is included in [`LICENSE`](LICENSE), and Mole's original copyright
 and license notices remain in the vendored source.
+
+## Sparkle
+
+Nori uses Sparkle 2.10.0 for signed application updates:
+
+- Project: https://github.com/sparkle-project/Sparkle
+- License: MIT, with bundled external licenses
+- License text: [`vendor/sparkle/LICENSE`](vendor/sparkle/LICENSE)
+
+The release archive and its SHA256 are pinned in `vendor/sparkle/release.json`.
+The complete license text ships in `Nori.app/Contents/Resources/Licenses/Sparkle.txt`.

@@ -9,12 +9,15 @@ struct ScreenshotPresetTests {
         testPlainLayoutIsIdentity()
         testWindowLayoutAddsChromeAndPadding()
         testPhoneShellLayout()
+        testTabletShellLayout()
         testPhoneShellCropsLandscapeSource()
         testPhoneShellWithoutPaddingKeepsButtons()
         testAspectNeverCropsContent()
         testChromeScalesWithResolution()
         testCompositionSelectionResetsOverrides()
         testPreferencesRoundTrip()
+        testEditorMigratesLegacyDevicePreset()
+        testEditorPreservesBackgroundAndCaptureFrame()
         testEncoderFormats()
         print("screenshot preset tests ok")
     }
@@ -47,6 +50,20 @@ struct ScreenshotPresetTests {
                 precondition(colors.count == 9, "mesh preset \(preset.id) needs 9 colors")
             }
         }
+    }
+
+    static func testTabletShellLayout() {
+        precondition(CaptureRatio.tablet.frameStyle == .ipad)
+        precondition(CaptureRatio.phone.frameStyle == .iphone)
+        let composition = ScreenshotComposition(preset: ScreenshotPreset.builtIn(id: "plain")!,
+                                                frame: .ipad, aspect: .free)
+        let layout = PresetLayout.compute(contentSize: CGSize(width: 900, height: 1200),
+                                          composition: composition)
+        precondition(layout.contentRect.size == CGSize(width: 900, height: 1200),
+                     "iPad capture must retain the full selected image")
+        precondition(layout.bezelTop == layout.bezelSide && layout.bezelBottom == layout.bezelSide)
+        precondition(layout.islandRect == .zero, "iPad must not have a Dynamic Island")
+        precondition(layout.cardRect.contains(layout.contentRect))
     }
 
     static func testPlainLayoutIsIdentity() {
@@ -147,7 +164,7 @@ struct ScreenshotPresetTests {
                 let layout = PresetLayout.compute(contentSize: content, composition: composition)
                 let canvas = CGRect(origin: .zero, size: layout.canvasSize)
                 precondition(canvas.contains(layout.cardRect), "\(frame)/\(aspect) must keep the card inside the canvas")
-                if frame == .iphone {
+                if frame == .iphone || frame == .ipad {
                     // iPhone 外壳：屏幕固定为手机比例，内容按 cover 居中剪裁，不缩放。
                     precondition(layout.contentSourceSize == content,
                                  "\(frame)/\(aspect) must keep the uncropped source size")
@@ -155,7 +172,7 @@ struct ScreenshotPresetTests {
                                  && layout.contentRect.height <= content.height,
                                  "\(frame)/\(aspect) screen must not exceed the source")
                     precondition(abs(layout.contentRect.width / layout.contentRect.height
-                                     - PresetLayout.phoneScreenRatio) < 0.001,
+                                     - (frame == .ipad ? PresetLayout.tabletScreenRatio : PresetLayout.phoneScreenRatio)) < 0.001,
                                  "\(frame)/\(aspect) screen ratio must stay a phone ratio")
                 } else {
                     precondition(layout.contentRect.size == content, "\(frame)/\(aspect) must never resize the content")
@@ -215,6 +232,56 @@ struct ScreenshotPresetTests {
 
         defaults.set("does-not-exist", forKey: "screenshot.preset")
         precondition(prefs.loadComposition().preset.id == ScreenshotPreset.defaultID, "unknown preset falls back to default")
+    }
+
+    static func testEditorMigratesLegacyDevicePreset() {
+        let suite = "com.nori.screenshot-migration-tests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else { fatalError("no defaults") }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = ScreenshotPreferences(defaults: defaults)
+        let legacy = ScreenshotComposition(preset: ScreenshotPreset.builtIn(id: "iphone")!,
+                                           frame: .iphone, aspect: .story9x16)
+        let plain = ScreenshotComposition(preset: ScreenshotPreset.builtIn(id: "plain")!)
+        let captureFrames: [PresetFrameStyle?] = [nil, PresetFrameStyle.none, .iphone, .ipad]
+        for captureFrame in captureFrames {
+            prefs.save(legacy)
+            let loaded = prefs.loadEditorComposition(captureFrame: captureFrame)
+            precondition(loaded.preset.id == "plain" && loaded.aspect == .free,
+                         "legacy device preset must migrate to the visible transparent preset")
+            precondition(loaded.frame == (captureFrame ?? .none),
+                         "migration must retain the frame chosen for this capture")
+            precondition(ScreenshotPreset.editorPresets.contains { $0.id == loaded.preset.id },
+                         "the migrated selection must appear in the editor")
+            precondition(prefs.loadComposition() == plain,
+                         "migration must persist the visible preset instead of the hidden device preset")
+            precondition(prefs.loadEditorComposition(captureFrame: nil) == plain,
+                         "the next ordinary capture must load the migrated selection")
+        }
+    }
+
+    static func testEditorPreservesBackgroundAndCaptureFrame() {
+        let suite = "com.nori.screenshot-editor-preferences-tests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else { fatalError("no defaults") }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = ScreenshotPreferences(defaults: defaults)
+        let composition = ScreenshotComposition(preset: ScreenshotPreset.builtIn(id: "aurora")!,
+                                                frame: .macWindow, aspect: .square)
+        prefs.save(composition)
+        precondition(prefs.loadEditorComposition(captureFrame: nil) == composition,
+                     "ordinary capture must retain a visible saved composition")
+        for frame in [PresetFrameStyle.none, .iphone, .ipad] {
+            let loaded = prefs.loadEditorComposition(captureFrame: frame)
+            precondition(loaded.preset == composition.preset && loaded.frame == frame && loaded.aspect == .free,
+                         "aspect capture must retain the background and use the selected capture frame")
+            precondition(prefs.loadComposition() == composition,
+                         "a per-capture frame must not rewrite the saved background composition")
+        }
+        var previousDeviceCapture = composition
+        previousDeviceCapture.frame = .ipad
+        prefs.save(previousDeviceCapture)
+        let ordinary = prefs.loadEditorComposition(captureFrame: nil)
+        precondition(ordinary.preset == composition.preset && ordinary.frame == .none,
+                     "ordinary capture must not inherit a device frame from an earlier aspect capture")
     }
 
     static func testEncoderFormats() {
