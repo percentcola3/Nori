@@ -128,6 +128,17 @@ enum CaptureRatio: String, CaseIterable, Identifiable {
 
     var l10nKey: String { "shot.ratio.\(rawValue)" }
 
+    /// 芯片上的短标签：纯比例数值，不需要本地化。
+    var shortLabel: String {
+        switch self {
+        case .phone: return "9:19.5"
+        case .story: return "9:16"
+        case .post: return "4:5"
+        case .square: return "1:1"
+        case .wide: return "16:9"
+        }
+    }
+
     private static let storedRawKey = "SMShotCaptureRatio"
 
     static func load(defaults: UserDefaults = .standard) -> CaptureRatio {

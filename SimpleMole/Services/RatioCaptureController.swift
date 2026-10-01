@@ -133,28 +133,14 @@ private struct RatioCaptureOverlayView: View {
     }
 
     private var controlBar: some View {
-        HStack(spacing: 10) {
-            Menu {
+        HStack(spacing: 14) {
+            // 比例模板选择：迷你比例预览 + 数值标签，点选即切换。
+            HStack(spacing: 6) {
                 ForEach(CaptureRatio.allCases) { candidate in
-                    Button {
-                        ratio = candidate
-                        ratio.store()
-                        origin = nil // 换比例回到居中
-                    } label: {
-                        if candidate == ratio {
-                            Label(l10n.t(candidate.l10nKey), systemImage: "checkmark")
-                        } else {
-                            Text(l10n.t(candidate.l10nKey))
-                        }
-                    }
+                    ratioChip(candidate)
                 }
-            } label: {
-                Label(l10n.t(ratio.l10nKey), systemImage: "aspectratio")
-                    .frame(minWidth: 110)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .foregroundStyle(.primary)
+            Spacer(minLength: 10)
             Button(role: .cancel) {
                 onCancel()
             } label: {
@@ -175,5 +161,44 @@ private struct RatioCaptureOverlayView: View {
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
         .padding(.bottom, 28)
+    }
+
+    /// 单个比例模板芯片：按真实宽高比绘制的迷你预览框 + 短标签。
+    private func ratioChip(_ candidate: CaptureRatio) -> some View {
+        let isSelected = candidate == ratio
+        let previewHeight: CGFloat = 16
+        let previewWidth = min(28, max(6, previewHeight * candidate.ratio))
+        return Button {
+            ratio = candidate
+            ratio.store()
+            origin = nil // 换比例回到居中
+        } label: {
+            VStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                    .strokeBorder(isSelected ? Color.moleAccentText : Color.white.opacity(0.65),
+                                  lineWidth: 1.2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                            .fill(isSelected ? Color.moleAccent.opacity(0.3)
+                                             : Color.white.opacity(0.08)))
+                    .frame(width: previewWidth, height: previewHeight)
+                Text(candidate.shortLabel)
+                    .font(.system(size: 9, weight: isSelected ? .semibold : .regular)
+                        .monospacedDigit())
+                    .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.72))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(isSelected ? Color.white.opacity(0.14) : Color.clear))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(isSelected ? Color.white.opacity(0.45) : Color.clear,
+                                  lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .help(l10n.t(candidate.l10nKey))
     }
 }
