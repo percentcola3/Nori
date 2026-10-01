@@ -476,6 +476,22 @@ test_productivity_feature_contract() {
         fail "apps and drill-down rows are not routed by analysis policy"
     /usr/bin/grep -Fq 'Label(l10n.t("analyze.advanced"), systemImage: "ellipsis.circle")' \
         "$analyze_view" || fail "advanced disk scopes are not consolidated"
+    if /usr/bin/sed -n '/case \.analyze:/,/case \.uninstall:/p' "$app_state" | /usr/bin/grep -Fq 'scanDiskOverview'; then
+        fail "opening Disk Analyze still starts a scan automatically"
+    fi
+    if /usr/bin/grep -Fq 'state.scanDiskOverview()' "$analyze_view"; then
+        fail "disk analysis view still scans when the page appears"
+    fi
+    /usr/bin/grep -Fq 'struct AnalyzeScanSplitButton' "$analyze_view" || \
+        fail "disk analysis has no split scan button"
+    /usr/bin/grep -Fq 'struct AnalyzeIdleArtwork' "$analyze_view" || \
+        fail "disk analysis is missing the idle artwork"
+    /usr/bin/grep -Fq 'case .videos:' "$analyze_view" || \
+        fail "disk analysis scan menu does not render a distinct video result"
+    /usr/bin/grep -Fq 'case .images:' "$analyze_view" || \
+        fail "disk analysis scan menu does not render a distinct image result"
+    /usr/bin/grep -Fq 'case .duplicates:' "$analyze_view" || \
+        fail "disk analysis scan menu does not render a distinct duplicate result"
     if /usr/bin/grep -Fq 'private var quickRoots' "$analyze_view"; then
         fail "disk analysis still exposes confusing directory tabs"
     fi
@@ -553,6 +569,21 @@ test_scan_access_boundary() {
         fail "authorized image inventory failed"
     [[ "$output" == *"$protected_image"* ]] || \
         fail "authorized image inventory did not include protected content"
+
+    set +e
+    output=$(env HOME="$home" PATH="$stub_dir:$PATH" MOLE_TEST_IMAGE_PATH="$protected_image" \
+        bash "$RUNTIME_DIR/bin/app_video_scan.sh" "$home" 20 2>&1)
+    rc=$?
+    set -e
+    assert_status 77 "$rc" "whole-Home video scan did not fail closed"
+    [[ "$output" == *"Full Disk Access is required"* ]] || \
+        fail "whole-Home video scan did not explain its permission failure"
+    output=$(env HOME="$home" PATH="$stub_dir:$PATH" MOLE_TEST_IMAGE_PATH="$protected_image" \
+        FORGESWEEP_FULL_DISK_AUTHORIZED=1 \
+        bash "$RUNTIME_DIR/bin/app_video_scan.sh" "$home" 20) || \
+        fail "authorized video inventory failed"
+    [[ "$output" == *"$protected_image"* ]] || \
+        fail "authorized video inventory did not include protected content"
 
     output=$(env HOME="$home" bash "$RUNTIME_DIR/bin/app_ai_scan.sh") || \
         fail "permission-filtered AI scan failed"

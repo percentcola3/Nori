@@ -564,6 +564,45 @@ struct ImageItem: Identifiable {
     var id: String { path }
 }
 
+/// 分析页扫描按钮可选的扫描类型。选择只改变随后主按钮触发的扫描，
+/// 不会在进入页面时自动开始。
+enum AnalyzeScanKind: String, CaseIterable, Identifiable, Equatable, Hashable {
+    case largeFiles
+    case duplicates
+    case videos
+    case images
+
+    var id: String { rawValue }
+
+    var actionKey: String {
+        switch self {
+        case .largeFiles: return "analyze.scan.action.large"
+        case .duplicates: return "analyze.scan.action.duplicates"
+        case .videos: return "analyze.scan.action.videos"
+        case .images: return "analyze.scan.action.images"
+        }
+    }
+
+    var optionKey: String {
+        switch self {
+        case .largeFiles: return "analyze.scan.option.large"
+        case .duplicates: return "analyze.scan.option.duplicates"
+        case .videos: return "analyze.scan.option.videos"
+        case .images: return "analyze.scan.option.images"
+        }
+    }
+
+    var detailKey: String { optionKey + ".detail" }
+}
+
+/// 视频等按体积列出的媒体文件。
+struct MediaFileItem: Identifiable, Equatable {
+    let bytes: UInt64
+    let path: String
+    var id: String { path }
+    var name: String { (path as NSString).lastPathComponent }
+}
+
 /// 原生应用扫描生成的卸载清单条目。
 struct UninstallApp: Identifiable, Codable, Equatable, Sendable {
     let name: String

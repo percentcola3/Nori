@@ -17,6 +17,7 @@ enum ProtectedOperation: Codable, Equatable {
     case slimScan
     case systemScan
     case imageScan
+    case videoScan
     case installedAppsScan
     case uninstall(app: UninstallApp)
     case developmentEnvironmentScan

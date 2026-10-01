@@ -424,6 +424,19 @@ enum Parsers {
         return items
     }
 
+    /// 解析媒体清单 TSV：`bytes\tpath`。路径本身可以包含空格。
+    static func mediaFiles(_ text: String) -> [MediaFileItem] {
+        var items: [MediaFileItem] = []
+        for line in text.components(separatedBy: "\n") {
+            let parts = line.components(separatedBy: "\t")
+            guard parts.count >= 2 else { continue }
+            let path = parts.dropFirst().joined(separator: "\t")
+            guard path.hasPrefix("/") else { continue }
+            items.append(MediaFileItem(bytes: UInt64(parts[0]) ?? 0, path: path))
+        }
+        return items
+    }
+
     /// 解析开发环境 TSV：`bytes\tkind\tname\tpath`。同一路径出现多次时
     /// 保留 current 记录（nvm 默认版本会与 family 扫描重复）。
     static func devEnvEntries(_ text: String) -> [DevEnvEntry] {

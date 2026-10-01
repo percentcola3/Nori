@@ -332,6 +332,12 @@ final class AppState: ObservableObject {
     @Published var isAnalyzing = false
     @Published var analyzeIsOverview = false
     @Published var analyzeStatus: String
+    /// 分析页拆分按钮当前选中的扫描类型。进入页面时不会因此开始扫描。
+    @Published var analyzeFocus: AnalyzeScanKind = .largeFiles
+    /// 已经完成过一次的扫描类型。未完成的类型继续显示占位，而不是空结果。
+    @Published var completedAnalyzeFocuses: Set<AnalyzeScanKind> = []
+    /// 重复文件扫描正在等待先完成大文件遍历。
+    @Published var duplicateScanPending = false
     private var analyzeCache = DiskAnalysisCache()
     private var analyzeHasScanned = false
     private var analyzeScanControl: CleanupScanControl?
@@ -346,6 +352,10 @@ final class AppState: ObservableObject {
     @Published var dupGroups: [[AnalyzeEntry]] = []
     @Published var dupSelection: Set<String> = []
     @Published var isScanningDups = false
+
+    @Published var videoItems: [MediaFileItem] = []
+    @Published var isScanningVideos = false
+    @Published var videoStatus: String
 
     var analyzeSelectedBytes: UInt64 {
         analyzeEntries.filter {
@@ -512,6 +522,7 @@ final class AppState: ObservableObject {
 
     func cancelPermissionCenter() {
         authorizationCoordinator.clearPending()
+        duplicateScanPending = false
         showPermissionCenter = false
     }
 
@@ -580,6 +591,7 @@ final class AppState: ObservableObject {
         case .slimScan: scanSlim()
         case .systemScan: scanSystemData()
         case .imageScan: scanImages()
+        case .videoScan: scanVideos()
         case .installedAppsScan: scanInstalledApps()
         case .uninstall(let app): previewUninstall(app)
         case .developmentEnvironmentScan: scanDevEnv()
@@ -608,7 +620,7 @@ final class AppState: ObservableObject {
     }
 
     var isBusyExcludingUninstall: Bool {
-        isScanning || isApplying || isScanningImages
+        isScanning || isApplying || isScanningImages || isScanningVideos
             || isScanningEnv
             || isAnalyzing || isThinning || isScanningDups
             || gcRunningId != nil || netFixRunning || isAutoCleanupScanning
@@ -657,6 +669,7 @@ final class AppState: ObservableObject {
         processStatus = L10n.shared.t("proc.status.apps") // 会在首次刷新时替换为带数量文案
         portStatus = L10n.shared.t("ports.status.none")
         imageStatus = L10n.shared.t("img.status.none")
+        videoStatus = L10n.shared.t("analyze.scan.video.none")
         appListStatus = L10n.shared.t("uninstall.status.none")
         devEnvStatus = L10n.shared.t("devenv.status.empty")
         analyzeStatus = L10n.shared.t("analyze.status.empty")
@@ -704,11 +717,10 @@ final class AppState: ObservableObject {
                         // System inventory also requires an explicit scan button.
                         break
                     case .analyze:
-                        self.scanSnapshots()
+                        // Opening the page only refreshes permission state.
+                        // Disk, duplicate, video and image scans start from
+                        // the split button, never from tab selection.
                         self.permissionCenter.refresh()
-                        if self.permissionCenter.fullDiskAccessGranted {
-                            self.scanDiskOverview()
-                        }
                     case .uninstall:
                         // The page's cancellable loading task starts data work
                         // only after the navigation/placeholder has appeared.
@@ -745,6 +757,7 @@ final class AppState: ObservableObject {
                 self.processStatus = self.l10n.t("proc.status.none")
                 self.portStatus = self.l10n.t("ports.status.none")
                 if !self.isScanningImages { self.imageStatus = self.l10n.t("img.status.none") }
+                if !self.isScanningVideos { self.videoStatus = self.l10n.t("analyze.scan.video.none") }
                 if !self.isScanningApps {
                     self.appListStatus = self.installedApps.isEmpty
                         ? self.l10n.t("uninstall.status.none")
@@ -2302,6 +2315,35 @@ final class AppState: ObservableObject {
                 : (items.count > images.count
                     ? l10n.tf("img.status.capped", items.count, images.count)
                     : l10n.tf("img.status.found", items.count))
+            markAnalyzeFocusComplete(.images)
+            logFailure(result)
+        }
+    }
+
+    /// 在用户目录中查找视频，结果只在分析页的“视频”扫描里展示。
+    func scanVideos() {
+        guard authorize(.videoScan, presentingPermissionCenter: true) else { return }
+        guard !isBusy else { return }
+        let scanEnvironment = fullDiskScanEnvironment
+        guard scanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
+        isScanningVideos = true
+        videoItems = []
+        videoStatus = l10n.t("analyze.scan.video.scanning")
+        log(l10n.t("log.videoScan"))
+        Task {
+            let result = await MoleEngine.shared.runBridge(
+                "bin/app_video_scan.sh", arguments: [NSHomeDirectory(), "200"],
+                extraEnvironment: scanEnvironment, timeout: 180)
+            isScanningVideos = false
+            let items = Parsers.mediaFiles(result.output).sorted { lhs, rhs in
+                if lhs.bytes != rhs.bytes { return lhs.bytes > rhs.bytes }
+                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+            }
+            videoItems = items
+            videoStatus = items.isEmpty
+                ? l10n.t("analyze.scan.video.none")
+                : l10n.tf("analyze.scan.video.found", items.count)
+            markAnalyzeFocusComplete(.videos)
             logFailure(result)
         }
     }
@@ -2763,15 +2805,25 @@ final class AppState: ObservableObject {
     /// The default scope is the filesystem root, using the same directory
     /// traversal and navigation as every user-selected folder.
     func scanDiskOverview(force: Bool = false) {
+        guard !isBusy else {
+            duplicateScanPending = false
+            return
+        }
+        // 授权未完成时保留 duplicateScanPending，权限恢复后的全盘扫描仍会接上查重。
         guard authorize(.diskOverview(force: force),
-                        presentingPermissionCenter: true), !isBusy else { return }
-        if !force, analyzeHasScanned { return }
+                        presentingPermissionCenter: true) else { return }
+        if !force, analyzeHasScanned {
+            duplicateScanPending = false
+            return
+        }
+        if !duplicateScanPending { analyzeFocus = .largeFiles }
         if force { analyzeCache.invalidate("/") }
         startAnalyze(displayPath: "/", overview: true)
     }
 
     func scanAnalyze(_ path: String? = nil, force: Bool = false) {
         guard !isBusy else { return }
+        analyzeFocus = .largeFiles
         let target = URL(fileURLWithPath: path ?? analyzePath, isDirectory: true).standardizedFileURL.path
         if force { analyzeCache.invalidate(target) }
         if let cached = analyzeCache.report(for: target) {
@@ -2786,7 +2838,11 @@ final class AppState: ObservableObject {
     func cancelAnalyze() { analyzeScanControl?.cancel() }
 
     private func startAnalyze(displayPath: String, overview: Bool) {
-        guard fullDiskScanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
+        guard fullDiskScanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else {
+            duplicateScanPending = false
+            return
+        }
+        if overview { scanSnapshots() }
         analyzeHasScanned = true
         analyzePath = displayPath
         analyzeIsOverview = overview
@@ -2816,14 +2872,15 @@ final class AppState: ObservableObject {
                         self.analyzeTotalSize = report.totalSize
                     }
                 })
+            let cancelled = control.isCancelled
             analyzeScanControl = nil
             isAnalyzing = false
             analyzeCache.store(report)
-            showAnalyzeReport(report)
+            showAnalyzeReport(report, cancelled: cancelled)
         }
     }
 
-    private func showAnalyzeReport(_ report: AnalyzeReport) {
+    private func showAnalyzeReport(_ report: AnalyzeReport, cancelled: Bool = false) {
         analyzeSelection.removeAll()
         analyzeAISelection.removeAll()
         analyzeAIItems = []
@@ -2841,6 +2898,74 @@ final class AppState: ObservableObject {
                 ? "analyze.directory.partial" : "analyze.status.summary",
                 analyzeEntries.count, ByteFormat.format(analyzeTotalSize))
         }
+        let files = report.largeFiles ?? []
+        let hasContent = !report.entries.isEmpty || !files.isEmpty
+        if !cancelled || hasContent {
+            markAnalyzeFocusComplete(.largeFiles)
+        }
+        if cancelled {
+            duplicateScanPending = false
+        } else {
+            continueDuplicateScanIfNeeded(largeFiles: files)
+        }
+    }
+
+    /// 主按钮按当前选项触发对应扫描。下拉面板只切换选项，不在选择时开工。
+    func runAnalyzeFocus(_ kind: AnalyzeScanKind) {
+        analyzeFocus = kind
+        switch kind {
+        case .largeFiles:
+            if analyzePath == "/" || analyzeIsOverview {
+                scanDiskOverview(force: true)
+            } else {
+                scanAnalyze(force: true)
+            }
+        case .duplicates:
+            startDuplicateFocus()
+        case .videos:
+            requestScanAccess(.videoScan)
+        case .images:
+            requestScanAccess(.imageScan)
+        }
+    }
+
+    func selectAnalyzeFocus(_ kind: AnalyzeScanKind) {
+        analyzeFocus = kind
+    }
+
+    private func startDuplicateFocus() {
+        analyzeFocus = .duplicates
+        guard !isBusy else { return }
+        if !analyzeLargeFiles.isEmpty {
+            scanDuplicates()
+            return
+        }
+        duplicateScanPending = true
+        scanDiskOverview(force: true)
+        if duplicateScanPending, !isAnalyzing, !isScanningDups, !hasPendingPermissionAction {
+            duplicateScanPending = false
+        }
+    }
+
+    private func continueDuplicateScanIfNeeded(largeFiles: [AnalyzeReport.LargeFile]) {
+        guard duplicateScanPending else { return }
+        duplicateScanPending = false
+        if largeFiles.isEmpty {
+            markAnalyzeFocusComplete(.duplicates)
+            log(l10n.t("analyze.dup.empty"))
+        } else {
+            scanDuplicates()
+        }
+    }
+
+    private func markAnalyzeFocusComplete(_ kind: AnalyzeScanKind) {
+        var next = completedAnalyzeFocuses
+        next.insert(kind)
+        completedAnalyzeFocuses = next
+    }
+
+    func revealFile(at path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
     // MARK: APFS 快照
@@ -2907,6 +3032,7 @@ final class AppState: ObservableObject {
         guard scanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
         let paths = analyzeLargeFiles.map(\.path)
         guard !paths.isEmpty else {
+            markAnalyzeFocusComplete(.duplicates)
             log(l10n.t("log.dupNeedScan"))
             return
         }
@@ -2925,6 +3051,7 @@ final class AppState: ObservableObject {
                 extraEnvironment: scanEnvironment, timeout: 1800)
             isScanningDups = false
             dupGroups = Parsers.duplicateGroups(result.output)
+            markAnalyzeFocusComplete(.duplicates)
             if dupGroups.isEmpty {
                 if result.succeeded { log(l10n.t("analyze.dup.empty")) }
                 else { logFailure(result) }
