@@ -108,6 +108,37 @@ enum PresetAspect: String, CaseIterable, Hashable {
     }
 }
 
+/// 按比例截取的固定画幅：尺寸不可调，只允许拖动选区；
+/// 只有 phone 比例的截图可以在编辑器里套 iPhone 相框。
+enum CaptureRatio: String, CaseIterable, Identifiable {
+    case phone, story, post, square, wide
+
+    var id: String { rawValue }
+
+    /// 宽 / 高。
+    var ratio: CGFloat {
+        switch self {
+        case .phone: return PresetLayout.phoneScreenRatio
+        case .story: return 9.0 / 16.0
+        case .post: return 4.0 / 5.0
+        case .square: return 1
+        case .wide: return 16.0 / 9.0
+        }
+    }
+
+    var l10nKey: String { "shot.ratio.\(rawValue)" }
+
+    private static let storedRawKey = "SMShotCaptureRatio"
+
+    static func load(defaults: UserDefaults = .standard) -> CaptureRatio {
+        defaults.string(forKey: storedRawKey).flatMap(CaptureRatio.init(rawValue:)) ?? .phone
+    }
+
+    func store(defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: Self.storedRawKey)
+    }
+}
+
 struct ScreenshotPreset: Identifiable, Equatable, Hashable {
     let id: String
     let background: PresetBackground
@@ -163,7 +194,9 @@ struct ScreenshotPreset: Identifiable, Equatable, Hashable {
         ScreenshotPreset(id: "graphite", background: .linear(
             [PresetColor(hex: 0x23262D), PresetColor(hex: 0x3A3F4A), PresetColor(hex: 0x5C6170)],
             angle: 45)),
-        ScreenshotPreset(id: "paper", background: .solid(PresetColor(hex: 0xF4F1EA)),
+        ScreenshotPreset(id: "paper", background: .linear(
+            [PresetColor(hex: 0xF3ECDC), PresetColor(hex: 0xE7DAC2), PresetColor(hex: 0xF0E8D6)],
+            angle: 135),
                          frame: .roundedCard, frameAppearance: .light),
         ScreenshotPreset(id: "midnight", background: .mesh([
             PresetColor(hex: 0x0B1020), PresetColor(hex: 0x141B3A), PresetColor(hex: 0x0B1020),
@@ -233,6 +266,8 @@ struct PresetLayout: Equatable {
     /// 机身外轮廓与屏幕内容的圆角。
     let bodyCornerRadius: CGFloat
     let screenCornerRadius: CGFloat
+    /// 输出画布四角的圆角：成品不再是直角矩形，PNG 透明导出时四角透出。
+    let canvasCornerRadius: CGFloat
     /// 侧键凸出机身的深度，留白至少要盖住它。
     let buttonProtrusion: CGFloat
     /// 灵动岛（画布坐标），完全落在上边框内、不遮挡内容。
@@ -260,9 +295,11 @@ struct PresetLayout: Equatable {
             }
         }
         // 以 1000pt 宽为基准缩放相框细节，导出 2x 时线条与点仍成比例。
+        // 机身比例对齐真实 iPhone：四边等宽的窄边框（~2.6%），顶部稍高只为
+        // 容纳灵动岛；旧版 5.5%/11% 的厚边框是"塑料壳"感的来源。
         let chromeScale = min(4, max(0.5, width / 1000))
-        let bezelSide = isPhone ? (55 * chromeScale).rounded() : 0
-        let bezelTop = isPhone ? (110 * chromeScale).rounded() : 0
+        let bezelSide = isPhone ? (26 * chromeScale).rounded() : 0
+        let bezelTop = isPhone ? (68 * chromeScale).rounded() : 0
         let bezelBottom = bezelSide
         let buttonProtrusion = isPhone ? (16 * chromeScale).rounded() : 0
         let padding = max((preset.paddingRatio * width).rounded(), buttonProtrusion)
@@ -294,8 +331,8 @@ struct PresetLayout: Equatable {
         let screenRim = (3 * chromeScale).rounded()
         let screenCornerRadius = isPhone
             ? max(0, bodyCornerRadius - bezelSide - screenRim) : 0
-        let islandWidth = min((300 * chromeScale).rounded(), width * 0.9)
-        let islandHeight = min((72 * chromeScale).rounded(), bezelTop)
+        let islandWidth = min((240 * chromeScale).rounded(), width * 0.9)
+        let islandHeight = min((52 * chromeScale).rounded(), bezelTop)
         let islandRect = isPhone
             ? CGRect(x: cardRect.midX - islandWidth / 2,
                      y: cardRect.minY + ((bezelTop - islandHeight) / 2).rounded(),
@@ -307,6 +344,7 @@ struct PresetLayout: Equatable {
                             bezelTop: bezelTop, bezelSide: bezelSide, bezelBottom: bezelBottom,
                             bodyCornerRadius: bodyCornerRadius,
                             screenCornerRadius: screenCornerRadius,
+                            canvasCornerRadius: (24 * chromeScale).rounded(),
                             buttonProtrusion: buttonProtrusion, islandRect: islandRect,
                             contentSourceSize: source)
     }

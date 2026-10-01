@@ -5,6 +5,7 @@ import Foundation
 struct ScreenshotPresetTests {
     static func main() {
         testBuiltInPresets()
+        testCaptureRatios()
         testPlainLayoutIsIdentity()
         testWindowLayoutAddsChromeAndPadding()
         testPhoneShellLayout()
@@ -16,6 +17,20 @@ struct ScreenshotPresetTests {
         testPreferencesRoundTrip()
         testEncoderFormats()
         print("screenshot preset tests ok")
+    }
+
+    /// 按比例截取的内置比例：互不相同，phone 与相框用的屏幕比例一致。
+    static func testCaptureRatios() {
+        precondition(CaptureRatio.allCases.count >= 5, "expected the built-in social ratios")
+        precondition(Set(CaptureRatio.allCases.map { Int($0.ratio * 10_000) }).count
+                     == CaptureRatio.allCases.count, "capture ratios must be distinct")
+        precondition(abs(CaptureRatio.phone.ratio - PresetLayout.phoneScreenRatio) < 0.0001,
+                     "phone capture ratio must match the phone shell screen ratio")
+        precondition(abs(CaptureRatio.square.ratio - 1) < 0.0001
+                     && abs(CaptureRatio.wide.ratio - 16.0 / 9.0) < 0.0001
+                     && abs(CaptureRatio.post.ratio - 4.0 / 5.0) < 0.0001
+                     && abs(CaptureRatio.story.ratio - 9.0 / 16.0) < 0.0001,
+                     "social capture ratios are wrong")
     }
 
     static func testBuiltInPresets() {
@@ -68,17 +83,17 @@ struct ScreenshotPresetTests {
         precondition(abs(layout.contentRect.width / layout.contentRect.height
                          - PresetLayout.phoneScreenRatio) < 0.001,
                      "screen aspect must match the phone ratio")
-        // chromeScale = 554/1000 = 0.554
-        precondition(layout.bezelSide == 30 && layout.bezelTop == 61 && layout.bezelBottom == 30,
+        // chromeScale = 554/1000 = 0.554；窄边框对齐真机（26/68/26 每 1000pt 宽）。
+        precondition(layout.bezelSide == 14 && layout.bezelTop == 38 && layout.bezelBottom == 14,
                      "bezel must scale with the screen width, got \(layout.bezelSide)/\(layout.bezelTop)")
-        precondition(layout.cardRect.size == CGSize(width: 614, height: 1291),
+        precondition(layout.cardRect.size == CGSize(width: 582, height: 1252),
                      "body must be screen plus bezels, got \(layout.cardRect.size)")
-        precondition(layout.contentRect == CGRect(x: layout.cardRect.minX + 30,
-                                                  y: layout.cardRect.minY + 61,
+        precondition(layout.contentRect == CGRect(x: layout.cardRect.minX + 14,
+                                                  y: layout.cardRect.minY + 38,
                                                   width: 554, height: 1200),
                      "screen must sit inside the bezels, got \(layout.contentRect)")
         precondition(layout.padding == 28, "5% padding of 554 must be 28, got \(layout.padding)")
-        precondition(layout.canvasSize == CGSize(width: 670, height: 1347),
+        precondition(layout.canvasSize == CGSize(width: 638, height: 1308),
                      "canvas must be body + padding, got \(layout.canvasSize)")
         precondition(layout.islandRect.midX == layout.cardRect.midX
                      && layout.islandRect.maxY <= layout.contentRect.minY,

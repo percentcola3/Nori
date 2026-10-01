@@ -3,48 +3,65 @@ import AppKit
 import Carbon.HIToolbox
 
 /// 全局快捷键（Carbon RegisterEventHotKey，无需辅助功能权限）。
+/// 支持多个并行注册：每个热键一个 id，回调按 id 分发。
 final class HotKeyCenter {
     static let shared = HotKeyCenter()
-    private var hotKeyRef: EventHotKeyRef?
+    private var hotKeys: [UInt32: EventHotKeyRef] = [:]
+    private var handlers: [UInt32: () -> Void] = [:]
     private var eventHandlerRef: EventHandlerRef?
-    private var handler: (() -> Void)?
+    private var nextID: UInt32 = 0
 
+    /// 注册一个热键；`id` 仅作调用方语义标识，变更热键组合时整体重注册。
     @discardableResult
-    func register(keyCode: UInt32,
+    func register(id: String,
+                  keyCode: UInt32,
                   modifiers: UInt32,
                   handler: @escaping () -> Void) -> Bool {
-        unregister()
-        if eventHandlerRef == nil {
-            var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
-                                          eventKind: UInt32(kEventHotKeyPressed))
-            let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-            let status = InstallEventHandler(GetApplicationEventTarget(), { _, _, userData -> OSStatus in
-                guard let userData else { return noErr }
-                Unmanaged<HotKeyCenter>.fromOpaque(userData).takeUnretainedValue().fire()
-                return noErr
-            }, 1, &eventType, selfPtr, &eventHandlerRef)
-            guard status == noErr else {
-                eventHandlerRef = nil
-                return false
-            }
-        }
-        self.handler = handler
-        let hotKeyID = EventHotKeyID(signature: OSType(0x534D_484B), id: 1) // "SMHK"
+        installEventHandlerIfNeeded()
+        let slot = nextID
+        nextID += 1
+        let hotKeyID = EventHotKeyID(signature: OSType(0x534D_484B), id: slot) // "SMHK"
         var ref: EventHotKeyRef?
-        let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID, GetApplicationEventTarget(), 0, &ref)
-        hotKeyRef = status == noErr ? ref : nil
-        if hotKeyRef == nil { self.handler = nil }
-        return hotKeyRef != nil
+        let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID,
+                                         GetApplicationEventTarget(), 0, &ref)
+        guard status == noErr, let ref else { return false }
+        hotKeys[slot] = ref
+        handlers[slot] = handler
+        return true
     }
 
     func unregister() {
-        if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
-        hotKeyRef = nil
-        handler = nil
+        for ref in hotKeys.values { UnregisterEventHotKey(ref) }
+        hotKeys.removeAll()
+        handlers.removeAll()
+        nextID = 0
     }
 
-    private func fire() {
-        Task { @MainActor in handler?() }
+    private func installEventHandlerIfNeeded() {
+        guard eventHandlerRef == nil else { return }
+        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                                      eventKind: UInt32(kEventHotKeyPressed))
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, userData -> OSStatus in
+            guard let userData, let event else { return noErr }
+            var hotKeyID = EventHotKeyID()
+            let status = GetEventParameter(event,
+                                           UInt32(kEventParamDirectObject),
+                                           UInt32(typeEventHotKeyID),
+                                           nil,
+                                           MemoryLayout<EventHotKeyID>.size,
+                                           nil,
+                                           &hotKeyID)
+            guard status == noErr else { return noErr }
+            Unmanaged<HotKeyCenter>.fromOpaque(userData).takeUnretainedValue().fire(slot: hotKeyID.id)
+            return noErr
+        }, 1, &eventType, selfPtr, &eventHandlerRef)
+        if status != noErr { eventHandlerRef = nil }
+    }
+
+    private func fire(slot: UInt32) {
+        guard let handler = handlers[slot] else { return }
+        Task { @MainActor in handler() }
     }
 }
 
@@ -56,18 +73,40 @@ struct HotKeyCombo: Equatable {
 
     static let `default` = HotKeyCombo(keyCode: UInt32(kVK_ANSI_S),
                                        modifiers: UInt32(cmdKey | shiftKey))
+    /// 按比例截取：默认 ⇧⌘R。
+    static let ratioDefault = HotKeyCombo(keyCode: UInt32(kVK_ANSI_R),
+                                          modifiers: UInt32(cmdKey | shiftKey))
 
     static func load(defaults: UserDefaults = .standard) -> HotKeyCombo {
-        guard let code = defaults.object(forKey: "SMShotHotKeyCode") as? Int,
-              let mods = defaults.object(forKey: "SMShotHotKeyMods") as? Int else {
-            return .default
+        load(defaults: defaults, codeKey: "SMShotHotKeyCode",
+             modsKey: "SMShotHotKeyMods", fallback: .default)
+    }
+
+    static func loadRatio(defaults: UserDefaults = .standard) -> HotKeyCombo {
+        load(defaults: defaults, codeKey: "SMShotRatioHotKeyCode",
+             modsKey: "SMShotRatioHotKeyMods", fallback: .ratioDefault)
+    }
+
+    private static func load(defaults: UserDefaults, codeKey: String,
+                             modsKey: String, fallback: HotKeyCombo) -> HotKeyCombo {
+        guard let code = defaults.object(forKey: codeKey) as? Int,
+              let mods = defaults.object(forKey: modsKey) as? Int else {
+            return fallback
         }
         return HotKeyCombo(keyCode: UInt32(code), modifiers: UInt32(mods))
     }
 
     func store(defaults: UserDefaults = .standard) {
-        defaults.set(Int(keyCode), forKey: "SMShotHotKeyCode")
-        defaults.set(Int(modifiers), forKey: "SMShotHotKeyMods")
+        store(defaults: defaults, codeKey: "SMShotHotKeyCode", modsKey: "SMShotHotKeyMods")
+    }
+
+    func storeRatio(defaults: UserDefaults = .standard) {
+        store(defaults: defaults, codeKey: "SMShotRatioHotKeyCode", modsKey: "SMShotRatioHotKeyMods")
+    }
+
+    private func store(defaults: UserDefaults, codeKey: String, modsKey: String) {
+        defaults.set(Int(keyCode), forKey: codeKey)
+        defaults.set(Int(modifiers), forKey: modsKey)
     }
 
     /// 至少包含 ⌘/⌥/⌃ 之一：仅 ⇧ 或无修饰键的全局热键会在日常打字里误触发。
@@ -190,6 +229,41 @@ enum ScreenShotService {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
         process.arguments = ["-i", "-x", url.path]
+        process.terminationHandler = { proc in
+            let image = proc.terminationStatus == 0
+                ? (try? Data(contentsOf: url)).flatMap(NSImage.init(data:))
+                : nil
+            try? fileManager.removeItem(at: directory)
+            DispatchQueue.main.async {
+                completion(image)
+            }
+        }
+        do {
+            try process.run()
+        } catch {
+            try? fileManager.removeItem(at: directory)
+            DispatchQueue.main.async { completion(nil) }
+        }
+    }
+
+    /// 定比例区域截取：`rect` 为全局屏幕坐标（点）。需要屏幕录制权限。
+    static func captureRegion(_ rect: CGRect, completion: @escaping (NSImage?) -> Void) {
+        let fileManager = FileManager.default
+        let directory = fileManager.temporaryDirectory
+            .appendingPathComponent("com.nori.screenshot.\(UUID().uuidString)", isDirectory: true)
+        do {
+            try fileManager.createDirectory(at: directory,
+                                            withIntermediateDirectories: false,
+                                            attributes: [.posixPermissions: 0o700])
+        } catch {
+            completion(nil)
+            return
+        }
+        let url = directory.appendingPathComponent("capture.png")
+        let region = "\(Int(rect.origin.x)),\(Int(rect.origin.y)),\(Int(rect.width)),\(Int(rect.height))"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-R", region, "-x", url.path]
         process.terminationHandler = { proc in
             let image = proc.terminationStatus == 0
                 ? (try? Data(contentsOf: url)).flatMap(NSImage.init(data:))

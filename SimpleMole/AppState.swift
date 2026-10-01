@@ -697,7 +697,7 @@ final class AppState: ObservableObject {
         UserDefaults.standard.set(Array(sanitizedHiddenPages), forKey: "SMHiddenPages")
         clipboardHistoryEnabled = UserDefaults.standard.object(forKey: "SMClipboardHistory") as? Bool ?? false
         screenshotHotKeyEnabled = UserDefaults.standard.object(forKey: "SMShotHotKey") as? Bool ?? true
-        ratioCaptureHotKeyEnabled = UserDefaults.standard.object(forKey: "SMShotRatioHotKey") as? Bool ?? false
+        ratioCaptureHotKeyEnabled = UserDefaults.standard.object(forKey: "SMShotRatioHotKey") as? Bool ?? true
         islandEnabled = true
         UserDefaults.standard.set(true, forKey: "SMIslandEnabled")
         menuBarIconVisible = UserDefaults.standard.object(forKey: "SMMenuBarIconVisible") as? Bool ?? true

@@ -146,12 +146,14 @@ enum AgentMCPConfigEditor {
 
     // MARK: - 备份
 
+    /// 原子覆写式备份：重复清理时刷新为最新原貌，且不触碰删除漏斗。
     private static func backup(_ path: String) -> Bool {
-        let destination = path + ".nori-backup"
-        let fm = FileManager.default
-        if fm.fileExists(atPath: destination) {
-            try? fm.removeItem(atPath: destination)
+        guard let data = FileManager.default.contents(atPath: path) else { return false }
+        do {
+            try data.write(to: URL(fileURLWithPath: path + ".nori-backup"), options: .atomic)
+            return true
+        } catch {
+            return false
         }
-        return (try? fm.copyItem(atPath: path, toPath: destination)) != nil
     }
 }

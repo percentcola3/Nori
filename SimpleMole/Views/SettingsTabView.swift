@@ -286,14 +286,9 @@ struct SettingsTabView: View {
 
     // MARK: 截图
 
-    @State private var hotKeyRecording = false
-    @State private var hotKeyMonitor: Any?
-    @State private var hotKeyNeedsModifierHint = false
-
     @ViewBuilder
     private var screenshotRow: some View {
-        SettingsRow(divider: state.screenshotHotKeyRegistrationFailed
-                    || state.screenshotHotKeyEnabled) {
+        SettingsRow(divider: true) {
             Toggle(l10n.t("shot.hotkey"), isOn: $state.screenshotHotKeyEnabled)
                 .toggleStyle(MoleSwitchToggleStyle())
                 .controlSize(.small)
@@ -302,78 +297,36 @@ struct SettingsTabView: View {
         }
         if state.screenshotHotKeyEnabled {
             SettingsRow(divider: state.screenshotHotKeyRegistrationFailed, vertical: 6) {
-                hotKeyRecorder
+                HotKeyRecorderRow(combo: $state.screenshotHotKey, defaultCombo: .default)
             }
         }
         if state.screenshotHotKeyRegistrationFailed {
+            SettingsRow(divider: true, vertical: 6) {
+                Label(l10n.t("settings.screenshot.conflict"), systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Color.warning)
+            }
+        }
+        SettingsRow(divider: state.ratioCaptureHotKeyEnabled
+                    || state.ratioCaptureHotKeyRegistrationFailed) {
+            Toggle(l10n.t("settings.ratiohotkey"), isOn: $state.ratioCaptureHotKeyEnabled)
+                .toggleStyle(MoleSwitchToggleStyle())
+                .controlSize(.small)
+                .tint(Color.moleAccentText)
+                .font(.system(size: 12))
+        }
+        if state.ratioCaptureHotKeyEnabled {
+            SettingsRow(divider: state.ratioCaptureHotKeyRegistrationFailed, vertical: 6) {
+                HotKeyRecorderRow(combo: $state.ratioCaptureHotKey, defaultCombo: .ratioDefault)
+            }
+        }
+        if state.ratioCaptureHotKeyRegistrationFailed {
             SettingsRow(vertical: 6) {
                 Label(l10n.t("settings.screenshot.conflict"), systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 10.5))
                     .foregroundStyle(Color.warning)
             }
         }
-    }
-
-    /// 快捷键录制：点按钮进入监听，按下新组合立即生效；Esc 取消。
-    /// 仅 ⇧ 或无修饰键的组合会被拒绝（全局热键会在打字时误触发）。
-    private var hotKeyRecorder: some View {
-        HStack(spacing: 8) {
-            Text(l10n.t("settings.screenshot.hotkey"))
-                .font(.system(size: 12))
-            if hotKeyNeedsModifierHint && hotKeyRecording {
-                Text(l10n.t("settings.screenshot.hotkey.needModifier"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.warning)
-            }
-            Spacer()
-            if state.screenshotHotKey != HotKeyCombo.default {
-                Button(l10n.t("settings.screenshot.hotkey.reset")) {
-                    state.screenshotHotKey = .default
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(hotKeyRecording || state.isBusy)
-            }
-            Button {
-                hotKeyRecording ? stopHotKeyRecording() : startHotKeyRecording()
-            } label: {
-                Text(hotKeyRecording
-                     ? l10n.t("settings.screenshot.hotkey.recording")
-                     : state.screenshotHotKey.displayLabel)
-                    .frame(minWidth: 86)
-            }
-            .buttonStyle(SecondaryButtonStyle(
-                tint: hotKeyRecording ? Color.moleAccentText : nil))
-            .disabled(state.isBusy)
-        }
-        .onDisappear { stopHotKeyRecording() }
-    }
-
-    private func startHotKeyRecording() {
-        guard hotKeyMonitor == nil else { return }
-        hotKeyRecording = true
-        hotKeyNeedsModifierHint = false
-        hotKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if event.keyCode == UInt16(kVK_Escape) {
-                stopHotKeyRecording()
-                return nil
-            }
-            let combo = HotKeyCombo(keyCode: UInt32(event.keyCode),
-                                    modifierFlags: event.modifierFlags)
-            guard combo.hasStrongModifier else {
-                hotKeyNeedsModifierHint = true
-                return nil
-            }
-            state.screenshotHotKey = combo
-            stopHotKeyRecording()
-            return nil
-        }
-    }
-
-    private func stopHotKeyRecording() {
-        if let hotKeyMonitor { NSEvent.removeMonitor(hotKeyMonitor) }
-        hotKeyMonitor = nil
-        hotKeyRecording = false
-        hotKeyNeedsModifierHint = false
     }
 
     // MARK: 目录清理与定时清理
@@ -507,5 +460,75 @@ struct SettingsTabView: View {
     private var menuBarIconBinding: Binding<Bool> {
         Binding(get: { state.menuBarIconVisible },
                 set: { state.setMenuBarIconVisible($0) })
+    }
+}
+
+/// 快捷键录制行：点按钮进入监听，按下新组合立即生效；Esc 取消。
+/// 仅 ⇧ 或无修饰键的组合会被拒绝（全局热键会在打字时误触发）。
+private struct HotKeyRecorderRow: View {
+    @Binding var combo: HotKeyCombo
+    let defaultCombo: HotKeyCombo
+    @State private var recording = false
+    @State private var monitor: Any?
+    @State private var needsModifierHint = false
+    @ObservedObject private var l10n = L10n.shared
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(l10n.t("settings.screenshot.hotkey"))
+                .font(.system(size: 12))
+            if needsModifierHint && recording {
+                Text(l10n.t("settings.screenshot.hotkey.needModifier"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(Color.warning)
+            }
+            Spacer()
+            if combo != defaultCombo {
+                Button(l10n.t("settings.screenshot.hotkey.reset")) {
+                    combo = defaultCombo
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(recording)
+            }
+            Button {
+                recording ? stopRecording() : startRecording()
+            } label: {
+                Text(recording
+                     ? l10n.t("settings.screenshot.hotkey.recording")
+                     : combo.displayLabel)
+                    .frame(minWidth: 86)
+            }
+            .buttonStyle(SecondaryButtonStyle(
+                tint: recording ? Color.moleAccentText : nil))
+        }
+        .onDisappear { stopRecording() }
+    }
+
+    private func startRecording() {
+        guard monitor == nil else { return }
+        recording = true
+        needsModifierHint = false
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == UInt16(kVK_Escape) {
+                stopRecording()
+                return nil
+            }
+            let recorded = HotKeyCombo(keyCode: UInt32(event.keyCode),
+                                       modifierFlags: event.modifierFlags)
+            guard recorded.hasStrongModifier else {
+                needsModifierHint = true
+                return nil
+            }
+            combo = recorded
+            stopRecording()
+            return nil
+        }
+    }
+
+    private func stopRecording() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        recording = false
+        needsModifierHint = false
     }
 }

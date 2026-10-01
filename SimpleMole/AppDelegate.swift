@@ -117,6 +117,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             .store(in: &observables)
+        NotificationCenter.default.publisher(for: .smTakeRatioScreenshot)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self,
+                      !self.isCapturingScreenshot,
+                      self.editorWindow?.isVisible != true else { return }
+                self.appState.permissionCenter.refresh()
+                guard self.appState.permissionCenter.screenRecordingGranted else {
+                    self.showMainWindow()
+                    self.appState.presentPermissionCenter()
+                    return
+                }
+                self.isCapturingScreenshot = true
+                RatioCaptureController.shared.present { [weak self] image in
+                    self?.isCapturingScreenshot = false
+                    guard let image else { return }
+                    self?.openScreenshotEditor(image: image)
+                }
+            }
+            .store(in: &observables)
     }
 
     private func openScreenshotEditor(image: NSImage) {
