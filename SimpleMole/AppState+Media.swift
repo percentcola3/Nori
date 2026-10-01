@@ -35,6 +35,13 @@ enum AnalyzeMode: String, CaseIterable, Identifiable {
         case .duplicates: return "analyze.section.duplicates"
         }
     }
+
+    /// 主按钮文案。下拉只改待执行的类型，按下主按钮才开始这一类扫描。
+    var actionKey: String { "analyze.scan.action.\(rawValue)" }
+    var detailKey: String { "analyze.scan.detail.\(rawValue)" }
+
+    /// 面板顺序：大文件、重复文件、视频、图片。
+    static let menuOrder: [AnalyzeMode] = [.largeFiles, .duplicates, .videos, .images]
 }
 
 struct SlimProgress: Equatable {

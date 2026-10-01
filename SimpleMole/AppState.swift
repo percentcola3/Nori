@@ -23,6 +23,7 @@ final class AppState: ObservableObject {
 
     @Published var metrics = MetricsSnapshot()
     @Published var networkHistory: [Double] = []
+    @Published var networkUploadHistory: [Double] = []
     /// 灵动岛展示的内存占用最高应用组（按内存排序前 5）。
     @Published var topMemoryApps: [ProcessRow] = []
     @Published var topCPUApps: [ProcessRow] = []
@@ -948,7 +949,11 @@ final class AppState: ObservableObject {
     func refreshMetrics() {
         metrics = SystemMetrics.sample()
         networkHistory.append(metrics.networkRxMBps)
+        networkUploadHistory.append(metrics.networkTxMBps)
         if networkHistory.count > 60 { networkHistory.removeFirst(networkHistory.count - 60) }
+        if networkUploadHistory.count > 60 {
+            networkUploadHistory.removeFirst(networkUploadHistory.count - 60)
+        }
     }
 
     // MARK: - 日志

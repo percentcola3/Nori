@@ -330,6 +330,20 @@ test_island_contract() {
     if /usr/bin/grep -Fq '"island.edge' "$l10n"; then
         fail "retired island edge dock keys are still localized"
     fi
+    /usr/bin/grep -Fq 'networkUploadHistory' "$app_state" || \
+        fail "upload throughput history is not sampled"
+    /usr/bin/grep -Fq 'private var networkMeter' "$island" || \
+        fail "network is not shown as a throughput meter"
+    /usr/bin/grep -Fq 'struct IslandSparkline' "$island" || \
+        fail "network throughput has no trend"
+    /usr/bin/grep -Fq 'l10n.t("metric.load")' "$island" || \
+        fail "island is missing the load gauge"
+    /usr/bin/grep -Fq 'l10n.t("metric.uptime")' "$island" || \
+        fail "island is missing the uptime gauge"
+    if awk '/private var networkMeter/,/private func rateLine/' "$island" \
+        | /usr/bin/grep -Fq 'Circle('; then
+        fail "network throughput is still drawn as a ring"
+    fi
 
     pass "floating island notch contract"
 }
@@ -369,6 +383,20 @@ test_productivity_feature_contract() {
         fail "retired quick panel view is still present"
     /usr/bin/grep -Fq 'static func memoryShort(_ bytes: UInt64)' "$models" || \
         fail "memory has no hardware-capacity formatter"
+    /usr/bin/grep -Fq 'static func megabytesPerSecond' "$models" || \
+        fail "network throughput has no rate formatter"
+    /usr/bin/grep -Fq 'struct AnalyzeScanSplitButton' "$analyze_view" || \
+        fail "disk analysis scan control is not a split button"
+    /usr/bin/grep -Fq 'ForEach(AnalyzeMode.menuOrder)' "$analyze_view" || \
+        fail "scan menu does not list large files, duplicates, videos and images"
+    if awk '/private func chooseAnalyzeMode/,/^    }/' "$analyze_view" \
+        | /usr/bin/grep -Eq 'scanDiskOverview|scanDuplicateFiles'; then
+        fail "choosing a scan option starts the scan instead of only changing the pending action"
+    fi
+    /usr/bin/grep -Fq 'state.scanDiskOverview(force: true)' "$analyze_view" || \
+        fail "the scan button does not start a disk analysis"
+    /usr/bin/grep -Fq 'state.scanDuplicateFiles()' "$analyze_view" || \
+        fail "the scan button does not start a duplicate comparison"
     /usr/bin/grep -Fq 'internalPages: UInt64(info.internal_page_count)' "$system_metrics" || \
         fail "memory usage still counts inactive file cache as occupied memory"
     /usr/bin/grep -Fq 'min(rawBytes, totalBytes)' "$system_metrics" || \

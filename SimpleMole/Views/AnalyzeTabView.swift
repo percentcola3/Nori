@@ -1,9 +1,10 @@
+import AppKit
 import QuickLook
 import SwiftUI
 
-/// 全盘扫描结果按 大文件 / 图片 / 视频 / 重复文件 分段聚焦展示：分段按钮组
-/// 既是类型切换也是分析入口。不提供扫描范围选择与目录层级浏览；
-/// 系统位置在扫描层就被排除，不再出现。
+/// 全盘扫描结果按 大文件 / 重复文件 / 视频 / 图片 聚焦展示。
+/// 进入页面不主动扫描：空态是占位插画和分体扫描按钮。下拉只改待执行的类型，
+/// 主按钮才开始对应扫描。不提供扫描范围选择与目录层级浏览。
 struct AnalyzeTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
@@ -14,6 +15,7 @@ struct AnalyzeTabView: View {
     @State private var showTrashConfirmation = false
     /// 从磁盘分析行发起的“按目录定时清理”意图。
     @State private var autoCleanIntent: AutoCleanupIntent?
+    @State private var scanMenuOpen = false
 
     private var scanning: Bool {
         state.isAnalyzing || state.isScanningDuplicates
@@ -55,7 +57,12 @@ struct AnalyzeTabView: View {
                 // 面板里选择 大文件/图片/视频/重复文件 后按类型触发分析。
                 VStack(spacing: 18) {
                     NoriStatusAnimation(mood: .idle, size: 120, assetName: "nori-coffee")
-                    scanMenuButton(title: l10n.t("analyze.scan.simple"))
+                    scanSplitButton
+                    Text(l10n.t(state.analyzeMode.detailKey))
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 320)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(reduceMotion ? .opacity : .moleStateSwap)
@@ -111,6 +118,9 @@ struct AnalyzeTabView: View {
         // 扫描中 → 结果/空态 的整块互换走弹簧过渡。
         .animation(reduceMotion ? nil : MoleMotion.panel, value: state.isAnalyzing)
         .animation(reduceMotion ? nil : MoleMotion.panel, value: hasResults)
+        .overlayPreferenceValue(ScanButtonAnchorKey.self) { anchor in
+            scanMenuOverlay(anchor)
+        }
     }
 
     private func toggleExpanded(_ section: AnalyzeSection) {
@@ -172,7 +182,7 @@ struct AnalyzeTabView: View {
             Spacer(minLength: 8)
             // 已有结果后工具栏提供同款下拉扫描按钮；未扫描的入口在空态。
             if hasResults && !scanning {
-                scanMenuButton(title: l10n.t("analyze.scan"))
+                scanSplitButton
             }
         }
         .padding(.horizontal, 16)
@@ -180,58 +190,69 @@ struct AnalyzeTabView: View {
         .padding(.bottom, 8)
     }
 
-    /// 带下拉面板的扫描按钮（GitHub 合并按钮样式）：主按钮视觉 + 右侧
-    /// 下拉箭头，面板里选择分析类型并触发对应效果。
-    private func scanMenuButton(title: String) -> some View {
-        Menu {
-            ForEach(AnalyzeMode.allCases) { mode in
-                Button {
-                    selectMode(mode)
-                } label: {
-                    if state.analyzeMode == mode {
-                        Label(l10n.t(mode.titleKey), systemImage: "checkmark")
-                    } else {
-                        Text(l10n.t(mode.titleKey))
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 7) {
-                Text(title)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(Color.moleOnAccent)
-            .padding(.horizontal, 14)
-            .frame(height: 30)
-            .background(
-                Capsule().fill(Color.moleAccent.opacity(0.72))
-                    .shadow(color: Color.moleAccent.opacity(0.18), radius: 5, y: 1))
-            .overlay(Capsule().strokeBorder(Color.moleAccentText.opacity(0.22), lineWidth: 1))
-            .contentShape(Capsule())
+    /// 主操作 + 下拉箭头。箭头只改待扫描类型，主区域才开始这一类扫描。
+    private var scanSplitButton: some View {
+        AnalyzeScanSplitButton(
+            title: l10n.t(state.analyzeMode.actionKey),
+            menuOpen: scanMenuOpen,
+            enabled: !state.isBusy,
+            accessibilityMenu: l10n.t("analyze.scan.menu")
+        ) {
+            runSelectedScan()
+        } onToggleMenu: {
+            scanMenuOpen.toggle()
         }
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .disabled(state.isBusy)
+        .anchorPreference(key: ScanButtonAnchorKey.self, value: .bounds) { $0 }
     }
 
-    /// 面板选项触发各自的分析：重复文件直接做内容级比对（独立于磁盘
-    /// 走查）；大文件/图片/视频共享走查结果，没有时才发起扫描。
-    private func selectMode(_ mode: AnalyzeMode) {
+    @ViewBuilder
+    private func scanMenuOverlay(_ anchor: Anchor<CGRect>?) -> some View {
+        if scanMenuOpen, let anchor {
+            GeometryReader { proxy in
+                let frame = proxy[anchor]
+                let width: CGFloat = 336
+                let menuHeight: CGFloat = 292
+                let x = min(max(12, frame.maxX - width), max(12, proxy.size.width - width - 12))
+                let spaceBelow = proxy.size.height - frame.maxY
+                let y = spaceBelow >= menuHeight + 12
+                    ? frame.maxY + 8
+                    : max(8, frame.minY - 8 - menuHeight)
+                ZStack(alignment: .topLeading) {
+                    Color.black.opacity(0.001)
+                        .contentShape(Rectangle())
+                        .onTapGesture { scanMenuOpen = false }
+                    AnalyzeScanMenu(
+                        selection: state.analyzeMode,
+                        title: { l10n.t($0.titleKey) },
+                        detail: { l10n.t($0.detailKey) }
+                    ) { mode in
+                        chooseAnalyzeMode(mode)
+                    }
+                    .frame(width: width, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .offset(x: x, y: y)
+                }
+            }
+        }
+    }
+
+    /// 下拉只切换待执行的扫描，不开始遍历。
+    private func chooseAnalyzeMode(_ mode: AnalyzeMode) {
         state.analyzeMode = mode
-        switch mode {
+        scanMenuOpen = false
+    }
+
+    /// 主按钮按当前类型开扫。重复文件做内容级比对；大文件、图片、视频
+    /// 共享一次磁盘走查，结果按所选分类展示。
+    private func runSelectedScan() {
+        scanMenuOpen = false
+        switch state.analyzeMode {
         case .duplicates:
-            if !state.isBusy, !state.isScanningDuplicates,
-               !state.duplicateScanFinished {
-                state.scanDuplicateFiles()
-            }
+            guard !state.isBusy, !state.isScanningDuplicates else { return }
+            state.scanDuplicateFiles()
         case .largeFiles, .images, .videos:
-            let hasWalkResults = !state.analyzeLargeFiles.isEmpty
-                || !state.analyzeMedia.isEmpty
-            if !hasWalkResults, !scanning {
-                state.scanDiskOverview(force: true)
-            }
+            guard !scanning else { return }
+            state.scanDiskOverview(force: true)
         }
     }
 
@@ -309,5 +330,118 @@ struct AnalyzeTabView: View {
         let explanation = l10n.t(state.duplicateMode == .exact
                                  ? "duplicates.trash.message" : "duplicates.trash.similarMessage")
         return selection + "\n\n" + explanation
+    }
+}
+
+private struct ScanButtonAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
+}
+
+/// 主操作 + 下拉箭头的胶囊按钮。箭头只打开选项，主区域才开始扫描。
+private struct AnalyzeScanSplitButton: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let title: String
+    let menuOpen: Bool
+    let enabled: Bool
+    let accessibilityMenu: String
+    let onPrimary: () -> Void
+    let onToggleMenu: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: onPrimary) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                    .padding(.horizontal, 16)
+                    .frame(minWidth: 132, minHeight: 34)
+            }
+            .buttonStyle(SplitSegmentStyle())
+            .disabled(!enabled)
+
+            Rectangle()
+                .fill(Color.moleOnAccent.opacity(0.28))
+                .frame(width: 1, height: 18)
+
+            Button(action: onToggleMenu) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 36, height: 34)
+                    .rotationEffect(.degrees(menuOpen ? 180 : 0))
+            }
+            .buttonStyle(SplitSegmentStyle())
+            .disabled(!enabled)
+            .accessibilityLabel(accessibilityMenu)
+        }
+        .foregroundStyle(Color.moleOnAccent)
+        .background(Capsule().fill(Color.moleAccent))
+        .clipShape(Capsule())
+        .opacity(enabled ? 1 : 0.45)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: menuOpen)
+    }
+}
+
+private struct SplitSegmentStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(Color.white.opacity(configuration.isPressed ? 0.16 : 0))
+            .contentShape(Rectangle())
+    }
+}
+
+/// 扫描类型面板：标题加说明。点选只改变主按钮将要执行的扫描。
+private struct AnalyzeScanMenu: View {
+    let selection: AnalyzeMode
+    let title: (AnalyzeMode) -> String
+    let detail: (AnalyzeMode) -> String
+    let onSelect: (AnalyzeMode) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(AnalyzeMode.menuOrder) { mode in
+                Button { onSelect(mode) } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(title(mode))
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.primary)
+                        Text(detail(mode))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(mode == selection
+                                  ? Color.moleAccent.opacity(0.14)
+                                  : Color.clear)
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(menuFill)
+                .shadow(color: .black.opacity(0.18), radius: 24, y: 10)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.hairline, lineWidth: 1)
+        )
+    }
+
+    private var menuFill: Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? NSColor(srgbRed: 0.16, green: 0.18, blue: 0.22, alpha: 1)
+                : NSColor.white
+        })
     }
 }

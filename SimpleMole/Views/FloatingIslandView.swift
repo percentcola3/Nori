@@ -195,6 +195,7 @@ struct FloatingIslandView: View {
     private var expandedPanel: some View {
         VStack(spacing: 0) {
             headerRow
+            observationRow
             if selectedResource != nil {
                 ZStack(alignment: .top) {
                     ForEach([IslandResource.cpu, .memory], id: \.self) { resource in
@@ -295,7 +296,9 @@ struct FloatingIslandView: View {
 
     @ViewBuilder
     private func metric(_ item: AppState.IslandItem) -> some View {
-        if let resource = item.resource {
+        if item == .network {
+            networkMeter
+        } else if let resource = item.resource {
             Button { beginCleanup(resource) } label: { ring(item) }
                 .buttonStyle(IslandResourceButtonStyle())
                 .disabled(state.islandCleaningResource != nil)
@@ -384,8 +387,128 @@ struct FloatingIslandView: View {
         case .cpu: return state.metrics.cpuPercent / 100
         case .memory: return state.metrics.memoryPercent / 100
         case .disk: return state.metrics.diskUsedPercent / 100
-        case .network: return state.metrics.networkRxMBps / max(0.1, state.networkHistory.max() ?? 0.1)
+        case .network: return 0
         }
+    }
+
+    /// 吞吐没有 0–100% 的上限，不用占用环表示。下行绿色、上行浅色。
+    private var networkMeter: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(l10n.t("island.item.network"))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            rateLine(symbol: "arrow.down",
+                     text: ByteFormat.megabytesPerSecond(state.metrics.networkRxMBps),
+                     tint: .green)
+            rateLine(symbol: "arrow.up",
+                     text: ByteFormat.megabytesPerSecond(state.metrics.networkTxMBps),
+                     tint: .white.opacity(0.85))
+            IslandSparkline(primary: state.networkHistory, secondary: state.networkUploadHistory)
+                .frame(height: 14)
+                .padding(.top, 1)
+        }
+        .frame(minWidth: 78, maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(l10n.t("island.item.network"))
+        .accessibilityValue(networkValue)
+        .onHover { if $0 { selectResource(nil) } }
+    }
+
+    private func rateLine(symbol: String, text: String, tint: Color) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: symbol)
+                .font(.system(size: 8, weight: .bold))
+            Text(text)
+                .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .foregroundStyle(tint)
+    }
+
+    private var networkValue: String {
+        "↓" + ByteFormat.megabytesPerSecond(state.metrics.networkRxMBps)
+            + " ↑" + ByteFormat.megabytesPerSecond(state.metrics.networkTxMBps)
+    }
+
+    /// 负载、开机时长、电池和交换空间。百分比环只留给有上限的 CPU、内存和磁盘。
+    private var observationRow: some View {
+        HStack(spacing: 8) {
+            observation(l10n.t("metric.load"), value: loadValue, fraction: loadFraction, warns: loadFraction >= 0.75)
+            observation(l10n.t("metric.uptime"), value: uptimeValue, fraction: nil, warns: false)
+            if state.metrics.batteryPresent {
+                observation(l10n.t("metric.battery"),
+                            value: batteryValue,
+                            fraction: state.metrics.batteryPercent / 100,
+                            warns: state.metrics.batteryPercent < 20 && !state.metrics.batteryCharging)
+            }
+            if state.metrics.swapTotalBytes > 0 {
+                let fraction = Double(state.metrics.swapUsedBytes) / Double(state.metrics.swapTotalBytes)
+                observation(l10n.t("metric.swap"),
+                            value: ByteFormat.memoryShort(state.metrics.swapUsedBytes),
+                            fraction: fraction,
+                            warns: fraction >= 0.8)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 10)
+    }
+
+    private func observation(_ title: String, value: String, fraction: Double?, warns: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                .foregroundStyle(warns ? Color.orange : Color.white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            if let fraction {
+                Capsule()
+                    .fill(Color.white.opacity(0.16))
+                    .frame(height: 3)
+                    .overlay(alignment: .leading) {
+                        GeometryReader { geo in
+                            Capsule()
+                                .fill(warns ? Color.orange : Color.green)
+                                .frame(width: max(2, geo.size.width * min(1, max(0, fraction))))
+                        }
+                    }
+            } else {
+                Color.clear.frame(height: 3)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var loadValue: String {
+        let cores = max(state.metrics.logicalCPUCount, 1)
+        return String(format: "%.2f", state.metrics.loadOneMinute) + " / " + l10n.tf("metric.load.cores", cores)
+    }
+
+    private var loadFraction: Double {
+        let cores = Double(max(state.metrics.logicalCPUCount, 1))
+        return state.metrics.loadOneMinute / cores
+    }
+
+    private var uptimeValue: String {
+        let seconds = state.metrics.uptimeSeconds
+        let days = Int(seconds / 86_400)
+        let hours = Int((seconds % 86_400) / 3_600)
+        let minutes = Int((seconds % 3_600) / 60)
+        if days > 0 { return l10n.tf("metric.uptime.days", days, hours) }
+        if hours > 0 { return l10n.tf("metric.uptime.hours", hours, minutes) }
+        return l10n.tf("metric.uptime.minutes", minutes)
+    }
+
+    private var batteryValue: String {
+        let percent = String(format: "%.0f%%", state.metrics.batteryPercent)
+        let stateKey = state.metrics.batteryCharging ? "metric.battery.charging" : "metric.battery.onbattery"
+        return percent + " · " + l10n.t(stateKey)
     }
 
     private func healthColor(_ item: AppState.IslandItem) -> Color {
@@ -558,6 +681,34 @@ struct FloatingIslandView: View {
         }
         if value { state.refreshMetrics(); state.refreshIslandProcesses(force: true) }
         onExpandedChange(value)
+    }
+}
+
+private struct IslandSparkline: View {
+    var primary: [Double]
+    var secondary: [Double]
+
+    var body: some View {
+        Canvas { context, size in
+            let peak = max(primary.max() ?? 0, secondary.max() ?? 0, 0.05)
+            Self.stroke(&context, values: secondary, in: size, peak: peak, color: .white.opacity(0.45))
+            Self.stroke(&context, values: primary, in: size, peak: peak, color: .green.opacity(0.90))
+        }
+        .accessibilityHidden(true)
+    }
+
+    private static func stroke(_ context: inout GraphicsContext, values: [Double], in size: CGSize,
+                        peak: Double, color: Color) {
+        guard values.count >= 2, size.width > 0, size.height > 0 else { return }
+        var path = Path()
+        for (index, value) in values.enumerated() {
+            let x = size.width * CGFloat(index) / CGFloat(values.count - 1)
+            let y = size.height * (1 - CGFloat(min(max(value, 0) / peak, 1)))
+            if index == 0 { path.move(to: CGPoint(x: x, y: y)) }
+            else { path.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        context.stroke(path, with: .color(color),
+                       style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round))
     }
 }
 
