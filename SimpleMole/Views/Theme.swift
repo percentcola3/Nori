@@ -8,8 +8,8 @@ import SwiftUI
 // 规则：
 // - 玻璃只有一层（GlassSurface），任何不透明色块都不要叠在玻璃上，否则模糊
 //   与折射会被盖住，看起来就像"液态玻璃没生效"。
-// - 卡片、行、按钮的底色用 surface1/2/3，描边用 hairline；它们在浅色与深色
-//   外观下分别取值，不要再写 Color.white.opacity(x)。
+// - 卡片、行、按钮的底色用 surface1/2/3；不叠组件外围描边。hairline 仅用于
+//   内容分隔线。它们随外观取值，不要再写 Color.white.opacity(x)。
 // - 强调色只用于选中态、主按钮与关键数值；状态色用 success/warning/danger。
 
 /// 品牌配色的原始值：token 与对比度测试共用同一份数据。
@@ -89,7 +89,7 @@ extension Color {
     static let trackOff = adaptive(light: NSColor.black.withAlphaComponent(0.12),
                                    dark: NSColor.white.withAlphaComponent(0.12))
     static let thumbOff = adaptive(light: .white, dark: NSColor.white.withAlphaComponent(0.82))
-    /// 描边 / 分隔线：略清晰一点，玻璃上的卡片轮廓更有"印刷感"。
+    /// 内容分隔线；玻璃组件的轮廓由材质本身呈现，不再叠外围描边。
     static let hairline = adaptive(light: NSColor.black.withAlphaComponent(0.10),
                                    dark: NSColor.white.withAlphaComponent(0.13))
 
@@ -131,8 +131,18 @@ struct GlassSurface: View {
     var cornerRadius: CGFloat = 0
     /// 主窗口与弹出面板都用系统玻璃；仅在需要更轻的材质时关掉。
     var usesSystemGlass = true
+    /// 旧系统选中态仅调整同一层材质的厚度，不额外叠实色高亮。
+    var highlighted = false
 
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.displayScale) private var displayScale
+
+    private var edgeInset: CGFloat {
+        if #available(macOS 26.0, *), usesSystemGlass, !reduceTransparency {
+            return max(1, 1 / max(displayScale, 1))
+        }
+        return 0
+    }
 
     var body: some View {
         ZStack {
@@ -140,19 +150,17 @@ struct GlassSurface: View {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(Color.glassOpaque)
             } else if usesSystemGlass {
-                GlassBackground(cornerRadius: cornerRadius, tintColor: .forgeGlassTint)
+                // Put the native rim outside the visible surface instead of leaving
+                // a transparent gap around the window or adding a covering stroke.
+                GlassBackground(cornerRadius: cornerRadius == 0 ? 0 : cornerRadius + edgeInset,
+                                tintColor: .forgeGlassTint)
+                    .padding(-edgeInset)
             } else {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(highlighted ? AnyShapeStyle(.thinMaterial) : AnyShapeStyle(.ultraThinMaterial))
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay {
-            if cornerRadius > 0 {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(Color.hairline, lineWidth: 1)
-            }
-        }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
@@ -181,8 +189,6 @@ struct GlassBackground: NSViewRepresentable {
         visual.wantsLayer = true
         visual.layer?.cornerRadius = cornerRadius
         visual.layer?.masksToBounds = true
-        visual.layer?.borderWidth = 1
-        visual.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.5).cgColor
         return visual
     }
 
@@ -191,5 +197,22 @@ struct GlassBackground: NSViewRepresentable {
             glass.cornerRadius = cornerRadius
             glass.tintColor = tintColor
         }
+    }
+}
+
+/// 原生玻璃的轮廓占用约一个逻辑点，Retina 上只裁一个物理像素仍会留暗边。
+/// 只裁材质边缘，保留内容布局、命中区域与原生玻璃切换。
+private struct GlassEdgeClip<GlassShape: InsettableShape>: ViewModifier {
+    let shape: GlassShape
+    @Environment(\.displayScale) private var displayScale
+
+    func body(content: Content) -> some View {
+        content.clipShape(shape.inset(by: max(1, 1 / max(displayScale, 1))))
+    }
+}
+
+extension View {
+    func clipGlassEdge<GlassShape: InsettableShape>(in shape: GlassShape) -> some View {
+        modifier(GlassEdgeClip(shape: shape))
     }
 }

@@ -6,7 +6,6 @@ private final class DeveloperCLIModel: ObservableObject {
     @Published private(set) var snapshot: DeveloperCLISnapshot?
     @Published private(set) var isChecking = false
     @Published private(set) var completedRefreshToken: Int?
-    @Published var actionError: String?
     private var refreshTask: Task<Void, Never>?
     private var lastRefreshToken: Int?
 
@@ -28,7 +27,10 @@ private final class DeveloperCLIModel: ObservableObject {
     }
 
     func openDiagnostic(for tool: DeveloperCLITool) {
-        guard let script = DeveloperCLIService.terminalScript(for: tool) else { return }
+        guard let script = DeveloperCLIService.terminalScript(for: tool) else {
+            TaskFeedbackNotice.reportFailure(messageKey: "task.reason.terminal")
+            return
+        }
         do {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("nori-cli-diagnostics", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
@@ -37,15 +39,17 @@ private final class DeveloperCLIModel: ObservableObject {
             try script.write(to: file, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
             guard let terminal = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") else {
-                actionError = DeveloperCLIText.choose("未找到 Terminal。可以复制诊断命令后在终端运行。", "Terminal is unavailable. Copy the diagnostic command into your terminal.")
+                TaskFeedbackNotice.reportFailure(messageKey: "task.reason.terminal")
                 return
             }
             NSWorkspace.shared.open([file], withApplicationAt: terminal, configuration: .init()) { _, error in
-                if let error {
-                    Task { @MainActor in self.actionError = error.localizedDescription }
+                if error != nil {
+                    Task { @MainActor in
+                        TaskFeedbackNotice.reportFailure(messageKey: "task.reason.terminal")
+                    }
                 }
             }
-        } catch { actionError = error.localizedDescription }
+        } catch { TaskFeedbackNotice.reportFailure(messageKey: "task.reason.terminal") }
     }
 }
 
@@ -56,17 +60,13 @@ struct DeveloperCLIPanel: View {
     var isExpanded = true
     @StateObject private var model = DeveloperCLIModel()
     @ObservedObject private var l10n = L10n.shared
-    @State private var query = ""
     @State private var onlyIssues = false
     @State private var expandedSources: Set<String> = []
 
     private var filteredEntries: [DeveloperCLIEntry] {
         guard let snapshot = model.snapshot else { return [] }
-        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return snapshot.entries.filter { entry in
-            let matchesIssue = !onlyIssues || (entry.isFound && (!entry.isInPATH || entry.hasPATHShadowing || entry.version == .timedOut || entry.version == .unavailable))
-            let searchable = ([entry.tool.name, entry.tool.id] + entry.locations.flatMap { [$0.path, $0.source] }).joined(separator: " ")
-            return matchesIssue && (needle.isEmpty || searchable.localizedCaseInsensitiveContains(needle))
+            !onlyIssues || (entry.isFound && (!entry.isInPATH || entry.hasPATHShadowing || entry.version == .timedOut || entry.version == .unavailable))
         }
     }
 
@@ -79,16 +79,12 @@ struct DeveloperCLIPanel: View {
                         refreshToken: refreshToken,
                         isSearching: model.completedRefreshToken != refreshToken || model.isChecking)])
         .task(id: refreshToken) { model.refresh(for: refreshToken) }
-        .alert(DeveloperCLIText.choose("无法打开诊断", "Cannot open diagnostic"), isPresented: Binding(get: { model.actionError != nil }, set: { if !$0 { model.actionError = nil } })) {
-            Button(DeveloperCLIText.choose("好", "OK")) { model.actionError = nil }
-        } message: { Text(model.actionError ?? "") }
     }
 
     private var visibleContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            searchControls
             if let snapshot = model.snapshot {
-                DeveloperCLIContextView(snapshot: snapshot)
+                DeveloperCLIContextView(snapshot: snapshot, onlyIssues: $onlyIssues, isChecking: model.isChecking)
                 if filteredEntries.isEmpty {
                     Text(DeveloperCLIText.choose("没有符合条件的工具。", "No matching tools."))
                         .font(.system(size: 12)).foregroundStyle(.secondary)
@@ -111,30 +107,12 @@ struct DeveloperCLIPanel: View {
             }
         }
     }
-
-    private var searchControls: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField(DeveloperCLIText.choose("搜索工具、来源或路径", "Search tool, source, or path"), text: $query)
-                    .textFieldStyle(.plain)
-                    .accessibilityLabel(DeveloperCLIText.choose("搜索命令行工具", "Search command-line tools"))
-            }
-            .padding(.horizontal, 12).padding(.vertical, 9)
-            .clipped()
-            .modifier(ListRowGlass())
-            Toggle(DeveloperCLIText.choose("仅看问题", "Issues only"), isOn: $onlyIssues)
-                .toggleStyle(.checkbox).font(.system(size: 12)).fixedSize()
-            if model.isChecking {
-                ProgressView().controlSize(.small)
-                    .help(DeveloperCLIText.choose("检查中", "Checking"))
-            }
-        }
-    }
 }
 
 private struct DeveloperCLIContextView: View {
     let snapshot: DeveloperCLISnapshot
+    @Binding var onlyIssues: Bool
+    let isChecking: Bool
     @ObservedObject private var l10n = L10n.shared
 
     var body: some View {
@@ -144,6 +122,12 @@ private struct DeveloperCLIContextView: View {
                 Text(DeveloperCLIText.choose("已发现 \(snapshot.entries.filter(\.isFound).count) 个工具", "\(snapshot.entries.filter(\.isFound).count) tools found"))
                     .font(.system(size: 12, weight: .medium))
                 Spacer()
+                if isChecking {
+                    ProgressView().controlSize(.small)
+                        .help(DeveloperCLIText.choose("检查中", "Checking"))
+                }
+                Toggle(DeveloperCLIText.choose("仅看问题", "Issues only"), isOn: $onlyIssues)
+                    .toggleStyle(.checkbox).font(.system(size: 11)).fixedSize()
                 Button {
                     DeveloperCLIText.copy(snapshot.pathDirectories.joined(separator: ":"))
                 } label: {
@@ -176,21 +160,24 @@ private struct DeveloperCLICategoryView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
                 Image(systemName: DeveloperCLIText.symbol(category)).foregroundStyle(Color.accentText)
-                Text(DeveloperCLIText.category(category)).font(.system(size: 13, weight: .semibold))
+                Text(DeveloperCLIText.category(category)).font(.system(size: 12, weight: .semibold))
                 Spacer()
                 Text("\(entries.filter(\.isFound).count) / \(entries.count)")
                     .font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary)
             }.padding(.top, 4)
-            ForEach(entries) { entry in
-                DeveloperCLIRow(entry: entry,
-                                showsLocations: Binding(
-                                    get: { expandedSources.contains(entry.id) },
-                                    set: { visible in
-                                        if visible { expandedSources.insert(entry.id) }
-                                        else { expandedSources.remove(entry.id) }
-                                    }),
-                                openDiagnostic: openDiagnostic)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(entries) { entry in
+                    DeveloperCLIRow(entry: entry,
+                                    showsLocations: Binding(
+                                        get: { expandedSources.contains(entry.id) },
+                                        set: { visible in
+                                            if visible { expandedSources.insert(entry.id) }
+                                            else { expandedSources.remove(entry.id) }
+                                        }),
+                                    openDiagnostic: openDiagnostic)
+                }
             }
+            .padding(.leading, 16)
         }
     }
 }

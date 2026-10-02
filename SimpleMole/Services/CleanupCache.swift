@@ -3,11 +3,10 @@ import Foundation
 /// Short-lived display cache. Directory signatures detect some changes, but
 /// cannot prove recursive freshness; explicit scans always bypass this cache.
 enum CleanupCache {
-    // Bump whenever the unified scanner's source set or safety classification
-    // changes. In particular, the cleanup page now includes all ordinary
-    // top-level Trash entries and the expanded AI safe-cache bridge; restoring
-    // an older snapshot would silently hide those candidates.
-    private static let version = 23
+    // Only current, fully inspected deletion units may be displayed. Older
+    // snapshots can contain broad parents covering occupied/protected files.
+    // Every restored snapshot still receives a fresh native preflight.
+    private static let version = 24
     private static let maximumAge: TimeInterval = 5 * 60
 
     private static var cacheURL: URL {

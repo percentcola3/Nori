@@ -127,6 +127,11 @@ struct DiskAnalysisTests {
             }
         }
         expect(parentReport.isPartial == true, "unreadable child must mark ancestors partial")
+        expect(permissions.scanIssues?.contains { $0.path == denied.path && $0.kind == .readFailure } == true,
+               "partial scans must retain the inaccessible path and reason")
+        let reasons = DiskAnalysisWorker.failureDetails(for: permissions, using: { $0 })
+        expect(reasons.contains { $0.contains(denied.path) && $0.contains("scan.reason.access") },
+               "permission refusals must explain both the action and affected directory")
         expect(chmod(denied.path, 0o700) == 0, "restore fixture permissions")
 
         let cancel = CleanupScanControl(mode: .deep)
@@ -189,6 +194,12 @@ struct DiskAnalysisTests {
         let missing = DiskAnalysisWorker.scan(fixture.appendingPathComponent("missing").path,
                                               control: CleanupScanControl(mode: .deep))
         expect(missing.isPartial == true && missing.error != nil, "unreadable root must not report a complete zero")
+        expect(missing.scanIssues?.first?.path == missing.path,
+               "root errors must name the requested directory")
+        let encoded = try JSONEncoder().encode(permissions)
+        let restored = try JSONDecoder().decode(AnalyzeReport.self, from: encoded)
+        expect(restored.scanIssueCount == permissions.scanIssueCount && restored.scanIssues?.count == permissions.scanIssues?.count,
+               "analysis diagnostics must survive caching")
         let legacy = Data("{\"name\":\"old\",\"path\":\"/old\",\"size\":1,\"is_dir\":true}".utf8)
         let decoded = try JSONDecoder().decode(AnalyzeEntry.self, from: legacy)
         expect(decoded.isPartial == nil,

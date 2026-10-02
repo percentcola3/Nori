@@ -173,10 +173,6 @@ private struct AutoCleanupRuleRow: View {
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 10).fill(.quinary))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(.separator.opacity(0.45), lineWidth: 1)
-        )
     }
 
     private var summary: some View {

@@ -7,15 +7,27 @@ struct CleanupExecutionResult: Equatable {
     var removed: Int = 0
     var skipped: Int = 0
     var failed: Int = 0
+    var messages: [String] = []
+    /// A bridge may confirm deletions and still time out or exit with an error.
+    /// Preserve that failure for retries without inventing failed file counts;
+    /// presentation can still acknowledge the space already reclaimed.
+    var executionFailed = false
     /// Only paths whose deletion was confirmed by the executor. Skips and
     /// failures must remain available for retry with their original identity.
     var removedPaths: Set<String> = []
+    /// Allocated bytes of files confirmed permanently deleted by the worker.
+    var reclaimedBytes: UInt64 = 0
+
+    var completedSuccessfully: Bool { removed > 0 && skipped == 0 && failed == 0 && !executionFailed }
 
     mutating func merge(_ other: CleanupExecutionResult) {
         removed += other.removed
         skipped += other.skipped
         failed += other.failed
+        messages.append(contentsOf: other.messages)
+        executionFailed = executionFailed || other.executionFailed
         removedPaths.formUnion(other.removedPaths)
+        reclaimedBytes &+= other.reclaimedBytes
     }
 
     func remainingPaths(in paths: [String]) -> [String] {

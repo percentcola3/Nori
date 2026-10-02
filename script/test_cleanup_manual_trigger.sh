@@ -27,6 +27,47 @@ fi
 /usr/bin/grep -Fq 'resumePendingAuthorizedOperation()' <<< "$activation" || \
     fail "user-requested scan cannot resume after authorization"
 
+startup_permissions=$(/usr/bin/awk '
+    /^    private func prepareStartupPermissions\(/ { capture = 1 }
+    capture { print }
+    capture && /^    }/ { exit }
+' "$APP_STATE")
+/usr/bin/grep -Fq 'showPermissionCenter = true' <<< "$startup_permissions" || \
+    fail "startup does not guide the user before a protected scan needs permission"
+/usr/bin/grep -Fq 'permissionCenter.scheduleLiveCheck(force: true)' <<< "$startup_permissions" || \
+    fail "startup permission guidance does not recheck the current signed process"
+if /usr/bin/grep -Eq 'scanCleanup\(|unifiedCleanupScan\(|runPrivilegedBridge\(|applyCleanup\(' \
+    <<< "$startup_permissions"; then
+    fail "startup permission guidance starts cleanup or administrator work"
+fi
+/usr/bin/grep -A6 -F 'appState.$showPermissionCenter' "$APP_DELEGATE" \
+    | /usr/bin/grep -Fq '.filter { $0 }' || fail "startup permission guidance has no visibility gate"
+/usr/bin/grep -A6 -F 'appState.$showPermissionCenter' "$APP_DELEGATE" \
+    | /usr/bin/grep -Fq 'self?.showMainWindow()' || \
+    fail "startup permission guidance remains hidden in a menu-bar-only launch"
+
+cleanup_feedback=$(/usr/bin/awk '
+    /^    private func reportCleanupResult\(/ { capture = 1 }
+    capture { print }
+    capture && /^    }/ { exit }
+' "$APP_STATE")
+remaining_feedback=$(/usr/bin/awk '
+    /^    private func recordRemainingCleanup\(/ { capture = 1 }
+    capture { print }
+    capture && /^    }/ { exit }
+' "$APP_STATE")
+if /usr/bin/grep -Eq 'presentTaskFailure\(|presentTaskNotice\(|confirmation[[:space:]]*=' \
+    <<< "$cleanup_feedback$remaining_feedback"; then
+    fail "cleanup feedback still presents a popup"
+fi
+/usr/bin/grep -Fq 'cleanupOutcomeMood = combined.removed > 0 ? .success : .attention' \
+    <<< "$cleanup_feedback" || fail "partial deletion does not show successful cleanup"
+/usr/bin/grep -Fq 'cleanupReclaimedBytes = combined.reclaimedBytes' \
+    <<< "$cleanup_feedback" || fail "cleanup result does not use actual reclaimed bytes"
+if /usr/bin/grep -Fq 'cleanupRetryAvailable = false' <<< "$cleanup_feedback"; then
+    fail "successful cleanup discards its remaining cleanup action"
+fi
+
 cleanup_tab=$(/usr/bin/awk '
     /switch pages\[tab\]/ { capture = 1 }
     capture && /case \.cleanup:/ { cleanup = 1; next }
@@ -46,5 +87,24 @@ fi
     "$APP_STATE" || fail "quick scans with unfinished directories no longer escalate to deep"
 /usr/bin/grep -Fq 'if mode == .quick && scan.cacheable { CleanupCache.save(scan.categories) }' \
     "$APP_STATE" || fail "successful manual scans are no longer cached"
+/usr/bin/grep -Fq 'NativeCore.shared.preflightCleanupCategories(cached.categories, control: control,' \
+    "$APP_STATE" || fail "cached cleanup paths are displayed without fresh deletion eligibility"
+/usr/bin/grep -Fq 'categories = finalizedCleanupCategories(preflight.categories, running: snapshot)' \
+    "$APP_STATE" || fail "cached cleanup display bypasses native eligibility or runtime filtering"
+/usr/bin/grep -Fq 'cleanupScanComplete = preflight.succeeded && !control.isCancelled' \
+    "$APP_STATE" || fail "unverified cached cleanup enables execution"
+[[ $(/usr/bin/grep -Fc 'includingAdministratorRequired: true' "$APP_STATE") -ge 2 ]] || \
+    fail "fresh or cached manual scans hide eligible items requiring administrator access"
 
-printf 'PASS: cleanup is manual; tab activation preserves results; pending authorization still resumes\n'
+unified_scan=$(/usr/bin/awk '
+    /^    private func unifiedCleanupScan\(/ { capture = 1 }
+    capture { print }
+    capture && /^    }/ { exit }
+' "$APP_STATE")
+/usr/bin/grep -Fq 'CleanupCategory.safeCleanupCandidates(from: coreScan.categories)' \
+    <<< "$unified_scan" || fail "ordinary cleanup publishes unconfirmed Warning data roots"
+if /usr/bin/grep -Fq 'app_installer_scan.sh' <<< "$unified_scan"; then
+    fail "ordinary cleanup recommends installer files that may be the only copy"
+fi
+
+printf 'PASS: manual cleanup preserves lifecycle and revalidates fresh/cached display eligibility\n'

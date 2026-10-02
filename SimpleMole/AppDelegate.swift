@@ -12,15 +12,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var screenshotSession = UUID()
     private var screenshotProcess: Process?
 
-    // 灵动岛：codenotch 式顶部刘海悬浮窗。
+    // 灵动岛：顶部刘海或左右屏幕边缘的纵向悬浮栏。
     private var islandPanel: NSPanel?
     private var islandHosting: IslandHostingView<FloatingIslandView>?
     private var islandPanelHardwareNotch: Bool?
     private var islandPanelSafeTop: CGFloat?
     private var islandPanelCollapsedWidth: CGFloat?
+    private var islandPanelEdge: AppState.IslandEdge?
     private var islandExpanded = false
     private var islandMouseMonitors: [Any] = []
     private var islandRoutingTimer: Timer?
+    private struct IslandSideDragSession {
+        let panel: NSPanel
+        let edge: AppState.IslandEdge
+        let initialOrigin: NSPoint
+        let windowHeight: CGFloat
+        let visibleFrame: NSRect
+    }
+    private var islandSideDragSession: IslandSideDragSession?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenu()
@@ -29,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppUpdateController.shared.start { [weak self] in
             guard let self else { return false }
             return !self.appState.isBusy && self.appState.confirmation == nil
+                && self.appState.taskNotice == nil
                 && self.screenshotProcess?.isRunning != true
                 && !RatioCaptureController.shared.isCapturing
                 && self.editorWindow?.isVisible != true
@@ -36,7 +46,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 && !NSApp.windows.contains(where: { $0.attachedSheet != nil })
         }
 
-        // 附件应用：启动只驻留菜单栏；点击图标直接打开高级主窗口。
+        // 授权完整时只驻留菜单栏；缺少磁盘权限时先展示授权引导。
+        // Published 的当前值也覆盖早于 didFinishLaunching 的启动检查。
+        appState.$showPermissionCenter
+            .removeDuplicates()
+            .filter { $0 }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.showMainWindow() }
+            .store(in: &observables)
+
         runtimeTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
@@ -63,6 +81,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 L10n.shared.refreshIfAuto()
             }
             .store(in: &observables)
+        NotificationCenter.default.publisher(for: .smOpenMainWindow)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.showMainWindow() }
+            .store(in: &observables)
         // 语言切换后重建本地化菜单。
         L10n.shared.objectWillChange
             .receive(on: RunLoop.main)
@@ -82,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        cancelIslandSideDragTracking()
         AppUpdateController.shared.stop()
         autoCleanupTimer?.invalidate()
         runtimeTimer?.invalidate()
@@ -161,17 +184,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             editorWindow = window
             createdWindow = true
         }
-        editorWindow?.contentViewController = NSHostingController(
-            rootView: ScreenshotEditorView(image: image, captureFrame: captureFrame) { [weak self] in
+        if let window = editorWindow {
+            let content = ScreenshotEditorView(image: image, captureFrame: captureFrame) { [weak self] in
                 self?.closeScreenshotEditor()
-            })
-        if let window = editorWindow, let screen = targetScreen ?? window.screen {
-            let frame = ScreenshotEditorSizing.windowFrame(
-                visibleFrame: screen.visibleFrame,
-                preferredSize: createdWindow ? NSSize(width: 900, height: 700) : window.frame.size,
-                preferredOrigin: createdWindow ? nil : window.frame.origin)
-            window.minSize = NSSize(width: min(520, frame.width), height: min(360, frame.height))
-            window.setFrame(frame, display: true)
+            }
+            ScreenshotEditorSizing.replaceContent(content, in: window,
+                                                   visibleFrame: (targetScreen ?? window.screen)?.visibleFrame,
+                                                   center: createdWindow)
         }
         editorWindow?.deminiaturize(nil)
         editorWindow?.makeKeyAndOrderFront(nil)
@@ -185,10 +204,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.publisher(for: NSWindow.willCloseNotification, object: window)
             .sink { [weak window] _ in
                 MosaicCache.shared.clear()
+                let closedContent = window?.contentViewController
                 // 关闭后释放原图和笔画；窗口外壳保留用于下次快速复用。
                 DispatchQueue.main.async {
                     // 新截图可能已复用窗口，旧关闭通知不能清空新编辑器。
-                    if window?.isVisible == false { window?.contentViewController = nil }
+                    if window?.isVisible == false,
+                       window?.contentViewController === closedContent {
+                        window?.contentViewController = nil
+                    }
                 }
             }
             .store(in: &observables)
@@ -357,19 +380,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateIslandPanel() {
+        // 设置切换和屏幕重排结束当前拖动，按新屏幕与持久化位置重新布局。
+        cancelIslandSideDragTracking()
         guard appState.islandEnabled && !appState.mainWindowVisible else {
             islandExpanded = false
             dismissLiquidPanel(islandPanel)
             return
         }
-        // 屏幕参数（刘海带宽/外接屏）变化时重建视图锚定参数。
+        // 同一次更新只读取一块屏幕，避免窗口重建与定位使用不同屏幕的指标。
+        guard let screen = NSScreen.main ?? islandPanel?.screen ?? NSScreen.screens.first else { return }
+        let hardwareNotch = screen.safeAreaInsets.top > 0
+        let safeTop = islandSafeTop(on: screen)
+        let collapsedWidth = islandCollapsedWidth(on: screen)
+        let edge = appState.islandEdge
+        // 屏幕参数或物理边缘变化时重建；侧边栏的窗口与内容采用纵向布局。
         if islandPanel == nil
-            || islandPanelHardwareNotch != islandHardwareNotch
-            || islandPanelSafeTop != islandSafeTop
-            || islandPanelCollapsedWidth != islandCollapsedWidth {
-            createIslandPanel()
+            || islandPanelHardwareNotch != hardwareNotch
+            || islandPanelSafeTop != safeTop
+            || islandPanelCollapsedWidth != collapsedWidth
+            || islandPanelEdge != edge {
+            createIslandPanel(hardwareNotch: hardwareNotch, safeTop: safeTop,
+                              collapsedWidth: collapsedWidth, edge: edge)
         }
-        positionIslandPanel()
+        positionIslandPanel(on: screen, edge: edge)
         if let islandPanel, !islandPanel.isVisible {
             presentLiquidPanel(islandPanel) {
                 islandPanel.orderFrontRegardless()
@@ -379,9 +412,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func createIslandPanel() {
+    private func createIslandPanel(hardwareNotch: Bool, safeTop: CGFloat,
+                                   collapsedWidth: CGFloat, edge: AppState.IslandEdge) {
+        cancelIslandSideDragTracking()
         dismissLiquidPanel(islandPanel)
-        let size = islandWindowSize
+        islandExpanded = false
+        let size = islandWindowSize(hardwareNotch: hardwareNotch, safeTop: safeTop,
+                                    collapsedWidth: collapsedWidth, edge: edge)
         let panel = IslandPanel(contentRect: NSRect(x: 0, y: 0, width: size.width, height: size.height),
                             styleMask: [.borderless, .nonactivatingPanel],
                             backing: .buffered, defer: false)
@@ -390,7 +427,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hidesOnDeactivate = false
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        // 悬浮窗不画系统阴影：贴顶刘海自带描边，
+        // 悬浮窗不画系统阴影：贴边轮廓自带描边，
         // 透明窗口的系统阴影会把整个窗口矩形投出来。
         panel.hasShadow = false
         panel.isMovable = false
@@ -404,26 +441,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.ignoresMouseEvents = true
         let hosting = IslandHostingView(rootView: FloatingIslandView(
             state: appState,
-            safeTop: islandSafeTop,
-            hardwareNotch: islandHardwareNotch,
-            collapsedWidth: islandCollapsedWidth,
+            safeTop: safeTop,
+            hardwareNotch: hardwareNotch,
+            collapsedWidth: collapsedWidth,
+            edge: edge,
             onOpenMain: { [weak self] in self?.openMainFromIsland() },
-            onHitFrameChange: { [weak self] frame, shape in
+            onHitFrameChange: { [weak self, weak panel] frame, shape in
+                guard let self, let panel, self.islandPanel === panel else { return }
                 // 同步赋值：SwiftUI 回调本就在主线程；async 跳一拍会让同一时刻的
-                // 多次上报乱序，命中区域可能停在旧值。
-                self?.islandHosting?.islandHitFrame = frame
-                self?.islandHosting?.islandHitShape = shape
-                self?.updateIslandMouseRouting()
+                // 多次上报乱序，命中区域可能停在旧值。重建前面板的迟到回调也不能覆盖新面板。
+                self.islandHosting?.islandHitFrame = frame
+                self.islandHosting?.islandHitShape = shape
+                self.updateIslandMouseRouting()
             },
-            onExpandedChange: { [weak self] expanded in
-                self?.islandExpanded = expanded
+            onDetailHitFrameChange: { [weak self, weak panel] frame in
+                guard let self, let panel, self.islandPanel === panel else { return }
+                self.islandHosting?.islandDetailHitFrame = frame
+                self.updateIslandMouseRouting()
+            },
+            onExpandedChange: { [weak self, weak panel] expanded in
+                guard let self, let panel, self.islandPanel === panel else { return }
+                self.islandExpanded = expanded
+            },
+            onSideDrag: { [weak self, weak panel] delta, phase in
+                guard let self, let panel, self.islandPanel === panel else { return }
+                self.handleIslandSideDrag(delta: delta, phase: phase, panel: panel, edge: edge)
             }))
         islandHosting = hosting
         islandPanel = panel
         panel.contentView = hosting
-        islandPanelHardwareNotch = islandHardwareNotch
-        islandPanelSafeTop = islandSafeTop
-        islandPanelCollapsedWidth = islandCollapsedWidth
+        islandPanelHardwareNotch = hardwareNotch
+        islandPanelSafeTop = safeTop
+        islandPanelCollapsedWidth = collapsedWidth
+        islandPanelEdge = edge
         installIslandMouseRouting()
     }
 
@@ -454,6 +504,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateIslandMouseRouting() {
         guard let panel = islandPanel, let hosting = islandHosting,
               panel.isVisible || !panel.ignoresMouseEvents else { return }
+        // 拖动越过手柄边界时仍由原生叶子控件跟踪，不切穿透也不触发收起。
+        if islandSideDragSession?.panel === panel {
+            panel.ignoresMouseEvents = false
+            return
+        }
         let inside = panel.isVisible && hosting.containsScreenPoint(NSEvent.mouseLocation)
         guard panel.ignoresMouseEvents == inside else { return }
         panel.ignoresMouseEvents = !inside
@@ -462,7 +517,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func handleIslandSideDrag(delta: CGFloat, phase: IslandDragPhase,
+                                       panel: NSPanel, edge: AppState.IslandEdge) {
+        guard edge != .top, appState.islandEdge == edge else { return }
+        if phase == .began {
+            guard let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
+            islandSideDragSession = IslandSideDragSession(
+                panel: panel, edge: edge, initialOrigin: panel.frame.origin,
+                windowHeight: panel.frame.height, visibleFrame: screen.visibleFrame)
+            panel.ignoresMouseEvents = false
+        }
+        guard let session = islandSideDragSession, session.panel === panel, session.edge == edge else { return }
+        if phase == .cancelled {
+            panel.setFrameOrigin(session.initialOrigin)
+            islandSideDragSession = nil
+            updateIslandMouseRouting()
+            return
+        }
+        // 原生控件报告从按下位置开始的累计屏幕 Y 差量；窗口位置不参与后续差量计算。
+        panel.setFrameOrigin(IslandWindowGeometry.draggedSideOrigin(
+            initialOrigin: session.initialOrigin, screenYDelta: delta,
+            windowHeight: session.windowHeight, visibleFrame: session.visibleFrame))
+        if phase == .ended {
+            let fraction = IslandWindowGeometry.sidePositionFraction(
+                originY: panel.frame.minY, windowHeight: session.windowHeight,
+                visibleFrame: session.visibleFrame)
+            islandSideDragSession = nil
+            appState.setIslandPosition(fraction, for: edge)
+            updateIslandMouseRouting()
+        }
+    }
+
+    private func cancelIslandSideDragTracking() {
+        guard islandSideDragSession != nil else { return }
+        // 先结束原生叶子控件跟踪，让其取消回调同步释放 SwiftUI 的拖动锁；
+        // 即使面板身份已变化、取消回调被拒绝，也必须清掉代理的临时会话。
+        islandHosting?.cancelIslandDragTracking()
+        islandSideDragSession = nil
+    }
+
     private func openMainFromIsland() {
+        cancelIslandSideDragTracking()
         // 点击发生在灵动岛所在的屏：主窗口就开在这块屏上，而不是按光标推断。
         let islandScreen = islandPanel?.screen
         // End nonactivating-panel event tracking before activating a regular
@@ -474,62 +569,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 屏幕指标在 Space/激活策略切换的瞬间可能暂时读不到（NSScreen.main 为 nil、
-    /// 辅助区缺失）。此时沿用上次的值，绝不能回落到 0/默认宽度重建面板——
-    /// 那会让刘海位置和宽度跳变（"位置漂移"）。
-    private var islandHardwareNotch: Bool {
-        guard let screen = NSScreen.main else { return islandPanelHardwareNotch ?? false }
-        return screen.safeAreaInsets.top > 0
-    }
-
     /// 刘海屏取硬件刘海高度；无刘海屏按 codenotch 的虚拟刘海取菜单栏高度，
     /// 菜单栏自动隐藏时 visibleFrame 顶部没有缺口，改用系统状态栏厚度。
-    private var islandSafeTop: CGFloat {
-        guard let screen = NSScreen.main else { return islandPanelSafeTop ?? 0 }
+    private func islandSafeTop(on screen: NSScreen) -> CGFloat {
         if screen.safeAreaInsets.top > 0 { return screen.safeAreaInsets.top }
         let menuBar = screen.frame.maxY - screen.visibleFrame.maxY
         return menuBar > 0 ? menuBar : NSStatusBar.system.thickness
     }
 
-    private var islandCollapsedWidth: CGFloat {
-        guard let screen = NSScreen.main else {
-            return islandPanelCollapsedWidth ?? IslandLayout.virtualNotchWidth
-        }
+    private func islandCollapsedWidth(on screen: NSScreen) -> CGFloat {
         guard let left = screen.auxiliaryTopLeftArea,
               let right = screen.auxiliaryTopRightArea
         else { return IslandLayout.virtualNotchWidth }
         return right.minX - left.maxX + 8
     }
 
-    /// 展开内容的顶部避让高度：刘海屏必须包住硬件刘海（islandSafeTop），
-    /// 无刘海屏没有实际遮挡，只保留一个手柄高度的顶部空间。
-    private var islandExpandedTopInset: CGFloat {
-        islandHardwareNotch ? islandSafeTop : IslandLayout.nonNotchExpandedTopInset
-    }
-
-    private var islandWindowSize: NSSize {
-        NSSize(width: max(IslandLayout.panelWidth, islandCollapsedWidth) + IslandLayout.windowMargin * 2,
-               height: ceil(islandExpandedTopInset) + IslandLayout.metricsHeight
+    private func islandWindowSize(hardwareNotch: Bool, safeTop: CGFloat,
+                                  collapsedWidth: CGFloat, edge: AppState.IslandEdge) -> NSSize {
+        guard edge == .top else { return IslandLayout.sideWindowSize }
+        let expandedTopInset = hardwareNotch ? safeTop : IslandLayout.nonNotchExpandedTopInset
+        return NSSize(width: max(IslandLayout.panelWidth, collapsedWidth) + IslandLayout.windowMargin * 2,
+               height: ceil(expandedTopInset) + IslandLayout.metricsHeight
                    + IslandLayout.detailBudget + IslandLayout.windowMargin)
     }
 
-    private func positionIslandPanel() {
-        guard let islandPanel,
-              let screen = NSScreen.main else { return }
-        let size = islandWindowSize
-        // 所有屏幕均贴物理顶边；真实刘海的遮挡由内容安全区避让。
-        // 左侧/右侧仍挂在顶边，只是改靠哪一端。
-        let x: CGFloat
-        switch appState.islandEdge {
-        case .left:
-            x = screen.frame.minX
-        case .right:
-            x = screen.frame.maxX - size.width
-        case .top:
-            x = screen.frame.midX - size.width / 2
+    private func positionIslandPanel(on screen: NSScreen, edge: AppState.IslandEdge) {
+        guard let islandPanel else { return }
+        let attachment: IslandAttachment = switch edge {
+        case .top: .top
+        case .left: .left
+        case .right: .right
         }
-        let origin = NSPoint(x: x, y: screen.frame.maxY - size.height)
-        islandPanel.setFrameOrigin(origin)
+        // 顶部保持贴物理顶边；左右按各自保存的比例避开菜单栏和 Dock。
+        islandPanel.setFrameOrigin(IslandWindowGeometry.origin(
+            size: islandPanel.frame.size, screenFrame: screen.frame,
+            visibleFrame: screen.visibleFrame, attachment: attachment,
+            positionFraction: appState.islandPosition(for: edge)))
     }
 
     // MARK: - 主窗口
@@ -540,20 +615,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         var createdWindow = false
         if mainWindow == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 940, height: 720),
-                                  styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            let window = NoriMainWindow(contentRect: NSRect(x: 0, y: 0, width: 940, height: 720),
+                                  styleMask: [.borderless, .closable, .miniaturizable, .resizable],
                                   backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
             window.minSize = NSSize(width: 760, height: 620)
-            // 深色玻璃基调：内容延伸进标题栏（fullSizeContentView），标题栏透明，
-            // DarkGlassSurface 贯通整窗；标题/交通灯/工具栏按钮浮在玻璃上。
+            // 系统标题窗口会在失焦时画暗色外框。主窗口由单层玻璃拥有轮廓，
+            // AppKit 控制按钮、拖动区与边缘缩放保留在自定义窗口中。
             window.isOpaque = false
             window.backgroundColor = .clear
-            window.titlebarAppearsTransparent = true
-            window.styleMask.insert(.fullSizeContentView)
-            // 系统标题文字由 SwiftUI 头部替代。
-            window.title = ""
-            window.contentView = NSHostingView(rootView: MainWindowView(state: appState))
+            window.collectionBehavior.insert(.fullScreenPrimary)
+            window.title = "Nori"
+            let hosting = NSHostingView(rootView: MainWindowView(state: appState))
+            // AppKit owns the window geometry through every page transition.
+            // Dynamic empty/results content must not replace its size limits.
+            hosting.sizingOptions = []
+            window.contentView = hosting
             observeMainWindow(window)
             mainWindow = window
             createdWindow = true

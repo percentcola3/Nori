@@ -59,20 +59,28 @@ struct DeletionPlan {
     }
 
     static func nonOverlappingPaths(_ paths: [String]) -> [String] {
-        var accepted: [(record: String, normalized: String?)] = []
-        for path in paths {
-            let normalized = (path as NSString).isAbsolutePath
-                ? URL(fileURLWithPath: path).standardizedFileURL.path : nil
-            if let normalized,
-               accepted.contains(where: { existing in
-                   guard let other = existing.normalized else { return false }
-                   return normalized == other || normalized.hasPrefix(other + "/")
-                       || other.hasPrefix(normalized + "/")
-               }) {
-                continue
-            }
-            accepted.append((path, normalized))
+        // A selected ancestor covers its descendants regardless of input
+        // order. Keeping the first child instead could leave the rest of a
+        // selected cache untouched while reporting that parent as coalesced.
+        // Unsafe literals remain independent so normalization cannot let a
+        // rejected `..` path swallow an otherwise valid deletion target.
+        let normalized = paths.map { path in
+            isLexicallySafePath(path) ? URL(fileURLWithPath: path).standardizedFileURL.path : nil
         }
-        return accepted.map(\.record)
+        let allPaths = Set(normalized.compactMap { $0 })
+        var seen = Set<String>()
+        return paths.indices.compactMap { index in
+            let record = paths[index]
+            guard let path = normalized[index] else {
+                return seen.insert(record).inserted ? record : nil
+            }
+            guard seen.insert(path).inserted else { return nil }
+            var parent = (path as NSString).deletingLastPathComponent
+            while !parent.isEmpty && parent != "/" {
+                if allPaths.contains(parent) { return nil }
+                parent = (parent as NSString).deletingLastPathComponent
+            }
+            return record
+        }
     }
 }

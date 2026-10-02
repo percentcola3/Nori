@@ -16,6 +16,13 @@ struct CleanupExecutionTests {
         try expect(complete == CleanupExecutionResult(removed: 3, skipped: 2, failed: 1),
                    "bridge counters were not preserved")
 
+        var interrupted = CleanupExecutionResult(removed: 2, executionFailed: true)
+        try expect(!interrupted.completedSuccessfully,
+                   "reported deletions must not hide an interrupted bridge")
+        interrupted.merge(CleanupExecutionResult(removed: 1))
+        try expect(interrupted.executionFailed && !interrupted.completedSuccessfully,
+                   "a later successful route must not erase an earlier execution failure")
+
         let unreported = CleanupExecutionResult.reconciled(
             bridgeOutput: "removed=1\nskipped=1\n", expectedCount: 4)
         try expect(unreported == CleanupExecutionResult(removed: 1, skipped: 1, failed: 2),
@@ -44,5 +51,16 @@ struct CleanupExecutionTests {
         let skipped = CleanupExecutionResult(skipped: 3)
         try expect(skipped.remainingPaths(in: scanned) == scanned,
                    "a failed open-file probe must preserve all paths for retry")
+        try expect(!skipped.completedSuccessfully && !complete.completedSuccessfully
+                   && CleanupExecutionResult(removed: 1).completedSuccessfully,
+                   "execution completeness must preserve partial work independently of its presentation")
+        var bytes = CleanupExecutionResult(removed: 1, reclaimedBytes: 4096)
+        bytes.merge(CleanupExecutionResult(removed: 1, failed: 1, reclaimedBytes: 8192))
+        try expect(bytes.reclaimedBytes == 12288 && !bytes.completedSuccessfully,
+                   "confirmed space must aggregate even when another target fails")
+        var explained = CleanupExecutionResult(skipped: 1, messages: ["cache is open"])
+        explained.merge(CleanupExecutionResult(failed: 1, messages: ["permission denied"]))
+        try expect(explained.messages == ["cache is open", "permission denied"],
+                   "route diagnostics were lost while aggregating cleanup results")
     }
 }

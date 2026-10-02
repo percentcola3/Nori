@@ -19,6 +19,7 @@ enum AppLanguage { case zhHans, zhHant, en }
 final class L10n: ObservableObject {
     static let shared = L10n()
     @Published var resolved = AppLanguage.en
+    func t(_ key: String) -> String { key }
 }
 extension Color {
     static let accentText = Color.blue

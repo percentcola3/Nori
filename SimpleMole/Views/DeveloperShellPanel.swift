@@ -3,6 +3,7 @@ import AppKit
 
 /// Owned state keeps shell editing separate from the workspace's runtime cleanup selection.
 struct DeveloperShellPanel: View {
+    @ObservedObject var state: AppState
     let refreshToken: Int
     var isExpanded = true
     @StateObject private var model = DeveloperShellPanelModel()
@@ -50,6 +51,9 @@ struct DeveloperShellPanel: View {
         ])
         .sheet(item: $editor) { request in
             DeveloperShellEditor(request: request, model: model)
+                .taskFeedback(Binding(get: { state.taskNotice }, set: {
+                    if $0 == nil { state.dismissTaskNotice() }
+                }), retry: state.retryTaskNotice)
         }
     }
 
@@ -205,8 +209,7 @@ struct DeveloperShellPanel: View {
             .help(copy("在新 Terminal 窗口执行 exec /bin/zsh -l。",
                        "Runs exec /bin/zsh -l in a new Terminal window."))
             if model.terminalFailed {
-                Text(copy("无法打开 Terminal，可在新终端窗口手动执行 exec /bin/zsh -l。",
-                          "Could not open Terminal. Run exec /bin/zsh -l manually in a new terminal window."))
+                Text(l10n.t("task.reason.terminal"))
                     .font(.system(size: 11)).foregroundStyle(Color.warning)
             }
         }
@@ -272,7 +275,9 @@ private final class DeveloperShellPanelModel: ObservableObject {
             terminalFailed = false
             return true
         case .failure(let error):
-            failure = error as? DeveloperShellService.Failure ?? .writeFailed
+            let issue = error as? DeveloperShellService.Failure ?? .writeFailed
+            failure = issue
+            DeveloperShellCopy.reportFailure(issue, fileName: profile.name)
             return false
         }
     }
@@ -291,9 +296,15 @@ private final class DeveloperShellPanelModel: ObservableObject {
             NSWorkspace.shared.open([command],
                                     withApplicationAt: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app"),
                                     configuration: configuration) { [weak self] _, error in
-                Task { @MainActor in self?.terminalFailed = error != nil }
+                Task { @MainActor in
+                    self?.terminalFailed = error != nil
+                    if error != nil { TaskFeedbackNotice.reportFailure(messageKey: "task.reason.terminal") }
+                }
             }
-        } catch { terminalFailed = true }
+        } catch {
+            terminalFailed = true
+            TaskFeedbackNotice.reportFailure(messageKey: "task.reason.terminal")
+        }
     }
 }
 
@@ -378,7 +389,6 @@ private struct DeveloperShellEditor: View {
                 .font(.system(size: 12, design: .monospaced))
                 .scrollContentBackground(.hidden)
                 .frame(height: 340)
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.hairline))
         case .remove(let variable):
             Text(copy("删除 \(variable.name) 在第 \(variable.lineNumber) 行的 export 声明？已有终端不会立即改变。",
                       "Delete the export declaration for \(variable.name) on line \(variable.lineNumber)? Existing shells do not change immediately."))
@@ -445,7 +455,11 @@ private struct DeveloperShellEditor: View {
             }
             if await model.save(candidate, replacing: request.profile) { dismiss() }
             else { localFailure = model.failure }
-        } catch { localFailure = error as? DeveloperShellService.Failure ?? .writeFailed }
+        } catch {
+            let failure = error as? DeveloperShellService.Failure ?? .writeFailed
+            localFailure = failure
+            DeveloperShellCopy.reportFailure(failure, fileName: request.profile.name)
+        }
     }
 
     private func copy(_ chinese: String, _ english: String) -> String {
@@ -462,20 +476,29 @@ private enum DeveloperShellCopy {
     }
 
     static func failure(_ failure: DeveloperShellService.Failure) -> String {
+        let message = L10n.shared.t(failureKey(failure))
+        if case .syntax(let line) = failure, !line.isEmpty { return message + "\n" + line }
+        return message
+    }
+
+    static func reportFailure(_ failure: DeveloperShellService.Failure, fileName: String) {
+        let location: String
+        if case .syntax(let line) = failure, !line.isEmpty { location = "~/" + fileName + ":" + line }
+        else { location = "~/" + fileName }
+        TaskFeedbackNotice.reportFailure(messageKey: failureKey(failure), details: [location], detailsAreLocalized: true)
+    }
+
+    private static func failureKey(_ failure: DeveloperShellService.Failure) -> String {
         switch failure {
-        case .unsupportedFile: return text("只支持四个标准 zsh 配置文件。", "Only the four standard zsh startup files are supported.")
-        case .unsafeFile: return text("拒绝读取或修改符号链接、硬链接、非普通文件及不属于当前用户的文件。", "Symlinks, hard links, nonregular files and files owned by another user are refused.")
-        case .tooLarge: return text("配置文件超过 2 MB，请使用外部编辑器。", "The file exceeds 2 MB. Use an external editor.")
-        case .unreadable: return text("无法读取此配置文件，请检查权限。", "Cannot read this file. Check its permissions.")
-        case .invalidEncoding: return text("仅支持不含空字符的 UTF-8 配置。", "Only UTF-8 configuration without null characters is supported.")
-        case .changedOnDisk: return text("文件已被其他应用修改。重新进入开发环境读取最新内容后再编辑。", "The file changed on disk. Reopen Developer workspace to read the latest content before editing.")
-        case .invalidVariable: return text("变量名需为字母、数字或下划线，且不能以数字开头；值不能换行。", "Names must start with a letter or underscore and contain letters, digits or underscores. Values cannot contain newlines.")
-        case .dynamicVariable: return text("动态或复杂声明请在完整配置中编辑。", "Edit dynamic or complex declarations in the source file.")
-        case .syntax(let line):
-            return line.isEmpty ? text("zsh 语法检查未通过，文件尚未保存。", "zsh syntax validation failed. The file was not saved.")
-                : text("zsh 语法检查未通过（第 \(line) 行），文件尚未保存。", "zsh syntax validation failed on line \(line). The file was not saved.")
-        case .validationUnavailable: return text("无法完成 zsh 语法检查，文件尚未保存。", "Could not complete zsh syntax validation. The file was not saved.")
-        case .writeFailed: return text("无法安全保存配置，原文件未被覆盖。", "Could not safely save the configuration.")
+        case .unsupportedFile, .unsafeFile: return "task.reason.path"
+        case .tooLarge: return "task.reason.shellTooLarge"
+        case .unreadable: return "task.reason.config"
+        case .invalidEncoding: return "task.reason.shellEncoding"
+        case .changedOnDisk: return "task.reason.configChanged"
+        case .invalidVariable: return "task.reason.shellInvalidVariable"
+        case .dynamicVariable: return "task.reason.shellDynamicVariable"
+        case .syntax, .validationUnavailable: return "task.reason.shellSyntax"
+        case .writeFailed: return "task.reason.config"
         }
     }
 }

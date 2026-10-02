@@ -99,6 +99,12 @@ def _place(figure, x, y, scale=.78):
     return f'<g transform="translate({x} {y}) scale({scale})">{figure}</g>'
 
 
+def _idle_figure(figure, y, scale=.78):
+    # The body's bounds center is x≈132 in the 256-unit master. Decorations
+    # must not move that center away from the action below the SVG viewport.
+    return _place(figure, round(128 - 132 * scale), y, scale)
+
+
 def working_scene(figure, colors):
     # The signature orbit: two clipped copies put the rear arc behind Nori.
     orbit = f'''<g transform="translate(128 139) rotate(-12) scale(1 .38)"><g class="orbit-spin" fill="none" stroke-width="11" stroke-linecap="round">
@@ -198,7 +204,7 @@ def coffee_scene(figure, colors):
            f'stroke-width="3" stroke-linejoin="round"/>'
            f'<ellipse cx="179" cy="155" rx="24" ry="5.5" fill="{ink}"/>'
            f'<path d="M164 176H194" stroke="{blue}" stroke-width="5" stroke-linecap="round"/>')
-    return f'{_place(figure, 7, 24, .81)}<g class="orbit-prop"><g class="cup-lift">{steam}{cup}</g></g>'
+    return f'{_idle_figure(figure, 24, .81)}<g class="orbit-prop"><g class="cup-lift">{steam}{cup}</g></g>'
 
 
 def doze_scene(figure, colors):
@@ -207,7 +213,7 @@ def doze_scene(figure, colors):
         f'<g transform="translate({x} {y}) scale({s})"><path class="z" style="animation-delay:{-index:g}s" '
         f'd="M-7-7H7L-7 7H7" fill="none" stroke="{lilac}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g>'
         for index, (x, y, s) in enumerate(((196, 70, 1), (210, 52, 1.2), (222, 34, 1.45))))
-    return f'{_place(figure, 12, 44)}<g class="orbit-prop">{zs}</g>'
+    return f'{_idle_figure(figure, 44)}<g class="orbit-prop">{zs}</g>'
 
 
 def humming_scene(figure, colors):
@@ -217,16 +223,16 @@ def humming_scene(figure, colors):
         f'<path d="{note}" fill="none" stroke="#{colors[c]}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>'
         f'<ellipse cx="-4" cy="1" rx="6" ry="4.6" fill="#{colors[c]}"/><ellipse cx="10" cy="-5" rx="6" ry="4.6" fill="#{colors[c]}"/></g></g>'
         for index, (x, y, c) in enumerate(((200, 104, 'ribbonBlue'), (214, 86, 'ribbonGold'), (192, 80, 'ribbonLilac'))))
-    return f'{_place(figure, 12, 40)}<g class="orbit-prop">{notes}</g>'
+    return f'{_idle_figure(figure, 40)}<g class="orbit-prop">{notes}</g>'
 
 
 def bubble_scene(figure, colors):
     blue = f'#{colors["ribbonBlue"]}'
-    bubble = (f'<g class="orbit-prop" transform="translate(52 214)"><g class="bubble chase">'
+    bubble = (f'<g class="orbit-prop" transform="translate(25 214)"><g class="bubble chase">'
               f'<circle r="15" fill="{blue}" fill-opacity=".14" stroke="{blue}" stroke-width="3"/>'
               f'<path d="M-7-4A8 8 0 0 1-2-9" fill="none" stroke="#{colors["body"]}" stroke-width="3" stroke-linecap="round"/>'
               '</g></g>')
-    return f'{_place(figure, 52, 40)}{bubble}'
+    return f'{_idle_figure(figure, 40)}{bubble}'
 
 
 _SCENES = {

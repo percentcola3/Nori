@@ -22,6 +22,7 @@ struct NoriPose: Equatable {
 /// Dimensions use the same 256-point coordinate system as Nori.svg.
 enum NoriMotion {
     static let celebrationDuration: TimeInterval = 1.9
+    static let successFeedbackDuration: TimeInterval = 3
     static let failureDuration: TimeInterval = 1.9
 
     static func pose(for mood: NoriMood, elapsed: TimeInterval,
@@ -126,11 +127,12 @@ struct NoriScanFeedback {
     }
 }
 
-/// Celebrate confirmed work only; partial/failed operations get attention feedback.
+/// Celebrate confirmed work even when other items had to remain in place.
 enum NoriCleanupFeedback {
     static func mood(removed: Int, skipped: Int, failed: Int) -> NoriMood {
+        if removed > 0 { return .success }
         if failed > 0 || skipped > 0 { return .attention }
-        return removed > 0 ? .success : .idle
+        return .idle
     }
 }
 

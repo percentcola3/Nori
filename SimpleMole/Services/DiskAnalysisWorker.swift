@@ -34,6 +34,8 @@ enum DiskAnalysisWorker {
         var totalFiles = 0
         var incomplete = false
         var lastProgress = -Double.infinity
+        var scanIssues: [AnalyzeReport.ScanIssue] = []
+        var scanIssueCount = 0
     }
 
     /// Keep the largest files per kind; trimming lazily keeps appends cheap.
@@ -45,6 +47,33 @@ enum DiskAnalysisWorker {
             trimmed += list.filter { $0.kind == kind }.sorted { $0.size > $1.size }.prefix(cap)
         }
         list = trimmed.sorted { $0.size > $1.size }
+    }
+
+    static func failureDetails(for report: AnalyzeReport,
+                               using localize: (String) -> String) -> [String] {
+        var details = (report.scanIssues ?? []).map { issue in
+            let key: String
+            switch issue.kind {
+            case .otherVolume: key = "scan.reason.otherVolume"
+            case .cancelled: key = "scan.reason.cancelled"
+            case .readFailure:
+                switch issue.errorCode {
+                case EACCES, EPERM: key = "scan.reason.access"
+                case ENOENT, ENOTDIR: key = "scan.reason.changed"
+                default: key = "scan.reason.read"
+                }
+            }
+            var text = localize(key) + "\n" + issue.path
+            if let code = issue.errorCode, code != 0 {
+                text += "\n" + String(cString: strerror(code)) + " (" + String(code) + ")"
+            }
+            return text
+        }
+        if let error = report.error, !error.isEmpty { details.append(error) }
+        let omitted = (report.scanIssueCount ?? 0) - (report.scanIssues?.count ?? 0)
+        if omitted > 0 { details.append(String(format: localize("scan.reason.more"), omitted)) }
+        if details.isEmpty { details.append(localize("scan.reason.unknown") + "\n" + report.path) }
+        return details
     }
 
     static func scan(_ path: String, control: CleanupScanControl,
@@ -67,11 +96,25 @@ enum DiskAnalysisWorker {
         } catch {
             report.isPartial = true
             report.error = error.localizedDescription
+            let underlying = (error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError
+            report.scanIssues = [.init(path: root.path, kind: .readFailure,
+                errorCode: underlying?.domain == NSPOSIXErrorDomain ? Int32(underlying!.code) : nil)]
+            report.scanIssueCount = 1
             return report
         }
         var rootStat = stat()
         let rootBytes = lstat(root.path, &rootStat) == 0 ? UInt64(max(0, rootStat.st_blocks)) * 512 : 0
         let shared = SharedState()
+
+        func recordIssue(_ path: String, kind: AnalyzeReport.ScanIssue.Kind = .readFailure,
+                         errorCode: Int32? = nil) {
+            shared.lock.lock()
+            defer { shared.lock.unlock() }
+            shared.scanIssueCount += 1
+            if shared.scanIssues.count < 32 {
+                shared.scanIssues.append(.init(path: path, kind: kind, errorCode: errorCode))
+            }
+        }
 
         func makeSnapshot(partial: Bool, currentEntry: AnalyzeEntry? = nil,
                           currentPath: String? = nil) -> AnalyzeReport {
@@ -88,6 +131,8 @@ enum DiskAnalysisWorker {
                                          totalFiles: shared.totalFiles, isPartial: partial)
             snapshot.media = trimmed.sorted { $0.size > $1.size }
             snapshot.mediaSummary = shared.mediaSummary
+            snapshot.scanIssues = shared.scanIssues.sorted { $0.path < $1.path }
+            snapshot.scanIssueCount = shared.scanIssueCount
             snapshot.currentPath = currentPath
             return snapshot
         }
@@ -101,6 +146,7 @@ enum DiskAnalysisWorker {
             }
             var metadata = stat()
             let available = lstat(child.path, &metadata) == 0
+            if !available { recordIssue(child.path, errorCode: errno) }
             let directory = available && (metadata.st_mode & S_IFMT) == S_IFDIR
             var bytes: UInt64 = 0
             var partial = !available
@@ -187,7 +233,11 @@ enum DiskAnalysisWorker {
                         if control.isCancelled { partial = true; break }
                         errno = 0
                         guard let entry = fts_read(tree) else {
-                            if errno != 0 { partial = true }
+                            if errno != 0 {
+                                let code = errno
+                                partial = true
+                                recordIssue(child.path, errorCode: code)
+                            }
                             break
                         }
                         let item = entry.pointee
@@ -198,6 +248,7 @@ enum DiskAnalysisWorker {
                             if stack.last?.path == itemPath { finishDirectory() }
                         case FTS_ERR, FTS_DNR, FTS_NS:
                             partial = true
+                            recordIssue(itemPath, errorCode: item.fts_errno)
                             if stack.last?.path == itemPath {
                                 // DNR/ERR terminate this directory without a later DP.
                                 // Close it now so subsequent siblings keep their real parent.
@@ -208,9 +259,14 @@ enum DiskAnalysisWorker {
                                                     cleanable: false, isPartial: true), files: 0)
                             }
                         case FTS_F, FTS_D, FTS_SL, FTS_SLNONE:
-                            guard let info = item.fts_statp?.pointee else { partial = true; continue }
+                            guard let info = item.fts_statp?.pointee else {
+                                partial = true
+                                recordIssue(itemPath, errorCode: EIO)
+                                continue
+                            }
                             if Int32(item.fts_info) == FTS_D && info.st_dev != metadata.st_dev {
                                 partial = true
+                                recordIssue(itemPath, kind: .otherVolume)
                                 append(AnalyzeEntry(name: itemName, path: itemPath, size: 0,
                                                     isDir: true, cleanable: false, isPartial: true), files: 0)
                                 continue
@@ -280,8 +336,15 @@ enum DiskAnalysisWorker {
                         }
                         publishProgress(at: itemPath)
                     }
-                } else { partial = true }
-            } else { partial = true }
+                } else {
+                    let code = errno
+                    partial = true
+                    recordIssue(child.path, errorCode: code)
+                }
+            } else {
+                partial = true
+                if available { recordIssue(child.path, errorCode: ENOMEM) }
+            }
             while !stack.isEmpty { finishDirectory(interrupted: true) }
             // Analysis never promotes a directory to a cleanup target merely
             // because its name resembles a cache or build output directory.
@@ -305,6 +368,7 @@ enum DiskAnalysisWorker {
         let incomplete = shared.incomplete
         let directoryReports = shared.directoryReports
         shared.lock.unlock()
+        if control.isCancelled { recordIssue(root.path, kind: .cancelled) }
         var result = makeSnapshot(partial: incomplete || control.isCancelled)
         result.directoryReports = directoryReports
         return result

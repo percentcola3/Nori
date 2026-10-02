@@ -83,8 +83,6 @@ struct UninstallTabView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 8)
-            .strokeBorder(.separator.opacity(0.4), lineWidth: 1))
     }
 
     // One status line follows the current operation; no separate task list.
@@ -251,8 +249,6 @@ private struct UninstallAppRow: View {
         }
         .clipped()
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 10)
-            .strokeBorder(.separator.opacity(0.35), lineWidth: 1))
     }
 
     private var appIcon: some View {

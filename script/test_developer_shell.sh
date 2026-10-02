@@ -10,3 +10,10 @@ swiftc -O -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/script/DeveloperShellTests.swift" \
     -o "$TEST_DIR/tests"
 "$TEST_DIR/tests" "$TEST_DIR/fixture"
+swiftc -typecheck -target "$(uname -m)-apple-macos13.0" \
+    -module-cache-path "$TEST_DIR/module-cache" -framework SwiftUI -framework AppKit \
+    "$ROOT_DIR/SimpleMole/Services/DeveloperShellService.swift" \
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift" \
+    "$ROOT_DIR/SimpleMole/Views/DeveloperShellPanel.swift" \
+    "$ROOT_DIR/script/DeveloperShellViewTypecheck.swift"
+echo "Developer Shell SwiftUI typecheck passed"

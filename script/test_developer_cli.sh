@@ -60,5 +60,6 @@ SDKROOT="$CLI_SDK" swiftc -typecheck -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Views/Theme.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCLIService.swift" \
     "$ROOT_DIR/SimpleMole/Views/DeveloperCLIPanel.swift" \
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift" \
     "$TEST_DIR/CLIUIStubs.swift"
 echo "Developer CLI SwiftUI typecheck passed"

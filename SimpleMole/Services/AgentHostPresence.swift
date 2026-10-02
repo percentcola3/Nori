@@ -28,6 +28,75 @@ enum AgentHostPresence {
         !owners(ids: ids, home: home, context: context).isEmpty
     }
 
+    /// Codex can be shipped inside ChatGPT rather than as a separate Codex.app.
+    /// The host identity and its active framework must both be real bundles;
+    /// a ChatGPT installation alone is not evidence that it contains Codex.
+    static func integratedCodexOwners(context: AgentPresenceContext) -> [String] {
+        var matches = Set<String>()
+        for directory in context.applicationDirs {
+            let app = URL(fileURLWithPath: directory).appendingPathComponent("ChatGPT.app")
+                .standardizedFileURL.path
+            guard let executable = appExecutable(at: app, bundleID: "com.openai.codex"),
+                  let framework = activeFrameworkDirectory(app + "/Contents/Frameworks/Codex Framework.framework"),
+                  let info = readPropertyList(framework + "/Resources/Info.plist"),
+                  info["CFBundleIdentifier"] as? String == "com.openai.codex.framework",
+                  info["CFBundlePackageType"] as? String == "FMWK",
+                  info["CFBundleExecutable"] as? String == "Codex Framework",
+                  isRegularExecutable(framework + "/Codex Framework") else { continue }
+            matches.formUnion(["com.openai.codex", executable])
+            for (name, bundleID) in [
+                ("Codex (Service)", "com.openai.codex.helper"),
+                ("Codex (Renderer)", "com.openai.codex.helper.renderer")
+            ] {
+                if let helper = appExecutable(at: framework + "/Helpers/" + name + ".app", bundleID: bundleID) {
+                    matches.formUnion([bundleID, helper])
+                }
+            }
+        }
+        return matches.sorted()
+    }
+
+    /// Accept only the conventional Current -> <version> framework link. Its
+    /// destination must remain a physical child of this framework's Versions.
+    private static func activeFrameworkDirectory(_ framework: String) -> String? {
+        guard hasPhysicalAncestors(framework), AgentCatalog.isDirectory(framework) else { return nil }
+        let versions = framework + "/Versions"
+        if AgentCatalog.exists(versions) {
+            guard hasPhysicalAncestors(versions), AgentCatalog.isDirectory(versions) else { return nil }
+            let current = versions + "/Current"
+            let active: String
+            if AgentCatalog.isSymlink(current) {
+                guard let version = try? FileManager.default.destinationOfSymbolicLink(atPath: current),
+                      isBundleExecutableName(version), version != "Current" else { return nil }
+                active = versions + "/" + version
+            } else {
+                active = current
+            }
+            return hasPhysicalAncestors(active) && AgentCatalog.isDirectory(active) ? active : nil
+        }
+        return framework
+    }
+
+    private static func appExecutable(at app: String, bundleID: String) -> String? {
+        guard hasPhysicalAncestors(app), AgentCatalog.isDirectory(app),
+              let info = readPropertyList(app + "/Contents/Info.plist"),
+              info["CFBundleIdentifier"] as? String == bundleID,
+              info["CFBundlePackageType"] as? String == "APPL",
+              let executable = info["CFBundleExecutable"] as? String,
+              isBundleExecutableName(executable),
+              isRegularExecutable(app + "/Contents/MacOS/" + executable) else { return nil }
+        return executable
+    }
+
+    private static func readPropertyList(_ path: String) -> [String: Any]? {
+        guard let data = readRegularFile(path, maximumBytes: maximumManifestBytes) else { return nil }
+        return (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any]
+    }
+
+    private static func isBundleExecutableName(_ name: String) -> Bool {
+        !name.isEmpty && !name.contains("/") && !name.contains("\0") && name != "." && name != ".."
+    }
+
     /// 只返回确实装有匹配扩展的宿主，供删除时的活动进程 / bundle 占用复核。
     static func owners(ids: [String], home: String, context: AgentPresenceContext) -> [String] {
         let expected = Set(ids.map { $0.lowercased() }.filter { !$0.isEmpty })
@@ -58,15 +127,7 @@ enum AgentHostPresence {
             for name in host.bundleNames {
                 let app = URL(fileURLWithPath: directory).appendingPathComponent(name + ".app")
                     .standardizedFileURL.path
-                guard hasPhysicalAncestors(app), AgentCatalog.isDirectory(app),
-                      let data = readRegularFile(app + "/Contents/Info.plist", maximumBytes: maximumManifestBytes),
-                      let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
-                      plist["CFBundleIdentifier"] as? String == host.bundleID,
-                      plist["CFBundlePackageType"] as? String == "APPL",
-                      let executable = plist["CFBundleExecutable"] as? String,
-                      !executable.isEmpty, !executable.contains("/"), !executable.contains("\0"),
-                      executable != ".", executable != "..",
-                      isRegularExecutable(app + "/Contents/MacOS/" + executable) else { continue }
+                guard appExecutable(at: app, bundleID: host.bundleID) != nil else { continue }
                 return true
             }
         }
@@ -103,7 +164,10 @@ enum AgentHostPresence {
     }
 
     private static func isRegularExecutable(_ path: String) -> Bool {
-        hasPhysicalAncestors(path) && isRegularFile(path) && FileManager.default.isExecutableFile(atPath: path)
+        var metadata = stat()
+        return hasPhysicalAncestors(path) && lstat(path, &metadata) == 0
+            && (metadata.st_mode & S_IFMT) == S_IFREG && metadata.st_size > 0
+            && FileManager.default.isExecutableFile(atPath: path)
     }
 
     private static func isRegularFile(_ path: String) -> Bool {

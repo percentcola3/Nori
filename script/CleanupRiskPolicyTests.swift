@@ -18,6 +18,7 @@ struct CleanupRiskPolicyTests {
         try testSourceMappings(home: policyHome)
         try testUninstalledAgentResidual(home: policyHome)
         try testRuntimeReassessment(home: policyHome)
+        try testLiveCacheBoundaries(home: policyHome)
         try testPathSelection()
         try testLongTailMerging(home: policyHome)
         try testAgePolicyBoundaries()
@@ -26,6 +27,8 @@ struct CleanupRiskPolicyTests {
         try testAnalyzeEntrySafety()
         try testDevEnvRelatedPackages()
         try testAutomationProtection(home: policyHome)
+        try testSharedCleanupContentProtection(home: policyHome)
+        try testCleanupFilenameBoundaries(home: policyHome)
         try testCacheRoundTrip(fixture: fixture)
         try testNetmonParsing()
         try testCacheMapPolicy(home: policyHome)
@@ -382,11 +385,11 @@ struct CleanupRiskPolicyTests {
                                               homeDirectory: home).risk == .safe,
                    "idle guarded cache did not remain Safe")
         try expect(CleanupRiskPolicy.reassess(category, running: running,
-                                              homeDirectory: home).risk == .protected,
-                   "running cache owner was not Protected")
+                                              homeDirectory: home).risk == .safe,
+                   "running cache owner suppressed its unused rebuildable files")
         try expect(CleanupRiskPolicy.reassess(category, running: .unavailable,
-                                              homeDirectory: home).risk == .protected,
-                   "unknown process state did not fail closed")
+                                              homeDirectory: home).risk == .safe,
+                   "a missing process list replaced the final actual file-activity guard")
         try expect(CleanupRiskPolicy.isEligible(category, mode: .quickClean, running: idle,
                                                 homeDirectory: home),
                    "Safe Trash category was rejected by Quick Clean")
@@ -400,17 +403,36 @@ struct CleanupRiskPolicyTests {
             reasonKey: "cleanup.risk.rebuildableCache")
         let mixedSubset = try unwrap(CleanupRiskPolicy.runtimeEligibleSubset(
             mixed, running: running, homeDirectory: home), "mixed runtime subset")
+        let selectedRunning = mixed.selectingPaths([path])
+        let bothOwners = RunningApplicationSnapshot(bundleIdentifiers: ["com.example.tool", "com.example.idle"],
+            processNames: ["Unrelated App"])
+        try expect(CleanupRiskPolicy.blockingOwners([selectedRunning], running: bothOwners,
+                                                     homeDirectory: home).isEmpty,
+                   "preflight required quitting an application just to clean its rebuildable cache")
+        try expect(CleanupRiskPolicy.blockingOwners([mixedSubset], running: running,
+                                                     homeDirectory: home).isEmpty,
+                   "preflight blocked an idle selected path because its visible sibling was running")
+        try expect(CleanupRiskPolicy.blockingOwners([selectedRunning],
+                                                     running: RunningApplicationSnapshot(
+                                                        bundleIdentifiers: ["com.example.unrelated"]),
+                                                     homeDirectory: home).isEmpty,
+                   "preflight included an unrelated cache owner")
+        try expect(CleanupRiskPolicy.blockingOwners([selectedRunning], running: idle,
+                                                     homeDirectory: home).isEmpty
+                   && mixed.selectedPathCount == 2 && selectedRunning.selectedPathCount == 1
+                   && selectedRunning.isPathSelected(path) && !selectedRunning.isPathSelected(idlePath),
+                   "owner preflight blocked idle state or mutated the selected paths")
         try expect(mixedSubset.paths == [path, idlePath] && mixedSubset.bytes == 3 &&
-                   mixedSubset.selectedPathCount == 1 &&
-                   mixedSubset.isPathSelected(idlePath),
-                   "one running app suppressed unrelated cache selection")
+                   mixedSubset.selectedPathCount == 2 &&
+                   mixedSubset.isPathSelected(path) && mixedSubset.isPathSelected(idlePath),
+                   "a running application cleared cache selections before file-activity verification")
         try expect(CleanupRiskPolicy.isEligible(mixedSubset, mode: .quickClean,
                                                 running: running, homeDirectory: home),
                    "idle subset was rejected because a visible sibling is running")
         let unknownSubset = try unwrap(CleanupRiskPolicy.runtimeEligibleSubset(
             mixed, running: .unavailable, homeDirectory: home), "incomplete runtime subset")
-        try expect(unknownSubset.paths == mixed.paths && !unknownSubset.selected,
-                   "incomplete runtime inventory did not clear selection while preserving totals")
+        try expect(unknownSubset.paths == mixed.paths && unknownSubset.selectedPathCount == 2,
+                   "incomplete process inventory cleared regenerable files before the final open-file probe")
 
         let browser = CleanupCategory(
             name: "Browsers", paths: [home + "/Library/Caches/Google/Chrome"], bytes: 5,
@@ -419,8 +441,17 @@ struct CleanupRiskPolicyTests {
         let browserRunning = try unwrap(CleanupRiskPolicy.runtimeEligibleSubset(
             browser, running: RunningApplicationSnapshot(processNames: ["Google Chrome"]),
             homeDirectory: home), "running browser subset")
-        try expect(browserRunning.paths == browser.paths && !browserRunning.selected,
-                   "running browser cache disappeared instead of staying visible")
+        try expect(browserRunning.paths == browser.paths && browserRunning.selected,
+                   "running browser cache did not reach the final file-activity verification")
+        let browsersAndUnrelated = RunningApplicationSnapshot(bundleIdentifiers: ["com.google.Chrome"],
+            processNames: ["Google Chrome", "Unrelated App"])
+        try expect(CleanupRiskPolicy.blockingOwners([browser], running: browsersAndUnrelated,
+                                                     homeDirectory: home).isEmpty,
+                   "browser cache preflight unnecessarily required the owner to quit")
+        try expect(CleanupRiskPolicy.blockingOwners([browser], running: idle,
+                                                     homeDirectory: home).isEmpty
+                   && browser.selected && browser.selectedPathCount == 1,
+                   "browser preflight blocked idle state or changed its selection")
 
         let warning = CleanupCategory(name: "Installer", paths: [home + "/Downloads/a.dmg"], bytes: 1,
                                       source: .installer, risk: .warning, disposal: .permanentDelete,
@@ -441,6 +472,90 @@ struct CleanupRiskPolicyTests {
                    "manual owner command was rejected with filesystem warnings")
     }
 
+    private static func testLiveCacheBoundaries(home: String) throws {
+        let running = RunningApplicationSnapshot(
+            bundleIdentifiers: ["com.example.tool", "com.google.Chrome", "com.apple.dt.Xcode", "com.openai.codex"],
+            processNames: ["Google Chrome", "Telegram", "Cursor", "Xcode", "Simulator", "codex", "Unrelated App"])
+        let guards: [CleanupActivityGuard] = [
+            .reverseDNSCache, .browser, .messenger, .ide, .xcode,
+            .simulator, .packageManager, .openFile, .aiAgent
+        ]
+        for activity in guards {
+            var cache = CleanupCategory(name: "Audited cache", paths: [home + "/Library/Caches/com.example.tool/idle"],
+                bytes: 3, selected: true, source: .core, risk: .safe, disposal: .permanentDelete,
+                applyRoute: .genericTrash, activityGuard: activity, reasonKey: "cleanup.risk.rebuildableCache")
+            cache.activityOwners = ["codex", "com.openai.codex"]
+            for snapshot in [running, .unavailable] {
+                try expect(CleanupRiskPolicy.usesFileActivityGuard(cache),
+                           "audited Safe cache lost its final file-activity guard: \(activity)")
+                for mode in [CleanupExecutionMode.manual, .quickClean, .automatic] {
+                    try expect(CleanupRiskPolicy.isEligible(cache, mode: mode, running: snapshot, homeDirectory: home),
+                               "an application/process-list state blocked regenerable cache files: \(activity)")
+                }
+                let subset = try unwrap(CleanupRiskPolicy.runtimeEligibleSubset(cache,
+                    running: snapshot, homeDirectory: home), "live cache subset")
+                try expect(subset.selectedPathCount == 1 && subset.bytes == 3
+                           && CleanupRiskPolicy.blockingOwners([subset], running: snapshot, homeDirectory: home).isEmpty,
+                           "cache preflight mutated selection or demanded quitting its owner: \(activity)")
+            }
+        }
+
+        for reason in ["agents.reason.review", "agents.reason.skill", "agents.reason.showOnly"] {
+            var sensitive = CleanupCategory(name: "Sensitive Agent resource", paths: [home + "/.codex/resource"],
+                bytes: 5, selected: true, source: .aiSession, risk: .warning, disposal: .permanentDelete,
+                applyRoute: .aiTrash, activityGuard: .aiAgent, reasonKey: reason)
+            sensitive.activityOwners = ["codex"]
+            try expect(!CleanupRiskPolicy.usesFileActivityGuard(sensitive),
+                       "sensitive Agent resource was treated as regenerable cache: \(reason)")
+            for snapshot in [running, .unavailable] {
+                try expect(!CleanupRiskPolicy.isEligible(sensitive, mode: .manual,
+                    running: snapshot, homeDirectory: home)
+                    && CleanupRiskPolicy.runtimeEligibleSubset(sensitive, running: snapshot,
+                        homeDirectory: home)?.selectedPathCount == 0,
+                    "running/unknown state admitted sensitive Agent data: \(reason)")
+            }
+            try expect(CleanupRiskPolicy.blockingOwners([sensitive], running: running,
+                homeDirectory: home) == ["codex"]
+                && CleanupRiskPolicy.blockingOwners([sensitive.clearingSelection()], running: running,
+                    homeDirectory: home).isEmpty,
+                "sensitive preflight included unrelated owners or an unselected resource")
+        }
+
+        var oldLeftover = CleanupCategory(name: "Legacy Agent whole-data root", paths: [home + "/.codex"],
+            bytes: 7, selected: true, source: .appLeftover, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .aiAgent, reasonKey: "cleanup.risk.agentLeftover")
+        oldLeftover.activityOwners = ["codex"]
+        let idle = RunningApplicationSnapshot()
+        try expect(!CleanupRiskPolicy.usesFileActivityGuard(oldLeftover)
+                   && CleanupRiskPolicy.reassess(oldLeftover, running: idle, homeDirectory: home).risk == .warning,
+                   "an obsolete Safe snapshot made a persistent Agent root cache-cleanable")
+        try expect(CleanupRiskPolicy.isEligible(oldLeftover, mode: .manual, running: idle, homeDirectory: home)
+                   && !CleanupRiskPolicy.isEligible(oldLeftover, mode: .quickClean, running: idle, homeDirectory: home)
+                   && !CleanupRiskPolicy.isEligible(oldLeftover, mode: .automatic, running: idle, homeDirectory: home),
+                   "legacy Agent whole-data root lost its manual-only boundary")
+        try expect(CleanupRiskPolicy.runtimeEligibleSubset(oldLeftover, running: idle,
+            homeDirectory: home)?.risk == .warning,
+            "legacy Agent root still appeared as Safe in the runtime inventory")
+        for snapshot in [running, .unavailable] {
+            try expect(!CleanupRiskPolicy.isEligible(oldLeftover, mode: .manual, running: snapshot,
+                homeDirectory: home), "legacy Agent root bypassed its active/unknown owner protection")
+        }
+
+        var excluded = oldLeftover
+        excluded.reasonKey = "cleanup.risk.rebuildableCache"
+        try expect(!CleanupRiskPolicy.usesFileActivityGuard(excluded),
+                   "an app-leftover source bypassed its required owner check")
+        excluded.source = .core
+        excluded.activityGuard = .unsupported
+        try expect(!CleanupRiskPolicy.usesFileActivityGuard(excluded)
+                   && !CleanupRiskPolicy.isEligible(excluded, mode: .manual, running: idle, homeDirectory: home),
+                   "an unsupported Safe route bypassed execution protection")
+        excluded.activityGuard = .browser
+        excluded.applyRoute = .none
+        try expect(!CleanupRiskPolicy.usesFileActivityGuard(excluded),
+                   "a category without a filesystem execution route used the cache exception")
+    }
+
     private static func testAutomationProtection(home: String) throws {
         for path in [
             home + "/.codex/sessions",
@@ -457,6 +572,154 @@ struct CleanupRiskPolicyTests {
         try expect(CleanupRiskPolicy.isForbiddenAutomationPath("relative/cache",
                                                                homeDirectory: home),
                    "automation accepted a relative path")
+    }
+
+    private static func testSharedCleanupContentProtection(home: String) throws {
+        let pnpmRoot = home + "/Library/Caches/pnpm"
+        let source = pnpmRoot + "/dlx/cache-hash/1720000000/node_modules/@bedrock/tool/templates/spa/src"
+        for leaf in ["models", "models/user.ts", "model", "config", "config/index.ts",
+                     "config.json", "settings", "settings.json"] {
+            let path = source + "/" + leaf
+            try expect(CleanupRiskPolicy.core(section: "pnpm Cache", path: path,
+                                              homeDirectory: home).risk == .safe,
+                       "pnpm template path lost its rebuildable policy: \(path)")
+            try expect(!CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: home,
+                                                                 rebuildableRoot: pnpmRoot),
+                       "generated pnpm template source was treated as durable content: \(path)")
+        }
+        for leaf in ["models/model.gguf", "models/weights.safetensors", "models/model.bin",
+                     "models/model.onnx", "models/adapter_model.bin", "models/predictor.mlmodelc/metadata",
+                     "models/state.db", "models/state.db/metadata",
+                     "models/state.sqlite", "models/state.db-wal", "credentials", "auth.json",
+                     "tokens", "secrets", "sessions", "skills", "mcp.json", ".git"] {
+            let path = source + "/" + leaf
+            try expect(CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: home,
+                                                                rebuildableRoot: pnpmRoot),
+                       "pnpm template exception admitted model weights or durable data: \(path)")
+        }
+        for path in [pnpmRoot + "/models", pnpmRoot + "/dlx/cache/models",
+                     pnpmRoot + "/dlx/cache/templates/spa/src/models",
+                     pnpmRoot + "/dlx/cache/node_modules/@bedrock/tool/models",
+                     home + "/Library/Caches/Unknown/templates/spa/src/models",
+                     home + "/Code/node_modules/@bedrock/tool/templates/spa/src/models"] {
+            try expect(CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: home,
+                                                                rebuildableRoot: pnpmRoot),
+                       "unknown model directory inherited the package-template exception: \(path)")
+        }
+        let templateModels = source + "/models"
+        try expect(CleanupRiskPolicy.isProtectedCleanupPath(templateModels, homeDirectory: home),
+                   "an unverified template path received cache-relative protection")
+        try expect(CleanupRiskPolicy.isProtectedCleanupPath(templateModels, homeDirectory: home,
+                                                            rebuildableRoot: home + "/Code"),
+                   "an unverified root granted a template exception")
+        try expect(CleanupRiskPolicy.isProtectedCleanupPath(templateModels, homeDirectory: home,
+                                                            rebuildableRoot: pnpmRoot + "/./"),
+                   "shared content guard normalized away an unsafe root literal")
+        try expect(CleanupRiskPolicy.isSensitiveAutomationPath(templateModels),
+                   "manual template exception weakened automation protection")
+
+        let cache = home + "/Library/Caches/com.example.tool"
+        for leaf in ["models", "preferences", "settings.json", "config", "config/generated.js", "data.db", "data.sqlite3",
+                     "Cookies", "cache-shm", "project.safetensors"] {
+            try expect(CleanupRiskPolicy.isProtectedCleanupPath(cache + "/" + leaf,
+                                                                homeDirectory: home, rebuildableRoot: cache),
+                       "ordinary cache admitted protected content: \(leaf)")
+        }
+        try expect(!CleanupRiskPolicy.isProtectedCleanupPath(cache + "/generated.js", homeDirectory: home,
+                                                             rebuildableRoot: cache),
+                   "ordinary rebuildable cache content was blocked")
+        try expect(CleanupRiskPolicy.isProtectedCleanupPath(cache + "/./generated.js",
+                                                            homeDirectory: home, rebuildableRoot: cache),
+                   "shared content guard normalized away an unsafe path literal")
+        try expect(CleanupRiskPolicy.isProtectedCleanupPath(home + "/Downloads/Tool.app", homeDirectory: home)
+                   && !CleanupRiskPolicy.isProtectedCleanupPath(home + "/Downloads/Tool.app",
+                                                               homeDirectory: home, allowApplicationBundle: true),
+                   "application bundle guard did not preserve the uninstall-only exception")
+        let verifiedAgentCache = home + "/.codex/log/cache"
+        try expect(!CleanupRiskPolicy.isProtectedCleanupPath(verifiedAgentCache + "/generated.txt",
+                                                             homeDirectory: home, rebuildableRoot: verifiedAgentCache,
+                                                             rootIsVerifiedRebuildable: true),
+                   "verified Agent cache inherited its durable parent's structural protection")
+        try expect(CleanupRiskPolicy.isProtectedCleanupPath(verifiedAgentCache + "/config/secrets.txt",
+                                                            homeDirectory: home, rebuildableRoot: verifiedAgentCache,
+                                                            rootIsVerifiedRebuildable: true),
+                   "verified Agent cache admitted durable data beneath a config directory")
+        try expect(CleanupRiskPolicy.isProtectedCleanupPath(verifiedAgentCache + "/generated.txt",
+                                                            homeDirectory: home, rebuildableRoot: verifiedAgentCache),
+                   "an unverified Agent data descendant inherited a cache exception")
+        for root in [home + "/.ollama/models", home + "/.cache/huggingface/hub",
+                     home + "/.cache/lm-studio/models/weights", home + "/.cache/torch/hub"] {
+            try expect(CleanupRiskPolicy.isProtectedCleanupPath(root + "/metadata.json", homeDirectory: home,
+                                                                rebuildableRoot: root, rootIsVerifiedRebuildable: true),
+                       "a falsely verified cache root overrode a real model depot: \(root)")
+        }
+        let compiledModel = source + "/models/predictor.mlmodelc"
+        let metadata = compiledModel + "/metadata.json"
+        let binaryModelChild = source + "/models/model.bin/metadata.json"
+        let ordinaryModelChild = cache + "/models/metadata.json"
+        // Mixed-tree splitting and cached inventories can rebase the same
+        // object from the package root to a directory or an individual child.
+        // Full model ancestry must survive each form of that inventory.
+        for (path, roots) in [(metadata, [pnpmRoot, compiledModel, metadata]),
+                              (binaryModelChild, [pnpmRoot, binaryModelChild]),
+                              (ordinaryModelChild, [cache, ordinaryModelChild])] {
+            for root in roots {
+                for verified in [false, true] {
+                    try expect(CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: home,
+                        rebuildableRoot: root, rootIsVerifiedRebuildable: verified),
+                        "rebasing a cached child lost its model ancestry: \(path), root: \(root)")
+                }
+            }
+        }
+        let sourceModel = source + "/models/user.ts"
+        for root in [pnpmRoot, source + "/models", sourceModel] {
+            try expect(!CleanupRiskPolicy.isProtectedCleanupPath(sourceModel, homeDirectory: home,
+                                                                 rebuildableRoot: root),
+                       "rebasing a split template source changed its eligibility: \(root)")
+        }
+        for ancestor in ["config", "configuration", "settings", "credentials", "database", "session",
+                         "sessions", "skills", "mcp", "storage.sqlite", "weights.mlmodelc"] {
+            let child = cache + "/" + ancestor + "/generated.js"
+            for root in [cache, cache + "/" + ancestor, child] {
+                try expect(CleanupRiskPolicy.isProtectedCleanupPath(child, homeDirectory: home,
+                                                                    rebuildableRoot: root),
+                           "an ordinary cached child lost its durable ancestry: \(child), root: \(root)")
+            }
+        }
+        let sourceConfig = source + "/config/generated.ts"
+        for root in [pnpmRoot, source + "/config", sourceConfig] {
+            try expect(!CleanupRiskPolicy.isProtectedCleanupPath(sourceConfig, homeDirectory: home,
+                                                                 rebuildableRoot: root),
+                       "ordinary full-path checks blocked a split pnpm template config source: \(root)")
+        }
+        let catalogCache = cache + "/config/rebuildable"
+        try expect(!CleanupRiskPolicy.isProtectedCleanupPath(catalogCache + "/generated.js", homeDirectory: home,
+            rebuildableRoot: catalogCache, rootIsVerifiedRebuildable: true),
+            "catalog-verified cache lost its explicitly allowed relative context")
+    }
+
+    private static func testCleanupFilenameBoundaries(home: String) throws {
+        let cache = home + "/Library/Caches/com.example.tool"
+        for leaf in [".weights.GGUF", "权重.v2.SAFETENSORS", "réseau.ONNX",
+                     "predictor.版本.MLMODELC/metadata.json"] {
+            let path = cache + "/" + leaf
+            try expect(CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: home,
+                                                                rebuildableRoot: cache),
+                       "filename parsing admitted a model signature: \(leaf)")
+            try expect(CleanupRiskPolicy.isSensitiveAutomationPath(path),
+                       "automation filename parsing lost a model signature: \(leaf)")
+        }
+        for leaf in [".state.SQLITE3", "备份.v2.DB/record", "journal.snapshot.REALM",
+                     "缓存.日志-wal"] {
+            try expect(CleanupRiskPolicy.isProtectedCleanupPath(cache + "/" + leaf,
+                                                                homeDirectory: home, rebuildableRoot: cache),
+                       "filename parsing admitted a database or sidecar: \(leaf)")
+        }
+        for leaf in [".cache-entry", "snapshot.gguf.cache", "缓存.v2.tmp", "entry%2Egguf"] {
+            try expect(!CleanupRiskPolicy.isProtectedCleanupPath(cache + "/" + leaf,
+                                                                 homeDirectory: home, rebuildableRoot: cache),
+                       "filename parsing changed a generated cache boundary: \(leaf)")
+        }
     }
 
     private static func testPathSelection() throws {
@@ -762,7 +1025,7 @@ struct CleanupRiskPolicyTests {
                                                         homeDirectory: home),
                    "Keychains was not protected content")
 
-        // 运行态守卫：Telegram 运行中，媒体缓存升级为 Protected 且清空选择。
+        // Telegram 可再生媒体缓存依据实际打开文件检查，不以整个应用运行为由拒绝。
         let runningTelegram = RunningApplicationSnapshot(
             bundleIdentifiers: ["ru.keepcoder.Telegram"])
         let mediaCategory = CleanupCategory(
@@ -773,14 +1036,14 @@ struct CleanupRiskPolicyTests {
             disposal: media.disposal, applyRoute: media.applyRoute,
             activityGuard: media.activityGuard, reasonKey: media.reasonKey)
         try expect(CleanupRiskPolicy.reassess(mediaCategory, running: runningTelegram,
-                                              homeDirectory: home).risk == .protected,
-                   "running Telegram did not protect its media cache")
+                                              homeDirectory: home).risk == .safe,
+                   "running Telegram prevented verification of its unused media cache files")
         let subset = CleanupRiskPolicy.runtimeEligibleSubset(mediaCategory,
                                                              running: runningTelegram,
                                                              homeDirectory: home)
-        try expect(subset?.selectedPathCount == 0,
-                   "running Telegram kept its cache selected")
-        // Brave 运行中 → 浏览器守卫同样拦截。
+        try expect(subset?.selectedPathCount == 1,
+                   "running Telegram cleared cache selection before the open-file guard")
+        // Brave 使用同一文件占用策略，持久用户数据的分类仍受保护。
         let runningBrave = RunningApplicationSnapshot(processNames: ["Brave Browser"])
         let braveSW = CleanupCategory(
             name: "Brave Service Worker",
@@ -790,12 +1053,11 @@ struct CleanupRiskPolicyTests {
             applyRoute: .genericTrash, activityGuard: .browser,
             reasonKey: "cleanup.risk.rebuildableCache")
         try expect(CleanupRiskPolicy.reassess(braveSW, running: runningBrave,
-                                              homeDirectory: home).risk == .protected,
-                   "running Brave did not protect its Service Worker")
+                                              homeDirectory: home).risk == .safe,
+                   "running Brave prevented verification of its unused Service Worker cache")
     }
 
-    /// 长尾合并：同一分桶里 <100MB 的 genericTrash 安全项凑满 3 个并成
-    /// 「其他」；特殊路线、IM 守卫和不足 3 个的尾巴保持独立行。
+    /// 长尾合并只影响展示；成员的执行策略、年龄门、归属者与扫描身份必须保留。
     private static func testLongTailMerging(home: String) throws {
         let cachePath = home + "/Library/Caches/"
         func tail(_ name: String, _ suffix: String, megabytes: UInt64,
@@ -805,12 +1067,14 @@ struct CleanupRiskPolicyTests {
             return CleanupCategory(
                 name: name, paths: [path], bytes: megabytes * 1024 * 1024,
                 pathBytes: [path: megabytes * 1024 * 1024],
+                pathIdentities: [path: "scan-" + suffix],
                 selected: selected, source: .core, risk: .safe,
                 disposal: .permanentDelete, applyRoute: .genericTrash,
                 activityGuard: kind, reasonKey: "cleanup.risk.rebuildableCache")
         }
 
-        let smallA = tail("Media Analysis", "com.apple.mediaanalysis", megabytes: 24)
+        let smallA = tail("Media Analysis", "com.apple.mediaanalysis", megabytes: 24,
+                          guard: .reverseDNSCache)
         let smallB = tail("helpd", "com.apple.helpd", megabytes: 8,
                           guard: .reverseDNSCache)
         let smallC = tail("GeoServices", "com.apple.geod", megabytes: 57,
@@ -826,7 +1090,11 @@ struct CleanupRiskPolicyTests {
         try expect(other.selectedPathCount == 2 && !other.isPathSelected(smallC.paths[0]),
                    "merged row selection is not the union of member selections")
         try expect(other.activityGuard == .reverseDNSCache,
-                   "merged guard is not the strictest member guard")
+                   "merged row changed its matching runtime guard")
+        try expect(other.pathIdentities == [smallA.paths[0]: "scan-com.apple.mediaanalysis",
+                                           smallB.paths[0]: "scan-com.apple.helpd",
+                                           smallC.paths[0]: "scan-com.apple.geod"],
+                   "merged row changed the identities authorized by the scan")
 
         // 不足 3 个的尾巴不合并。
         let pair = CleanupCategory.mergingLongTail([smallA, smallB, big], homeDirectory: home)
@@ -862,21 +1130,66 @@ struct CleanupRiskPolicyTests {
         try expect(bucketed.count == 2,
                    "trash tail must merge within its own bucket, not with caches")
 
-        // 浏览器守卫并进「其他」后，执行前评估只会更保守：任一浏览器在运行
-        // 就整组跳过，绝不放宽到逐路径删除。
+        // 一个正在运行的浏览器只能保护它自己的组，不应连带冻结无关缓存。
+        let idleTail = tail("Idle Cache", "idle-cache", megabytes: 7)
         let browserTail = tail("Edge", "com.microsoft.edgemac", megabytes: 15,
                                guard: .browser)
         let mixedTail = CleanupCategory.mergingLongTail(
-            [smallA, browserTail, smallB], homeDirectory: home)
-        let mixedOther = try unwrap(mixedTail.first { $0.name == "cleanup.group.other" },
-                                    "mixed tail row")
-        try expect(mixedOther.activityGuard == .browser,
-                   "browser member must promote the merged guard to browser")
+            [idleTail, browserTail, smallB], homeDirectory: home)
+        try expect(mixedTail.count == 3 && !mixedTail.contains { $0.name == "cleanup.group.other" },
+                   "different runtime guards merged into one execution policy")
         let runningEdge = RunningApplicationSnapshot(
             bundleIdentifiers: ["com.microsoft.edgemac"], processNames: [])
-        try expect(CleanupRiskPolicy.reassess(mixedOther, running: runningEdge,
-                                              homeDirectory: home).risk == .protected,
-                   "running browser must protect the whole merged row")
+        let retainedBrowser = try unwrap(mixedTail.first { $0.id == browserTail.id }, "browser row")
+        let retainedIdle = try unwrap(mixedTail.first { $0.id == idleTail.id }, "idle cache row")
+        try expect(CleanupRiskPolicy.reassess(retainedBrowser, running: runningEdge,
+                                              homeDirectory: home).risk == .safe,
+                   "long-tail rendering reintroduced whole-browser cache blocking")
+        try expect(CleanupRiskPolicy.isEligible(retainedIdle, mode: .manual,
+                                               running: runningEdge, homeDirectory: home),
+                   "running browser protected an unrelated idle cache")
+
+        // 同一展示分桶中的其他策略差异也必须保持独立，不能用首项覆盖后项。
+        var differentSource = smallC
+        differentSource.source = .unknown
+        var differentRetention = smallC
+        differentRetention.retention = CleanupAgePolicy.developerRetention
+        var differentReason = smallC
+        differentReason.reasonKey = "cleanup.risk.staleDeviceSupport"
+        var differentOwners = smallC
+        differentOwners.activityOwners = ["owner.app"]
+        for distinct in [differentSource, differentRetention, differentReason, differentOwners] {
+            let separated = CleanupCategory.mergingLongTail(
+                [smallA, smallB, distinct], homeDirectory: home)
+            try expect(separated.count == 3,
+                       "different execution metadata merged into one category")
+        }
+
+        // 完全相同的开发者缓存策略可合并；7 天年龄门、原因与归属列表不能丢失。
+        let ownedTails = [smallA, smallB, smallC].enumerated().map { index, original in
+            var owned = original
+            owned.source = .developerCache
+            owned.activityGuard = .aiAgent
+            owned.retention = CleanupAgePolicy.developerRetention
+            owned.reasonKey = "cleanup.risk.staleDeviceSupport"
+            owned.activityOwners = index == 0 ? ["owner.app", "owner.helper"]
+                : ["owner.helper", "owner.app", "owner.app"]
+            return owned
+        }
+        let ownedMerged = CleanupCategory.mergingLongTail(ownedTails, homeDirectory: home)
+        let ownedOther = try unwrap(ownedMerged.first, "owned merged row")
+        try expect(ownedMerged.count == 1
+                   && ownedOther.source == .developerCache
+                   && ownedOther.activityGuard == .aiAgent
+                   && ownedOther.retention == CleanupAgePolicy.developerRetention
+                   && ownedOther.reasonKey == ownedTails[0].reasonKey
+                   && Set(ownedOther.activityOwners) == ["owner.app", "owner.helper"],
+                   "merged execution policy lost retention, owners or reason metadata")
+        let runningOwner = RunningApplicationSnapshot(
+            bundleIdentifiers: ["owner.app"], processNames: [])
+        try expect(CleanupRiskPolicy.isEligible(ownedOther, mode: .manual,
+                                                running: runningOwner, homeDirectory: home),
+                   "merged cache metadata reintroduced whole-owner blocking")
     }
 
     /// 7 天门槛的边界行为：恰好到期算未活跃；差一秒算活跃；时间缺失、
@@ -933,16 +1246,16 @@ struct CleanupRiskPolicyTests {
         let telegramRunning = RunningApplicationSnapshot(
             bundleIdentifiers: [], processNames: ["Telegram"])
         try expect(CleanupRiskPolicy.reassess(telegramCategory, running: telegramRunning,
-                                          homeDirectory: home).risk == .protected,
-               "Telegram running must still protect its own cache")
+                                          homeDirectory: home).risk == .safe,
+               "Telegram's unused cache must reach actual file-activity verification")
         let unknownOwner = CleanupCategory(
             name: "IM Cache", paths: [home + "/Library/Application Support/Mystery/Cache"],
             bytes: 1, source: .core, risk: .safe, disposal: .permanentDelete,
             applyRoute: .genericTrash, activityGuard: .messenger,
             reasonKey: "cleanup.risk.rebuildableCache")
         try expect(CleanupRiskPolicy.reassess(unknownOwner, running: weChatRunning,
-                                          homeDirectory: home).risk == .protected,
-               "unrecognizable messenger paths must fall back to whole-family protection")
+                                          homeDirectory: home).risk == .safe,
+               "an audited messenger cache must use file activity rather than whole-family running state")
     }
 
     private static func unwrap<T>(_ value: T?, _ name: String) throws -> T {

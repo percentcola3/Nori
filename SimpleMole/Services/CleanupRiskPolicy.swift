@@ -56,6 +56,51 @@ enum CleanupRiskPolicy {
         "/System", "/Library", "/Applications", "/usr", "/bin", "/sbin",
         "/private", "/var", "/etc", "/dev"
     ]
+    private static let modelFileExtensions: Set<String> = [
+        "gguf", "safetensors", "ckpt", "mlmodel", "mlmodelc",
+        "pt", "pth", "onnx", "tflite"
+    ]
+    private static let modelBinaryNames: Set<String> = [
+        "pytorch_model.bin", "adapter_model.bin", "model.bin"
+    ]
+    private static let modelDepots = [
+        "/.ollama/models", "/.cache/huggingface", "/.cache/lm-studio/models", "/.cache/torch"
+    ]
+    private static let databaseFileExtensions: Set<String> = ["db", "sqlite", "sqlite3", "realm"]
+    private static let databaseSidecarSuffixes = ["-wal", "-shm", "-journal"]
+    private static let durableCleanupNames: Set<String> = [
+        "credentials", "credential", "sessions", "session", "databases", "database",
+        "models", "model", "auth.json", "history.jsonl", "cookies", "history",
+        "preferences", "settings.json", "tokens", "secrets", "local storage",
+        "indexeddb", "session storage", "keychains", "conversations", "userdata",
+        "user data", "skills", "skill.md", "mcp", "mcp.json", "mcp-config.json",
+        "mcp_config.json", "config.toml", "config.json", "settings", "config", "configuration"
+    ]
+    private static let templateSourceNames: Set<String> = [
+        "models", "model", "settings.json", "config.toml", "config.json",
+        "settings", "config", "configuration"
+    ]
+    private static let sensitiveAutomationComponents: Set<String> = [
+        ".git", "models", "sessions", "conversations", "userdata",
+        "user data", "docker", "vms"
+    ]
+    private static let sensitiveAutomationFragments = [
+        "/.codex/sessions", "/.codex/log", "/.codex/auth.json",
+        "/.codex/history.jsonl", "/.claude/projects", "/.claude/todos",
+        "/.claude/shell-snapshots", "/.gemini/",
+        "/.local/share/opencode/project",
+        "/library/application support/codex", "/.ollama/models",
+        "/.cache/huggingface", "/.cache/lm-studio/models", "/.cache/torch",
+        "/library/containers/com.docker", "/library/group containers/group.com.docker",
+        "/.docker/contexts", "/.docker/config.json"
+    ]
+
+    private static func hasModelFileSignature(_ component: String) -> Bool {
+        // Components already belong to a normalized path. Creating relative
+        // file URLs here needlessly resolves each name against the working directory.
+        modelBinaryNames.contains(component)
+            || modelFileExtensions.contains((component as NSString).pathExtension)
+    }
     static func core(section: String,
                      path: String,
                      homeDirectory: String = NSHomeDirectory()) -> CleanupPolicyDescriptor {
@@ -642,21 +687,41 @@ enum CleanupRiskPolicy {
               reasonKey: "cleanup.risk.ownerCommand")
     }
 
+    /// Audited rebuildable filesystem items use the actual file-activity guard
+    /// at the deletion edge. A running owner alone does not make its idle cache
+    /// files unsafe. Whole uninstall leftovers remain sensitive even when an
+    /// older inventory incorrectly stored their risk as Safe.
+    static func usesFileActivityGuard(_ category: CleanupCategory) -> Bool {
+        guard category.risk == .safe, category.disposal == .permanentDelete,
+              category.activityGuard != .unsupported, category.source != .appLeftover,
+              category.reasonKey != "cleanup.risk.agentLeftover" else { return false }
+        switch category.applyRoute {
+        case .genericTrash, .installerTrash, .developerCacheTrash, .aiTrash, .xcodeTrash:
+            return true
+        case .toolCommand, .none:
+            return false
+        }
+    }
+
     /// 应用执行前使用新快照重判。风险只会保持或升高，不会在旧扫描上降级。
     static func reassess(_ category: CleanupCategory,
                          running snapshot: RunningApplicationSnapshot,
                          homeDirectory: String = NSHomeDirectory()) -> CleanupRiskAssessment {
+        let risk = currentRisk(category)
         // Agent 用户可选项同样要在执行前复核归属者；风险保持 Warning，
         // 只可能升级为 Protected，不会被降成 Safe。
-        let agentReview = category.risk == .warning && category.activityGuard == .aiAgent
-        guard category.risk == .safe || agentReview else {
-            return .init(risk: category.risk, reasonKey: category.reasonKey)
+        let agentReview = risk == .warning && category.activityGuard == .aiAgent
+        guard risk == .safe || agentReview else {
+            return .init(risk: risk, reasonKey: category.reasonKey)
         }
         guard category.activityGuard != .unsupported else {
             return .init(risk: .protected, reasonKey: "cleanup.risk.runtimeUnsupported")
         }
-        guard category.activityGuard != .none else {
+        if usesFileActivityGuard(category) {
             return .init(risk: .safe, reasonKey: category.reasonKey)
+        }
+        guard category.activityGuard != .none else {
+            return .init(risk: risk, reasonKey: category.reasonKey)
         }
         guard snapshot.isComplete else {
             return .init(risk: .protected, reasonKey: "cleanup.risk.runtimeUnknown")
@@ -664,16 +729,49 @@ enum CleanupRiskPolicy {
         if ownerIsRunning(for: category, snapshot: snapshot, homeDirectory: homeDirectory) {
             return .init(risk: .protected, reasonKey: "cleanup.risk.runningApplication")
         }
-        return .init(risk: category.risk, reasonKey: category.reasonKey)
+        return .init(risk: risk, reasonKey: category.reasonKey)
     }
 
-    /// 运行态保护按路径裁剪。分类和总容量始终保留在结果中；当前运行的
-    /// 应用只会清空对应选择，避免把数 GB 的缓存从页面中隐藏。
+    private static func currentRisk(_ category: CleanupCategory) -> CleanupRisk {
+        category.risk == .safe && category.reasonKey == "cleanup.risk.agentLeftover"
+            ? .warning : category.risk
+    }
+
+    /// Use the same ownership policy as execution to name prerequisites before
+    /// a manual task begins. Reading a snapshot never mutates the selection.
+    static func blockingOwners(_ requested: [CleanupCategory],
+                               running snapshot: RunningApplicationSnapshot,
+                               homeDirectory: String = NSHomeDirectory()) -> [String] {
+        guard snapshot.isComplete else { return [] }
+        let categories = requested.filter {
+            $0.selectedPathCount > 0 && !usesFileActivityGuard($0)
+                && (currentRisk($0) == .safe || (currentRisk($0) == .warning && $0.activityGuard == .aiAgent))
+        }
+        let processes = snapshot.processNames.filter { owner in
+            let single = RunningApplicationSnapshot(processNames: [owner])
+            return categories.contains {
+                ownerIsRunning(for: $0, snapshot: single, homeDirectory: homeDirectory)
+            }
+        }
+        let bundles = snapshot.bundleIdentifiers.filter { owner in
+            let single = RunningApplicationSnapshot(bundleIdentifiers: [owner])
+            return categories.contains {
+                ownerIsRunning(for: $0, snapshot: single, homeDirectory: homeDirectory)
+            }
+        }
+        return Array(Set(processes).union(bundles)).sorted()
+    }
+
+    /// 可再生缓存保留用户选择，由执行边界核对实际文件占用。
+    /// 敏感数据仍按运行归属者裁剪选择，分类和总容量保留在结果中。
     static func runtimeEligibleSubset(
         _ category: CleanupCategory,
         running snapshot: RunningApplicationSnapshot,
         homeDirectory: String = NSHomeDirectory()
     ) -> CleanupCategory? {
+        var category = category
+        category.risk = currentRisk(category)
+        if usesFileActivityGuard(category) { return category }
         if category.activityGuard == .aiAgent, category.risk != .protected {
             guard snapshot.isComplete,
                   !ownerIsRunning(for: category, snapshot: snapshot,
@@ -742,41 +840,107 @@ enum CleanupRiskPolicy {
         return protectedRoots.contains { pathsOverlap(normalized, normalize($0)) }
     }
 
-    /// Sensitive content is protected by structure wherever it appears, not
-    /// only at its conventional location under the current home directory.
+    /// Shared discovery/deletion content guard. A rebuildable root changes
+    /// only the structural context; it does not grant deletion authorization.
+    /// Model weights, databases and credentials stay protected even in a cache.
+    static func isProtectedCleanupPath(
+        _ rawPath: String,
+        homeDirectory: String = NSHomeDirectory(),
+        rebuildableRoot: String? = nil,
+        rootIsVerifiedRebuildable: Bool = false,
+        allowApplicationBundle: Bool = false,
+        rebuildableRootPolicy: CleanupPolicyDescriptor? = nil
+    ) -> Bool {
+        guard DeletionPlan.isLexicallySafePath(rawPath) else { return true }
+        let path = normalize(rawPath)
+        let home = normalize(homeDirectory)
+        let fullComponents = URL(fileURLWithPath: path).pathComponents.map { $0.lowercased() }
+        // A split inventory may submit a metadata child as its own cache root.
+        // Check immutable model signatures before any ancestor is stripped.
+        if fullComponents.contains(where: hasModelFileSignature) { return true }
+        // Catalog verification never overrides a real model depot, even if a
+        // caller accidentally labels a descendant as a rebuildable cache.
+        let lowerPath = path.lowercased()
+        if modelDepots.contains(where: { lowerPath.hasSuffix($0) || lowerPath.contains($0 + "/") }) {
+            return true
+        }
+        let root = rebuildableRoot.flatMap {
+            DeletionPlan.isLexicallySafePath($0) ? normalize($0) : nil
+        }
+        let verifiedRoot = root.flatMap { root -> String? in
+            guard DeletionPlan.isLexicallySafePath(root),
+                  path == root || isStrictDescendant(path, of: root) else { return nil }
+            if rootIsVerifiedRebuildable { return root }
+            let descriptor = rebuildableRootPolicy ?? core(section: "Cache", path: root, homeDirectory: home)
+            return descriptor.risk == .safe && descriptor.disposal == .permanentDelete ? root : nil
+        }
+        let templateSource = verifiedRoot != nil && isDisposablePackageTemplateSourcePath(path, home: home)
+        let homeRelativePath = isStrictDescendant(path, of: home) ? String(path.dropFirst(home.count)) : path
+        if !templateSource && homeRelativePath.split(separator: "/").contains(where: {
+            $0.lowercased() == "models" || $0.lowercased() == "model"
+        }) { return true }
+        // Ordinary cached child records must retain durable ancestry. Only a
+        // catalog-verified root may shed its data parent's context; rebasing a
+        // generic scan root is never evidence that those ancestors are junk.
+        let contextPath = rootIsVerifiedRebuildable ? (verifiedRoot.map {
+            "/nori-rebuildable-cache/" + URL(fileURLWithPath: $0).lastPathComponent + String(path.dropFirst($0.count))
+        } ?? path) : "/nori-home-context" + homeRelativePath
+        // `models` in a downloaded SPA template denotes source-code models,
+        // not model weights. Only this precise generated source tree gets the
+        // name exception; known model files are still checked below.
+        let structuralPath = templateSource
+            ? "/" + contextPath.split(separator: "/").filter { $0.lowercased() != "models" }.joined(separator: "/")
+            : contextPath
+        if isSensitiveAutomationPath(structuralPath) { return true }
+
+        let url = URL(fileURLWithPath: path)
+        let name = url.lastPathComponent.lowercased()
+        let extensionName = url.pathExtension.lowercased()
+        if contextPath.split(separator: "/").contains(where: {
+            databaseFileExtensions.contains((String($0) as NSString).pathExtension.lowercased())
+        })
+            || databaseSidecarSuffixes.contains(where: name.hasSuffix) { return true }
+        if extensionName == "app" { return !allowApplicationBundle }
+
+        return contextPath.split(separator: "/").contains { component in
+            let component = component.lowercased()
+            return durableCleanupNames.contains(component) && !(templateSource && templateSourceNames.contains(component))
+        }
+    }
+
+    /// The pnpm dlx cache contains downloaded packages. Recognize source
+    /// templates by the package boundary as well as `templates/<name>/src`;
+    /// an arbitrary cache directory named `models` receives no exemption.
+    private static func isDisposablePackageTemplateSourcePath(_ path: String, home: String) -> Bool {
+        let prefix = home + "/Library/Caches/pnpm/dlx/"
+        guard path.hasPrefix(prefix) else { return false }
+        let components = String(path.dropFirst(prefix.count)).split(separator: "/").map(String.init)
+        for index in components.indices where components[index] == "node_modules" {
+            guard index > 0, index + 1 < components.count else { continue }
+            let packageIndex = index + 1
+            let templateIndex = packageIndex + (components[packageIndex].hasPrefix("@") ? 2 : 1)
+            guard templateIndex + 2 < components.count,
+                  components[templateIndex] == "templates",
+                  !components[templateIndex + 1].isEmpty,
+                  components[templateIndex + 2] == "src" else { continue }
+            return true
+        }
+        return false
+    }
+
+    /// Sensitive automation content is protected by structure wherever it
+    /// appears. Automation retains this strict rule without cache exceptions.
     static func isSensitiveAutomationPath(_ rawPath: String) -> Bool {
         let path = normalize(rawPath)
         let lower = path.lowercased()
         let components = URL(fileURLWithPath: path).pathComponents.map { $0.lowercased() }
-        let sensitiveComponents: Set<String> = [
-            ".git", "models", "sessions", "conversations", "userdata",
-            "user data", "docker", "vms"
-        ]
-        if components.contains(where: sensitiveComponents.contains) { return true }
-        let protectedFragments = [
-            "/.codex/sessions", "/.codex/log", "/.codex/auth.json",
-            "/.codex/history.jsonl", "/.claude/projects", "/.claude/todos",
-            "/.claude/shell-snapshots", "/.gemini/",
-            "/.local/share/opencode/project",
-            "/library/application support/codex", "/.ollama/models",
-            "/.cache/huggingface", "/.cache/lm-studio/models", "/.cache/torch",
-            "/library/containers/com.docker", "/library/group containers/group.com.docker",
-            "/.docker/contexts", "/.docker/config.json"
-        ]
-        if protectedFragments.contains(where: {
+        if components.contains(where: sensitiveAutomationComponents.contains) { return true }
+        if sensitiveAutomationFragments.contains(where: {
             lower == String($0.dropLast($0.hasSuffix("/") ? 1 : 0)) || lower.contains($0)
         }) {
             return true
         }
-        let leaf = URL(fileURLWithPath: lower).lastPathComponent
-        if ["pytorch_model.bin", "adapter_model.bin", "model.bin"].contains(leaf) {
-            return true
-        }
-        let protectedExtensions = [
-            "gguf", "safetensors", "ckpt", "mlmodel", "mlmodelc",
-            "pt", "pth", "onnx", "tflite"
-        ]
-        return protectedExtensions.contains(URL(fileURLWithPath: lower).pathExtension)
+        return components.contains(where: hasModelFileSignature)
     }
 
     private static func ownerIsRunning(for category: CleanupCategory,

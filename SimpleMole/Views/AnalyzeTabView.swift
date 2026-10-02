@@ -197,7 +197,6 @@ struct AnalyzeTabView: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.hairline, lineWidth: 1))
     }
 
     // MARK: 大文件/视频平铺删除清单
@@ -297,10 +296,6 @@ struct AnalyzeTabView: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 8)
-            // 已有结果后工具栏提供同款下拉扫描按钮；未扫描的入口在空态。
-            if hasResults && !scanning {
-                scanSplitButton
-            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
@@ -417,9 +412,7 @@ struct AnalyzeTabView: View {
                 Button(l10n.t("common.cancel")) { state.cancelSlim() }
                     .buttonStyle(SecondaryButtonStyle())
             } else {
-                Text(footerSummary)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                scanSplitButton
                 Spacer()
                 // 按当前模式分流：大文件/视频＝删除；重复文件＝清理；
                 // 图片＝瘦身（唯一可降分辨率压缩的分类）。
@@ -431,17 +424,19 @@ struct AnalyzeTabView: View {
                         } label: {
                             Label(l10n.tf("analyze.delete.selected",
                                           state.analysisFileSelectedItems.count),
-                                  systemImage: "trash")
+                                  systemImage: "trash.fill")
                         }
-                        .buttonStyle(DangerButtonStyle())
+                        .buttonStyle(PrimaryButtonStyle())
+                        .accessibilityValue(footerSummary)
                         .disabled(state.isBusy || state.isDeletingAnalysisFiles)
                     }
                 case .duplicates:
                     if state.duplicateSelectedCount > 0 {
                         Button { showTrashConfirmation = true } label: {
-                            Label(l10n.t("duplicates.trash"), systemImage: "trash")
+                            Label(l10n.t("duplicates.trash"), systemImage: "trash.fill")
                         }
-                        .buttonStyle(DangerButtonStyle())
+                        .buttonStyle(PrimaryButtonStyle())
+                        .accessibilityValue(footerSummary)
                         .disabled(state.isBusy)
                     }
                 case .images:
@@ -611,18 +606,16 @@ private struct ScanMenuChrome: ViewModifier {
     var reduceMotion: Bool
     var reduceTransparency: Bool
     var shape: RoundedRectangle
+    @Environment(\.controlActiveState) private var controlActiveState
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency {
+        if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
             content
                 .glassEffect(Glass.regular.interactive(!reduceMotion), in: shape)
-                .overlay {
-                    shape.strokeBorder(Color.hairline, lineWidth: 1)
-                        .allowsHitTesting(false)
-                }
+                .clipGlassEdge(in: shape)
         } else {
-            content.background(GlassSurface(cornerRadius: 14))
+            content.background(GlassSurface(cornerRadius: 14, usesSystemGlass: false))
         }
     }
 }
@@ -634,10 +627,11 @@ private struct ScanSelectionGlass: ViewModifier {
     var namespace: Namespace.ID
     var reduceMotion: Bool
     var reduceTransparency: Bool
+    @Environment(\.controlActiveState) private var controlActiveState
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency, selected {
+        if #available(macOS 26.0, *), !reduceTransparency, selected, controlActiveState == .key {
             content
                 .glassEffect(
                     Glass.regular
@@ -647,11 +641,10 @@ private struct ScanSelectionGlass: ViewModifier {
                 )
                 .glassEffectID(id, in: namespace)
                 .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+                .clipGlassEdge(in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         } else if selected {
-            content.background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.surface2)
-            )
+            content.background(GlassSurface(cornerRadius: 8, usesSystemGlass: false,
+                                             highlighted: true))
         } else {
             content
         }

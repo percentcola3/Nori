@@ -7,62 +7,101 @@ struct AgentsTabView: View {
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var collapsed: Set<String> = []
-    @State private var confirmation: AgentActionIntent?
-    @Namespace private var glassNamespace
+    @State private var expandedCLIInstallations: Set<String> = []
 
     private var presentationPhase: Int {
-        if state.agentScanning || state.agentApplying { return 1 }
+        if state.agentApplying { return 3 }
+        if state.agentCelebrating { return 4 }
+        if state.agentCleanupHasFeedback && state.agentOutcomeMood == .success { return 6 }
+        if showsCleanupFailure { return 5 }
+        if state.agentScanning { return 1 }
         return state.agentHasScanned ? 2 : 0
     }
 
+    private var showsCleanupFailure: Bool {
+        state.agentCleanupHasFeedback && state.agentOutcomeMood == .attention
+    }
+
     var body: some View {
-        ZStack {
-            NoriPageTransition(phase: presentationPhase) {
+        NoriPageTransition(phase: presentationPhase) {
             VStack(spacing: 0) {
-                if state.agentScanning || state.agentApplying {
-                    NoriScanActivity(text: state.agentStatus,
-                                     assetName: state.agentScanning ? "nori-agent" : "nori-tidying", quiet: true)
+                if state.agentApplying {
+                    NoriCleanupTaskStage(phase: .working,
+                        progress: state.agentCleanupProgress, statusText: state.agentStatus,
+                        feedbackID: state.agentFeedbackID)
+                } else if state.agentCelebrating {
+                    cleanupSuccess
+                } else if state.agentCleanupHasFeedback && state.agentOutcomeMood == .success {
+                    NoriPlaceholderStage { size in
+                        NoriIdlePlaceholder(state: state, size: size)
+                        scanButton
+                    }
+                } else if showsCleanupFailure {
+                    cleanupFailure
+                } else if state.agentScanning {
+                    NoriPlaceholderStage { size in
+                        NoriStatusAnimation(mood: .working, size: size, assetName: "nori-agent")
+                        NoriCurrentFileView(path: state.agentScanCurrentPath)
+                    }
                 } else if !state.agentHasScanned {
                     emptyState
                 } else {
-                    if state.agentOutcomeMood == .attention || !state.agentScanComplete { statusRow }
+                    if !state.agentApplying && (state.agentOutcomeMood == .attention || !state.agentScanComplete) {
+                        statusRow
+                    }
                     resourceList
                     Divider()
                     actions
                 }
             }
-            }
-            .disabled(confirmation != nil)
-            .accessibilityHidden(confirmation != nil)
-            if let confirmation {
-                Color.surface1.opacity(0.45).ignoresSafeArea()
-                AgentActionConfirmation(intent: confirmation, cancel: { self.confirmation = nil }) {
-                    self.confirmation = nil
-                    switch confirmation {
-                    case .cleanup: state.applyAgentCleanup()
-                    case .uninstall(let plan): state.uninstallAgentAndClean(plan)
-                    }
-                }
-                .liquidSurface("agent-confirmation")
-                .padding(20)
-                .transition(.opacity)
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .environment(\.liquidNamespace, glassNamespace)
         .onReceive(state.$agentHasScanned.removeDuplicates()) { hasScanned in
-            if !hasScanned { collapsed.removeAll(); confirmation = nil }
+            if !hasScanned {
+                collapsed.removeAll()
+                expandedCLIInstallations.removeAll()
+            }
         }
-        .onExitCommand { confirmation = nil }
+    }
+
+    private var cleanupSuccess: some View {
+        let feedbackID = state.agentFeedbackID
+        return NoriCleanupTaskStage(phase: .success,
+            completedCount: state.agentCompletedCount, reclaimedBytes: state.agentReclaimedBytes,
+            feedbackID: state.agentFeedbackID)
+            .task(id: feedbackID) {
+                do { try await Task.sleep(nanoseconds: UInt64(NoriMotion.successFeedbackDuration * 1_000_000_000)) }
+                catch { return }
+                state.finishAgentCelebration(feedbackID: feedbackID)
+            }
+    }
+
+    private var cleanupFailure: some View {
+        return NoriCleanupTaskStage(phase: .attention,
+            statusText: state.agentStatus,
+            details: TaskFeedbackDiagnostic.localized(state.agentOutcomeDetails),
+            applications: state.agentFailureApplications,
+            completedCount: state.agentCompletedCount, feedbackID: state.agentFeedbackID,
+            retryAvailable: true, onRetry: continueCleanup)
+    }
+
+    private func continueCleanup() {
+        if state.agentRetryAvailable { state.retryFailedAgentCleanup() }
+        else { state.requestScanAccess(.aiScan) }
+    }
+
+    private var scanButton: some View {
+        Button { state.requestScanAccess(.aiScan) } label: {
+            Label(l10n.t("agents.scan"), systemImage: "sparkle.magnifyingglass")
+        }
+        .buttonStyle(PrimaryButtonStyle())
+        .disabled(state.isBusy)
     }
 
     private var emptyState: some View {
         NoriPlaceholderStage { size in
             NoriIdlePlaceholder(state: state, size: size)
-            Button { state.requestScanAccess(.aiScan) } label: {
-                Label(l10n.t("agents.scan"), systemImage: "sparkle.magnifyingglass")
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .disabled(state.isBusy)
+            scanButton
             if state.agentOutcomeMood != nil {
                 Text(state.agentStatus)
                     .font(.system(size: 11))
@@ -73,10 +112,24 @@ struct AgentsTabView: View {
     }
 
     private var statusRow: some View {
-        Label(state.agentStatus, systemImage: "exclamationmark.triangle.fill")
-            .font(.system(size: 11)).foregroundStyle(Color.warning)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 16).padding(.bottom, 6)
+        VStack(alignment: .leading, spacing: 6) {
+            Label(state.agentStatus, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(Color.warning)
+            if !state.agentOutcomeDetails.isEmpty {
+                DisclosureGroup(l10n.t("agents.result.details")) {
+                    ScrollView {
+                        Text(TaskFeedbackDiagnostic.localized(state.agentOutcomeDetails).joined(separator: "\n\n"))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 120)
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+        .font(.system(size: 11))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16).padding(.bottom, 6)
     }
 
     private var resourceList: some View {
@@ -146,14 +199,19 @@ struct AgentsTabView: View {
     private func groupHeader(_ group: AgentGroupSummary) -> some View {
         HStack(spacing: 8) {
             Button {
+                guard !state.agentApplying else { return }
                 withAnimation(reduceMotion ? nil : MoleMotion.panel) {
                     if collapsed.contains(group.id) { collapsed.remove(group.id) } else { collapsed.insert(group.id) }
                 }
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: group.id == "shared" ? "sparkles" :
-                            (group.id == "shared-mcp" || group.id == "chrome-devtools-mcp" ? "server.rack" : "brain"))
-                        .foregroundStyle(Color.moleAccentText)
+                    if group.id == "shared" || group.id == "shared-mcp" {
+                        Image(systemName: group.id == "shared" ? "sparkles" : "server.rack")
+                            .foregroundStyle(Color.moleAccentText)
+                            .frame(width: 24, height: 24)
+                    } else {
+                        AgentIconView(agentID: group.id, size: 24)
+                    }
                     Text(group.name).font(.system(size: 12, weight: .semibold))
                     if !group.documented { AgentRiskTag(text: l10n.t("agents.badge.review"), high: true) }
                     Spacer()
@@ -166,28 +224,25 @@ struct AgentsTabView: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plain).disabled(state.agentApplying)
             .accessibilityValue(l10n.t(collapsed.contains(group.id) ? "agents.collapsed" : "agents.expanded"))
-            if !state.agentCLIInstallations.filter({ $0.agentID == group.id }).isEmpty {
-                Button { confirmation = .uninstall(state.agentRemovalPlan(for: group)) } label: {
-                    Label(l10n.t("agents.cli.uninstallClean"), systemImage: "trash")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color.danger)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain).disabled(state.isBusy)
-            }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .modifier(ListRowGlass())
     }
 
     @ViewBuilder private func groupContents(_ group: AgentGroupSummary) -> some View {
+        let cliInstallations = state.agentCLIInstallations.filter { $0.agentID == group.id }
+        if !cliInstallations.isEmpty {
+            ForEach(cliInstallations) { installation in
+                cliInstallationRow(installation)
+            }
+        }
         ForEach(group.categoryIDs, id: \.self) { id in
-            if let index = state.agentCategories.firstIndex(where: { $0.id == id }) {
-                CategoryRowView(category: $state.agentCategories[index], selectionEnabled: !state.isBusy,
-                                highlightsSensitiveData: true)
+            if let category = state.agentCategories.first(where: { $0.id == id }) {
+                CategoryRowView(category: categoryBinding(for: category),
+                    selectionEnabled: !state.isBusy && !state.agentCLISelectedAgentIDs.contains(group.id),
+                    highlightsSensitiveData: true)
             }
         }
         let skills = state.agentSkills.filter { $0.agentID == group.id }
@@ -202,6 +257,86 @@ struct AgentsTabView: View {
         }
     }
 
+    private func categoryBinding(for snapshot: CleanupCategory) -> Binding<CleanupCategory> {
+        Binding(get: {
+            let category = state.agentCategories.first(where: { $0.id == snapshot.id }) ?? snapshot
+            return category.selectingPaths(category.paths.filter {
+                state.isAgentCategorySelected(category, path: $0)
+            })
+        }, set: { update in
+            guard let index = state.agentCategories.firstIndex(where: { $0.id == snapshot.id }) else { return }
+            var category = state.agentCategories[index]
+            let includedByCLI = state.agentGroups.contains {
+                state.agentCLISelectedAgentIDs.contains($0.id) && $0.categoryIDs.contains(category.id)
+            }
+            // Expanding an implicitly selected row must not turn its derived
+            // checkmarks into explicit data selections when the CLI is undone.
+            if !includedByCLI && !state.isBusy {
+                category = category.selectingPaths(update.selectedPaths)
+            }
+            category.expanded = update.expanded
+            state.agentCategories[index] = category
+        })
+    }
+
+    private func cliInstallationRow(_ installation: AgentCLIInstallation) -> some View {
+        let selected = state.agentSelectedCLIInstallations.contains(installation.id)
+        let expanded = expandedCLIInstallations.contains(installation.id)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: Binding(get: { selected }, set: { _ in
+                    state.toggleAgentCLIInstallation(installation)
+                }))
+                .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
+                .disabled(state.isBusy || installation.identities.isEmpty)
+                .accessibilityLabel(l10n.tf("agents.cli.select", installation.name))
+                Button {
+                    withAnimation(reduceMotion ? nil : MoleMotion.panel) {
+                        if expanded { expandedCLIInstallations.remove(installation.id) }
+                        else { expandedCLIInstallations.insert(installation.id) }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "terminal").foregroundStyle(Color.moleAccentText)
+                        Text(l10n.t("agents.cli.installation"))
+                            .font(.system(size: 12, weight: .medium))
+                        Text(installation.manager.rawValue)
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                        AgentRiskTag(text: l10n.t("agents.cli.uninstallClean"), high: true)
+                        Spacer()
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .rotationEffect(.degrees(expanded ? 180 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(MolePlainButtonStyle())
+                .accessibilityValue(l10n.t(expanded ? "agents.expanded" : "agents.collapsed"))
+            }
+            if selected || expanded {
+                Text(l10n.t("agents.cli.selectionHint"))
+                    .font(.system(size: 10)).foregroundStyle(selected ? Color.warning : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 25)
+            }
+            if expanded {
+                Text(installation.detail)
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 25)
+                ForEach(installation.managedPaths, id: \.self) { path in
+                    Text(abbreviate(path))
+                        .font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle).help(path)
+                        .padding(.leading, 25)
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .modifier(ListRowGlass(selected: selected))
+    }
+
     private func subsectionHeader(_ title: String, count: Int) -> some View {
         HStack(spacing: 6) {
             Text(title).font(.system(size: 11, weight: .semibold))
@@ -212,11 +347,11 @@ struct AgentsTabView: View {
     }
 
     private func skillRow(_ skill: AgentSkill) -> some View {
-        let selected = state.agentSelectedSkills.contains(skill.path)
+        let selected = state.isAgentSkillSelected(skill)
         return HStack(alignment: .top, spacing: 8) {
             Toggle("", isOn: Binding(get: { selected }, set: { _ in state.toggleAgentSkill(skill) }))
                 .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
-                .disabled(skill.identity.isEmpty || state.isBusy)
+                .disabled(skill.identity.isEmpty || state.isBusy || state.agentCLISelectedAgentIDs.contains(skill.agentID))
                 .accessibilityLabel(skill.name)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -246,14 +381,15 @@ struct AgentsTabView: View {
     }
 
     private func serverRow(_ server: AgentMCPServer) -> some View {
-        let selected = state.agentSelectedServers.contains(server.id)
+        let selected = state.isAgentServerSelected(server)
         let unreadable = server.issues.contains(.unreadableConfig)
         let issues = server.issues.reduce(into: [AgentMCPServer.Issue]()) { result, issue in
             if !result.contains(issue) { result.append(issue) }
         }
         return HStack(alignment: .top, spacing: 8) {
             Toggle("", isOn: Binding(get: { selected }, set: { _ in state.toggleAgentServer(server) }))
-                .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize().disabled(state.isBusy)
+                .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
+                .disabled(state.isBusy || state.agentCLISelectedAgentIDs.contains(server.agentID))
                 .accessibilityLabel(server.name)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -320,11 +456,23 @@ struct AgentsTabView: View {
 
     private var actions: some View {
         HStack(spacing: 8) {
+            if state.agentApplying {
+                ProgressView().controlSize(.small)
+                Text(state.agentStatus)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.updatesFrequently)
+            } else {
+                Button { state.requestScanAccess(.aiScan) } label: {
+                    Label(l10n.t("agents.rescan"), systemImage: "arrow.clockwise")
+                }
+                    .buttonStyle(SecondaryButtonStyle()).disabled(state.isBusy)
+            }
             Spacer()
-            Button { confirmation = .cleanup(state.agentCleanupDetails) } label: {
-                Label(state.agentSelectedCount > 0
+            Button { state.applyAgentCleanup() } label: {
+                Label(state.agentApplying ? l10n.t("agents.apply.working") : (state.agentSelectedCount > 0
                       ? l10n.tf("agents.apply.withCount", state.agentSelectedCount, ByteFormat.format(state.agentSelectedBytes))
-                      : l10n.t("agents.apply"), systemImage: "trash.fill")
+                      : l10n.t("agents.apply")), systemImage: "sparkles")
             }
             .buttonStyle(PrimaryButtonStyle()).disabled(state.agentSelectedCount == 0 || state.isBusy)
         }
@@ -334,51 +482,6 @@ struct AgentsTabView: View {
     private func abbreviate(_ path: String) -> String {
         let home = NSHomeDirectory()
         return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
-    }
-}
-
-private enum AgentActionIntent {
-    case cleanup([String])
-    case uninstall(AgentRemovalPlan)
-}
-
-private struct AgentActionConfirmation: View {
-    let intent: AgentActionIntent
-    let cancel: () -> Void
-    let confirm: () -> Void
-    @ObservedObject private var l10n = L10n.shared
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label(l10n.t("agents.confirm.title"), systemImage: "exclamationmark.triangle")
-                .font(.system(size: 16, weight: .semibold)).foregroundStyle(Color.warning)
-            Text(l10n.t(messageKey)).font(.system(size: 12))
-            ScrollView {
-                Text(details).font(.system(size: 11)).frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }.frame(maxHeight: 260)
-            HStack {
-                Spacer()
-                Button(l10n.t("common.cancel"), action: cancel).buttonStyle(SecondaryButtonStyle())
-                Button(l10n.t("agents.confirm.proceed"), action: confirm).buttonStyle(DangerButtonStyle())
-            }
-        }
-        .padding(24).frame(maxWidth: 580)
-    }
-
-    private var details: String {
-        switch intent {
-        case .cleanup(let lines): return lines.joined(separator: "\n\n")
-        case .uninstall(let plan):
-            return plan.details.joined(separator: "\n\n")
-        }
-    }
-
-    private var messageKey: String {
-        switch intent {
-        case .cleanup: return "agents.confirm.message"
-        case .uninstall: return "agents.cli.cleanNotice"
-        }
     }
 }
 

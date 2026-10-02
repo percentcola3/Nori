@@ -592,6 +592,8 @@ enum AgentCatalog {
         if presence.commands.contains(where: {
             resolveExecutable($0, searchPath: context.searchPath, home: home) != nil
         }) { return true }
+        if (agent.id == "codex" || agent.id == "codex-app"),
+           !AgentHostPresence.integratedCodexOwners(context: context).isEmpty { return true }
         if AgentHostPresence.hasExtension(ids: presence.extensionIDs, home: home, context: context) { return true }
         // 某些安装器只放在私有 bin，不写到当前进程的 PATH。
         // 注入搜索范围的测试严格使用给定范围。
@@ -618,8 +620,11 @@ enum AgentCatalog {
     static func runtimeOwners(for agent: AgentDefinition, home: String,
                               presence context: AgentPresenceContext? = nil) -> [String] {
         let extensions = installationPresence(for: agent)?.extensionIDs ?? []
+        let context = context ?? defaultPresenceContext(home: home)
+        let integratedOwners = agent.id == "codex" || agent.id == "codex-app"
+            ? AgentHostPresence.integratedCodexOwners(context: context) : []
         return Array(Set(agent.owners + AgentHostPresence.owners(ids: extensions, home: home,
-            context: context ?? defaultPresenceContext(home: home)))).sorted()
+            context: context) + integratedOwners)).sorted()
     }
 
     static func nativeLaunchers(for agent: AgentDefinition) -> [String] {

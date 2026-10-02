@@ -6,6 +6,8 @@ A native, lightweight companion for **macOS 13 Ventura and later** that helps yo
 
 [Download the latest release](https://github.com/percentcola3/sweep/releases/latest) · [简体中文](README.zh-CN.md) · [Development guide](docs/development.md)
 
+> **Early development — not yet stable.** Nori is actively evolving and may still have bugs in scanning, cleanup, permissions, and interface behavior. Review selected paths before deleting files, keep backups of important data, and report issues with your macOS version and steps to reproduce.
+
 ![Nori overview in English](docs/screenshots/en/overview.png)
 
 Nori is inspired by [Mole](https://github.com/tw93/Mole), the excellent Mac cleanup tool by [tw93](https://github.com/tw93). Its Swift and SwiftUI interface, native core services, and focused helper scripts bring that spirit to a visual Mac companion. Audited Mole helper libraries are included with attribution under GPL v3.

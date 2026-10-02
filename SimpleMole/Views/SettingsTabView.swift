@@ -27,11 +27,6 @@ private struct SettingsSection<Content: View>: View {
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .fill(Color.surface1)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .strokeBorder(Color.hairline, lineWidth: 1)
-                    .allowsHitTesting(false)
-            )
         }
     }
 }
@@ -86,6 +81,9 @@ struct SettingsTabView: View {
         .clipped()
         .contentShape(Rectangle())
         .onAppear { loginItem.refresh() }
+        .onReceive(loginItem.$errorMessage.compactMap { $0 }) { error in
+            state.presentTaskFailure(details: [error])
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             loginItem.refresh()
         }
@@ -189,10 +187,6 @@ struct SettingsTabView: View {
                     .background(RoundedRectangle(cornerRadius: 8)
                         .fill(L10n.shared.language == language
                               ? Color.moleAccent.opacity(0.15) : Color.surface2))
-                    .overlay(RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(L10n.shared.language == language
-                                      ? Color.moleAccentText.opacity(0.30) : Color.hairline,
-                                      lineWidth: 1))
                     .contentShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
@@ -220,11 +214,10 @@ struct SettingsTabView: View {
                     Text(l10n.t("settings.island.edge"))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
-                    HStack(spacing: 6) {
-                        ForEach(AppState.IslandEdge.allCases) { edge in
-                            edgeChip(edge)
-                        }
-                    }
+                    PillPicker(items: AppState.IslandEdge.allCases.map { l10n.t($0.labelKey) },
+                               selection: islandEdgeBinding)
+                        .accessibilityLabel(l10n.t("settings.island.edge"))
+                        .accessibilityValue(l10n.t(state.islandEdge.labelKey))
                 }
             }
 
@@ -275,9 +268,6 @@ struct SettingsTabView: View {
             .frame(height: 27)
             .background(RoundedRectangle(cornerRadius: 8)
                 .fill(isSelected ? Color.moleAccent.opacity(0.15) : Color.surface2))
-            .overlay(RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isSelected ? Color.moleAccentText.opacity(0.30) : Color.hairline,
-                              lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 8))
             .opacity(isLastRemaining ? 0.55 : 1)
         }
@@ -418,10 +408,6 @@ struct SettingsTabView: View {
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isActive ? Color.moleAccent.opacity(0.15) : Color.surface2))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(isActive ? Color.moleAccentText.opacity(0.30) : Color.hairline,
-                                  lineWidth: 1))
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
@@ -453,16 +439,13 @@ struct SettingsTabView: View {
         .accessibilityAddTraits(state.clipboardHistoryEnabled ? .isSelected : [])
     }
 
-    /// 浮动位置单选胶囊：与功能页/岛上内容标签同一套视觉。
-    private func edgeChip(_ edge: AppState.IslandEdge) -> some View {
-        let isSelected = state.islandEdge == edge
-        return Button {
-            state.setIslandEdge(edge)
-        } label: {
-            chipLabel(l10n.t(edge.labelKey), isActive: isSelected)
-        }
-        .buttonStyle(MolePlainButtonStyle())
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    /// 顶部横排、左右侧边竖排，共用现有单层玻璃选中透镜。
+    private var islandEdgeBinding: Binding<Int> {
+        Binding(get: { AppState.IslandEdge.allCases.firstIndex(of: state.islandEdge) ?? 0 },
+                set: { index in
+                    guard AppState.IslandEdge.allCases.indices.contains(index) else { return }
+                    state.setIslandEdge(AppState.IslandEdge.allCases[index])
+                })
     }
 
     private var menuBarIconBinding: Binding<Bool> {

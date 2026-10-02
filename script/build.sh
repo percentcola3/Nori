@@ -291,6 +291,7 @@ for arch in $BUILD_ARCHS; do
     cp "$ROOT_DIR/vendor/sparkle/LICENSE" "$RESOURCES/Licenses/Sparkle.txt"
     mkdir -p "$RESOURCES/Nori"
     cp "$ROOT_DIR/SimpleMole/Support/Nori/Animations/"*.svg "$RESOURCES/Nori/"
+    cp -R "$ROOT_DIR/SimpleMole/Support/AgentIcons" "$RESOURCES/AgentIcons"
 
     # Preserve the complete versioned framework and its symlinks. Re-sign
     # nested code inside-out with the host's resolved identity; --deep is used

@@ -9,6 +9,7 @@ struct MainWindowView: View {
     @Namespace private var dialogNamespace
 
     private var activeDialog: String? {
+        if let notice = state.taskNotice { return "task-" + notice.id.uuidString }
         if state.showPermissionCenter { return "permissions" }
         if state.showAutoCleanupSheet { return "autoCleanup" }
         if state.showWhitelistSheet { return "whitelist" }
@@ -25,6 +26,7 @@ struct MainWindowView: View {
                 VStack(spacing: 0) {
                     titleBarRow
                     PillPicker(items: tabs, selection: $state.selectedTab)
+                        .disabled(state.agentApplying)
                         .padding(.top, 10)
                         .padding(.bottom, 8)
                     AnimatedTabContent(state: state)
@@ -34,10 +36,10 @@ struct MainWindowView: View {
                 .accessibilityHidden(activeDialog != nil)
 
                 if let activeDialog {
-                    Color.black.opacity(0.20)
+                    Color.surface1.opacity(0.45)
                         .ignoresSafeArea()
                         .contentShape(Rectangle())
-                        .onTapGesture { dismissDialog() }
+                        .onTapGesture { if state.taskNotice == nil { dismissDialog() } }
                         .transition(.opacity)
                     dialogContent(activeDialog)
                         .liquidSurface(activeDialog)
@@ -51,9 +53,23 @@ struct MainWindowView: View {
         .environment(\.liquidDialogID, activeDialog)
         .frame(minWidth: 760, idealWidth: 940, minHeight: 620, idealHeight: 720)
         .background { GlassSurface().ignoresSafeArea() }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .ignoresSafeArea(.container, edges: .top)
         .animation(reduceMotion ? nil : MoleMotion.panel, value: activeDialog)
         .onExitCommand { dismissDialog() }
+        .alert(l10n.t("cleanup.admin.title"), isPresented: Binding(
+            get: { state.administratorCleanupPrompt != nil },
+            set: { visible in
+                if !visible {
+                    DispatchQueue.main.async { state.resolveAdministratorCleanup(nil) }
+                }
+            })) {
+                Button(l10n.t("cleanup.admin.include")) { state.resolveAdministratorCleanup(true) }
+                Button(l10n.t("cleanup.admin.skip")) { state.resolveAdministratorCleanup(false) }
+                Button(l10n.t("common.cancel"), role: .cancel) { state.resolveAdministratorCleanup(nil) }
+            } message: {
+                Text(state.administratorCleanupPrompt ?? "")
+            }
         .alert(confirmationTitle,
                isPresented: confirmationBinding, presenting: state.confirmation) { accepted in
             Button(accepted.confirmLabel, role: .destructive) { state.runConfirmation(accepted) }
@@ -65,7 +81,7 @@ struct MainWindowView: View {
 
     private var titleBarRow: some View {
         HStack(spacing: 8) {
-            Color.clear.frame(width: 66, height: 1)
+            MainWindowControls().frame(width: 66, height: 28)
             HeaderBrandIconView(size: 20, isSearching: state.isScanning,
                                 searchSucceeded: state.cleanupScanComplete, isWorking: state.isBusy,
                                 reactionID: state.headerReactionID,
@@ -73,7 +89,7 @@ struct MainWindowView: View {
                                 isTidying: state.headerTask?.tidying == true)
             Text(l10n.t("window.title"))
                 .font(.system(size: 13, weight: .semibold))
-            Spacer()
+            MainWindowDragArea().frame(maxWidth: .infinity, maxHeight: .infinity)
             Button {
                 NSApp.terminate(nil)
             } label: {
@@ -93,16 +109,23 @@ struct MainWindowView: View {
 
     @ViewBuilder
     private func dialogContent(_ id: String) -> some View {
-        switch id {
-        case "permissions": PermissionCenterView(state: state)
-        case "autoCleanup": AutoCleanupRulesView(state: state)
-        case "whitelist": WhitelistSheet(state: state)
-        default: EmptyView()
+        if let notice = state.taskNotice {
+            TaskFeedbackView(notice: notice, dismiss: { state.dismissTaskNotice() }, retry: {
+                state.retryTaskNotice(notice)
+            })
+        } else {
+            switch id {
+            case "permissions": PermissionCenterView(state: state)
+            case "autoCleanup": AutoCleanupRulesView(state: state)
+            case "whitelist": WhitelistSheet(state: state)
+            default: EmptyView()
+            }
         }
     }
 
     private func dismissDialog() {
-        if state.showPermissionCenter { state.cancelPermissionCenter() }
+        if state.taskNotice != nil { state.dismissTaskNotice() }
+        else if state.showPermissionCenter { state.cancelPermissionCenter() }
         else if state.showAutoCleanupSheet { state.showAutoCleanupSheet = false }
         else { state.showWhitelistSheet = false }
     }

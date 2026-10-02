@@ -20,7 +20,10 @@ struct NoriStatusAnimation: View {
 
     private var asset: String {
         if let assetName { return assetName }
-        if reduceMotion || !active || settled { return "nori-static" }
+        if reduceMotion || !active || settled {
+            if mood == .success || mood == .attention { return "nori-\(mood.rawValue)" }
+            return "nori-static"
+        }
         switch mood {
         // Resting moods share the single blinking placeholder.
         case .idle, .bored, .blink: return "nori-static"
@@ -30,7 +33,8 @@ struct NoriStatusAnimation: View {
     var body: some View {
         Group {
             if let url = Bundle.main.url(forResource: asset, withExtension: "svg", subdirectory: "Nori") {
-                NoriSVGCanvas(url: url, animates: !reduceMotion && active && !settled)
+                NoriSVGCanvas(url: url, animates: !reduceMotion && active && !settled,
+                              retainsResultBadge: mood == .success || mood == .attention)
             } else {
                 NoriMascotView(mood: mood, size: size)
             }
@@ -139,7 +143,8 @@ struct NoriRestingPlaceholder: View {
 private struct NoriSVGCanvas: NSViewRepresentable {
     let url: URL
     let animates: Bool
-    final class Coordinator { var loadedURL: URL?; var animates: Bool? }
+    let retainsResultBadge: Bool
+    final class Coordinator { var loadedURL: URL?; var animates: Bool?; var retainsResultBadge: Bool? }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -151,13 +156,19 @@ private struct NoriSVGCanvas: NSViewRepresentable {
         return view
     }
     func updateNSView(_ view: WKWebView, context: Context) {
-        guard context.coordinator.loadedURL != url || context.coordinator.animates != animates,
+        guard context.coordinator.loadedURL != url || context.coordinator.animates != animates
+                || context.coordinator.retainsResultBadge != retainsResultBadge,
               let data = try? Data(contentsOf: url), var svg = String(data: data, encoding: .utf8) else { return }
         context.coordinator.loadedURL = url
         context.coordinator.animates = animates
+        context.coordinator.retainsResultBadge = retainsResultBadge
         if !animates {
+            let hidden = retainsResultBadge
+                ? ".steam,.confetti0,.confetti1,.confetti2,.confetti3,.confetti4,.confetti5,.confetti6,.confetti7,.confetti8"
+                : ".steam,.orbit-prop"
+            let resultBadge = retainsResultBadge ? ".orbit-prop{display:inline!important}" : ""
             svg = svg.replacingOccurrences(of: "</svg>",
-                with: "<style>*{animation:none!important}.steam,.orbit-prop{display:none}</style></svg>")
+                with: "<style>*{animation:none!important}\(resultBadge)\(hidden){display:none!important}</style></svg>")
         }
         let html = """
         <html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'"><style>

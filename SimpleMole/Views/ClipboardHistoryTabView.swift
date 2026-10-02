@@ -216,8 +216,6 @@ private struct ClipboardHistoryCard: View {
         .clipped()
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
             .fill(entry.isPinned ? Color.moleAccent.opacity(0.075) : Color.surface1))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(Color.hairline, lineWidth: 1))
         .animation(reduceMotion ? nil : MoleMotion.selection, value: entry.isPinned)
         .animation(reduceMotion ? nil : MoleMotion.press, value: copied)
     }

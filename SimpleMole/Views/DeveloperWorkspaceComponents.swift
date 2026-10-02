@@ -82,7 +82,7 @@ struct DeveloperWorkspaceSection<Content: View>: View {
                         .background(Circle().fill(Color.accent.opacity(0.14)))
                         .accessibilityHidden(true)
                     Text(title)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.primary)
                     Spacer(minLength: 8)
                     Image(systemName: "chevron.down")
@@ -107,7 +107,10 @@ struct DeveloperWorkspaceSection<Content: View>: View {
                                                       isExpanded ? "Collapse section" : "Expand section"))
 
             content(isExpanded)
-                .padding(.top, isExpanded ? 8 : 0)
+                .padding(.leading, 30)
+                .padding(.trailing, 10)
+                .padding(.top, isExpanded ? 12 : 0)
+                .padding(.bottom, isExpanded ? 6 : 0)
         }
         .clipped()
     }

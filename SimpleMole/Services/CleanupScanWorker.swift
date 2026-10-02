@@ -10,14 +10,30 @@ enum CleanupScanMode: String, Codable, Sendable {
 final class CleanupScanControl: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
+    private var lastDirectory = ""
+    private var lastDirectorySentAt = -Double.infinity
+    private let onDirectory: (@Sendable (String) -> Void)?
     let startedAt = ProcessInfo.processInfo.systemUptime
     let totalBudget: TimeInterval
     let directoryBudget: TimeInterval
 
     init(mode: CleanupScanMode, totalBudget: TimeInterval? = nil,
-         directoryBudget: TimeInterval? = nil) {
+         directoryBudget: TimeInterval? = nil,
+         onDirectory: (@Sendable (String) -> Void)? = nil) {
         self.totalBudget = totalBudget ?? (mode == .quick ? 45 : .infinity)
         self.directoryBudget = directoryBudget ?? (mode == .quick ? 8 : .infinity)
+        self.onDirectory = onDirectory
+    }
+
+    /// Bounded delivery across concurrent workers; callbacks run outside the lock.
+    func reportDirectory(_ path: String) {
+        guard let onDirectory else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        lock.lock()
+        let deliver = path != lastDirectory && now - lastDirectorySentAt >= 0.12
+        if deliver { lastDirectory = path; lastDirectorySentAt = now }
+        lock.unlock()
+        if deliver { onDirectory(path) }
     }
 
     func cancel() { lock.lock(); cancelled = true; lock.unlock() }
@@ -57,6 +73,7 @@ enum CleanupScanWorker {
     }
 
     static func measure(_ path: String, control: CleanupScanControl) -> Measurement {
+        control.reportDirectory(path)
         let began = ProcessInfo.processInfo.systemUptime
         guard !control.shouldStop, let name = strdup(path) else {
             return Measurement(complete: false)
@@ -83,6 +100,10 @@ enum CleanupScanWorker {
             case FTS_ERR, FTS_DNR, FTS_NS:
                 result.complete = false
             case FTS_F, FTS_D:
+                if Int32(entry.pointee.fts_info) == FTS_D,
+                   let directory = entry.pointee.fts_path {
+                    control.reportDirectory(String(cString: directory))
+                }
                 guard let metadata = entry.pointee.fts_statp?.pointee else {
                     result.complete = false
                     continue

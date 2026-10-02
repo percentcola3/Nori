@@ -15,6 +15,7 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate,
     @Published private(set) var status: Status = .idle
     private var observations = Set<AnyCancellable>()
     private var started = false
+    private var userInitiatedCycle = false
     private var isSafeToRelaunch: () -> Bool = { true }
     private var postponedInstallation: (() -> Void)?
     private var relaunchTimer: Timer?
@@ -57,6 +58,7 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate,
 
     func checkForUpdates() {
         guard canCheckForUpdates else { return }
+        userInitiatedCycle = true
         controller.checkForUpdates(nil)
     }
 
@@ -95,7 +97,7 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate,
             status = .upToDate
         } else {
             // An empty/incompatible feed is not evidence that this is the latest version.
-            status = .failed(error.localizedDescription)
+            reportUpdateFailure(error)
         }
     }
 
@@ -108,11 +110,19 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate,
             status = .idle
             return
         }
-        status = .failed(error.localizedDescription)
+        reportUpdateFailure(error)
     }
 
     func updater(_ updater: SPUUpdater, didFinishUpdateCycleFor updateCheck: SPUUpdateCheck, error: Error?) {
         if status == .checking { status = .idle }
+        userInitiatedCycle = false
+    }
+
+    private func reportUpdateFailure(_ error: Error) {
+        status = .failed(error.localizedDescription)
+        if userInitiatedCycle {
+            TaskFeedbackNotice.reportFailure(details: [error.localizedDescription])
+        }
     }
 
     func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,

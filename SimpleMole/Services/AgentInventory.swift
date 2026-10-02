@@ -81,16 +81,62 @@ enum AgentInventory {
                      control: CleanupScanControl = CleanupScanControl(
                         mode: .deep, totalBudget: 180, directoryBudget: 30),
                      localize: (String) -> String = { $0 },
-                     presence context: AgentPresenceContext? = nil) -> AgentScanReport {
+                     presence context: AgentPresenceContext? = nil,
+                     includingAgentIDs: Set<String> = []) -> AgentScanReport {
         var report = AgentScanReport()
+        let whitelist = NativeCore.shared.loadWhitelist(homeDirectory: home)
         let installed = AgentCatalog.definitions.filter {
             AgentCatalog.hasData($0, home: home) || AgentCatalog.isInstalled($0, home: home, presence: context)
         }
         let orphanedIDs = Set(installed.filter { AgentCatalog.isOrphaned($0, home: home, presence: context) }
             .map(\.id))
-        // 已卸载工具不再是“Agent”：数据属于磁盘垃圾，由清理扫描按应用残留收录。
-        let active = installed.filter { !orphanedIDs.contains($0.id) }
-        let rawResolved = active.map { ($0, AgentCatalog.resolve($0, home: home, presence: context)) }
+        // Removed tools remain available only through an explicitly resumed
+        // Agent cleanup; their history is never ordinary junk.
+        let active = installed.filter { !orphanedIDs.contains($0.id) || includingAgentIDs.contains($0.id) }
+        let discoveredResolved = active.map { agent in
+            (agent, AgentCatalog.resolve(agent, home: home, presence: context).compactMap { target -> AgentCatalog.ResolvedTarget? in
+                let paths = target.paths.filter { !NativeCore.shared.matchesWhitelist($0, entries: whitelist) }
+                guard !paths.isEmpty else { return nil }
+                return AgentCatalog.ResolvedTarget(agentID: target.agentID, tier: target.tier,
+                    labelKey: target.labelKey, owners: target.owners, paths: paths)
+            })
+        }
+        let allRegistrations = scanMCP(agents: AgentCatalog.definitions, home: home, presence: context)
+        let skillDeclarations = NativeCore.shared.matchesWhitelist(home + "/.codex/config.toml", entries: whitelist)
+            ? [] : AgentSkillConfigEditor.scan(home: home)
+        let registeredBodies = Set(allRegistrations.compactMap(\.installationID) + skillDeclarations.map {
+            $0.resolvedPath.hasSuffix("/SKILL.md")
+                ? ($0.resolvedPath as NSString).deletingLastPathComponent : $0.resolvedPath
+        })
+        var cacheInputs: [CleanupCategory] = []
+        var cacheInputIDs: [String: UUID] = [:]
+        for (agentIndex, entry) in discoveredResolved.enumerated() {
+            for (targetIndex, target) in entry.1.enumerated() where target.tier == .safe {
+                let input = CleanupCategory(name: target.labelKey, paths: target.paths, bytes: 0,
+                    selected: true, source: .aiCache, risk: .safe, disposal: .permanentDelete,
+                    applyRoute: .aiTrash, activityGuard: .aiAgent, reasonKey: "agents.reason.rebuildable")
+                cacheInputs.append(input)
+                cacheInputIDs["\(agentIndex):\(targetIndex)"] = input.id
+            }
+        }
+        let cacheScan = cacheInputs.isEmpty ? nil : NativeCore.shared.preflightCleanupCategories(cacheInputs,
+            homeDirectory: home, control: control,
+            verifiedRebuildableRoots: Set(cacheInputs.flatMap(\.paths)), excludingPaths: registeredBodies)
+        if let cacheScan, !cacheScan.succeeded || !cacheScan.deferredPaths.isEmpty { report.complete = false }
+        let cacheCategories = Dictionary((cacheScan?.categories ?? []).map { ($0.id, $0) },
+                                         uniquingKeysWith: { first, _ in first })
+        let cacheSizes = (cacheScan?.categories ?? []).reduce(into: [String: UInt64]()) {
+            $0.merge($1.pathBytes, uniquingKeysWith: { first, _ in first })
+        }
+        let rawResolved = discoveredResolved.enumerated().map { agentIndex, entry in
+            (entry.0, entry.1.enumerated().compactMap { targetIndex, target -> AgentCatalog.ResolvedTarget? in
+                guard target.tier == .safe else { return target }
+                guard let id = cacheInputIDs["\(agentIndex):\(targetIndex)"],
+                      let category = cacheCategories[id], !category.paths.isEmpty else { return nil }
+                return AgentCatalog.ResolvedTarget(agentID: target.agentID, tier: target.tier,
+                    labelKey: target.labelKey, owners: target.owners, paths: category.paths)
+            })
+        }
         // 同一实体只在一个组产生操作项，但守卫保留所有消费者。
         var pathOwners: [String: Set<String>] = [:]
         var pathTiers: [String: AgentTier] = [:]
@@ -114,18 +160,18 @@ enum AgentInventory {
                     labelKey: target.labelKey, owners: owners, paths: paths)
             })
         }
-        let allPaths = Array(Set(resolved.flatMap { $0.1.flatMap(\.paths) })).sorted()
+        let allPaths = Array(Set(resolved.flatMap { $0.1.flatMap(\.paths) }).subtracting(cacheSizes.keys)).sorted()
         let measurements = CleanupScanWorker.measure(allPaths, control: control) { _, _ in }
-        var sizes: [String: UInt64] = [:]
+        var sizes = cacheSizes
         for (path, measurement) in zip(allPaths, measurements) {
             sizes[path] = measurement.bytes
             if !measurement.complete { report.complete = false }
         }
 
         report.skills = scanSkills(home: home, control: control, agents: active,
-                                   orphanedAgentIDs: orphanedIDs)
-        report.servers = scanMCP(agents: active, home: home, presence: context)
-        let allRegistrations = scanMCP(agents: AgentCatalog.definitions, home: home, presence: context)
+                                   orphanedAgentIDs: orphanedIDs.subtracting(includingAgentIDs))
+        let activeIDs = Set(active.map(\.id))
+        report.servers = allRegistrations.filter { activeIDs.contains($0.agentID) }
         report.installations = mcpInstallations(servers: allRegistrations, home: home, control: control)
         report.complete = report.complete && report.skills.allSatisfy(\.measurementComplete)
             && report.installations.allSatisfy(\.measurementComplete)
@@ -138,7 +184,12 @@ enum AgentInventory {
                 guard !paths.isEmpty else { continue }
                 let key = target.labelKey + "|" + target.tier.rawValue
                 if var existing = merged[key] {
-                    for path in paths { existing.appendPath(path, bytes: sizes[path] ?? 0) }
+                    for path in paths {
+                        existing.appendPath(path, bytes: sizes[path] ?? 0)
+                        if isDefaultCleanupSelection(target, documented: agent.documented) {
+                            existing.setPathSelected(path, selected: true)
+                        }
+                    }
                     merged[key] = existing
                     continue
                 }
@@ -148,6 +199,7 @@ enum AgentInventory {
                     paths: paths,
                     bytes: paths.reduce(0) { $0 &+ (sizes[$1] ?? 0) },
                     pathBytes: Dictionary(uniqueKeysWithValues: paths.map { ($0, sizes[$0] ?? 0) }),
+                    selected: isDefaultCleanupSelection(target, documented: agent.documented),
                     source: target.tier == .safe ? .aiCache : .aiSession,
                     risk: risk(for: target.tier),
                     disposal: .permanentDelete,
@@ -194,6 +246,18 @@ enum AgentInventory {
         }
     }
 
+    /// Default selection is a cleanup recommendation, not a lower risk tier.
+    /// Checkpoints and reviewed logs/cache still retain their owner and identity
+    /// guards. Live conversations, state, credentials and installations are
+    /// left for an explicit selection.
+    private static func isDefaultCleanupSelection(_ target: AgentCatalog.ResolvedTarget,
+                                                   documented: Bool) -> Bool {
+        if target.tier == .safe { return true }
+        guard documented, target.tier == .review else { return false }
+        return ["agents.label.cache", "agents.label.logs", "agents.label.logDatabase",
+                "agents.label.tempFiles", "agents.label.checkpoints"].contains(target.labelKey)
+    }
+
     private static func reasonKey(for target: AgentCatalog.ResolvedTarget,
                                   documented: Bool) -> String {
         guard documented else { return "agents.reason.undocumented" }
@@ -219,10 +283,13 @@ enum AgentInventory {
             .filter { orphanedAgentIDs.contains($0.id) }.map(\.name))
         let codexInstalled = agents.contains { $0.id == "codex" }
         let codexName = AgentCatalog.definitions.first { $0.id == "codex" }?.name ?? "Codex CLI"
-        let declarations = AgentSkillConfigEditor.scan(home: home)
+        let whitelist = NativeCore.shared.loadWhitelist(homeDirectory: home)
+        let declarations = NativeCore.shared.matchesWhitelist(home + "/.codex/config.toml", entries: whitelist)
+            ? [] : AgentSkillConfigEditor.scan(home: home)
         let allLinkUsers = AgentCatalog.skillDirectories(home: home).flatMap { directory in
             AgentCatalog.childNames(of: directory.path).compactMap { name -> (String, [String])? in
                 let path = directory.path + "/" + name
+                guard !NativeCore.shared.matchesWhitelist(path, entries: whitelist) else { return nil }
                 guard AgentCatalog.isSymlink(path) else { return nil }
                 return (URL(fileURLWithPath: path).resolvingSymlinksInPath().path, directory.agentNames)
             }
@@ -236,6 +303,7 @@ enum AgentInventory {
                 : directory.ownerNames.first.flatMap { idsByAgentName[$0] } ?? "shared"
             for name in AgentCatalog.childNames(of: directory.path) {
                 let path = directory.path + "/" + name
+                guard !NativeCore.shared.matchesWhitelist(path, entries: whitelist) else { continue }
                 let linked = AgentCatalog.isSymlink(path)
                 let resolved = linked
                     ? URL(fileURLWithPath: path).resolvingSymlinksInPath().path : path
@@ -303,12 +371,15 @@ enum AgentInventory {
     // MARK: - MCP（只读）
 
     static func scanMCP(agents: [AgentDefinition], home: String,
-                        presence context: AgentPresenceContext? = nil) -> [AgentMCPServer] {
+                        presence context: AgentPresenceContext? = nil,
+                        excludingWhitelist: Bool = true) -> [AgentMCPServer] {
         var servers: [AgentMCPServer] = []
+        let whitelist = excludingWhitelist ? NativeCore.shared.loadWhitelist(homeDirectory: home) : []
         let searchPath = context?.searchPath ?? executableSearchPath(home: home)
         for agent in agents {
             for source in agent.mcpSources {
                 let path = AgentCatalog.absolute(source.path, home: home)
+                guard !NativeCore.shared.matchesWhitelist(path, entries: whitelist) else { continue }
                 guard AgentCatalog.exists(path) else { continue }
                 let entries: [(scope: String?, name: String, config: [String: Any])]?
                 switch source.format {
@@ -403,8 +474,10 @@ enum AgentInventory {
         -> [AgentMCPInstallation] {
         let grouped = Dictionary(grouping: servers.filter { $0.installationID != nil },
                                  by: { $0.installationID! })
+        let whitelist = NativeCore.shared.loadWhitelist(homeDirectory: home)
         return grouped.sorted(by: { $0.key < $1.key }).compactMap { path, registrations in
-            guard let identity = DeletionPlan.identity(at: path),
+            guard !NativeCore.shared.matchesWhitelist(path, entries: whitelist),
+                  let identity = DeletionPlan.identity(at: path),
                   isPhysicalInstallation(path, home: home) else { return nil }
             let measurement = CleanupScanWorker.measure(path, control: control)
             var installation = AgentMCPInstallation(
@@ -486,7 +559,9 @@ enum AgentInventory {
     }
 
     private static func validNodePackage(_ path: String, expectedName: String?, home: String) -> Bool {
-        guard isPhysicalInstallation(path, home: home), AgentCatalog.isDirectory(path),
+        guard !NativeCore.shared.matchesWhitelist(path,
+                    entries: NativeCore.shared.loadWhitelist(homeDirectory: home)),
+              isPhysicalInstallation(path, home: home), AgentCatalog.isDirectory(path),
               let data = FileManager.default.contents(atPath: path + "/package.json"),
               let manifest = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let name = manifest["name"] as? String,

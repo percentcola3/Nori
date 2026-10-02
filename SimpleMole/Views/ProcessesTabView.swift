@@ -73,8 +73,6 @@ struct ProcessesTabView: View {
                 .padding(.horizontal, 8)
                 .frame(height: 26)
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.surface2))
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(Color.hairline, lineWidth: 1))
                 .frame(maxWidth: 260)
 
                 Picker("", selection: $state.processSort) {
@@ -115,8 +113,6 @@ struct ProcessesTabView: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.warning.opacity(0.10)))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .strokeBorder(Color.warning.opacity(0.35), lineWidth: 1).allowsHitTesting(false))
     }
 
     // MARK: 应用分组列表
@@ -238,8 +234,6 @@ struct ProcessesTabView: View {
         }
         .clipped()
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.hairline, lineWidth: 1)
-            .allowsHitTesting(false))
         .animation(reduceMotion ? nil : MoleMotion.panel, value: isExpanded)
     }
 
@@ -360,8 +354,6 @@ struct ProcessesTabView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
-                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.hairline, lineWidth: 1)
-                            .allowsHitTesting(false))
                     }
                 }
                 .padding(.horizontal, 16)
@@ -426,7 +418,6 @@ private struct ProcessLifecycleBadge: View {
             .padding(.horizontal, 6)
             .frame(height: 17)
             .background(Capsule().fill(tint.opacity(0.12)))
-            .overlay(Capsule().strokeBorder(tint.opacity(0.32), lineWidth: 1))
             .fixedSize()
     }
 }
@@ -511,7 +502,6 @@ struct PortsTabView: View {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
-                            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
                         }
                     }
                     .padding(.horizontal, 16)

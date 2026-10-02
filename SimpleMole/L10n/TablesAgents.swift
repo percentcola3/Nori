@@ -5,10 +5,12 @@ import Foundation
 enum L10nAgentsTables {
     static let en: [String: String] = [
         "agents.cli.uninstallClean": "Uninstall & clean",
-        "agents.cli.cleanNotice": "Uninstall every detected CLI installation for this agent, then permanently delete its listed data, including history, state and credentials. Shared skill sources and shared MCP installations are kept. If uninstalling fails, data cleanup stops. Running or changed data is skipped.",
+        "agents.cli.select": "Uninstall and clean %@",
+        "agents.cli.selectionHint": "Click Clean to uninstall this CLI and permanently delete this agent's listed data, including history, state and credentials. Shared skill sources and shared MCP installations are kept.",
+        "agents.cli.cleanNotice": "Uninstall the selected CLI installations, then permanently delete their listed agent data, including history, state and credentials. Shared skill sources and shared MCP installations are kept. If uninstalling fails, data cleanup stops. Running or changed data is skipped.",
         "agents.expanded": "Expanded",
         "agents.collapsed": "Collapsed",
-        "agents.cli.notice": "Managed packages are uninstalled by their package manager. Native files move to Trash; launcher links are removed. Agent data remains for a separate cleanup.",
+        "agents.cli.notice": "Managed packages are uninstalled by their package manager. Native installations are deleted; launcher links are removed. Selecting a CLI also includes its agent data in the cleanup.",
         "agents.cli.confirmLink": "Unlink the command for %@. Its source installation remains; only this launcher link is removed.",
         "agents.cli.unlink": "Unlink command",
         "agents.sharedSkills": "Global skills",
@@ -16,11 +18,18 @@ enum L10nAgentsTables {
         "agents.section.installed": "Installed agents",
         "agents.section.skills": "Global skills",
         "agents.section.mcp": "MCP installations",
-        "agents.notice.installed": "Uninstalled agent data appears in Cleanup. History and credentials require explicit selection; running agents must be closed before cleaning.",
+        "agents.notice.installed": "Select a CLI to uninstall it and clean its agent data, or select data separately. Close related agents before cleaning. Uninstalled agent leftovers appear in Cleanup.",
         "agents.notice.skills": "Links only disconnect a skill. Deleting a global skill also removes its agent links.",
         "agents.notice.mcp": "Local MCP installations are separate from registrations. Deleting an installation also removes its known registrations. Remote and on-demand services have registrations only.",
         "agents.status.emptySection": "No items in this section.",
         "agents.status.uninstalling": "Uninstalling %@…",
+        "agents.status.cleaning": "Cleaning %ld items…",
+        "agents.status.cleaningData": "Cleaning %@ data…",
+        "agents.status.refreshing": "Checking cleanup results…",
+        "agents.status.incomplete": "Some items were kept. Review the details, close the related agents if needed, then scan again.",
+        "agents.status.leftovers": "%@ was uninstalled. Scan the Cleanup page to find its remaining data.",
+        "agents.result.details": "View skipped and failed items",
+        "agents.result.noReason": "The remaining items could not be cleaned. Scan again to check their current state before retrying.",
         "agents.badge.review": "Needs review",
         "agents.risk.high": "High risk",
         "agents.skills.unlink": "Unlink",
@@ -36,7 +45,7 @@ enum L10nAgentsTables {
         "agents.cli.confirm": "Uninstall %@ using its detected installation method, then clean the data listed below.",
         "agents.confirm.title": "Review cleanup actions",
         "agents.confirm.message": "File cleanup permanently deletes the selected content and may lose history, state or credentials. Skill links only disconnect their sources; MCP unregistering edits a backed-up config. Running or changed items will be skipped.",
-        "agents.confirm.proceed": "Confirm and proceed",
+        "agents.confirm.proceed": "Confirm cleanup",
         "agents.confirm.unlinkSkill": "Unlink skill: %@ (keep its source)",
         "agents.confirm.deleteSkill": "Delete skill: %@ (remove its known links too)",
         "agents.confirm.unlinkMCP": "Unregister MCP: %@ from %@",
@@ -49,7 +58,7 @@ enum L10nAgentsTables {
         "agents.subtitle": "Caches, old versions and history left by coding agents. Selected items are deleted permanently.",
         "agents.scan": "Scan agents",
         "agents.rescan": "Rescan",
-        "agents.empty.hint": "Finds space used by Claude Code, Codex, Cursor, Copilot, Gemini, Grok, opencode and other agents, and checks their skills and MCP servers. Nothing is removed until you confirm.",
+        "agents.empty.hint": "Finds space used by Claude Code, Codex, Cursor, Copilot, Gemini, Grok, opencode and other agents, and checks their skills and MCP servers. Select items and click Clean to remove them.",
         "agents.status.scanning": "Scanning agent directories…",
         "agents.status.empty": "No agent data found.",
         "agents.status.done": "%ld agents · %@ in total",
@@ -67,9 +76,10 @@ enum L10nAgentsTables {
         "agents.mcp.issue.secret": "Plaintext secret in %@ (%@). Prefer an environment variable.",
         "agents.mcp.issue.unreadable": "Configuration could not be parsed. Selecting this item deletes the whole file after backing it up.",
         "agents.selectSafe": "Select safe",
-        "agents.apply": "Delete",
-        "agents.apply.withCount": "Delete %ld items · %@",
-        "agents.reason.rebuildable": "Rebuildable cache. Skipped while the app is running.",
+        "agents.apply": "Clean",
+        "agents.apply.withCount": "Clean %ld items · %@",
+        "agents.apply.working": "Cleaning…",
+        "agents.reason.rebuildable": "Rebuildable cache. Unused files can be cleaned; files in use are kept.",
         "agents.reason.oldVersion": "Old version not used by any launcher link; the active and newest versions are kept.",
         "agents.reason.review": "History or session data. The tool keeps working without it; your choice.",
         "agents.reason.showOnly": "High risk: deleting state, conversations or credentials may reset the agent or lose login and history. Select manually.",
@@ -109,10 +119,12 @@ enum L10nAgentsTables {
 
     static let zhHans: [String: String] = [
         "agents.cli.uninstallClean": "卸载并清理",
-        "agents.cli.cleanNotice": "卸载该 Agent 检测到的全部 CLI 安装，再永久删除下列数据，包含历史、状态和凭据。共享 Skill 本体和共享 MCP 安装保留。卸载失败则停止数据清理；运行中或身份已变化的数据会跳过。",
+        "agents.cli.select": "卸载并清理 %@",
+        "agents.cli.selectionHint": "点击「清理」后，将卸载此 CLI 并永久删除该 Agent 下列数据，包含历史、状态和凭据。共享 Skill 本体和共享 MCP 安装保留。",
+        "agents.cli.cleanNotice": "卸载勾选的 CLI 安装，再永久删除对应 Agent 下列数据，包含历史、状态和凭据。共享 Skill 本体和共享 MCP 安装保留。卸载失败则停止数据清理；运行中或身份已变化的数据会跳过。",
         "agents.expanded": "已展开",
         "agents.collapsed": "已收起",
-        "agents.cli.notice": "包管理器安装的版本通过对应管理器卸载；原生本体移入废纸篓，启动链接会解除。Agent 数据会保留，另行清理。",
+        "agents.cli.notice": "包管理器安装的版本通过对应管理器卸载；原生本体会删除，启动链接会解除。勾选 CLI 时，会一并清理该 Agent 的数据。",
         "agents.cli.confirmLink": "解除 %@ 的命令链接。仅删除启动入口链接，保留链接指向的安装本体。",
         "agents.cli.unlink": "解除命令链接",
         "agents.sharedSkills": "全局 Skills",
@@ -120,11 +132,18 @@ enum L10nAgentsTables {
         "agents.section.installed": "已安装 Agent",
         "agents.section.skills": "全局 Skills",
         "agents.section.mcp": "MCP 本体",
-        "agents.notice.installed": "已卸载 Agent 的残留在「清理」页处理。历史和凭据需手动选择；清理前请退出相关 Agent。",
+        "agents.notice.installed": "勾选 CLI 可卸载并清理其数据，也可单独勾选数据清理。清理前请退出相关 Agent；已卸载 Agent 的残留在「清理」页处理。",
         "agents.notice.skills": "勾选链接只解除关联；删除全局 Skill 本体会自动清理各 Agent 对它的链接。",
         "agents.notice.mcp": "本地 MCP 本体与 Agent 注册分开管理。删除本体会自动清理已发现的注册；远程和按需启动的服务管理配置关联。",
         "agents.status.emptySection": "这一分区没有发现项目。",
         "agents.status.uninstalling": "正在卸载 %@…",
+        "agents.status.cleaning": "正在清理 %ld 项…",
+        "agents.status.cleaningData": "正在清理 %@ 的数据…",
+        "agents.status.refreshing": "正在核对清理结果…",
+        "agents.status.incomplete": "部分项目尚未清理，请查看原因；需要时退出相关 Agent 后重新扫描。",
+        "agents.status.leftovers": "%@ 已卸载；剩余数据请到「清理」页重新扫描。",
+        "agents.result.details": "查看跳过或失败的原因",
+        "agents.result.noReason": "剩余项目未完成清理。请重新扫描，核对当前状态后重试。",
         "agents.badge.review": "需核对用途",
         "agents.risk.high": "高风险",
         "agents.skills.unlink": "解除关联",
@@ -140,7 +159,7 @@ enum L10nAgentsTables {
         "agents.cli.confirm": "按照检测到的安装方式卸载 %@，随后清理下列数据。",
         "agents.confirm.title": "确认清理动作与影响",
         "agents.confirm.message": "文件清理会永久删除所选内容，可能丢失历史、状态或登录凭据。Skill 链接仅解除关联；MCP 解除注册会先备份再修改配置。正在使用或扫描后变化的项目会跳过。",
-        "agents.confirm.proceed": "确认执行",
+        "agents.confirm.proceed": "确认清理",
         "agents.confirm.unlinkSkill": "解除 Skill 关联：%@（保留本体）",
         "agents.confirm.deleteSkill": "删除 Skill 本体：%@（同步清理已发现的关联链接）",
         "agents.confirm.unlinkMCP": "解除 MCP 注册：%@ · %@",
@@ -153,7 +172,7 @@ enum L10nAgentsTables {
         "agents.subtitle": "编程 Agent 留下的缓存、旧版本和历史记录，勾选后直接永久删除。",
         "agents.scan": "扫描 Agent",
         "agents.rescan": "重新扫描",
-        "agents.empty.hint": "找出 Claude Code、Codex、Cursor、Copilot、Gemini、Grok、opencode 等 Agent 占用的空间，并检查它们的 Skills 和 MCP 服务。确认之前不会删除任何内容。",
+        "agents.empty.hint": "找出 Claude Code、Codex、Cursor、Copilot、Gemini、Grok、opencode 等 Agent 占用的空间，并检查它们的 Skills 和 MCP 服务。勾选后点击「清理」才会删除。",
         "agents.status.scanning": "正在扫描 Agent 目录…",
         "agents.status.empty": "没有发现 Agent 数据。",
         "agents.status.done": "%ld 个 Agent · 共 %@",
@@ -171,9 +190,10 @@ enum L10nAgentsTables {
         "agents.mcp.issue.secret": "%@ 中有明文密钥（%@），建议改用环境变量。",
         "agents.mcp.issue.unreadable": "配置文件无法解析；勾选后会先备份，再删除整份配置。",
         "agents.selectSafe": "勾选安全项",
-        "agents.apply": "删除",
-        "agents.apply.withCount": "删除 %ld 项 · %@",
-        "agents.reason.rebuildable": "可再生缓存；应用运行时跳过。",
+        "agents.apply": "清理",
+        "agents.apply.withCount": "清理 %ld 项 · %@",
+        "agents.apply.working": "正在清理…",
+        "agents.reason.rebuildable": "可再生缓存，可清理未占用文件；使用中的文件会保留。",
         "agents.reason.oldVersion": "没有被任何启动链接使用的旧版本；当前版本和最新版本会保留。",
         "agents.reason.review": "历史或会话数据：删除后工具照常可用，由你决定。",
         "agents.reason.showOnly": "高风险：删除状态、对话或凭据可能重置 Agent、丢失历史或需要重新登录。请手动选择。",
@@ -212,12 +232,17 @@ enum L10nAgentsTables {
     ]
 
     static let zhHant: [String: String] = [
+        "agents.cli.select": "解除安裝並清理 %@",
+        "agents.cli.selectionHint": "點擊「清理」後，將解除安裝此 CLI 並永久刪除該 Agent 下列資料，包含歷史、狀態和憑證。共用 Skill 本體和共用 MCP 安裝保留。",
+        "agents.cli.uninstallClean": "解除安裝並清理",
+        "agents.cli.installation": "CLI 安裝",
+        "agents.notice.installed": "勾選 CLI 可解除安裝並清理其資料，也可單獨勾選資料清理。清理前請退出相關 Agent；已解除安裝 Agent 的殘留在「清理」頁處理。",
         "tab.agents": "Agent",
         "agents.title": "AI Agent 專清",
         "agents.subtitle": "程式 Agent 留下的快取、舊版本和歷史紀錄，勾選後直接永久刪除。",
         "agents.scan": "掃描 Agent",
         "agents.rescan": "重新掃描",
-        "agents.empty.hint": "找出 Claude Code、Codex、Cursor、Copilot、Gemini、Grok、opencode 等 Agent 佔用的空間，並檢查它們的 Skills 和 MCP 服務。確認之前不會刪除任何內容。",
+        "agents.empty.hint": "找出 Claude Code、Codex、Cursor、Copilot、Gemini、Grok、opencode 等 Agent 佔用的空間，並檢查它們的 Skills 和 MCP 服務。勾選後點擊「清理」才會刪除。",
         "agents.status.scanning": "正在掃描 Agent 目錄…",
         "agents.status.empty": "沒有發現 Agent 資料。",
         "agents.status.done": "%ld 個 Agent · 共 %@",
@@ -235,9 +260,18 @@ enum L10nAgentsTables {
         "agents.mcp.issue.secret": "%@ 中有明文金鑰（%@），建議改用環境變數。",
         "agents.mcp.issue.unreadable": "設定檔無法解析。",
         "agents.selectSafe": "勾選安全項",
-        "agents.apply": "刪除",
-        "agents.apply.withCount": "刪除 %ld 項 · %@",
-        "agents.reason.rebuildable": "可再生快取；應用程式執行時略過。",
+        "agents.apply": "清理",
+        "agents.apply.withCount": "清理 %ld 項 · %@",
+        "agents.apply.working": "正在清理…",
+        "agents.confirm.proceed": "確認清理",
+        "agents.status.cleaning": "正在清理 %ld 項…",
+        "agents.status.cleaningData": "正在清理 %@ 的資料…",
+        "agents.status.refreshing": "正在核對清理結果…",
+        "agents.status.incomplete": "部分項目尚未清理，請查看原因；需要時退出相關 Agent 後重新掃描。",
+        "agents.status.leftovers": "%@ 已解除安裝；剩餘資料請到「清理」頁重新掃描。",
+        "agents.result.details": "查看略過或失敗的原因",
+        "agents.result.noReason": "剩餘項目未完成清理。請重新掃描，核對目前狀態後重試。",
+        "agents.reason.rebuildable": "可再生快取，可清理未使用的檔案；使用中的檔案會保留。",
         "agents.reason.oldVersion": "沒有被任何啟動連結使用的舊版本；目前版本和最新版本會保留。",
         "agents.reason.review": "歷史或工作階段資料：刪除後工具照常可用，由你決定。",
         "agents.reason.showOnly": "高風險：刪除狀態、對話或憑證可能重置 Agent、丟失歷史或需要重新登入。請手動選擇。",
@@ -252,84 +286,93 @@ enum L10nAgentsTables {
     ]
 
     static let ja: [String: String] = [
+        "agents.reason.rebuildable": "再生成できるキャッシュです。未使用のファイルはクリーンアップでき、使用中のファイルは保持されます。",
         "tab.agents": "Agent",
         "agents.title": "AI エージェントのクリーンアップ",
         "agents.scan": "エージェントをスキャン",
         "agents.rescan": "再スキャン",
         "agents.selectSafe": "安全な項目を選択",
-        "agents.apply": "削除"
+        "agents.apply": "クリーンアップ"
     ]
 
     static let ko: [String: String] = [
+        "agents.reason.rebuildable": "다시 생성할 수 있는 캐시입니다. 사용하지 않는 파일은 정리할 수 있으며, 사용 중인 파일은 유지됩니다.",
         "tab.agents": "Agent",
         "agents.title": "AI 에이전트 정리",
         "agents.scan": "에이전트 스캔",
         "agents.rescan": "다시 스캔",
         "agents.selectSafe": "안전 항목 선택",
-        "agents.apply": "삭제"
+        "agents.apply": "정리"
     ]
 
     static let de: [String: String] = [
+        "agents.reason.rebuildable": "Wiederherstellbarer Cache. Ungenutzte Dateien können bereinigt werden; verwendete Dateien bleiben erhalten.",
         "tab.agents": "Agenten",
         "agents.title": "KI-Agenten bereinigen",
         "agents.scan": "Agenten scannen",
         "agents.rescan": "Erneut scannen",
         "agents.selectSafe": "Sichere auswählen",
-        "agents.apply": "Löschen"
+        "agents.apply": "Bereinigen"
     ]
 
     static let fr: [String: String] = [
+        "agents.reason.rebuildable": "Cache pouvant être régénéré. Les fichiers inutilisés peuvent être nettoyés ; les fichiers en cours d’utilisation sont conservés.",
         "tab.agents": "Agents",
         "agents.title": "Nettoyage des agents IA",
         "agents.scan": "Analyser les agents",
         "agents.rescan": "Relancer",
         "agents.selectSafe": "Sélection sûre",
-        "agents.apply": "Supprimer"
+        "agents.apply": "Nettoyer"
     ]
 
     static let es: [String: String] = [
+        "agents.reason.rebuildable": "Caché que se puede regenerar. Los archivos sin usar se pueden limpiar; los archivos en uso se conservan.",
         "tab.agents": "Agentes",
         "agents.title": "Limpieza de agentes IA",
         "agents.scan": "Analizar agentes",
         "agents.rescan": "Volver a analizar",
         "agents.selectSafe": "Seleccionar seguros",
-        "agents.apply": "Eliminar"
+        "agents.apply": "Limpiar"
     ]
 
     static let pt: [String: String] = [
+        "agents.reason.rebuildable": "Cache que pode ser recriado. Os arquivos não utilizados podem ser limpos; os arquivos em uso são mantidos.",
         "tab.agents": "Agentes",
         "agents.title": "Limpeza de agentes de IA",
         "agents.scan": "Analisar agentes",
         "agents.rescan": "Analisar de novo",
         "agents.selectSafe": "Selecionar seguros",
-        "agents.apply": "Apagar"
+        "agents.apply": "Limpar"
     ]
 
     static let it: [String: String] = [
+        "agents.reason.rebuildable": "Cache rigenerabile. I file inutilizzati possono essere puliti; i file in uso vengono conservati.",
         "tab.agents": "Agenti",
         "agents.title": "Pulizia agenti IA",
         "agents.scan": "Analizza agenti",
         "agents.rescan": "Rianalizza",
         "agents.selectSafe": "Seleziona sicuri",
-        "agents.apply": "Elimina"
+        "agents.apply": "Pulisci"
     ]
 
     static let ru: [String: String] = [
+        "agents.reason.rebuildable": "Кэш можно создать заново. Неиспользуемые файлы можно очистить; используемые файлы сохраняются.",
         "tab.agents": "Агенты",
         "agents.title": "Очистка ИИ-агентов",
         "agents.scan": "Сканировать агентов",
         "agents.rescan": "Пересканировать",
         "agents.selectSafe": "Выбрать безопасные",
-        "agents.apply": "Удалить"
+        "agents.apply": "Очистить"
     ]
 
     static let tr: [String: String] = [
+        "agents.reason.rebuildable": "Yeniden oluşturulabilir önbellek. Kullanılmayan dosyalar temizlenebilir; kullanılan dosyalar korunur.",
         "tab.agents": "Ajanlar",
         "agents.title": "Yapay zekâ ajanı temizliği",
         "agents.scan": "Ajanları tara",
         "agents.rescan": "Yeniden tara",
         "agents.selectSafe": "Güvenlileri seç",
-        "agents.apply": "Sil"
+        "agents.apply": "Temizle"
     ]
 
     static func table(for language: AppLanguage) -> [String: String] {

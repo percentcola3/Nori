@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 
@@ -5,6 +6,19 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
     guard condition() else {
         FileHandle.standardError.write(Data(("FAIL: " + message + "\n").utf8))
         exit(1)
+    }
+}
+
+private final class ScanProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [CleanupScanProgressEvent] = []
+    func record(_ event: CleanupScanProgressEvent) {
+        lock.lock(); defer { lock.unlock() }
+        recorded.append(event)
+    }
+    var events: [CleanupScanProgressEvent] {
+        lock.lock(); defer { lock.unlock() }
+        return recorded
     }
 }
 
@@ -22,6 +36,11 @@ struct CleanupScanTests {
             let url = home.appendingPathComponent(path)
             try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(repeating: 97, count: bytes).write(to: url)
+        }
+        func allocatedBytes(_ path: String) -> UInt64 {
+            var metadata = stat()
+            expect(lstat(path, &metadata) == 0, "could not size allocated fixture bytes")
+            return UInt64(max(0, metadata.st_blocks)) * 512
         }
         try write("Library/Caches/com.example.ordinary/cache")
         try write("Library/Caches/com.example.second/cache")
@@ -162,7 +181,8 @@ struct CleanupScanTests {
         expect(!deepPaths.contains(home.path + "/Library/Containers/com.example.other/Data/Library/Caches/entry"),
                "orphan container cache must not be double-listed per child")
 
-        // 数据目录不能充当安装证明。卸载后的历史与凭据进入清理页，仍须人工选择。
+        // Uninstalled Agent data includes user history and credentials; the
+        // ordinary junk scan must not offer it under an orphan-data label.
         let orphanHome = fixture.appendingPathComponent("agent-residual-home")
         func writeResidual(_ relative: String) throws {
             let url = orphanHome.appendingPathComponent(relative)
@@ -183,28 +203,10 @@ struct CleanupScanTests {
                                                               agentPresence: orphanPresence)
         expect(residualScan.succeeded && residualScan.deferredPaths.isEmpty,
                "isolated Agent residual scan did not complete")
-        let residualRoots = [".codex", ".gemini/tmp", ".local/share/opencode",
-                             "Library/Application Support/Cursor"]
-        for relative in residualRoots {
-            let path = orphanHome.path + "/" + relative
-            let category = residualScan.categories.first { $0.paths.contains(path) }
-            expect(category?.source == .appLeftover && category?.risk == .warning
-                   && category?.canSelect == true && category?.selected == false
-                   && category?.activityGuard == .aiAgent && category?.activityOwners.isEmpty == false,
-                   "Agent residual was omitted, default-selected or lost its manual owner guard: " + relative)
-        }
-        expect(CleanupCategory.safeCleanupCandidates(from: residualScan.categories).isEmpty,
-               "uninstalled Agent history entered quick-clean recommendations")
-        expect(CleanupCategory.manualCleanupCandidates(from: residualScan.categories).count
-               == residualScan.categories.count,
-               "manual cleanup filtering omitted scanned Agent residuals")
+        expect(residualScan.categories.isEmpty, "uninstalled Agent data entered the junk scan")
         let residualDeep = await NativeCore.shared.scanCleanup(homeDirectory: orphanHome.path,
             mode: .deep, agentPresence: orphanPresence)
-        let residualDeepPaths = Set(residualDeep.categories.flatMap(\.paths))
-        expect(residualRoots.allSatisfy { residualDeepPaths.contains(orphanHome.path + "/" + $0) },
-               "deep cache-leaf discovery displaced an entire Agent history residual")
-        expect(!residualDeepPaths.contains(orphanHome.path + "/Library/Application Support/Cursor/Cache"),
-               "a narrow Safe cache replaced the manually cleanable whole Agent residual")
+        expect(residualDeep.categories.isEmpty, "deep scan admitted Agent-owned data")
         let cancelled = CleanupScanControl(mode: .quick)
         cancelled.cancel()
         let stopped = await NativeCore.shared.scanCleanup(homeDirectory: home.path, control: cancelled)
@@ -229,6 +231,23 @@ struct CleanupScanTests {
         let expected = UInt64(directoryStat.st_blocks + fileStat.st_blocks) * 512
         expect(measured.complete && measured.files == 1 && measured.bytes == expected,
                "hardlink accounting or symlink exclusion failed")
+        let scanHardlinkHome = fixture.appendingPathComponent("scan-hardlink-home")
+        let scanHardlinkRoot = scanHardlinkHome.appendingPathComponent("Library/Caches/hardlinks")
+        try fm.createDirectory(at: scanHardlinkRoot, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 8192).write(to: scanHardlinkRoot.appendingPathComponent("first"))
+        try fm.linkItem(at: scanHardlinkRoot.appendingPathComponent("first"),
+                        to: scanHardlinkRoot.appendingPathComponent("second"))
+        let hardlinkScan = await NativeCore(cleanupOpenFileProbe: { [] }).scanCleanup(
+            homeDirectory: scanHardlinkHome.path)
+        expect(hardlinkScan.categories.first?.pathBytes[scanHardlinkRoot.path]
+               == CleanupScanWorker.measure(scanHardlinkRoot.path, control: .init(mode: .deep)).bytes,
+               "whole-subtree preflight counted allocated hardlink bytes twice")
+        let hardlinkBytes = allocatedBytes(scanHardlinkRoot.appendingPathComponent("first").path)
+        let hardlinkRemoval = NativeCore(cleanupOpenFileProbe: { [] }).applyCleanup(
+            items: DeletionPlan(paths: [scanHardlinkRoot.path]).items, permanent: true,
+            homeDirectory: scanHardlinkHome.path)
+        expect(hardlinkRemoval.reclaimedBytes == hardlinkBytes,
+               "deleting a hardlink family must count allocated bytes only at its last link")
 
         // Enough output to exceed a pipe buffer; no real process list is read.
         let watchdog = DispatchWorkItem { exit(2) }
@@ -249,6 +268,64 @@ struct CleanupScanTests {
         let sized = CleanupScanWorker.measure(many.path, control: benchmark)
         expect(sized.complete && sized.files == 10000, "benchmark did not count all files")
 
+        // Exercise the real secure scan (not just the size-only walker), with
+        // parallel roots and nested progress while a large root is unfinished.
+        let progressHome = fixture.appendingPathComponent("progress-home")
+        for group in 0..<4 {
+            let root = progressHome.appendingPathComponent("Library/Caches/com.example.group\(group)")
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            for file in 0..<1000 { try payload.write(to: root.appendingPathComponent("file-\(file)")) }
+        }
+        let recorder = ScanProgressRecorder()
+        let secureBegan = Date()
+        let secureScan = await NativeCore(cleanupOpenFileProbe: { [] }).scanCleanup(
+            homeDirectory: progressHome.path, progress: .init(handler: recorder.record), mode: .deep)
+        let secureSeconds = Date().timeIntervalSince(secureBegan)
+        let events = recorder.events
+        expect(secureScan.succeeded && secureScan.deferredPaths.isEmpty
+               && secureScan.categories.count == 4 && secureScan.completedRoots.count == 4,
+               "bounded parallel scan lost a complete fixture root")
+        expect(events.contains { $0.phase == "discovery" }
+               && events.contains { $0.phase == "occupancy" }
+               && events.contains { $0.phase == "native" && $0.completed == 0 && $0.total == 4 }
+               && events.contains { $0.phase == "native" && $0.completed == 4 && $0.total == 4 },
+               "scan progress must include discovery, occupancy, start and completion")
+        expect(events.contains { $0.currentPath.contains("/file-") && $0.completed < $0.total },
+               "a large scan must report the current file before its root finishes")
+        let carriedRoot = progressHome.appendingPathComponent("Library/Caches/com.example.group0").path
+        let continued = await NativeCore(cleanupOpenFileProbe: { [] }).scanCleanup(
+            homeDirectory: progressHome.path, mode: .deep, excludingScannedRoots: [carriedRoot])
+        expect(continued.categories.count == 3
+               && !continued.categories.flatMap(\.paths).contains { $0 == carriedRoot || $0.hasPrefix(carriedRoot + "/") },
+               "deep continuation remeasured a root whose results are already carried")
+        expect(partial.completedRoots.isEmpty, "an unfinished root was certified complete for continuation")
+        print(String(format: "Secure scan: 4000 files across four roots in %.3fs; nested progress and selective continuation passed", secureSeconds))
+
+        // Completed roots are literal paths rather than whitelist glob rules.
+        // A carried descendant must also keep its parent out of the new plan,
+        // while unrelated siblings remain discoverable with many carried roots.
+        let continuationHome = fixture.appendingPathComponent("continuation-home")
+        let continuationCache = continuationHome.appendingPathComponent("Library/Caches")
+        let carriedLiteral = continuationCache.appendingPathComponent("com.example.cache[1]")
+        let unrelatedLiteral = continuationCache.appendingPathComponent("com.example.cache1")
+        let prefixSibling = continuationCache.appendingPathComponent("com.example.cache[1]-sibling")
+        let mixedParent = continuationCache.appendingPathComponent("com.example.mixed")
+        let carriedChild = mixedParent.appendingPathComponent("already-scanned")
+        let remainingChild = mixedParent.appendingPathComponent("remaining")
+        for root in [carriedLiteral, unrelatedLiteral, prefixSibling, carriedChild, remainingChild] {
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            try payload.write(to: root.appendingPathComponent("entry"))
+        }
+        var carriedRoots = Set((0..<600).map {
+            continuationCache.appendingPathComponent("com.example.completed\($0)").path
+        })
+        carriedRoots.formUnion([carriedLiteral.path, carriedChild.path])
+        let literalContinuation = await NativeCore(cleanupOpenFileProbe: { [] }).scanCleanup(
+            homeDirectory: continuationHome.path, mode: .deep, excludingScannedRoots: carriedRoots)
+        expect(Set(literalContinuation.categories.flatMap(\.paths))
+               == Set([unrelatedLiteral.path, prefixSibling.path, remainingChild.path]),
+               "continuation treated a literal root as a glob, covered a carried child, or excluded a sibling")
+
         // ---- 7 天活跃门（扫描级）----
         func age(_ path: String, days: Double) throws {
             let url = home.appendingPathComponent(path)
@@ -258,6 +335,21 @@ struct CleanupScanTests {
         try write("Library/Developer/Xcode/DerivedData/ProjStale/build")
         try write("Library/Developer/Xcode/DerivedData/ProjActive/build")
         try age("Library/Developer/Xcode/DerivedData/ProjStale/build", days: 8)
+        // Reading directory entries may change a directory's atime, but the
+        // scanner captures regular-file activity before its SQLite header probe.
+        let oldSeconds = Int(Date().addingTimeInterval(-8 * 86400).timeIntervalSince1970)
+        var oldTimes = [timeval(tv_sec: oldSeconds, tv_usec: 0),
+                        timeval(tv_sec: oldSeconds, tv_usec: 0)]
+        let staleBuild = home.appendingPathComponent("Library/Developer/Xcode/DerivedData/ProjStale/build")
+        expect(utimes(staleBuild.path, &oldTimes) == 0, "could not prepare old access-time evidence")
+        let staleRoot = staleBuild.deletingLastPathComponent().path
+        let evidenceBefore = CleanupScanWorker.measure(staleRoot, control: .init(mode: .deep))
+        let evidenceAfter = CleanupScanWorker.measure(staleRoot, control: .init(mode: .deep))
+        expect(evidenceBefore.complete && evidenceAfter.complete
+               && evidenceBefore.activityEvidence == evidenceAfter.activityEvidence
+               && CleanupAgePolicy.isStale(evidenceAfter.activityEvidence,
+                   retention: CleanupAgePolicy.developerRetention),
+               "repeated directory sizing must not refresh regular-file activity")
         let aged = await NativeCore.shared.scanCleanup(homeDirectory: home.path)
         func category(containing path: String) -> CleanupCategory? {
             aged.categories.first { $0.paths.contains(home.path + "/" + path) }
@@ -345,17 +437,33 @@ struct CleanupScanTests {
         try fm.createSymbolicLink(at: secureTree.appendingPathComponent("inner/link"),
                                   withDestinationURL: outsideKeep)
         let securePlan = DeletionPlan(paths: [secureTree.path])
+        var liveCurrentFiles: [String] = []
         let secureSummary = NativeCore.shared.applyCleanup(
-            items: securePlan.items, permanent: true, homeDirectory: home.path)
-        expect(secureSummary.removed == 1 && secureSummary.failed == 0,
+            items: securePlan.items, permanent: true, homeDirectory: home.path,
+            onCurrentFile: { liveCurrentFiles.append($0) })
+        expect(secureSummary.removed == 3 && secureSummary.failed == 0,
                "secure removal of an identity-matching tree failed")
-        expect(!fm.fileExists(atPath: secureTree.path),
-               "identity-matching tree was not removed")
+        expect(fm.fileExists(atPath: secureTree.path)
+               && NativeCore.shared.directChildren(of: secureTree).isEmpty,
+               "live cache root should remain while unused descendants are removed")
         expect(fm.fileExists(atPath: outsideKeep.appendingPathComponent("precious").path),
                "internal symlink must be unlinked without following it")
+        expect(liveCurrentFiles.contains(secureTree.appendingPathComponent("inner/file").path),
+               "live-cache progress must publish an actual nested file")
+        let recursiveTree = home.appendingPathComponent("Downloads/recursive-progress")
+        let recursiveLeaf = recursiveTree.appendingPathComponent("inner/nested/file")
+        try fm.createDirectory(at: recursiveLeaf.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 5, count: 4096).write(to: recursiveLeaf)
+        var permanentCurrentFiles: [String] = []
+        let recursiveSummary = NativeCore.shared.applyCleanup(
+            items: DeletionPlan(paths: [recursiveTree.path]).items, permanent: true, homeDirectory: home.path,
+            onCurrentFile: { permanentCurrentFiles.append($0) })
+        expect(recursiveSummary.removed == 1 && recursiveSummary.failed == 0
+               && permanentCurrentFiles.contains(recursiveLeaf.path),
+               "permanent recursive removal must publish the current nested file")
 
         // 身份不符（mtime 已变化）→ 跳过且目录保留。
-        let tampered = home.appendingPathComponent("Library/Caches/tampered")
+        let tampered = home.appendingPathComponent("Downloads/tampered")
         try fm.createDirectory(at: tampered, withIntermediateDirectories: true)
         try Data(repeating: 7, count: 4096).write(to: tampered.appendingPathComponent("file"))
         let tamperedPlan = DeletionPlan(paths: [tampered.path])
@@ -386,6 +494,49 @@ struct CleanupScanTests {
         expect(fm.fileExists(atPath: realParent.appendingPathComponent("target/file").path),
                "the real target behind the symlinked parent must survive")
 
+        // Root-based progress completes for removed, refused and failed work;
+        // it must not turn into one callback per cache descendant.
+        let progressFile = home.appendingPathComponent("Downloads/progress-success.txt")
+        try fm.createDirectory(at: progressFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fixture garbage".utf8).write(to: progressFile)
+        let progressItems = DeletionPlan(paths: [progressFile.path]).items
+            + [.init(record: "relative/refused", identity: "")] + throughLink.items
+        var progressEvents: [(Int, Int, String)] = []
+        let fixtureCore = NativeCore(cleanupOpenFileProbe: { [] })
+        let progressBytes = allocatedBytes(progressFile.path)
+        let progressSummary = fixtureCore.applyCleanup(items: progressItems, permanent: true,
+            homeDirectory: home.path, onProgress: { progressEvents.append(($0, $1, $2)) })
+        expect(progressSummary.removed == 1 && progressSummary.skipped == 2 && progressSummary.failed == 0,
+               "progress fixture did not exercise removed and safely refused root outcomes")
+        expect(progressSummary.reclaimedBytes == progressBytes && progressBytes > 0,
+               "reclaimed bytes included refused paths or omitted the confirmed deleted leaf")
+
+        let partialSecureRoot = home.appendingPathComponent("Downloads/partial-secure")
+        try fm.createDirectory(at: partialSecureRoot, withIntermediateDirectories: true)
+        let partialSecureLeaf = partialSecureRoot.appendingPathComponent("first")
+        try Data(repeating: 7, count: 4096).write(to: partialSecureLeaf)
+        let partialSecureBytes = allocatedBytes(partialSecureLeaf.path)
+        let partialSecureResult = fixtureCore.applyCleanup(
+            items: DeletionPlan(paths: [partialSecureRoot.path]).items, permanent: true,
+            homeDirectory: home.path, onCurrentFile: { path in
+                if path == partialSecureLeaf.path {
+                    try? Data("active lock".utf8).write(to: partialSecureRoot.appendingPathComponent("writer.open"))
+                }
+            })
+        expect(partialSecureResult.removed > 0 && partialSecureResult.failed > 0
+               && partialSecureResult.reclaimedBytes == partialSecureBytes
+               && fm.fileExists(atPath: partialSecureRoot.appendingPathComponent("writer.open").path),
+               "partial secure deletion lost its confirmed reclaimed bytes or removed a new lock")
+        expect(progressEvents.map { $0.0 } == [0, 1, 2, 3]
+               && progressEvents.allSatisfy { $0.1 == 3 }
+               && progressEvents.dropFirst().map { $0.2 } == progressItems.map(\.record),
+               "root progress was not monotonic or failed to complete all outcomes")
+        var emptyProgress: [(Int, Int)] = []
+        _ = fixtureCore.applyCleanup(items: [], permanent: true, homeDirectory: home.path,
+            onProgress: { completed, total, _ in emptyProgress.append((completed, total)) })
+        expect(emptyProgress.count == 1 && emptyProgress[0].0 == 0 && emptyProgress[0].1 == 0,
+               "empty cleanup progress should start and finish at zero roots")
+
         // 内容相关删除必须在运行态探测后仍可否决，不能绕过最后一道校验。
         let finalGuardFile = home.appendingPathComponent("Downloads/final-guard.txt")
         try fm.createDirectory(at: finalGuardFile.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -402,7 +553,421 @@ struct CleanupScanTests {
                "final content validation must be called and prevent Trash")
         expect(fm.fileExists(atPath: finalGuardFile.path), "final-validation rejection must preserve the file")
 
-        print(String(format: "PASS: catalog, grouping, deep scan, manual Agent residuals, exclusions, cancellation, partial sizes, hardlinks, pipe output, 7-day gate, custom locations, lexical guards, secure fd-walk deletion; 10000 files in %.3fs", benchmark.elapsed))
+        // Coalescing must keep a selected parent even when a child appears
+        // first, and covered paths must not be reported as skips.
+        let coveringRoot = home.appendingPathComponent("Library/Caches/coalesced")
+        try fm.createDirectory(at: coveringRoot, withIntermediateDirectories: true)
+        let coveringChild = coveringRoot.appendingPathComponent("first")
+        let otherChild = coveringRoot.appendingPathComponent("second")
+        try Data("first cache entry".utf8).write(to: coveringChild)
+        try Data("second cache entry".utf8).write(to: otherChild)
+        let coveringPaths = [coveringChild.path, coveringRoot.path]
+        expect(DeletionPlan.nonOverlappingPaths(coveringPaths) == [coveringRoot.path]
+               && DeletionPlan.nonOverlappingPaths(Array(coveringPaths.reversed())) == [coveringRoot.path],
+               "selected parent coverage must not depend on input order")
+        let coveringItems = coveringPaths.map {
+            DeletionPlan.Item(record: $0, identity: DeletionPlan.identity(at: $0)!)
+        }
+        let covered = NativeCore.shared.applyCleanup(items: coveringItems,
+            permanent: true, homeDirectory: home.path)
+        expect(covered.removed == 2 && covered.skipped == 0 && covered.failed == 0
+               && covered.removedPaths == Set([coveringChild.path, otherChild.path])
+               && covered.remainingPaths == [coveringRoot.path],
+               "live cache accounting must identify deleted leaves and retain its root shell")
+        expect(!fm.fileExists(atPath: otherChild.path), "coalescing a child left the selected parent's siblings behind")
+        let literal = home.path + "/Library/Caches/coalesced/../ordinary"
+        let safeLiteral = home.path + "/Library/Caches/ordinary"
+        expect(DeletionPlan.nonOverlappingPaths([literal, safeLiteral]) == [literal, safeLiteral],
+               "unsafe normalized path swallowed a valid deletion target")
+
+        // Exercise the same immutable scan identities used by the app, with
+        // actual deletion and a fresh scan. Open files must survive while
+        // unrelated cache paths are removed and stay absent on a second scan.
+        let roundTripHome = fixture.appendingPathComponent("round-trip-home")
+        let idleCache = roundTripHome.appendingPathComponent("Library/Caches/com.example.idle")
+        let openCache = roundTripHome.appendingPathComponent("Library/Caches/com.example.open")
+        for root in [idleCache, openCache] {
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            try Data(repeating: 9, count: 4096).write(to: root.appendingPathComponent("entry"))
+        }
+        let openedFD = open(openCache.appendingPathComponent("entry").path, O_RDONLY)
+        expect(openedFD >= 0, "could not open cache fixture")
+        let beforeDelete = await NativeCore.shared.scanCleanup(homeDirectory: roundTripHome.path)
+        expect(beforeDelete.categories.flatMap(\.paths) == [idleCache.path],
+               "round-trip scan must expose only currently deletable cache garbage")
+        let scannedItems = beforeDelete.categories.flatMap { category in
+            category.paths.map { DeletionPlan.Item(record: $0, identity: category.pathIdentities[$0]!) }
+        }
+        let partialDelete = NativeCore.shared.applyCleanup(items: scannedItems,
+            permanent: true, homeDirectory: roundTripHome.path)
+        expect(partialDelete.removed == 1 && partialDelete.skipped == 0 && partialDelete.failed == 0,
+               "confirmed idle scan inventory did not clean without avoidable skips")
+        let afterDelete = await NativeCore.shared.scanCleanup(homeDirectory: roundTripHome.path)
+        expect(afterDelete.categories.isEmpty,
+               "fresh scan rediscovered deleted garbage or admitted an occupied file")
+        close(openedFD)
+        let releasedScan = await NativeCore.shared.scanCleanup(homeDirectory: roundTripHome.path)
+        let releasedItems = releasedScan.categories.flatMap { category in
+            category.paths.map { DeletionPlan.Item(record: $0, identity: category.pathIdentities[$0]!) }
+        }
+        let retried = NativeCore.shared.applyCleanup(
+            items: releasedItems,
+            permanent: true, homeDirectory: roundTripHome.path)
+        expect(retried.removed == 1 && retried.skipped == 0 && retried.failed == 0,
+               "unchanged cache could not be retried after releasing its open file")
+        let afterRetry = await NativeCore.shared.scanCleanup(homeDirectory: roundTripHome.path)
+        expect(afterRetry.categories.isEmpty, "scan-delete-rescan did not converge to an empty inventory")
+
+        // Live caches are cleaned per leaf. One open file or a durable child
+        // must not freeze the unused garbage elsewhere in the same directory.
+        let liveHome = fixture.appendingPathComponent("live-home")
+        let liveRoot = liveHome.appendingPathComponent("Library/Caches/com.example.live")
+        func liveWrite(_ relative: String, contents: Data = Data("rebuildable garbage".utf8)) throws -> URL {
+            let url = liveRoot.appendingPathComponent(relative)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try contents.write(to: url)
+            return url
+        }
+        let liveOpen = try liveWrite("nested/active")
+        let liveLock = try liveWrite("agent.open")
+        let liveUnused = try liveWrite("nested/unused")
+        let liveSession = try liveWrite("sessions/history.jsonl")
+        let liveConfig = try liveWrite("config.toml")
+        let liveMCP = try liveWrite("mcp.json")
+        let liveSkill = try liveWrite("skills/example/SKILL.md")
+        let liveDatabase = try liveWrite("store.sqlite")
+        let liveWAL = try liveWrite("store.sqlite-wal")
+        let liveSHM = try liveWrite("store.sqlite-shm")
+        let liveJournal = try liveWrite("store.sqlite-journal")
+        let headerDatabase = try liveWrite("state-without-extension",
+            contents: Data("SQLite format 3\0durable database".utf8))
+        let whitelistedFile = try liveWrite("keep/selected")
+        let whitelistedDirectory = try liveWrite("keep-directory/data")
+        let whitelistedGlob = try liveWrite("glob/preserved")
+        let liveFree = try liveWrite("other/unused")
+        let liveDirectoryLeaf = try liveWrite("open-directory/unused")
+        let liveOutside = fixture.appendingPathComponent("live-outside")
+        try fm.createDirectory(at: liveOutside, withIntermediateDirectories: true)
+        try Data("external data".utf8).write(to: liveOutside.appendingPathComponent("precious"))
+        let liveLink = liveRoot.appendingPathComponent("external-link")
+        try fm.createSymbolicLink(at: liveLink, withDestinationURL: liveOutside)
+        let whitelistURL = liveHome.appendingPathComponent(".config/mole/whitelist")
+        try fm.createDirectory(at: whitelistURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(([whitelistedFile.path, whitelistedDirectory.deletingLastPathComponent().path,
+                   liveRoot.appendingPathComponent("glob/*").path].joined(separator: "\n") + "\n").utf8)
+            .write(to: whitelistURL)
+        let livePlan = DeletionPlan(paths: [liveRoot.path])
+        let liveFD = open(liveOpen.path, O_RDONLY)
+        let liveDirectoryFD = open(liveDirectoryLeaf.deletingLastPathComponent().path, O_RDONLY | O_DIRECTORY)
+        expect(liveFD >= 0, "could not hold the live cache file open")
+        expect(liveDirectoryFD >= 0, "could not hold the live cache directory open")
+        let safeLiveScan = await NativeCore.shared.scanCleanup(homeDirectory: liveHome.path)
+        let safeLivePaths = safeLiveScan.categories.flatMap(\.paths)
+        func offered(_ path: String, in paths: [String]) -> Bool {
+            paths.contains { path == $0 || path.hasPrefix($0 + "/") }
+        }
+        for deletable in [liveUnused, liveFree, liveDirectoryLeaf] {
+            expect(offered(deletable.path, in: safeLivePaths),
+                   "mixed cache scan lost a deletable sibling: \(deletable.path)")
+        }
+        for preserved in [liveOpen, liveLock, liveSession, liveConfig, liveMCP, liveSkill, liveDatabase,
+                          liveWAL, liveSHM, liveJournal, headerDatabase, whitelistedFile,
+                          whitelistedDirectory, whitelistedGlob, liveLink] {
+            expect(!offered(preserved.path, in: safeLivePaths),
+                   "mixed cache scan offered occupied or protected content: \(preserved.path)")
+        }
+        let oldInventory = CleanupCategory(name: "cached broad parent", paths: [liveRoot.path],
+            bytes: 999999, pathIdentities: [liveRoot.path: "0:0:0"], selected: true,
+            source: .core, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .openFile)
+        let refreshedInventory = NativeCore.shared.preflightCleanupCategories([oldInventory],
+            homeDirectory: liveHome.path)
+        expect(Set(refreshedInventory.categories.flatMap(\.paths)) == Set(safeLivePaths)
+               && refreshedInventory.categories.allSatisfy { $0.allSelected }
+               && refreshedInventory.categories.flatMap { Array($0.pathIdentities.values) }
+                    .allSatisfy { $0 != "0:0:0" },
+               "cached preflight did not materialize safe descendants or refresh scan identities")
+        for category in refreshedInventory.categories {
+            for path in category.paths {
+                expect(category.pathBytes[path] == CleanupScanWorker.measure(path,
+                    control: .init(mode: .deep)).bytes,
+                    "cached preflight counted protected bytes under a split cache")
+            }
+        }
+        var liveProgress: [(Int, Int, String)] = []
+        let liveDeletedBytes = [liveUnused, liveFree, liveDirectoryLeaf, liveLink]
+            .reduce(UInt64(0)) { $0 &+ allocatedBytes($1.path) }
+        let livePartial = NativeCore.shared.applyCleanup(items: livePlan.items,
+            permanent: true, homeDirectory: liveHome.path,
+            onProgress: { liveProgress.append(($0, $1, $2)) })
+        expect(liveProgress.map { $0.0 } == [0, 1] && liveProgress.allSatisfy { $0.1 == 1 && $0.2 == liveRoot.path },
+               "partial live cleanup progress should complete its root without counting nested leaves")
+        expect(livePartial.failed == 0 && livePartial.removedPaths.contains(liveUnused.path)
+               && livePartial.removedPaths.contains(liveFree.path)
+               && livePartial.removedPaths.contains(liveDirectoryLeaf.path)
+               && livePartial.removedPaths.contains(liveLink.path)
+               && !livePartial.removedPaths.contains(liveRoot.path)
+               && livePartial.remainingPaths == [liveRoot.path],
+               "one occupied cache leaf froze unrelated garbage or misreported the directory as removed")
+        expect(livePartial.reclaimedBytes == liveDeletedBytes,
+               "partial live cleanup reported selected capacity instead of confirmed deleted leaf bytes")
+        for preserved in [liveOpen, liveLock, liveSession, liveConfig, liveMCP, liveSkill, liveDatabase, liveWAL, liveSHM, liveJournal,
+                          headerDatabase, whitelistedFile, whitelistedDirectory, whitelistedGlob] {
+            expect(fm.fileExists(atPath: preserved.path), "live cleanup removed a protected child: \(preserved.path)")
+        }
+        expect(fm.fileExists(atPath: liveOutside.appendingPathComponent("precious").path),
+               "live cleanup followed a descendant symlink")
+        expect(fm.fileExists(atPath: liveDirectoryLeaf.deletingLastPathComponent().path),
+               "live cleanup removed an occupied directory shell")
+        close(liveFD)
+        close(liveDirectoryFD)
+        let liveRetry = NativeCore.shared.applyCleanup(items: livePlan.items,
+            permanent: true, homeDirectory: liveHome.path)
+        expect(liveRetry.removedPaths.contains(liveOpen.path)
+               && !fm.fileExists(atPath: liveOpen.path),
+               "a partial live cleanup changed root mtime and prevented retry of the released leaf")
+
+        // Directory content churn keeps the same authorized cache object;
+        // replacing that directory object must still reject the old plan.
+        let churnRoot = liveHome.appendingPathComponent("Library/Caches/churning")
+        try fm.createDirectory(at: churnRoot, withIntermediateDirectories: true)
+        let churnOld = churnRoot.appendingPathComponent("modified")
+        try Data("old cache".utf8).write(to: churnOld)
+        let churnPlan = DeletionPlan(paths: [churnRoot.path])
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-60)], ofItemAtPath: churnRoot.path)
+        try Data("updated cache".utf8).write(to: churnOld)
+        let churnNew = churnRoot.appendingPathComponent("new")
+        try Data("new cache".utf8).write(to: churnNew)
+        let churnClean = NativeCore.shared.applyCleanup(items: churnPlan.items,
+            permanent: true, homeDirectory: liveHome.path)
+        expect(churnClean.failed == 0 && churnClean.skipped == 0
+               && churnClean.removedPaths == Set([churnOld.path, churnNew.path]),
+               "cache content changes incorrectly invalidated its stable directory identity")
+        let replacementPlan = DeletionPlan(paths: [churnRoot.path])
+        let originalRoot = liveHome.appendingPathComponent("Library/Caches/original-churning")
+        try fm.moveItem(at: churnRoot, to: originalRoot)
+        try fm.createDirectory(at: churnRoot, withIntermediateDirectories: true)
+        let replacementLeaf = churnRoot.appendingPathComponent("replacement")
+        try Data("new directory object".utf8).write(to: replacementLeaf)
+        let replaced = NativeCore.shared.applyCleanup(items: replacementPlan.items,
+            permanent: true, homeDirectory: liveHome.path)
+        expect(replaced.removed == 0 && replaced.skipped == 1
+               && fm.fileExists(atPath: replacementLeaf.path),
+               "a replaced cache inode was accepted as the old directory")
+
+        // Unknown open-file state fails closed even for an explicitly trusted
+        // live target outside the generic macOS cache catalog.
+        let customLive = liveHome.appendingPathComponent(".codex/tmp")
+        try fm.createDirectory(at: customLive, withIntermediateDirectories: true)
+        let customLeaf = customLive.appendingPathComponent("unused")
+        try Data("temporary garbage".utf8).write(to: customLeaf)
+        let customPlan = DeletionPlan(paths: [customLive.path])
+        let unavailableCore = NativeCore(cleanupOpenFileProbe: { nil })
+        let unavailableScan = await unavailableCore.scanCleanup(homeDirectory: liveHome.path)
+        expect(!unavailableScan.succeeded && unavailableScan.categories.isEmpty,
+               "unknown open-file evidence was incorrectly presented as deletable garbage")
+        let unavailable = unavailableCore.applyCleanup(items: customPlan.items,
+            permanent: true, homeDirectory: liveHome.path, liveCleanupTargets: [customLive.path])
+        expect(unavailable.removed == 0 && unavailable.skipped == 1
+               && fm.fileExists(atPath: customLeaf.path),
+               "unknown open-file state must preserve an explicitly declared live cache")
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-60)], ofItemAtPath: customLive.path)
+        let customClean = NativeCore.shared.applyCleanup(items: customPlan.items,
+            permanent: true, homeDirectory: liveHome.path, liveCleanupTargets: [customLive.path])
+        expect(customClean.removedPaths == [customLeaf.path] && customClean.skipped == 0,
+               "fresh catalog live target was not admitted outside generic cache roots")
+
+        // Permission-only content is shown only when its signed administrator
+        // execution route is available. Immutable content remains excluded.
+        let permissionsHome = fixture.appendingPathComponent("permissions-home")
+        let permissionsRoot = permissionsHome.appendingPathComponent("Library/Caches/readonly-parent")
+        try fm.createDirectory(at: permissionsRoot, withIntermediateDirectories: true)
+        let permissionLeaf = permissionsRoot.appendingPathComponent("cache")
+        try Data("administrator-removable cache".utf8).write(to: permissionLeaf)
+        expect(chmod(permissionsRoot.path, 0o555) == 0, "could not prepare permission fixture")
+        let userPermissionScan = await fixtureCore.scanCleanup(homeDirectory: permissionsHome.path)
+        expect(userPermissionScan.categories.isEmpty, "ordinary scan offered administrator-only junk")
+        let administratorScan = await fixtureCore.scanCleanup(homeDirectory: permissionsHome.path,
+            includingAdministratorRequired: true)
+        expect(administratorScan.categories.flatMap(\.paths) == [permissionsRoot.path]
+               && administratorScan.administratorRequiredPaths == [permissionsRoot.path]
+               && fixtureCore.requiresAdministratorDeletion(permissionsRoot.path),
+               "administrator-enabled scan lost readable confirmed junk or recursive permission metadata")
+        expect(chmod(permissionsRoot.path, 0o755) == 0, "could not release permission fixture")
+        let aclRoot = permissionsHome.appendingPathComponent("Library/Caches/acl-parent")
+        try fm.createDirectory(at: aclRoot, withIntermediateDirectories: true)
+        let aclLeaf = aclRoot.appendingPathComponent("cache")
+        try Data("ACL protected cache".utf8).write(to: aclLeaf)
+        let aclCommand = Process()
+        aclCommand.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        aclCommand.arguments = ["+a", "\(NSUserName()) deny delete", aclLeaf.path]
+        try aclCommand.run(); aclCommand.waitUntilExit()
+        expect(aclCommand.terminationStatus == 0, "could not prepare ACL deletion fixture")
+        let aclUserScan = await fixtureCore.scanCleanup(homeDirectory: permissionsHome.path)
+        let aclAdministratorScan = await fixtureCore.scanCleanup(homeDirectory: permissionsHome.path,
+            includingAdministratorRequired: true)
+        let aclRequiresAdministrator = fixtureCore.requiresAdministratorDeletion(aclRoot.path)
+        let releaseACL = Process()
+        releaseACL.executableURL = URL(fileURLWithPath: "/bin/chmod")
+        releaseACL.arguments = ["-N", aclLeaf.path]
+        try releaseACL.run(); releaseACL.waitUntilExit()
+        expect(!offered(aclLeaf.path, in: aclUserScan.categories.flatMap(\.paths))
+               && offered(aclLeaf.path, in: aclAdministratorScan.categories.flatMap(\.paths))
+               && aclAdministratorScan.administratorRequiredPaths.contains(aclRoot.path)
+               && aclRequiresAdministrator,
+               "ACL-only restrictions were missed by recursive administrator routing")
+        let immutableRoot = permissionsHome.appendingPathComponent("Library/Caches/immutable")
+        try fm.createDirectory(at: immutableRoot, withIntermediateDirectories: true)
+        let immutableLeaf = immutableRoot.appendingPathComponent("cache")
+        try Data("immutable cache".utf8).write(to: immutableLeaf)
+        expect(chflags(immutableLeaf.path, UInt32(UF_IMMUTABLE)) == 0, "could not prepare immutable fixture")
+        let immutableScan = await fixtureCore.scanCleanup(homeDirectory: permissionsHome.path,
+            includingAdministratorRequired: true)
+        expect(chflags(immutableLeaf.path, 0) == 0, "could not release immutable fixture")
+        expect(!offered(immutableLeaf.path, in: immutableScan.categories.flatMap(\.paths)),
+               "administrator-enabled scan offered immutable content")
+
+        let templateHome = fixture.appendingPathComponent("template-home")
+        let templateRoot = templateHome.appendingPathComponent("Library/Caches/pnpm/dlx/hash/node_modules/create-ui/templates/spa/src")
+        try fm.createDirectory(at: templateRoot.appendingPathComponent("models"), withIntermediateDirectories: true)
+        try Data("export interface Task {}".utf8).write(to: templateRoot.appendingPathComponent("models/Task.ts"))
+        try Data("export const config = {}".utf8).write(to: templateRoot.appendingPathComponent("config.json"))
+        let templateScan = await fixtureCore.scanCleanup(homeDirectory: templateHome.path)
+        expect(!templateScan.categories.isEmpty, "downloaded pnpm source template was excluded as persistent data")
+        let templateItems = templateScan.categories.flatMap { category in
+            category.paths.map { DeletionPlan.Item(record: $0, identity: category.pathIdentities[$0]!) }
+        }
+        let templateApply = fixtureCore.applyCleanup(items: templateItems, permanent: true,
+            homeDirectory: templateHome.path)
+        expect(templateApply.skipped == 0 && templateApply.failed == 0
+               && !fm.fileExists(atPath: templateRoot.appendingPathComponent("models/Task.ts").path),
+               "scan/apply source-template protection diverged")
+
+        let browserHome = fixture.appendingPathComponent("browser-home")
+        var browserCaches: [String] = []
+        var browserDatabases: [String] = []
+        var browserProtectedCacheContent: [String] = []
+        for browser in ["Arc/User Data", "Microsoft Edge"] {
+            let serviceWorker = browserHome.appendingPathComponent(
+                "Library/Application Support/" + browser + "/Default/Service Worker")
+            for leaf in ["CacheStorage/hash/cache", "ScriptCache/cache", "Database/000001.log"] {
+                let file = serviceWorker.appendingPathComponent(leaf)
+                try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data(repeating: 5, count: 4096).write(to: file)
+                if leaf.hasPrefix("Database/") { browserDatabases.append(file.path) }
+                else { browserCaches.append(file.path) }
+            }
+            for leaf in ["CacheStorage/credentials/plain", "CacheStorage/Database/metadata",
+                         "CacheStorage/records.sqlite/plain"] {
+                let file = serviceWorker.appendingPathComponent(leaf)
+                try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try Data(repeating: 7, count: 4096).write(to: file)
+                browserProtectedCacheContent.append(file.path)
+            }
+        }
+        let browserScan = await fixtureCore.scanCleanup(homeDirectory: browserHome.path)
+        let browserPaths = browserScan.categories.flatMap(\.paths)
+        expect(browserCaches.allSatisfy { offered($0, in: browserPaths) }
+               && (browserDatabases + browserProtectedCacheContent).allSatisfy { !offered($0, in: browserPaths) },
+               "Arc/Edge Service Worker database or durable ancestry diverged from cache discovery")
+        let staleBrowserDatabase = CleanupCategory(name: "stale browser cache",
+            paths: browserDatabases.map { ($0 as NSString).deletingLastPathComponent }, bytes: 999999,
+            selected: true, source: .core, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .browser)
+        expect(fixtureCore.preflightCleanupCategories([staleBrowserDatabase],
+            homeDirectory: browserHome.path).categories.isEmpty,
+            "cached Service Worker databases were republished as ordinary junk")
+        let staleBrowserProtectedLeaves = CleanupCategory(name: "stale browser leaves",
+            paths: browserProtectedCacheContent, bytes: 999999,
+            selected: true, source: .core, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .browser)
+        expect(fixtureCore.preflightCleanupCategories([staleBrowserProtectedLeaves],
+            homeDirectory: browserHome.path).categories.isEmpty,
+            "split browser cache records discarded protected content ancestry")
+        let staleBrowserApply = fixtureCore.applyCleanup(
+            items: DeletionPlan(paths: browserProtectedCacheContent).items,
+            permanent: true, homeDirectory: browserHome.path)
+        expect(staleBrowserApply.removed == 0 && staleBrowserApply.reclaimedBytes == 0
+               && browserProtectedCacheContent.allSatisfy { fm.fileExists(atPath: $0) },
+               "split browser cache removal discarded protected content ancestry")
+        let browserBytes = browserCaches.reduce(UInt64(0)) { $0 &+ allocatedBytes($1) }
+        let browserRemoval = fixtureCore.applyCleanup(items: browserScan.categories.flatMap { category in
+            category.paths.map { DeletionPlan.Item(record: $0, identity: category.pathIdentities[$0]!) }
+        }, permanent: true, homeDirectory: browserHome.path)
+        expect(browserRemoval.skipped == 0 && browserRemoval.failed == 0
+               && browserRemoval.reclaimedBytes == browserBytes
+               && (browserDatabases + browserProtectedCacheContent).allSatisfy { fm.fileExists(atPath: $0) },
+               "Arc/Edge cache scan/apply proof diverged or database bytes were claimed as reclaimed")
+
+        // Generic inference cannot override the Agent executor's decision to
+        // keep a verified directory with embedded registrations non-live.
+        let verifiedRoot = liveHome.appendingPathComponent("Library/Caches/verified-resource")
+        try fm.createDirectory(at: verifiedRoot, withIntermediateDirectories: true)
+        let verifiedOpen = verifiedRoot.appendingPathComponent("active")
+        let verifiedUnused = verifiedRoot.appendingPathComponent("unused")
+        try Data("active resource".utf8).write(to: verifiedOpen)
+        try Data("registered resource".utf8).write(to: verifiedUnused)
+        let verifiedFD = open(verifiedOpen.path, O_RDONLY)
+        expect(verifiedFD >= 0, "could not hold a verified non-live resource")
+        let verifiedClean = NativeCore.shared.applyCleanup(items: DeletionPlan(paths: [verifiedRoot.path]).items,
+            permanent: true, homeDirectory: liveHome.path, verifiedTargets: [verifiedRoot.path])
+        close(verifiedFD)
+        expect(verifiedClean.removed == 0 && verifiedClean.skipped == 1
+               && fm.fileExists(atPath: verifiedUnused.path),
+               "generic cache inference bypassed a verified Agent resource's whole-item protection")
+
+        let cacheFile = liveHome.appendingPathComponent("Library/Caches/identity-file")
+        try Data("planned file".utf8).write(to: cacheFile)
+        let cacheFilePlan = DeletionPlan(paths: [cacheFile.path])
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-60)], ofItemAtPath: cacheFile.path)
+        let changedFile = NativeCore.shared.applyCleanup(items: cacheFilePlan.items,
+            permanent: true, homeDirectory: liveHome.path, liveCleanupTargets: [cacheFile.path])
+        expect(changedFile.removed == 0 && changedFile.skipped == 1 && fm.fileExists(atPath: cacheFile.path),
+               "live mode relaxed a regular file's full planned identity")
+
+        // Fresh catalog caches can live below a durable Agent data parent.
+        // Its broad parent prefix must not veto each unused cache descendant.
+        let codexCache = liveHome.appendingPathComponent("Library/Application Support/Codex/Cache")
+        try fm.createDirectory(at: codexCache, withIntermediateDirectories: true)
+        let codexOpen = codexCache.appendingPathComponent("active")
+        let codexUnused = codexCache.appendingPathComponent("unused")
+        let codexConfig = codexCache.appendingPathComponent("config.toml")
+        for leaf in [codexOpen, codexUnused, codexConfig] { try Data("fixture resource".utf8).write(to: leaf) }
+        let codexFD = open(codexOpen.path, O_RDONLY)
+        expect(codexFD >= 0, "could not hold a nested Codex cache leaf")
+        let codexClean = NativeCore.shared.applyCleanup(items: DeletionPlan(paths: [codexCache.path]).items,
+            permanent: true, homeDirectory: liveHome.path, verifiedTargets: [codexCache.path],
+            liveCleanupTargets: [codexCache.path])
+        close(codexFD)
+        expect(codexClean.removedPaths == [codexUnused.path]
+               && fm.fileExists(atPath: codexOpen.path) && fm.fileExists(atPath: codexConfig.path),
+               "a sensitive Agent parent froze a fresh cache or let a durable child be removed")
+        let codexLogs = liveHome.appendingPathComponent(".codex/log")
+        try fm.createDirectory(at: codexLogs, withIntermediateDirectories: true)
+        let codexLog = codexLogs.appendingPathComponent("old.log")
+        try Data("log garbage".utf8).write(to: codexLog)
+        let logPlan = DeletionPlan(paths: [codexLogs.path])
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-60)], ofItemAtPath: codexLogs.path)
+        let logClean = NativeCore.shared.applyCleanup(items: logPlan.items, permanent: true,
+            homeDirectory: liveHome.path, verifiedTargets: [codexLogs.path], liveCleanupTargets: [codexLogs.path])
+        expect(logClean.removedPaths == [codexLog.path] && logClean.skipped == 0,
+               "fresh log garbage below an Agent data root was blanket protected")
+
+        // A running app's real bundle ID is used only as read-only ownership
+        // evidence; all paths being cleaned still belong to this fixture home.
+        if let owner = NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier)
+            .first(where: { CleanupRiskPolicy.isValidReverseDNSOwner($0) }) {
+            let ownedRoot = liveHome.appendingPathComponent("Library/Caches/" + owner)
+            try fm.createDirectory(at: ownedRoot, withIntermediateDirectories: true)
+            let ownedLeaf = ownedRoot.appendingPathComponent("unused")
+            try Data("unoccupied cache".utf8).write(to: ownedLeaf)
+            let ownedClean = NativeCore.shared.applyCleanup(items: DeletionPlan(paths: [ownedRoot.path]).items,
+                permanent: true, homeDirectory: liveHome.path)
+            expect(ownedClean.removedPaths.contains(ownedLeaf.path) && ownedClean.skipped == 0,
+                   "running application ownership froze unoccupied fixture cache garbage")
+        }
+
+        print(String(format: "PASS: catalog, grouping, deep scan, manual Agent residuals, exclusions, cancellation, partial sizes, hardlinks, pipe output, 7-day gate, sizing activity, custom locations, lexical guards, secure fd-walk deletion, leaf-level live caches, protected descendants, stable directory identity, open-file retry, scan-delete-rescan; 10000 files in %.3fs", benchmark.elapsed))
         print(quick.diagnostics)
         print(deep.diagnostics)
         print(aged.diagnostics)

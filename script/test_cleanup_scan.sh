@@ -5,7 +5,8 @@ TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-scan-build.XXXXXX")"
 FIXTURE_ROOT="${NORI_CLEANUP_FIXTURE_ROOT:-$ROOT_DIR}"
 FIXTURE_DIR="$(mktemp -d "$FIXTURE_ROOT/.cleanup-scan-fixture.XXXXXX")"
 trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
-swiftc -O -target "$(uname -m)-apple-macos13.0" \
+source "$ROOT_DIR/script/test_developer_toolchain.sh"
+swiftc -O -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -module-cache-path "$TEST_DIR/module-cache" \
     -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \

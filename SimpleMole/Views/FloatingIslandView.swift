@@ -40,6 +40,22 @@ enum IslandLayout {
     static let nonNotchExpandedTopInset: CGFloat = 12
     static let windowMargin: CGFloat = 14
     static let hitSpaceName = "islandRoot"
+
+    static let sideRailWidth: CGFloat = 88
+    static let sideDetailWidth: CGFloat = 344
+    static let sideDetailGap: CGFloat = 12
+    static let sideCollapsedWidth: CGFloat = 12
+    static let sideCollapsedHeight: CGFloat = 96
+    static let sideMetricHeight: CGFloat = 82
+    static let sideRailBudget: CGFloat = 480
+    static let sideWindowSize = NSSize(
+        width: sideRailWidth + sideDetailWidth + sideDetailGap + windowMargin,
+        height: sideRailBudget + windowMargin * 2)
+
+    static func sideRailHeight(itemCount: Int) -> CGFloat {
+        28 + CGFloat(itemCount) * sideMetricHeight + 32
+            + CGFloat(itemCount + 1) * 8 + 24
+    }
 }
 
 extension AppState.IslandItem {
@@ -68,11 +84,15 @@ struct FloatingIslandView: View {
     var safeTop: CGFloat = 0
     var hardwareNotch = false
     var collapsedWidth: CGFloat = IslandLayout.virtualNotchWidth
+    var edge: AppState.IslandEdge = .top
     var onOpenMain: () -> Void
     var onHitFrameChange: (CGRect, NotchShape) -> Void
+    var onDetailHitFrameChange: (CGRect?) -> Void = { _ in }
     var onExpandedChange: (Bool) -> Void = { _ in }
+    var onSideDrag: (CGFloat, IslandDragPhase) -> Void = { _, _ in }
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.layoutDirection) private var layoutDirection
     @FocusState private var focusedResource: IslandResource?
     @State private var expanded = false
     @State private var selectedResource: IslandResource?
@@ -82,9 +102,12 @@ struct FloatingIslandView: View {
     @State private var feedbackDismissal: Task<Void, Never>?
     @State private var feedbackPinned = false
     @State private var islandHovered = false
+    @State private var detailHovered = false
+    @State private var sideDragging = false
     @State private var moreHovered = false
     @State private var morePressed = false
     @State private var expandedHeight: CGFloat = IslandLayout.metricsHeight
+    @State private var sideDetailHeight: CGFloat = IslandLayout.metricsHeight
     @State private var visibleSize: CGSize = .zero
     @State private var resourceHoverDebounce: Task<Void, Never>?
     @State private var ringReveal: CGFloat = 1
@@ -121,17 +144,60 @@ struct FloatingIslandView: View {
         reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)
     }
     private var visibleShape: NotchShape {
-        if expanded { return NotchShape(bottomRadius: 20, shoulderRadius: 10) }
-        return NotchShape(bottomRadius: hardwareNotch ? IslandLayout.notchBottomRadius
-                                                      : IslandLayout.handleBottomRadius,
-                          shoulderRadius: 4)
+        let attachment: IslandAttachment = edge == .left ? .left : edge == .right ? .right : .top
+        if expanded {
+            return NotchShape(bottomRadius: 20, shoulderRadius: 10, attachment: attachment)
+        }
+        return NotchShape(bottomRadius: edge == .top && hardwareNotch
+                             ? IslandLayout.notchBottomRadius : IslandLayout.handleBottomRadius,
+                          shoulderRadius: 4, attachment: attachment)
     }
 
     var body: some View {
-        LiquidGlassGroup { islandBody }
+        LiquidGlassGroup {
+            if edge == .top { topIslandBody }
+            else { sideIslandBody }
+        }
+        .coordinateSpace(name: IslandLayout.hitSpaceName)
+        .environment(\.colorScheme, .dark)
+        .onChange(of: focusedResource) { resource in
+            if let resource { selectResource(resource) }
+            else if edge != .top, !islandHovered, !sideDragging, !feedbackPinned,
+                    state.islandCleaningResource == nil {
+                setExpanded(false)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .smIslandPointerExited)) { _ in
+            detailHovered = false
+            handleHover(false)
+        }
+        .onChange(of: state.islandCleaningResource) { resource in
+            if resource == nil, feedbackPinned {
+                replayUsageRings()
+                releaseFeedbackAfterDelay()
+            }
+        }
+        .onDisappear {
+            hoverDebounce?.cancel()
+            resourceDebounce?.cancel()
+            resourceHoverDebounce?.cancel()
+            feedbackDismissal?.cancel()
+            ringReplay?.cancel()
+            ringReveal = 1
+            moreHovered = false
+            feedbackPinned = false
+            islandHovered = false
+            detailHovered = false
+            sideDragging = false
+            onDetailHitFrameChange(nil)
+            expanded = false
+            selectedResource = nil
+            hoveredResource = nil
+            onExpandedChange(false)
+        }
     }
 
-    private var islandBody: some View {
+    private var topIslandBody: some View {
         VStack(spacing: 0) {
             // Keep one surface alive: animate its bounds and shoulder geometry,
             // rather than cross-fading two unrelated backgrounds.
@@ -204,35 +270,160 @@ struct FloatingIslandView: View {
         .padding(.horizontal, IslandLayout.windowMargin)
         .padding(.bottom, IslandLayout.windowMargin)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .coordinateSpace(name: IslandLayout.hitSpaceName)
-        .environment(\.colorScheme, .dark)
-        .onChange(of: focusedResource) { resource in
-            if let resource { selectResource(resource) }
+    }
+
+    /// Side rails stay attached to the physical screen edge. The detail slot
+    /// always reserves inward space, so opening it never moves the rail.
+    private var sideIslandBody: some View {
+        HStack(spacing: IslandLayout.sideDetailGap) {
+            if edge == .right { sideDetailSlot }
+            sideRail
+                .frame(width: IslandLayout.sideRailWidth, height: IslandLayout.sideRailBudget,
+                       alignment: edge == .left ? .leading : .trailing)
+            if edge == .left { sideDetailSlot }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .smIslandPointerExited)) { _ in
-            handleHover(false)
+        .padding(.leading, edge == .right ? IslandLayout.windowMargin : 0)
+        .padding(.trailing, edge == .left ? IslandLayout.windowMargin : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .environment(\.layoutDirection, .leftToRight)
+        .animation(motion, value: expanded)
+        .animation(detailMotion, value: selectedResource)
+        .animation(detailMotion, value: sideDetailHeight)
+        .onPreferenceChange(IslandSideDetailFrameKey.self) { frame in
+            onDetailHitFrameChange(frame)
         }
-        .onChange(of: state.islandCleaningResource) { resource in
-            if resource == nil, feedbackPinned {
-                replayUsageRings()
-                releaseFeedbackAfterDelay()
+    }
+
+    private var sideRail: some View {
+        ZStack {
+            VStack(spacing: 8) {
+                sideExpandedDragHandle
+                ForEach(AppState.IslandItem.allCases.filter { state.islandItems.contains($0) }, id: \.self) { item in
+                    metric(item)
+                        .frame(width: IslandLayout.sideRailWidth - 16, height: IslandLayout.sideMetricHeight)
+                }
+                moreControl
+                    .frame(height: 32)
             }
+            .padding(.vertical, 12)
+            .opacity(expanded ? 1 : 0)
+            .allowsHitTesting(expanded)
+            .accessibilityHidden(!expanded)
+            sideCollapsedHandle
+                .opacity(expanded ? 0 : 1)
+                .allowsHitTesting(!expanded)
+                .accessibilityHidden(expanded)
         }
-        .onDisappear {
+        .frame(width: expanded ? IslandLayout.sideRailWidth : IslandLayout.sideCollapsedWidth,
+               height: expanded ? IslandLayout.sideRailHeight(itemCount: state.islandItems.count)
+                                : IslandLayout.sideCollapsedHeight)
+        .modifier(IslandLiquidSurface(shape: visibleShape, isExpanded: expanded, isInteractive: true))
+        .background {
+            GeometryReader { geo in
+                let frame = geo.frame(in: .named(IslandLayout.hitSpaceName))
+                Color.clear
+                    .onAppear { onHitFrameChange(frame, visibleShape) }
+                    .onChange(of: frame) { onHitFrameChange($0, visibleShape) }
+            }
+            .allowsHitTesting(false)
+        }
+        .onHover { handleHover($0) }
+    }
+
+    private var sideExpandedDragHandle: some View {
+        mascot(size: 28)
+            .frame(width: IslandLayout.sideRailWidth - 16, height: 28)
+            .overlay(alignment: edge == .left ? .leading : .trailing) {
+                Capsule()
+                    .fill(Color.islandHandleGrip)
+                    .frame(width: 2, height: 12)
+                    .padding(.horizontal, 6)
+                    .allowsHitTesting(false)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .overlay {
+                IslandDragTarget(label: l10n.t("island.drag.hint"),
+                                 positionFraction: state.islandPosition(for: edge), isEnabled: expanded,
+                                 onDrag: handleSideDrag)
+            }
+    }
+
+    private var sideCollapsedHandle: some View {
+        Capsule()
+            .fill(Color.islandHandleGrip)
+            .frame(width: 2, height: 20)
+            .frame(width: IslandLayout.sideCollapsedWidth, height: IslandLayout.sideCollapsedHeight)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .overlay {
+                IslandDragTarget(label: l10n.t("settings.island") + " · " + l10n.t("island.drag.hint"),
+                                 positionFraction: state.islandPosition(for: edge),
+                                 isEnabled: !expanded,
+                                 onClick: { setExpanded(true) }, onDrag: handleSideDrag)
+            }
+    }
+
+    private func handleSideDrag(_ delta: CGFloat, _ phase: IslandDragPhase) {
+        switch phase {
+        case .began:
+            sideDragging = true
             hoverDebounce?.cancel()
             resourceDebounce?.cancel()
             resourceHoverDebounce?.cancel()
-            feedbackDismissal?.cancel()
-            ringReplay?.cancel()
-            ringReveal = 1
-            moreHovered = false
-            feedbackPinned = false
-            islandHovered = false
-            expanded = false
-            selectedResource = nil
-            hoveredResource = nil
-            onExpandedChange(false)
+        case .changed: break
+        case .ended, .cancelled: sideDragging = false
         }
+        onSideDrag(delta, phase)
+        if (phase == .ended || phase == .cancelled), expanded, !islandHovered {
+            scheduleHoverTransition(false)
+        }
+    }
+
+    private var sideDetailSlot: some View {
+        ZStack {
+            if expanded, let resource = selectedResource {
+                ScrollView(.vertical) {
+                    resourcePanel(resource)
+                        .frame(width: IslandLayout.sideDetailWidth)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .background {
+                            GeometryReader { geo in
+                                Color.clear.preference(key: IslandSideDetailHeightKey.self, value: geo.size.height)
+                            }
+                        }
+                }
+                    .scrollIndicators(.hidden)
+                    .frame(width: IslandLayout.sideDetailWidth,
+                           height: min(IslandLayout.detailBudget, max(64, sideDetailHeight)))
+                    .onPreferenceChange(IslandSideDetailHeightKey.self) { height in
+                        if height > 0 { sideDetailHeight = height }
+                    }
+                    .modifier(IslandLiquidSurface(shape: RoundedRectangle(cornerRadius: 20, style: .continuous),
+                                                 isInteractive: true))
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.preference(key: IslandSideDetailFrameKey.self,
+                                value: geo.frame(in: .named(IslandLayout.hitSpaceName)))
+                        }
+                        .allowsHitTesting(false)
+                    }
+                    .onHover { hovering in
+                        detailHovered = hovering
+                        handleHover(hovering)
+                        if hovering {
+                            resourceDebounce?.cancel()
+                            resourceHoverDebounce?.cancel()
+                        } else {
+                            scheduleResourceDismissal()
+                        }
+                    }
+                    .transition(reduceMotion ? .identity : .opacity.combined(
+                        with: .offset(x: edge == .left ? -8 : 8)))
+            }
+        }
+        .frame(width: IslandLayout.sideDetailWidth, height: IslandLayout.sideRailBudget)
+        .environment(\.layoutDirection, layoutDirection)
     }
 
     /// 展开态：指标行 + 可选资源详情，占满面板宽度。
@@ -310,9 +501,9 @@ struct FloatingIslandView: View {
     }
 
     private var moreControl: some View {
-        Image(systemName: "chevron.right")
+        Image(systemName: edge == .right ? "chevron.left" : "chevron.right")
             .font(.system(size: 15, weight: .semibold))
-            .offset(x: moreHovered && !reduceMotion ? 2 : 0)
+            .offset(x: moreHovered && !reduceMotion ? (edge == .right ? -2 : 2) : 0)
             .foregroundStyle(moreHovered ? Color.accentText : Color.secondary)
             .frame(width: IslandLayout.moreWidth, height: 36)
             .contentShape(Rectangle())
@@ -378,7 +569,48 @@ struct FloatingIslandView: View {
         }
     }
 
+    @ViewBuilder
     private func ring(_ item: AppState.IslandItem) -> some View {
+        if edge == .top { topMetric(item) }
+        else { sideMetric(item) }
+    }
+
+    private func sideMetric(_ item: AppState.IslandItem) -> some View {
+        let active = item.resource != nil && (selectedResource == item.resource
+            || hoveredResource == item.resource || focusedResource == item.resource)
+        return VStack(spacing: 3) {
+            ZStack {
+                Circle().stroke(Color.hairline, lineWidth: 4)
+                Circle()
+                    .trim(from: 0, to: min(1, max(0, progress(item))) * ringReveal)
+                    .stroke(healthColor(item), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                if let resource = item.resource, state.islandCleaningResource == resource {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: item.systemImage)
+                        .font(.system(size: 19, weight: .medium))
+                        .foregroundStyle(active ? Color.accentText : Color.primary)
+                }
+            }
+            .frame(width: 42, height: 42)
+            Text(primaryValue(item))
+                .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundStyle(healthColor(item))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .contentTransition(.numericText())
+            Text(l10n.t(item.labelKey))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+    }
+
+    private func topMetric(_ item: AppState.IslandItem) -> some View {
         let selected = item.resource != nil && selectedResource == item.resource
         let active = item.resource != nil && (
             selected || hoveredResource == item.resource || focusedResource == item.resource)
@@ -436,7 +668,33 @@ struct FloatingIslandView: View {
     }
 
     /// 吞吐没有 0–100% 的上限，不用占用环表示。下行用成功色，上行用次要色。
+    @ViewBuilder
     private var networkMeter: some View {
+        if edge == .top { topNetworkMeter }
+        else {
+            VStack(spacing: 4) {
+                Image(systemName: AppState.IslandItem.network.systemImage)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(Color.success)
+                Text(l10n.t("island.item.network"))
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                rateLine(symbol: "arrow.down", text: ByteFormat.megabytesPerSecond(state.metrics.networkRxMBps),
+                         tint: Color.success)
+                rateLine(symbol: "arrow.up", text: ByteFormat.megabytesPerSecond(state.metrics.networkTxMBps),
+                         tint: Color.secondary)
+                IslandSparkline(primary: state.networkHistory, secondary: state.networkUploadHistory)
+                    .frame(height: 10)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(l10n.t("island.item.network"))
+            .accessibilityValue(networkValue)
+            .onHover { if $0 { selectResource(nil) } }
+        }
+    }
+
+    private var topNetworkMeter: some View {
         VStack(alignment: .leading, spacing: 0) {
             tileLabel(.network, highlighted: false)
             Spacer(minLength: 3)
@@ -577,19 +835,29 @@ struct FloatingIslandView: View {
         resourceDebounce = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled, state.islandCleaningResource == nil,
-                  state.islandClosingPIDs.isEmpty, hoveredResource == nil, !moreHovered, !feedbackPinned else { return }
+                  state.islandClosingPIDs.isEmpty, hoveredResource == nil, !moreHovered, !feedbackPinned,
+                  !detailHovered, !sideDragging, edge == .top || focusedResource == nil else { return }
             withAnimation(detailMotion) { selectedResource = nil }
         }
     }
 
     private func handleHover(_ hovering: Bool) {
+        if sideDragging {
+            islandHovered = hovering
+            return
+        }
         guard islandHovered != hovering else { return }
         islandHovered = hovering
+        scheduleHoverTransition(hovering)
+    }
+
+    private func scheduleHoverTransition(_ hovering: Bool) {
         hoverDebounce?.cancel()
         hoverDebounce = Task { @MainActor in
             try? await Task.sleep(nanoseconds: hovering ? 220_000_000 : 400_000_000)
-            guard !Task.isCancelled else { return }
-            if !hovering, feedbackPinned || state.islandCleaningResource != nil { return }
+            guard !Task.isCancelled, !sideDragging else { return }
+            if !hovering, feedbackPinned || state.islandCleaningResource != nil
+                || (edge != .top && focusedResource != nil) { return }
             setExpanded(hovering)
         }
     }
@@ -640,7 +908,7 @@ struct FloatingIslandView: View {
             try? await Task.sleep(nanoseconds: 5_000_000_000)
             guard !Task.isCancelled else { return }
             feedbackPinned = false
-            if !islandHovered { setExpanded(false) }
+            if !islandHovered && !sideDragging && (edge == .top || focusedResource == nil) { setExpanded(false) }
         }
     }
 
@@ -742,6 +1010,20 @@ private struct IslandQuitButton: View {
 
 private struct IslandExpandedHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = IslandLayout.metricsHeight
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct IslandSideDetailFrameKey: PreferenceKey {
+    static var defaultValue: CGRect? = nil
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
+private struct IslandSideDetailHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
     }

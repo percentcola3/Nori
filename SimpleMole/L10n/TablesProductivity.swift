@@ -22,7 +22,10 @@ enum L10nProductivityTables {
 
     private static let en = values(
         title: "Settings", pages: "Visible pages",
+        islandPosition: "Position", islandTop: "Top", islandLeft: "Left", islandRight: "Right",
         pagesHint: "Keep at least one page visible. Changes apply immediately.",
+        islandHint: "The top position keeps stats horizontal; left and right dock vertically on the corresponding screen edge. Drag the sidebar handle up or down to reposition it. Hover CPU or memory for app details; click the lightning bolt for smart cleanup. The arrow opens the advanced panel.",
+        islandDragHint: "Drag the handle up or down to move the sidebar.",
         count: "%d items in memory", clear: "Clear history",
         capture: "Take screenshot", permission: "Screen Recording…",
         conflict: "The shortcut is already used by another app.",
@@ -46,14 +49,9 @@ enum L10nProductivityTables {
             "island.clean.cache.empty": "Cleared this app’s caches. System memory usage may stay unchanged.",
             "settings.general": "General",
             "settings.island": "Floating Island",
-            "settings.island.hint": "A discreet notch attached to the top of the screen. Hover CPU or memory to inspect apps; click the lightning bolt for smart cleanup. The arrow opens the advanced panel.",
             "settings.island.keepOne": "Keep at least one quick stat on the notch.",
             "settings.menubaricon": "Show menu bar icon",
             "settings.startup": "Launch at login",
-            "settings.island.edge": "Position",
-            "settings.island.edge.top": "Top",
-            "settings.island.edge.left": "Left",
-            "settings.island.edge.right": "Right",
             "settings.launchAtLogin": "Launch at login",
             "settings.launchAtLogin.approval": "Waiting for approval in macOS Login Items; automatic launch is not active yet.",
             "settings.launchAtLogin.openSettings": "Open Login Items settings",
@@ -206,7 +204,10 @@ enum L10nProductivityTables {
 
     private static let zhHans = values(
         title: "设置", pages: "显示的功能页",
+        islandPosition: "浮动位置", islandTop: "顶部", islandLeft: "左侧", islandRight: "右侧",
         pagesHint: "至少保留一个功能页，修改会立即生效。",
+        islandHint: "顶部保持横向排列；左侧和右侧贴对应屏幕侧边，纵向显示指标，可拖动侧边栏手柄上下调整位置。悬停 CPU 或内存查看应用详情，点击闪电智能清理；箭头打开高级面板。",
+        islandDragHint: "上下拖动手柄，调整侧边栏位置。",
         count: "内存中有 %d 条记录", clear: "清空历史",
         capture: "立即截图", permission: "屏幕录制权限…",
         conflict: "快捷键已被其他应用占用。",
@@ -230,14 +231,9 @@ enum L10nProductivityTables {
             "island.clean.cache.empty": "已清除本应用缓存；系统内存占用可能保持不变。",
             "settings.general": "通用",
             "settings.island": "灵动岛",
-            "settings.island.hint": "贴屏幕顶边的隐蔽刘海：悬停 CPU 或内存查看占用排行，点击闪电智能清理；右侧箭头直接打开高级面板。",
             "settings.island.keepOne": "刘海上至少保留一个快捷指标。",
             "settings.menubaricon": "在菜单栏显示图标",
             "settings.startup": "开机启动",
-            "settings.island.edge": "浮动位置",
-            "settings.island.edge.top": "顶部",
-            "settings.island.edge.left": "左侧",
-            "settings.island.edge.right": "右侧",
             "settings.launchAtLogin": "开机自启（登录后）",
             "settings.launchAtLogin.approval": "等待在 macOS「登录项」中允许，开机自启尚未生效。",
             "settings.launchAtLogin.openSettings": "打开登录项设置",
@@ -390,7 +386,10 @@ enum L10nProductivityTables {
 
     private static let zhHant = values(
         title: "設定", pages: "顯示的功能頁",
+        islandPosition: "浮動位置", islandTop: "頂部", islandLeft: "左側", islandRight: "右側",
         pagesHint: "至少保留一個功能頁，修改會立即生效。",
+        islandHint: "頂部保持橫向排列；左側和右側貼對應螢幕側邊，縱向顯示指標，可上下拖曳側邊欄手柄調整位置。將指標停留在 CPU 或記憶體上查看 App 詳情，點擊閃電智慧清理；箭頭開啟進階面板。",
+        islandDragHint: "上下拖曳手柄，調整側邊欄位置。",
         count: "記憶體中有 %d 筆記錄", clear: "清除歷史",
         capture: "立即截圖", permission: "螢幕錄製權限…",
         conflict: "快速鍵已被其他 App 使用。",
@@ -409,7 +408,10 @@ enum L10nProductivityTables {
 
     private static let ja = values(
         title: "設定", pages: "表示するページ",
+        islandPosition: "表示位置", islandTop: "上部", islandLeft: "左側", islandRight: "右側",
         pagesHint: "少なくとも1ページを表示してください。変更はすぐ反映されます。",
+        islandHint: "上部では指標を横に並べ、左側・右側では画面の対応する端に縦に並べます。サイドバーのハンドルを上下にドラッグして位置を調整できます。CPU またはメモリにポインタを合わせるとアプリの詳細を表示し、稲妻をクリックするとスマートクリーンアップを実行します。矢印で詳細パネルを開きます。",
+        islandDragHint: "ハンドルを上下にドラッグしてサイドバーを移動します。",
         count: "メモリ内に %d 件", clear: "履歴を消去",
         capture: "スクリーンショット", permission: "画面収録の権限…",
         conflict: "ショートカットは別のアプリで使用中です。",
@@ -417,7 +419,10 @@ enum L10nProductivityTables {
 
     private static let ko = values(
         title: "설정", pages: "표시할 페이지",
+        islandPosition: "표시 위치", islandTop: "상단", islandLeft: "왼쪽", islandRight: "오른쪽",
         pagesHint: "페이지를 하나 이상 유지해야 합니다. 변경 사항은 즉시 적용됩니다.",
+        islandHint: "상단에서는 지표를 가로로 표시하고, 왼쪽과 오른쪽에서는 해당 화면 가장자리에 세로로 표시합니다. 사이드바 손잡이를 위아래로 드래그하여 위치를 조정할 수 있습니다. CPU 또는 메모리에 포인터를 올리면 앱 세부 정보를 볼 수 있고, 번개를 클릭하면 스마트 정리를 실행합니다. 화살표는 고급 패널을 엽니다.",
+        islandDragHint: "손잡이를 위아래로 드래그하여 사이드바를 이동하세요.",
         count: "메모리에 %d개 항목", clear: "기록 지우기",
         capture: "스크린샷 찍기", permission: "화면 기록 권한…",
         conflict: "다른 앱에서 이 단축키를 사용 중입니다.",
@@ -425,7 +430,10 @@ enum L10nProductivityTables {
 
     private static let de = values(
         title: "Einstellungen", pages: "Sichtbare Seiten",
+        islandPosition: "Position", islandTop: "Oben", islandLeft: "Links", islandRight: "Rechts",
         pagesHint: "Mindestens eine Seite muss sichtbar bleiben. Änderungen gelten sofort.",
+        islandHint: "Oben bleiben die Werte horizontal; links und rechts werden sie am jeweiligen Bildschirmrand vertikal angeordnet. Ziehen Sie den Griff der Seitenleiste nach oben oder unten, um ihre Position zu ändern. Bewegen Sie den Zeiger über CPU oder Speicher für App-Details; klicken Sie auf den Blitz zur intelligenten Bereinigung. Der Pfeil öffnet das erweiterte Panel.",
+        islandDragHint: "Ziehen Sie den Griff nach oben oder unten, um die Seitenleiste zu verschieben.",
         count: "%d Einträge im Speicher", clear: "Verlauf löschen",
         capture: "Screenshot aufnehmen", permission: "Bildschirmaufnahme…",
         conflict: "Das Tastenkürzel wird bereits von einer anderen App verwendet.",
@@ -433,7 +441,10 @@ enum L10nProductivityTables {
 
     private static let fr = values(
         title: "Réglages", pages: "Pages visibles",
+        islandPosition: "Position", islandTop: "En haut", islandLeft: "À gauche", islandRight: "À droite",
         pagesHint: "Gardez au moins une page visible. Les changements sont immédiats.",
+        islandHint: "En haut, les indicateurs restent horizontaux ; à gauche et à droite, ils sont disposés verticalement sur le bord correspondant de l’écran. Faites glisser la poignée de la barre latérale vers le haut ou le bas pour la repositionner. Survolez CPU ou mémoire pour voir les détails des apps ; cliquez sur l’éclair pour le nettoyage intelligent. La flèche ouvre le panneau avancé.",
+        islandDragHint: "Faites glisser la poignée vers le haut ou le bas pour déplacer la barre latérale.",
         count: "%d éléments en mémoire", clear: "Effacer l’historique",
         capture: "Prendre une capture", permission: "Enregistrement de l’écran…",
         conflict: "Le raccourci est déjà utilisé par une autre app.",
@@ -441,7 +452,10 @@ enum L10nProductivityTables {
 
     private static let es = values(
         title: "Ajustes", pages: "Páginas visibles",
+        islandPosition: "Posición", islandTop: "Arriba", islandLeft: "Izquierda", islandRight: "Derecha",
         pagesHint: "Mantén al menos una página visible. Los cambios se aplican al instante.",
+        islandHint: "Arriba, los indicadores siguen en horizontal; a izquierda y derecha se muestran en vertical en el borde correspondiente de la pantalla. Arrastra el asa de la barra lateral hacia arriba o abajo para cambiar su posición. Pasa el cursor sobre CPU o memoria para ver detalles de las apps; pulsa el rayo para la limpieza inteligente. La flecha abre el panel avanzado.",
+        islandDragHint: "Arrastra el asa hacia arriba o abajo para mover la barra lateral.",
         count: "%d elementos en memoria", clear: "Borrar historial",
         capture: "Hacer captura", permission: "Grabación de pantalla…",
         conflict: "Otra app ya usa este atajo.",
@@ -449,7 +463,10 @@ enum L10nProductivityTables {
 
     private static let pt = values(
         title: "Ajustes", pages: "Páginas visíveis",
+        islandPosition: "Posição", islandTop: "Topo", islandLeft: "Esquerda", islandRight: "Direita",
         pagesHint: "Mantenha pelo menos uma página visível. As alterações são imediatas.",
+        islandHint: "No topo, os indicadores continuam na horizontal; à esquerda e à direita, ficam na vertical na borda correspondente da tela. Arraste a alça da barra lateral para cima ou para baixo para reposicioná-la. Passe o cursor sobre CPU ou memória para ver detalhes dos apps; clique no raio para a limpeza inteligente. A seta abre o painel avançado.",
+        islandDragHint: "Arraste a alça para cima ou para baixo para mover a barra lateral.",
         count: "%d itens na memória", clear: "Limpar histórico",
         capture: "Capturar tela", permission: "Gravação da tela…",
         conflict: "O atalho já está sendo usado por outro app.",
@@ -457,7 +474,10 @@ enum L10nProductivityTables {
 
     private static let it = values(
         title: "Impostazioni", pages: "Pagine visibili",
+        islandPosition: "Posizione", islandTop: "In alto", islandLeft: "A sinistra", islandRight: "A destra",
         pagesHint: "Mantieni visibile almeno una pagina. Le modifiche sono immediate.",
+        islandHint: "In alto, gli indicatori restano orizzontali; a sinistra e a destra sono disposti in verticale sul bordo corrispondente dello schermo. Trascina la maniglia della barra laterale in alto o in basso per riposizionarla. Passa il puntatore su CPU o memoria per i dettagli delle app; fai clic sul fulmine per la pulizia intelligente. La freccia apre il pannello avanzato.",
+        islandDragHint: "Trascina la maniglia in alto o in basso per spostare la barra laterale.",
         count: "%d elementi in memoria", clear: "Cancella cronologia",
         capture: "Acquisisci schermata", permission: "Registrazione schermo…",
         conflict: "La scorciatoia è già usata da un’altra app.",
@@ -465,7 +485,10 @@ enum L10nProductivityTables {
 
     private static let ru = values(
         title: "Настройки", pages: "Видимые разделы",
+        islandPosition: "Положение", islandTop: "Сверху", islandLeft: "Слева", islandRight: "Справа",
         pagesHint: "Оставьте видимым хотя бы один раздел. Изменения применяются сразу.",
+        islandHint: "Сверху показатели остаются горизонтальными; слева и справа они располагаются вертикально у соответствующего края экрана. Перетащите ручку боковой панели вверх или вниз, чтобы изменить её положение. Наведите указатель на CPU или память, чтобы увидеть сведения о приложениях; нажмите на молнию для умной очистки. Стрелка открывает расширенную панель.",
+        islandDragHint: "Перетащите ручку вверх или вниз, чтобы переместить боковую панель.",
         count: "В памяти: %d", clear: "Очистить историю",
         capture: "Сделать снимок", permission: "Запись экрана…",
         conflict: "Сочетание клавиш уже занято другим приложением.",
@@ -473,20 +496,31 @@ enum L10nProductivityTables {
 
     private static let tr = values(
         title: "Ayarlar", pages: "Görünür sayfalar",
+        islandPosition: "Konum", islandTop: "Üst", islandLeft: "Sol", islandRight: "Sağ",
         pagesHint: "En az bir sayfa görünür kalmalıdır. Değişiklikler hemen uygulanır.",
+        islandHint: "Üst konumda göstergeler yatay kalır; sol ve sağ konumlarda ilgili ekran kenarında dikey sıralanır. Konumunu değiştirmek için kenar çubuğunun tutamacını yukarı veya aşağı sürükleyin. Uygulama ayrıntıları için CPU veya belleğin üzerine gelin; akıllı temizlik için şimşeğe tıklayın. Ok, gelişmiş paneli açar.",
+        islandDragHint: "Kenar çubuğunu taşımak için tutamacı yukarı veya aşağı sürükleyin.",
         count: "Bellekte %d öğe", clear: "Geçmişi temizle",
         capture: "Ekran görüntüsü al", permission: "Ekran Kaydı…",
         conflict: "Kısayol başka bir uygulama tarafından kullanılıyor.",
         copied: "Kopyalandı ✓", failed: "İşlem başarısız")
 
-    private static func values(title: String, pages: String, pagesHint: String,
+    private static func values(title: String, pages: String,
+                               islandPosition: String, islandTop: String, islandLeft: String, islandRight: String,
+                               pagesHint: String, islandHint: String, islandDragHint: String,
                                count: String, clear: String, capture: String,
                                permission: String, conflict: String,
                                copied: String, failed: String) -> [String: String] {
         [
             "settings.title": title,
             "settings.pages": pages,
+            "settings.island.edge": islandPosition,
+            "settings.island.edge.top": islandTop,
+            "settings.island.edge.left": islandLeft,
+            "settings.island.edge.right": islandRight,
             "settings.pages.hint": pagesHint,
+            "settings.island.hint": islandHint,
+            "island.drag.hint": islandDragHint,
             "settings.clipboard.count": count,
             "settings.screenshot.capture": capture,
             "settings.screenshot.conflict": conflict,

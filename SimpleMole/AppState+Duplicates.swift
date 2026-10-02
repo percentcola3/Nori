@@ -40,6 +40,7 @@ extension AppState {
         guard !isBusy, !isScanningDuplicates else { return }
         guard permissionCenter.fullDiskAccessGranted else {
             duplicateStatus = L10n.shared.t("duplicates.status.noAccess")
+            presentTaskFailure(message: duplicateStatus)
             return
         }
         resetDuplicateResults()
@@ -87,8 +88,13 @@ extension AppState {
         } else if let error {
             duplicateStatus = L10n.shared.t("duplicates.status.failed")
             log(error)
+            presentTaskFailure(message: duplicateStatus, details: [error])
         } else {
             duplicateStatus = L10n.shared.tf("duplicates.status.complete", duplicateGroups.count)
+            if partial {
+                presentTaskFailure(message: L10n.shared.t("duplicates.coverage.partial"),
+                    details: [duplicateCoverage], detailsAreLocalized: true)
+            }
         }
     }
 
@@ -136,11 +142,16 @@ extension AppState {
             isDeletingDuplicates = false
             guard let summary else {
                 duplicateStatus = L10n.shared.t("duplicates.status.invalidSelection")
+                presentTaskFailure(message: duplicateStatus)
                 return
             }
             resetDuplicateResults()
             duplicateStatus = L10n.shared.tf("duplicates.status.deleted", summary.removed, summary.skipped, summary.failed)
             for message in summary.messages { log(message) }
+            if summary.failed > 0 || summary.skipped > 0 {
+                presentTaskFailure(message: duplicateStatus,
+                    details: summary.messages.filter { !$0.hasPrefix("Open-file check ") })
+            }
             analyzeCache.clear()
             resampleAfterMutation()
         }

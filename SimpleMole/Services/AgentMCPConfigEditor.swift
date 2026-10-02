@@ -229,6 +229,15 @@ enum AgentSkillConfigEditor {
         func references(_ body: String) -> Bool {
             resolvedPath == body || (resolvedPath.hasPrefix(body + "/") && resolvedPath.hasSuffix("/SKILL.md"))
         }
+
+        /// A declaration through a Skill link belongs to that link, even though
+        /// its resolved body may be shared by other declarations and links.
+        func declares(_ path: String, home: String) -> Bool {
+            let absolute = skillPath.hasPrefix("~/") ? home + skillPath.dropFirst() : skillPath
+            guard DeletionPlan.isLexicallySafePath(absolute) else { return false }
+            let declared = URL(fileURLWithPath: absolute).standardizedFileURL.path
+            return declared == path || declared.hasPrefix(path + "/")
+        }
     }
 
     static func scan(home: String) -> [Registration] {

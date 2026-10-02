@@ -306,20 +306,36 @@ struct AgentCatalogTests {
         }!
         memoryCategory.selected = true
         let runningCode = RunningApplicationSnapshot(processNames: ["Code"])
+        expect(AgentCleanupExecutor.blockingOwners([memoryCategory], running: runningCode,
+                   home: home, presence: ideOnly) == ["Code"]
+               && AgentCleanupExecutor.blockingOwners([memoryCategory.clearingSelection()],
+                   running: runningCode, home: home, presence: ideOnly).isEmpty,
+               "Agent owner preflight missed a live host IDE or included unselected data")
         expect(AgentCleanupExecutor.plan([memoryCategory], running: runningCode, home: home,
                    presence: ideOnly).items.isEmpty,
                "a running IDE could lose Agent persistent memory")
         let ideSkill = ideReport.skills.first { $0.path == home + "/.claude/skills/implicit" }!
+        expect(AgentCleanupExecutor.blockingOwners([], skills: [ideSkill],
+                   running: RunningApplicationSnapshot(processNames: ["Code", "unrelated"]),
+                   home: home, presence: ideOnly) == ["Code"]
+               && AgentCleanupExecutor.blockingOwners([], skills: [ideSkill],
+                   running: RunningApplicationSnapshot(), home: home, presence: ideOnly).isEmpty,
+               "Skill owner preflight missed an implicit consumer or retained a closed owner")
         let blockedSkill = AgentCleanupExecutor.execute([], running: runningCode, home: home,
             permanent: true, presence: ideOnly, skills: [ideSkill])
-        expect(blockedSkill.refused > 0 && fm.fileExists(atPath: ideSkill.path),
+        expect(blockedSkill.refused > 0 && fm.fileExists(atPath: ideSkill.path)
+               && blockedSkill.summary.messages.contains { $0.contains("owner is running (Code)") && $0.contains(ideSkill.path) },
                "a running IDE could lose its implicitly consumed Skill")
         try Data("{\"mcpServers\":{\"fixture\":{\"url\":\"https://example.invalid/mcp\"}}}".utf8)
             .write(to: URL(fileURLWithPath: home + "/.claude.json"))
         let ideServer = AgentInventory.scanMCP(agents: [claude], home: home, presence: ideOnly).first!
+        expect(AgentCleanupExecutor.blockingOwners([], servers: [ideServer], running: runningCode,
+                   home: home, presence: ideOnly) == ["Code"],
+               "MCP registration preflight missed its live host IDE")
         let blockedServer = AgentCleanupExecutor.execute([], running: runningCode, home: home,
             permanent: true, presence: ideOnly, servers: [ideServer])
         expect(blockedServer.refused > 0
+               && blockedServer.summary.messages.contains { $0.contains("owner is running (Code)") && $0.contains(ideServer.configPath) }
                && AgentInventory.scanMCP(agents: [claude], home: home, presence: ideOnly).count == 1,
                "a running IDE could lose its MCP registration")
         try fm.removeItem(atPath: home + "/.claude.json")
@@ -368,9 +384,12 @@ struct AgentCatalogTests {
                "installed undocumented tool has protected/unselectable data")
         try? fm.removeItem(atPath: home + "/Applications/Kiro.app")
 
-        // --- 扫描报告：Safe 默认勾选，用户数据全部可选但不预选。
+        // --- 扫描报告：清理建议默认勾选，当前会话和状态数据仍须手动选择。
         try write(".claude/projects/-Users-me-repo/session.jsonl")
         try write(".claude/statsig/cache")
+        try write("Library/Application Support/Cursor/snapshots/checkpoint")
+        try write(".codex/cache/rebuildable-entry")
+        try write(".claude/debug/diagnostic.log")
         try write(".claude/skills/writer/SKILL.md")
         try Data("---\nname: writer\ndescription: \"Writes docs\"\n---\nbody\n".utf8)
             .write(to: URL(fileURLWithPath: home + "/.claude/skills/writer/SKILL.md"))
@@ -380,6 +399,15 @@ struct AgentCatalogTests {
         let report = AgentInventory.scan(home: home, presence: sandboxPresence)
         let statsig = report.categories.first { $0.paths.contains(home + "/.claude/statsig") }
         expect(statsig?.risk == .safe && statsig?.allSelected == true, "safe agent cache not preselected")
+        let checkpoints = report.categories.first {
+            $0.paths.contains(home + "/Library/Application Support/Cursor/snapshots")
+        }
+        expect(checkpoints?.allSelected == true && checkpoints?.risk == .warning
+               && checkpoints?.activityOwners == ["Cursor", "com.todesktop.230313mzl4w4u92"],
+               "recommended checkpoints were not selected or lost their risk/owner guard")
+        expect(report.categories.first { $0.paths.contains(home + "/.codex/cache") }?.allSelected == true
+               && report.categories.first { $0.paths.contains(home + "/.claude/debug") }?.allSelected == true,
+               "reviewed Agent caches/logs were discarded from default cleanup selection")
         let projects = report.categories.first { $0.paths.contains(home + "/.claude/projects/-Users-me-repo/session.jsonl") }
         expect(projects?.risk == .warning && projects?.selected == false
                && projects?.activityOwners == ["claude"], "review item preselected or unguarded")
@@ -458,8 +486,155 @@ struct AgentCatalogTests {
                                         presence: sandboxPresence).items.isEmpty,
                "a non-skill path passed the skill revalidation")
 
+        // 运行中的客户端不应挡住普通缓存；只有同一分类中的注册资源继续要求关闭消费者。
+        try write("Library/Application Support/Cursor/Cache/entry")
+        try write("Library/Application Support/Cursor/Code Cache/entry")
+        try write("Applications/Codex.app/Contents/Info.plist")
+        try write("Library/Caches/com.openai.codex/entry")
+        try write("Library/Application Support/Codex/Cache/entry")
+        try write(".codex/log/idle.log")
+        let cursorCache = home + "/Library/Application Support/Cursor/Cache"
+        let cursorCodeCache = home + "/Library/Application Support/Cursor/Code Cache"
+        let liveReport = AgentInventory.scan(home: home, presence: sandboxPresence)
+        let cacheCategory = liveReport.categories.first { $0.paths.contains(cursorCache) }!
+        let codexCacheCategory = liveReport.categories.first {
+            $0.paths.contains(home + "/Library/Caches/com.openai.codex")
+        }!
+        let codexAppCacheCategory = liveReport.categories.first {
+            $0.paths.contains(home + "/Library/Application Support/Codex/Cache")
+        }!
+        let codexLogsCategory = liveReport.categories.first { $0.paths.contains(home + "/.codex/log") }!
+        let runningClients = RunningApplicationSnapshot(processNames: ["Cursor", "codex"])
+        let codexSafeCategories = [codexCacheCategory, codexAppCacheCategory, codexLogsCategory]
+        let safePlan = AgentCleanupExecutor.plan([cacheCategory] + codexSafeCategories,
+            running: runningClients, home: home, presence: sandboxPresence)
+        expect(safePlan.refused == 0 && safePlan.liveTargets == Set([
+                   cursorCache, cursorCodeCache, home + "/Library/Caches/com.openai.codex",
+                   home + "/Library/Application Support/Codex/Cache", home + "/.codex/log"])
+               && AgentCleanupExecutor.blockingOwners([cacheCategory] + codexSafeCategories,
+                   running: runningClients, home: home, presence: sandboxPresence).isEmpty,
+               "a running Agent still blocks its ordinary rebuildable caches")
+        var cacheProgress: [(Int, Int, String)] = []
+        let codexCacheCleanup = AgentCleanupExecutor.execute(codexSafeCategories,
+            running: runningClients, home: home, permanent: true, presence: sandboxPresence,
+            onProgress: { cacheProgress.append(($0, $1, $2)) })
+        expect(cacheProgress.first?.0 == 0 && cacheProgress.last?.0 == 3
+               && cacheProgress.allSatisfy { $0.1 == 3 }
+               && zip(cacheProgress, cacheProgress.dropFirst()).allSatisfy { $0.0.0 <= $0.1.0 },
+               "Agent cache progress did not aggregate its submitted roots monotonically")
+        expect(codexCacheCleanup.refused == 0 && codexCacheCleanup.summary.skipped == 0
+               && codexCacheCleanup.summary.removedPaths == Set([
+                   home + "/Library/Caches/com.openai.codex/entry",
+                   home + "/Library/Application Support/Codex/Cache/entry", home + "/.codex/log/idle.log"])
+               && codexSafeCategories.flatMap(\.paths).allSatisfy(AgentCatalog.exists),
+               "freshly verified Codex caches/logs were blocked by a broad persistent-data prefix: \(codexCacheCleanup.summary.messages)")
+        let unknownRuntime = AgentCleanupExecutor.blockingResources([cacheCategory, selectedState],
+            running: .unavailable, home: home, presence: sandboxPresence)
+        expect(unknownRuntime.paths == [home + "/.codex/state_5.sqlite"] && unknownRuntime.owners.isEmpty
+               && AgentCleanupExecutor.plan([cacheCategory], running: .unavailable,
+                   home: home, presence: sandboxPresence).liveTargets == Set(cacheCategory.paths),
+               "unknown runtime blocks unused caches or permits persistent Agent data")
+        var forgedSafeState = selectedState
+        forgedSafeState.risk = .safe
+        let forgedSafePlan = AgentCleanupExecutor.plan([forgedSafeState], running: idle,
+            home: home, presence: sandboxPresence)
+        expect(forgedSafePlan.liveTargets.isEmpty
+               && AgentCleanupExecutor.plan([forgedSafeState], running: runningClients,
+                   home: home, presence: sandboxPresence).items.isEmpty,
+               "a forged safe risk bypassed fresh persistent-data classification")
+
+        let cacheSkill = cursorCache + "/registered-skill"
+        try write("Library/Application Support/Cursor/Cache/registered-skill/SKILL.md")
+        try executable("Library/Application Support/Cursor/Cache/fixture-mcp")
+        let cacheSkillConfiguration = """
+        [[skills.config]]
+        path = "\(cacheSkill)"
+        enabled = true
+        """
+        try cacheSkillConfiguration.write(toFile: home + "/.codex/config.toml",
+            atomically: true, encoding: .utf8)
+        expect(AgentCleanupExecutor.blockingResources([cacheCategory],
+                   running: RunningApplicationSnapshot(bundleIdentifiers: ["com.openai.codex"]),
+                   home: home, presence: sandboxPresence).paths == [cursorCache]
+               && AgentCleanupExecutor.plan([cacheCategory],
+                   running: RunningApplicationSnapshot(bundleIdentifiers: ["com.openai.codex"]),
+                   home: home, presence: sandboxPresence).liveTargets == [cursorCodeCache],
+               "a Skill declaration alone did not protect its body inside an otherwise safe cache")
+        try Data("{\"mcpServers\":{\"cache-mcp\":{\"command\":\"\(cursorCache)/fixture-mcp\"}}}".utf8)
+            .write(to: URL(fileURLWithPath: home + "/.cursor/mcp.json"))
+        let registeredCacheReport = AgentInventory.scan(home: home, presence: sandboxPresence)
+        expect(!registeredCacheReport.categories.flatMap(\.paths).contains {
+            $0 == cursorCache || $0 == cacheSkill || $0.hasPrefix(cacheSkill + "/")
+                || $0 == cursorCache + "/fixture-mcp"
+        }, "fresh cache scan included registered Skill/MCP bodies as disposable junk")
+        // A previously selected broad root must still retain its stronger
+        // consumer guard after fresh discovery splits out registered bodies.
+        let registeredCacheCategory = cacheCategory
+        let registeredCacheServer = registeredCacheReport.servers.first { $0.name == "cache-mcp" }!
+        let registeredCacheInstallation = registeredCacheReport.installations.first {
+            $0.path == cursorCache + "/fixture-mcp"
+        }!
+        let blockedCache = AgentCleanupExecutor.blockingResources([registeredCacheCategory],
+            installations: [registeredCacheInstallation], servers: [registeredCacheServer],
+            running: runningClients, home: home, presence: sandboxPresence)
+        expect(blockedCache.paths == [cursorCache]
+               && blockedCache.installationIDs == [registeredCacheInstallation.id]
+               && blockedCache.serverIDs == [registeredCacheServer.id]
+               && Set(blockedCache.owners).isSuperset(of: ["Cursor", "codex"]),
+               "registered Skill/MCP data in a cache bypassed consumer guards or blocked its sibling")
+        let unknownResources = AgentCleanupExecutor.blockingResources([registeredCacheCategory, selectedState],
+            skills: [writer!], installations: [registeredCacheInstallation], servers: [registeredCacheServer],
+            running: .unavailable, home: home, presence: sandboxPresence)
+        expect(unknownResources.paths == [cursorCache, home + "/.codex/state_5.sqlite"]
+               && unknownResources.skillPaths == [writer!.path]
+               && unknownResources.installationIDs == [registeredCacheInstallation.id]
+               && unknownResources.serverIDs == [registeredCacheServer.id] && unknownResources.owners.isEmpty,
+               "unknown runtime did not preserve sensitive data, Skill bodies, MCP installations and registrations")
+        let mixedPlan = AgentCleanupExecutor.plan([registeredCacheCategory], running: runningClients,
+            home: home, presence: sandboxPresence)
+        expect(mixedPlan.refused == 1 && mixedPlan.liveTargets == [cursorCodeCache]
+               && mixedPlan.items.map(\.record) == [cursorCodeCache],
+               "a blocked cache path prevented the ready sibling from entering the plan")
+        let stoppedRegisteredPlan = AgentCleanupExecutor.plan([registeredCacheCategory], running: idle,
+            home: home, presence: sandboxPresence)
+        expect(stoppedRegisteredPlan.items.count == 2
+               && stoppedRegisteredPlan.liveTargets == [cursorCodeCache],
+               "registered resources were assigned partial cache cleanup instead of their guarded operation")
+        var mixedProgress: [(Int, Int, String)] = []
+        let mixedCleanup = AgentCleanupExecutor.execute([registeredCacheCategory],
+            running: runningClients, home: home, permanent: true, presence: sandboxPresence,
+            onProgress: { mixedProgress.append(($0, $1, $2)) })
+        expect(mixedProgress.first?.0 == 0 && mixedProgress.last?.0 == 2
+               && mixedProgress.allSatisfy { $0.1 == 2 }
+               && mixedProgress.contains { $0.0 == 1 }
+               && zip(mixedProgress, mixedProgress.dropFirst()).allSatisfy { $0.0.0 <= $0.1.0 },
+               "Agent progress failed to complete an owner-refused root beside a cleaned cache")
+        expect(mixedCleanup.refused == 1 && mixedCleanup.summary.removed > 0
+               && AgentCatalog.exists(cursorCache + "/fixture-mcp") && AgentCatalog.exists(cacheSkill)
+               && AgentCatalog.exists(cursorCodeCache) && !AgentCatalog.exists(cursorCodeCache + "/entry")
+               && (try? String(contentsOfFile: home + "/.codex/config.toml", encoding: .utf8)) == cacheSkillConfiguration
+               && AgentInventory.scanMCP(agents: [AgentCatalog.definitions.first { $0.id == "cursor" }!],
+                   home: home, presence: sandboxPresence).contains { $0.name == "cache-mcp" },
+               "mixed cleanup failed to remove unused cache leaves or mutated active Skill/MCP resources: \(mixedCleanup.summary.messages)")
+        try fm.removeItem(atPath: home + "/.codex/config.toml")
+        expect(AgentCleanupExecutor.blockingResources([registeredCacheCategory],
+                   running: RunningApplicationSnapshot(processNames: ["Cursor"]),
+                   home: home, presence: sandboxPresence).paths == [cursorCache]
+               && AgentCleanupExecutor.plan([registeredCacheCategory],
+                   running: RunningApplicationSnapshot(processNames: ["Cursor"]),
+                   home: home, presence: sandboxPresence).liveTargets == [cursorCodeCache],
+               "an MCP registration alone did not protect its executable inside an otherwise safe cache")
+        try fm.removeItem(atPath: home + "/.cursor/mcp.json")
+        try fm.removeItem(atPath: cursorCache)
+        try fm.removeItem(atPath: cursorCodeCache)
+        try fm.removeItem(atPath: home + "/Library/Caches/com.openai.codex")
+        try fm.removeItem(atPath: home + "/Library/Application Support/Codex")
+        try fm.removeItem(atPath: home + "/.codex/log")
+        try fm.removeItem(atPath: home + "/Applications/Codex.app")
+
         // --- 漏斗：SQLite 族原子处理；verifiedTargets 只解除名字/扩展名拦截。
         var logCategory = report.categories.first { $0.paths.contains(home + "/.codex/logs_2.sqlite") }!
+        logCategory.selected = false
         logCategory.setPathSelected(home + "/.codex/logs_2.sqlite", selected: true)
         let partialPlan = AgentCleanupExecutor.plan([logCategory], running: idle, home: home,
                                                    presence: sandboxPresence)
@@ -479,12 +654,57 @@ struct AgentCatalogTests {
         expect(fm.fileExists(atPath: home + "/.codex/state_5.sqlite"), "unselected state database was touched")
 
         // --- Skill 链接和共享本体是不同操作：解除单个关联保留本体，删除本体清掉全部关联。
-        let unlinked = AgentCleanupExecutor.execute([], running: idle, home: home, permanent: true,
+        // Explicit declarations through a link must also be detached. A direct
+        // declaration of the shared body belongs to the body and stays intact.
+        let linkedSkillConfig = """
+        model = "fixture-model"
+        [[skills.config]]
+        path = "~/.cursor/skills/shared-skill/SKILL.md"
+        enabled = true
+        [[skills.config]]
+        path = "\(home)/.agents/skills/shared-skill"
+        enabled = true
+        """
+        try linkedSkillConfig.write(toFile: home + "/.codex/config.toml", atomically: true, encoding: .utf8)
+        let linkedDeclarations = AgentSkillConfigEditor.scan(home: home)
+        expect(linkedDeclarations.first?.declares(home + "/.cursor", home: home) == true
+               && linkedDeclarations.last?.declares(home + "/.cursor", home: home) == false,
+               "a parent cleanup could miss a Skill declaration through a contained link")
+        let filesBeforePreflight = AgentCatalog.childNames(of: home + "/.codex")
+        expect(AgentCleanupExecutor.blockingOwners([], skills: [linked!],
+                   running: RunningApplicationSnapshot(bundleIdentifiers: ["com.openai.codex"]),
+                   home: home, presence: sandboxPresence) == ["com.openai.codex"]
+               && AgentCatalog.childNames(of: home + "/.codex") == filesBeforePreflight
+               && (try? String(contentsOfFile: home + "/.codex/config.toml", encoding: .utf8)) == linkedSkillConfig,
+               "Skill link preflight missed a lexical declaration or mutated its configuration")
+        let linkHeldByCodex = AgentCleanupExecutor.execute([],
+            running: RunningApplicationSnapshot(processNames: ["codex"]), home: home, permanent: true,
             presence: sandboxPresence, skills: [linked!])
-        expect(unlinked.summary.removed == 1
+        expect(linkHeldByCodex.refused == 1 && AgentCatalog.exists(linked!.path)
+               && (try? String(contentsOfFile: home + "/.codex/config.toml", encoding: .utf8)) == linkedSkillConfig,
+               "a registered Skill link was detached while its declaring Agent was running")
+        var linkProgress: [(Int, Int)] = []
+        let unlinked = AgentCleanupExecutor.execute([], running: idle, home: home, permanent: true,
+            presence: sandboxPresence, skills: [linked!], onProgress: { completed, total, _ in
+                linkProgress.append((completed, total))
+                if total > 0 && completed == total {
+                    expect(!AgentCatalog.exists(linked!.path)
+                           && AgentSkillConfigEditor.scan(home: home).map(\.skillPath)
+                               == [home + "/.agents/skills/shared-skill"],
+                           "Skill progress reached completion before its registration was detached")
+                }
+            })
+        expect(linkProgress.first?.0 == 0 && linkProgress.last?.0 == 1
+               && linkProgress.allSatisfy { $0.1 == 1 },
+               "explicit linked Skill did not produce complete progress")
+        expect(unlinked.summary.removed == 2
                && !AgentCatalog.exists(home + "/.cursor/skills/shared-skill")
                && fm.fileExists(atPath: home + "/.agents/skills/shared-skill/SKILL.md"),
                "unlinking a skill deleted its shared target: \(unlinked.summary.messages)")
+        let remainingDeclarations = AgentSkillConfigEditor.scan(home: home)
+        expect(remainingDeclarations.map(\.skillPath) == [home + "/.agents/skills/shared-skill"]
+               && fm.fileExists(atPath: home + "/.codex/config.toml.nori-backup"),
+               "Skill link cleanup left its explicit declaration or removed the body's declaration")
         try link(".cursor/skills/shared-skill", to: home + "/.agents/skills/shared-skill")
         try link(".codex/skills/shared-skill", to: "../../.agents/skills/shared-skill")
         // 卸载 Agent 的注册也必须随共享本体一起清除。
@@ -500,6 +720,11 @@ struct AgentCatalogTests {
         """.utf8).write(to: URL(fileURLWithPath: home + "/.codex/config.toml"))
         let sharedSkill = AgentInventory.scan(home: home, presence: sandboxPresence).skills
             .first { $0.path == home + "/.agents/skills/shared-skill" }!
+        expect(Set(AgentCleanupExecutor.blockingOwners([], skills: [sharedSkill],
+                   running: RunningApplicationSnapshot(bundleIdentifiers: ["com.openai.codex"],
+                       processNames: ["Cursor", "kimi"]), home: home, presence: sandboxPresence))
+                   == Set(["com.openai.codex", "Cursor", "kimi"]),
+               "shared Skill preflight missed declarations or installed/orphaned link consumers")
         let sharedDeleted = AgentCleanupExecutor.execute([], running: idle, home: home, permanent: true,
             presence: sandboxPresence, skills: [sharedSkill])
         expect(sharedDeleted.summary.removed >= 1
@@ -613,6 +838,11 @@ struct AgentCatalogTests {
                }, "shared MCP executable was not deduplicated across agents")
         expect(mcpReport.installations.allSatisfy { $0.path != "/bin/sh" },
                "a shared runtime was mistaken for an MCP installation")
+        expect(AgentCleanupExecutor.blockingOwners([], installations: [mcpInstall!],
+                   running: RunningApplicationSnapshot(bundleIdentifiers: ["com.openai.codex"],
+                       processNames: ["claude"]), home: home, presence: sandboxPresence)
+                   == ["claude", "com.openai.codex"],
+               "shared MCP installation preflight missed one of its registration consumers")
         // Agent 自身也可以提供 MCP；只能解除注册，不能在 MCP 区卸掉宿主包。
         try executable(".npm-global/lib/node_modules/@openai/codex/cli.js")
         let hostPackage = home + "/.npm-global/lib/node_modules/@openai/codex"
@@ -661,9 +891,15 @@ struct AgentCatalogTests {
         let blockedBackup = home + "/.codex/config.toml.nori-backup"
         try fm.removeItem(atPath: blockedBackup)
         try fm.createDirectory(atPath: blockedBackup, withIntermediateDirectories: false)
+        var refusedMCPProgress: [(Int, Int)] = []
         let refusedBody = AgentCleanupExecutor.execute([], running: idle, home: home, permanent: true,
-            presence: sandboxPresence, installations: [mcpInstall!])
+            presence: sandboxPresence, installations: [mcpInstall!],
+            onProgress: { completed, total, _ in refusedMCPProgress.append((completed, total)) })
+        expect(refusedMCPProgress.first?.0 == 0 && refusedMCPProgress.last?.0 == 1
+               && refusedMCPProgress.allSatisfy { $0.1 == 1 },
+               "MCP backup failure left aggregate progress incomplete")
         expect(refusedBody.summary.removed == 0 && refusedBody.refused > 0
+               && refusedBody.summary.messages.contains { $0.contains("could not be backed up") && $0.contains(mcpInstall!.path) }
                && fm.fileExists(atPath: home + "/.local/bin/nori-fixture-mcp"),
                "MCP body was removed when its registrations could not be backed up")
         try fm.removeItem(atPath: blockedBackup)
@@ -734,6 +970,23 @@ struct AgentCatalogTests {
         var rootCategory = AgentInventory.scan(home: home, presence: sandboxPresence).categories
             .first { $0.paths.contains(kiroRoot) }!
         rootCategory.selected = true
+        expect(AgentCleanupExecutor.blockingOwners([rootCategory],
+                   running: RunningApplicationSnapshot(bundleIdentifiers: ["com.openai.codex"],
+                       processNames: ["claude", "Cursor"]), home: home, presence: sandboxPresence)
+                   == ["claude", "com.openai.codex"],
+               "parent-root preflight missed shared MCP/Skill consumers or included an unrelated app")
+        let containedLink = kiroRoot + "/skills/external-shared"
+        try fm.createSymbolicLink(atPath: containedLink,
+            withDestinationPath: home + "/.agents/skills/global")
+        try (existingTOML + "\n[[skills.config]]\npath = \"\(containedLink)/SKILL.md\"\nenabled = true\n")
+            .write(toFile: home + "/.codex/config.toml", atomically: true, encoding: .utf8)
+        expect(AgentCleanupExecutor.blockingOwners([rootCategory],
+                   running: RunningApplicationSnapshot(bundleIdentifiers: ["com.openai.codex"]),
+                   home: home, presence: sandboxPresence) == ["com.openai.codex"],
+               "parent-root preflight missed a declaration through a contained Skill link")
+        try fm.removeItem(atPath: containedLink)
+        try (existingTOML + "\n[[skills.config]]\npath = \"\(containedSkill)\"\nenabled = true\n")
+            .write(toFile: home + "/.codex/config.toml", atomically: true, encoding: .utf8)
         let consumerBusy = AgentCleanupExecutor.execute([rootCategory],
             running: RunningApplicationSnapshot(processNames: ["claude"]), home: home,
             permanent: true, presence: sandboxPresence)
@@ -779,24 +1032,34 @@ struct AgentCatalogTests {
         let cleanupReport = await NativeCore.shared.scanCleanup(homeDirectory: home, mode: .quick,
             control: CleanupScanControl(mode: .quick, totalBudget: 30, directoryBudget: 5),
             agentPresence: sandboxPresence)
-        let opencodeLeftover = cleanupReport.categories.first {
+        expect(!cleanupReport.categories.contains {
             $0.paths.contains(home + "/.local/share/opencode")
-        }
-        expect(opencodeLeftover?.source == .appLeftover && opencodeLeftover?.risk == .warning
-               && opencodeLeftover?.canSelect == true && opencodeLeftover?.selected == false,
-               "documented CLI residual data did not reach the cleanup tab as a review choice")
-        var selectedLeftover = opencodeLeftover!
+        }, "ordinary cleanup scan offered uninstalled Agent history as junk")
+        let leftoverPolicy = CleanupRiskPolicy.uninstalledAgentLeftover(
+            path: home + "/.local/share/opencode", homeDirectory: home,
+            verifiedPaths: [home + "/.local/share/opencode"])
+        var opencodeLeftover = CleanupCategory(name: "OpenCode data",
+            paths: [home + "/.local/share/opencode"], bytes: 4096, selected: false,
+            source: leftoverPolicy.source, risk: leftoverPolicy.risk,
+            disposal: leftoverPolicy.disposal, applyRoute: leftoverPolicy.applyRoute,
+            activityGuard: leftoverPolicy.activityGuard, reasonKey: leftoverPolicy.reasonKey)
+        opencodeLeftover.activityOwners = ["opencode"]
+        var selectedLeftover = opencodeLeftover
         selectedLeftover.selected = true
+        expect(AgentCleanupExecutor.blockingOwners([selectedLeftover],
+                   running: RunningApplicationSnapshot(processNames: ["opencode"]),
+                   home: home, presence: sandboxPresence) == ["opencode"],
+               "Agent leftover preflight missed its running CLI owner")
         expect(selectedLeftover.activityOwners == ["opencode"]
                && CleanupRiskPolicy.isEligible(selectedLeftover, mode: .manual, running: idle, homeDirectory: home)
                && !CleanupRiskPolicy.isEligible(selectedLeftover, mode: .quickClean, running: idle, homeDirectory: home)
                && !CleanupRiskPolicy.isEligible(selectedLeftover, mode: .automatic, running: idle, homeDirectory: home),
                "agent leftovers lost their owner guard or reached quick/automatic cleanup")
-        let manualLeftovers = CleanupCategory.manualCleanupCandidates(from: [opencodeLeftover!])
+        let manualLeftovers = CleanupCategory.manualCleanupCandidates(from: [opencodeLeftover])
         expect(manualLeftovers.count == 1 && !manualLeftovers[0].selected
                && CleanupCategory.safeCleanupCandidates(from: [selectedLeftover]).isEmpty
                && CleanupCategory.manualCleanupCandidates(from: [plainWarning]).isEmpty,
-               "manual leftovers were hidden/preselected or widened the quick-clean funnel")
+               "explicit Agent leftovers were preselected or widened the safe junk funnel")
         expect(Set(AgentCleanupExecutor.plan([selectedLeftover], running: idle, home: home,
             presence: sandboxPresence).items.map(\.record)) == Set(selectedLeftover.paths),
                "cleanup-tab Agent leftovers cannot reach the Agent resource cascade")
@@ -876,6 +1139,48 @@ struct AgentCatalogTests {
                && !CleanupRiskPolicy.isAgentOwnedPath(home + "/Library/Caches/com.example.app",
                                                       homeDirectory: home),
                "agent ownership boundary is wrong")
+
+        let whitelistHome = fixture.appendingPathComponent("whitelist-home").path
+        func whitelistWrite(_ relative: String, contents: Data = Data(repeating: 9, count: 4096)) throws {
+            let url = URL(fileURLWithPath: whitelistHome + "/" + relative)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try contents.write(to: url)
+        }
+        try whitelistWrite(".local/bin/codex", contents: Data("#!/bin/sh\nexit 0\n".utf8))
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: whitelistHome + "/.local/bin/codex")
+        try whitelistWrite(".codex/log/keep.log")
+        try whitelistWrite(".codex/tmp/arg0/garbage")
+        try whitelistWrite(".codex/tmp/arg0/agent.open")
+        try whitelistWrite(".agents/skills/white/SKILL.md", contents: Data("not a readable manifest".utf8))
+        try whitelistWrite(".codex/config.toml", contents: Data("invalid MCP config that must not be analyzed".utf8))
+        try whitelistWrite(".config/mole/whitelist", contents: Data((
+            whitelistHome + "/.codex/log\n" + whitelistHome + "/.codex/config.toml\n"
+                + whitelistHome + "/.agents/skills/white\n").utf8))
+        let whitelistPresence = AgentPresenceContext(applicationDirs: [whitelistHome + "/Applications"],
+            searchPath: [whitelistHome + "/.local/bin"])
+        let whiteReport = AgentInventory.scan(home: whitelistHome, presence: whitelistPresence)
+        expect(!whiteReport.categories.flatMap(\.paths).contains { $0.hasPrefix(whitelistHome + "/.codex/log") }
+               && !whiteReport.skills.contains { $0.path == whitelistHome + "/.agents/skills/white" }
+               && !whiteReport.servers.contains { $0.configPath == whitelistHome + "/.codex/config.toml" },
+               "Agent whitelist content reached measurement, manifest parsing or MCP analysis")
+        let safeTemp = whiteReport.categories.first {
+            $0.paths.contains(whitelistHome + "/.codex/tmp/arg0/garbage")
+        }
+        expect(safeTemp != nil && safeTemp!.paths == [whitelistHome + "/.codex/tmp/arg0/garbage"],
+               "Agent safe temp cache was not split around its protocol lock")
+        var whiteLeafStat = stat()
+        expect(lstat(whitelistHome + "/.codex/tmp/arg0/garbage", &whiteLeafStat) == 0,
+               "could not capture Agent allocated-byte fixture")
+        let whiteRemoval = AgentCleanupExecutor.execute([safeTemp!], running: idle,
+            home: whitelistHome, permanent: true, presence: whitelistPresence)
+        expect(whiteRemoval.summary.removed > 0 && whiteRemoval.summary.skipped == 0
+               && whiteRemoval.summary.failed == 0
+               && whiteRemoval.summary.reclaimedBytes == UInt64(whiteLeafStat.st_blocks) * 512
+               && fm.fileExists(atPath: whitelistHome + "/.codex/tmp/arg0/agent.open"),
+               "Agent split cache authorization or actual reclaimed-byte accounting diverged")
+        let whiteAfter = AgentInventory.scan(home: whitelistHome, presence: whitelistPresence)
+        expect(!whiteAfter.categories.flatMap(\.paths).contains { $0.hasPrefix(whitelistHome + "/.codex/tmp") },
+               "a lock-only Agent cache reappeared as junk after successful cleanup")
         print("Agent catalog: versions, leftovers, SQLite families, selectable risk tiers, skill unlink/cascade, MCP bodies/registrations and CLI uninstall guards passed")
     }
 

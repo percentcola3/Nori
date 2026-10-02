@@ -175,6 +175,10 @@ extension AppState {
             log(summary)
             if failed == 0, !removed.isEmpty { noteHeaderReaction(.success) }
             else if failed > 0 { noteHeaderReaction(.attention) }
+            if failed > 0 {
+                presentTaskFailure(message: summary,
+                    details: applied.messages.filter { !$0.hasPrefix("Open-file check ") })
+            }
             resampleAfterMutation()
         }
     }
@@ -270,6 +274,13 @@ extension AppState {
             noteHeaderReaction((failed > 0 || cancelled > 0) ? .attention : .success)
         }
         log(statusText)
+        if failed > 0 || unsupported > 0 {
+            presentTaskFailure(message: statusText, details: outcomes.compactMap { outcome in
+                guard outcome.status == .failed || outcome.status == .unsupported else { return nil }
+                let reason = outcome.message.map { L10n.shared.t($0) } ?? ""
+                return outcome.path + (reason.isEmpty ? "" : "\n" + reason)
+            }, detailsAreLocalized: true)
+        }
         applySlimOutcomes(slimmed)
         resampleAfterMutation()
     }

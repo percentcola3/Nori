@@ -84,7 +84,6 @@ struct MoleSwitchToggleStyle: ToggleStyle {
                     .padding(2)
                     .offset(x: isOn ? travel : 0)
             }
-            .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1))
             .animation(reduceMotion ? nil : MoleMotion.control, value: isOn)
     }
 
@@ -100,17 +99,17 @@ struct MoleSwitchToggleStyle: ToggleStyle {
 struct ActionGlassChrome: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.controlActiveState) private var controlActiveState
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency {
+        if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
             content
                 .glassEffect(.regular.interactive(!reduceMotion), in: Capsule())
-                .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1).allowsHitTesting(false))
+                .clipGlassEdge(in: Capsule())
         } else {
             content
-                .background(Capsule().fill(Color.glassOpaque))
-                .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1).allowsHitTesting(false))
+                .background(GlassSurface(cornerRadius: 100, usesSystemGlass: false))
         }
     }
 }
@@ -141,7 +140,6 @@ struct SecondaryButtonStyle: ButtonStyle {
             .padding(.horizontal, 12)
             .frame(height: 28)
             .background(Capsule().fill(configuration.isPressed ? Color.accent.opacity(0.22) : Color.surface2))
-            .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1).allowsHitTesting(false))
             .contentShape(Capsule())
             .opacity(isEnabled ? 1 : 0.5)
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
@@ -161,7 +159,6 @@ struct DangerButtonStyle: ButtonStyle {
             .padding(.horizontal, 10)
             .frame(height: 24)
             .background(Capsule().fill(base.opacity(configuration.isPressed ? 0.10 : 0.06)))
-            .overlay(Capsule().strokeBorder(base.opacity(0.35), lineWidth: 1))
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
     }
 }
@@ -197,13 +194,6 @@ struct MoleIconButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(backgroundColor(isPressed: configuration.isPressed))
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(isActive
-                                  ? Color.moleAccentText.opacity(0.24)
-                                  : Color.surface2,
-                                  lineWidth: 1)
-            }
             .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             .opacity(isEnabled ? 1 : 0.45)
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
@@ -217,7 +207,7 @@ struct MoleIconButtonStyle: ButtonStyle {
     }
 }
 
-/// 可选择列表行的统一交互表面。固定 padding 和描边，选择与按压不会改变布局。
+/// 可选择列表行的统一交互表面。固定 padding，选择与按压不会改变布局。
 struct MoleSelectableRowButtonStyle: ButtonStyle {
     let isSelected: Bool
     var cornerRadius: CGFloat = 8
@@ -250,18 +240,19 @@ struct ListRowGlass: ViewModifier {
     @Namespace private var namespace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.controlActiveState) private var controlActiveState
 
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency {
+        if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
             content
                 .glassEffect(.regular.tint(selected ? Color.moleAccent.opacity(0.20) : .clear)
                     .interactive(interactive && !reduceMotion), in: RoundedRectangle(cornerRadius: 9))
                 .glassEffectID("row", in: namespace)
                 .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+                .clipGlassEdge(in: RoundedRectangle(cornerRadius: 9))
         } else {
-            content.background(GlassSurface(cornerRadius: 9, usesSystemGlass: false))
-                .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(
-                    selected ? Color.moleAccent : Color.hairline, lineWidth: selected ? 1.5 : 1))
+            content.background(GlassSurface(cornerRadius: 9, usesSystemGlass: false,
+                                            highlighted: selected))
         }
     }
 }
@@ -312,6 +303,7 @@ struct PillPicker: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.controlActiveState) private var controlActiveState
     @Namespace private var selectionNamespace
     @State private var previousSelection: Int
     @State private var settledSelection: Int
@@ -335,7 +327,11 @@ struct PillPicker: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 Group {
                     if #available(macOS 26.0, *), !reduceTransparency {
-                        nativeGlassPicker
+                        if controlActiveState == .key {
+                            nativeGlassPicker
+                        } else {
+                            inactiveGlassPicker
+                        }
                     } else {
                         fallbackGooeyPicker
                     }
@@ -352,6 +348,32 @@ struct PillPicker: View {
         return 34
     }
 
+    /// 非关键窗口使用更轻的单层材质，保留与原生选中透镜相同的布局尺寸。
+    private var inactiveGlassPicker: some View {
+        HStack(spacing: 4) {
+            ForEach(items.indices, id: \.self) { index in
+                let selected = selection == index
+                Button { select(index) } label: {
+                    Text(items[index])
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(selected ? Color.primary : Color.secondary)
+                        .padding(.horizontal, itemHorizontalPadding)
+                        .frame(height: 28)
+                        .background {
+                            if selected {
+                                GlassSurface(cornerRadius: 100, usesSystemGlass: false,
+                                             highlighted: true)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(Capsule().fill(Color.surface1))
+    }
+
     @available(macOS 26.0, *)
     private var nativeGlassPicker: some View {
         GlassEffectContainer(spacing: 24) {
@@ -360,6 +382,7 @@ struct PillPicker: View {
                     let selected = selection == index
                     Button { select(index) } label: {
                         if selected {
+                            GlassEffectContainer(spacing: 24) {
                             Text(items[index])
                                 .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(Color.primary)
@@ -382,9 +405,10 @@ struct PillPicker: View {
                                 )
                                 .glassEffectID(index, in: selectionNamespace)
                                 .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-                                // 裁掉系统玻璃外缘的深色轮廓，保留胶囊内部的折射与高光。
-                                .clipShape(Capsule().inset(by: 0.5))
                                 .contentShape(Capsule())
+                            }
+                            // Clip the compositor, not a child lifted into it by glassEffectID.
+                            .clipGlassEdge(in: Capsule())
                         } else {
                             Text(items[index])
                                 .font(.system(size: 11, weight: .semibold))
@@ -401,7 +425,6 @@ struct PillPicker: View {
         }
         .padding(4)
         .background(Capsule().fill(Color.surface1))
-        .overlay(Capsule().strokeBorder(.separator.opacity(0.45), lineWidth: 1))
         // Keep this value animation as a fallback for programmatic navigation.
         // Pointer clicks use an explicit transaction in select(_:), which is
         // required for reliable glass hierarchy transitions on macOS 26.
@@ -445,7 +468,6 @@ struct PillPicker: View {
             }
         }
         .background(Capsule().fill(.quinary))
-        .overlay(Capsule().strokeBorder(.separator.opacity(0.5), lineWidth: 1))
         .onAppear {
             previousSelection = selection
             settledSelection = selection

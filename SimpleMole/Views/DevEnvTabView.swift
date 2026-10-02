@@ -17,13 +17,12 @@ struct DevEnvTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
             ScrollView {
                 LiquidGlassGroup {
                     VStack(alignment: .leading, spacing: 16) {
                         DeveloperWorkspaceSection(id: "shell", symbol: "slider.horizontal.3",
                                                   title: DevWorkspaceText.choose("环境与 Shell", "Environment & Shell")) { isExpanded in
-                            DeveloperShellPanel(refreshToken: state.devWorkspaceRefreshToken, isExpanded: isExpanded)
+                            DeveloperShellPanel(state: state, refreshToken: state.devWorkspaceRefreshToken, isExpanded: isExpanded)
                         }
                         DeveloperWorkspaceSection(id: "network", symbol: "network",
                                                   title: DevWorkspaceText.choose("网络与 hosts", "Network & hosts")) { isExpanded in
@@ -39,6 +38,7 @@ struct DevEnvTabView: View {
                         }
                     }
                     .padding(.horizontal, 20)
+                    .padding(.top, 14)
                     .padding(.bottom, 20)
                 }
             }
@@ -64,19 +64,16 @@ struct DevEnvTabView: View {
         }
         .sheet(isPresented: $state.showSimulatorDevices) {
             SimulatorDevicesView(store: state.simulatorInventory, canMutate: !state.isBusy)
+                .taskFeedback(taskNoticeBinding, retry: state.retryTaskNotice)
         }
         .sheet(isPresented: $state.showDockerDetails) {
             DockerDetailsView(store: state.dockerInventory)
+                .taskFeedback(taskNoticeBinding, retry: state.retryTaskNotice)
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Text(DevWorkspaceText.choose("开发者工作台", "Developer workspace"))
-                .font(.system(size: 15, weight: .semibold))
-            Spacer()
-        }
-        .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 12)
+    private var taskNoticeBinding: Binding<TaskFeedbackNotice?> {
+        Binding(get: { state.taskNotice }, set: { _ in state.dismissTaskNotice() })
     }
 }
 

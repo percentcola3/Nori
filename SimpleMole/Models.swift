@@ -118,10 +118,10 @@ enum CleanupActivityGuard: String, Codable, CaseIterable, Hashable, Sendable {
     case simulator
     case packageManager
     case ide
-    /// IM/国民应用（Telegram、飞书、微信等）的缓存：应用退出前一律保护。
+    /// IM 应用的可再生缓存使用实际文件占用检查，持久消息数据另行保护。
     case messenger
-    /// Agent 专清目录项：归属进程/应用记录在 `activityOwners`，归属者运行
-    /// 或进程表不可读时一律不执行；用户可选（Warning）项也只在这一守卫下可执行。
+    /// Agent 可再生缓存按文件占用清理；会话、配置等资源仍由
+    /// `activityOwners` 保护，不能用父目录选择绕过。
     case aiAgent
     case unsupported
 }
@@ -189,7 +189,7 @@ struct CleanupCategory: Identifiable, Equatable {
     var retention: TimeInterval
     /// 稳定原因键，由 UI 层自行本地化。
     var reasonKey: String
-    /// `.aiAgent` 守卫的归属者：进程名或 Bundle ID，任一在运行即视为占用。
+    /// `.aiAgent` 敏感资源的归属者；可再生缓存另用实际文件占用检查。
     var activityOwners: [String] = []
 
     init(id: UUID = UUID(),
@@ -211,8 +211,9 @@ struct CleanupCategory: Identifiable, Equatable {
         self.name = name
         self.paths = paths
         self.bytes = bytes
+        let knownPaths = Set(paths)
         if let pathBytes {
-            self.pathBytes = pathBytes.filter { paths.contains($0.key) }
+            self.pathBytes = pathBytes.filter { knownPaths.contains($0.key) }
         } else if paths.count == 1, let path = paths.first {
             self.pathBytes = [path: bytes]
         } else {
@@ -222,7 +223,7 @@ struct CleanupCategory: Identifiable, Equatable {
             if let identity = DeletionPlan.identity(at: path) { result[path] = identity }
         }
         let shouldSelect = risk != .protected && (selected ?? (risk == .safe))
-        self.selectedPaths = shouldSelect ? Set(paths) : []
+        self.selectedPaths = shouldSelect ? knownPaths : []
         self.expanded = expanded
         self.source = source
         self.risk = risk
@@ -366,11 +367,9 @@ struct CleanupCategory: Identifiable, Equatable {
     static let longTailByteThreshold: UInt64 = 100 * 1024 * 1024
     static let longTailMinimumCount = 3
 
-    /// 把同一分桶里小于阈值的通用删除路线安全项并成一个「其他」类目，避免
-    /// 长尾小项铺满列表。只合并 genericTrash 路线的项；特殊执行路线（Xcode、
-    /// 工具命令、安装器等）即使很小也保持独立行。messenger（IM 缓存）和
-    /// unsupported 守卫不参与合并，执行前的运行态保护必须按类别精确生效。
-    /// 合并后的守卫取成员中最严格的一档，执行前评估只会更保守，不会更宽松。
+    /// 只有分桶和执行策略完全相同的通用删除安全项才并成「其他」。守卫、
+    /// 年龄门与归属者保持原样，避免一个运行中的应用冻结同组无关缓存。
+    /// 特殊路线、messenger 和 unsupported 守卫仍保持独立行。
     static func mergingLongTail(
         _ categories: [CleanupCategory],
         byteThreshold: UInt64 = longTailByteThreshold,
@@ -378,8 +377,8 @@ struct CleanupCategory: Identifiable, Equatable {
         homeDirectory: String = NSHomeDirectory()
     ) -> [CleanupCategory] {
         var kept: [CleanupCategory] = []
-        var tails: [CleanupGroupBucket: [CleanupCategory]] = [:]
-        var tailOrder: [CleanupGroupBucket] = []
+        var tails: [LongTailMergePolicy: [CleanupCategory]] = [:]
+        var tailOrder: [LongTailMergePolicy] = []
         for category in categories {
             let mergeable = category.bytes < byteThreshold
                 && category.risk == .safe
@@ -391,13 +390,13 @@ struct CleanupCategory: Identifiable, Equatable {
                 kept.append(category)
                 continue
             }
-            let bucket = CleanupGroupBucket(category: category, homeDirectory: homeDirectory)
-            if tails[bucket] == nil { tailOrder.append(bucket) }
-            tails[bucket, default: []].append(category)
+            let policy = LongTailMergePolicy(category, homeDirectory: homeDirectory)
+            if tails[policy] == nil { tailOrder.append(policy) }
+            tails[policy, default: []].append(category)
         }
         var result = kept
-        for bucket in tailOrder {
-            guard let items = tails[bucket] else { continue }
+        for policy in tailOrder {
+            guard let items = tails[policy] else { continue }
             if items.count >= minimumCount, let merged = mergedTailCategory(items) {
                 result.append(merged)
             } else {
@@ -405,6 +404,30 @@ struct CleanupCategory: Identifiable, Equatable {
             }
         }
         return result
+    }
+
+    private struct LongTailMergePolicy: Hashable {
+        let bucket: CleanupGroupBucket
+        let source: CleanupSource
+        let risk: CleanupRisk
+        let disposal: CleanupDisposal
+        let applyRoute: CleanupApplyRoute
+        let activityGuard: CleanupActivityGuard
+        let retention: TimeInterval
+        let reasonKey: String
+        let activityOwners: Set<String>
+
+        init(_ category: CleanupCategory, homeDirectory: String) {
+            bucket = CleanupGroupBucket(category: category, homeDirectory: homeDirectory)
+            source = category.source
+            risk = category.risk
+            disposal = category.disposal
+            applyRoute = category.applyRoute
+            activityGuard = category.activityGuard
+            retention = category.retention
+            reasonKey = category.reasonKey
+            activityOwners = Set(category.activityOwners)
+        }
     }
 
     private static func mergedTailCategory(_ items: [CleanupCategory]) -> CleanupCategory? {
@@ -426,15 +449,7 @@ struct CleanupCategory: Identifiable, Equatable {
         }
         guard !paths.isEmpty, bytes > 0 else { return nil }
 
-        // 类别级守卫只能有一个：取成员里最严格的一档，宁可整组跳过也不放宽。
-        let strictness: [CleanupActivityGuard] = [.browser, .xcode, .simulator, .ide,
-                                                  .messenger, .reverseDNSCache,
-                                                  .openFile, .packageManager, .none]
-        let guardKind = items.map(\.activityGuard).min {
-            (strictness.firstIndex(of: $0) ?? strictness.count)
-                < (strictness.firstIndex(of: $1) ?? strictness.count)
-        } ?? .openFile
-        return CleanupCategory(
+        var merged = CleanupCategory(
             name: L10n.shared.t("cleanup.group.other"),
             paths: paths,
             bytes: bytes,
@@ -442,12 +457,15 @@ struct CleanupCategory: Identifiable, Equatable {
             pathIdentities: pathIdentities,
             expanded: false,
             source: first.source,
-            risk: .safe,
-            disposal: .permanentDelete,
-            applyRoute: .genericTrash,
-            activityGuard: guardKind,
-            reasonKey: "cleanup.risk.rebuildableCache"
+            risk: first.risk,
+            disposal: first.disposal,
+            applyRoute: first.applyRoute,
+            activityGuard: first.activityGuard,
+            retention: first.retention,
+            reasonKey: first.reasonKey
         ).selectingPaths(selectedPaths)
+        merged.activityOwners = first.activityOwners
+        return merged
     }
 
     static func sizeDescending(_ lhs: CleanupCategory, _ rhs: CleanupCategory) -> Bool {
@@ -1013,6 +1031,17 @@ struct AnalyzeReport: Codable {
     let totalFiles: Int?
     var isPartial: Bool? = nil
     var error: String? = nil
+    /// Bounded examples of incomplete traversal, with the full issue count.
+    var scanIssues: [ScanIssue]? = nil
+    var scanIssueCount: Int? = nil
+
+    struct ScanIssue: Codable {
+        enum Kind: String, Codable { case readFailure, otherVolume, cancelled }
+        let path: String
+        let kind: Kind
+        var errorCode: Int32? = nil
+    }
+
     /// Current traversal location for live progress; not serialized.
     var currentPath: String? = nil
     /// In-memory directory index from the same traversal; not serialized.
@@ -1029,7 +1058,7 @@ struct AnalyzeReport: Codable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case path, overview, entries, isPartial, error, media
+        case path, overview, entries, isPartial, error, media, scanIssues, scanIssueCount
         case mediaSummary = "media_summary"
         case largeFiles = "large_files"
         case totalSize = "total_size"

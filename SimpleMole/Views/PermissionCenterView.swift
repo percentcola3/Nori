@@ -190,8 +190,6 @@ struct PermissionCenterView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
             .fill(Color.warning.opacity(0.10)))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .strokeBorder(Color.warning.opacity(0.30), lineWidth: 1))
     }
 
     private func notice(_ text: String, icon: String, tint: Color) -> some View {
@@ -441,8 +439,6 @@ private struct PermissionCard: View {
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .fill(Color.surface1))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(Color.hairline, lineWidth: 1))
     }
 
     private var chipView: some View {
@@ -514,9 +510,6 @@ private struct PermissionCard: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(Color.accent.opacity(0.45),
                                   style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
-            } else {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(guidance.tint.opacity(0.28), lineWidth: 1)
             }
         }
     }

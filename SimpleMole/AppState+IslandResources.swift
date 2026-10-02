@@ -75,6 +75,10 @@ extension AppState {
             islandResourceStatus[resource] = L10n.shared.tf(
                 app.isTerminated ? "island.quit.done" : "island.quit.pending", row.name)
             islandClosingPIDs.remove(row.pid)
+            if !app.isTerminated {
+                presentTaskFailure(message: islandResourceStatus[resource] ?? "", details: [row.name],
+                    detailsAreLocalized: true)
+            }
             _ = await sampleIslandProcesses()
             resampleAfterMutation()
         }
@@ -96,6 +100,7 @@ extension AppState {
                 resource == .cpu ? $0.cpu > $1.cpu : $0.memBytes > $1.memBytes
             }
             var requested: [NSRunningApplication] = []
+            var attemptedApplications: [(name: String, application: NSRunningApplication)] = []
             var attempted = 0
             for row in sorted {
                 guard attempted < 3, let app = islandApplication(for: row),
@@ -106,6 +111,7 @@ extension AppState {
                         isOwnApp: row.pid == ProcessInfo.processInfo.processIdentifier,
                         executablePath: app.executableURL?.path ?? "", elapsed: row.elapsed) else { continue }
                 attempted += 1
+                attemptedApplications.append((row.name, app))
                 if app.terminate() { requested.append(app) }
             }
             var cacheBytes = 0
@@ -117,7 +123,7 @@ extension AppState {
             for _ in 0..<25 where requested.contains(where: { !$0.isTerminated }) {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
-            let closed = requested.filter(\.isTerminated).count
+            let closed = attemptedApplications.filter { $0.application.isTerminated }.count
             let result: String
             if attempted > 0 {
                 result = L10n.shared.tf("island.clean.result", closed, attempted - closed)
@@ -128,6 +134,11 @@ extension AppState {
                 ? " " + (cacheBytes > 0
                     ? L10n.shared.tf("island.clean.cache", ByteFormat.format(UInt64(cacheBytes)))
                     : L10n.shared.t("island.clean.cache.empty")) : "")
+            if attempted > closed {
+                presentTaskFailure(message: result, details: attemptedApplications.compactMap {
+                    $0.application.isTerminated ? nil : $0.name
+                }, detailsAreLocalized: true)
+            }
             _ = await sampleIslandProcesses()
             // Completion is observed by the rings: publish it only after the
             // post-cleanup sample, so the reveal uses current occupancy.

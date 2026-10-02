@@ -16,12 +16,14 @@ final class AppState {
     var visiblePages: [Page] = [.devenv, .cleanup]
     var runtimeScans = 0
     var cacheScans = 0
-    func scanDevEnv(announce: Bool, presentingPermissionCenter: Bool) {
+    func scanDevEnv(announce: Bool, presentingPermissionCenter: Bool, notifyingUser: Bool) {
         precondition(!announce && !presentingPermissionCenter)
+        precondition(notifyingUser)
         runtimeScans += 1
     }
-    func scanGc(force: Bool) {
+    func scanGc(force: Bool, notifyingUser: Bool) {
         precondition(force)
+        precondition(notifyingUser)
         cacheScans += 1
     }
 }

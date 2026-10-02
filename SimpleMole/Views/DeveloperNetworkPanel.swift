@@ -152,17 +152,29 @@ struct DeveloperNetworkPanel: View {
     }
 
     private func reloadHosts() {
-        guard let current = try? DeveloperNetworkService.readHosts(), let snapshot else { return }
-        self.snapshot = .init(services: snapshot.services, resolverServers: snapshot.resolverServers,
-                              hosts: current, warnings: snapshot.warnings.filter { $0 != "hosts" })
-        hostsDraft = current.text
-        externalChange = false
-        hostsError = nil
+        guard let snapshot else { return }
+        do {
+            let current = try DeveloperNetworkService.readHosts()
+            self.snapshot = .init(services: snapshot.services, resolverServers: snapshot.resolverServers,
+                                  hosts: current, warnings: snapshot.warnings.filter { $0 != "hosts" })
+            hostsDraft = current.text
+            externalChange = false
+            hostsError = nil
+        } catch {
+            let failure = error as? DeveloperNetworkService.HostsError ?? .unavailable
+            hostsError = failure
+            reportHostsFailure(failure)
+        }
     }
 
     private func requestSave(_ original: DeveloperNetworkService.HostsDocument) {
         do { try DeveloperNetworkService.validateHosts(hostsDraft) }
-        catch { hostsError = error as? DeveloperNetworkService.HostsError ?? .saveFailed; return }
+        catch {
+            let failure = error as? DeveloperNetworkService.HostsError ?? .saveFailed
+            hostsError = failure
+            reportHostsFailure(failure)
+            return
+        }
         let draft = hostsDraft
         state.confirmation = AppState.Confirmation(
             title: text("保存 hosts 映射？", "Save hosts mappings?"),
@@ -183,21 +195,35 @@ struct DeveloperNetworkPanel: View {
                         let failure = error as? DeveloperNetworkService.HostsError ?? .saveFailed
                         hostsError = failure
                         externalChange = failure == .changedExternally
+                        reportHostsFailure(failure)
                     }
                 }
             }
     }
 
     private func errorMessage(_ error: DeveloperNetworkService.HostsError) -> String {
-        guard chinese else { return error.localizedDescription }
+        let message = l10n.t(hostsFailureKey(error))
+        if case .invalidLine(let line) = error { return message + "\n/etc/hosts:\(line)" }
+        return message
+    }
+
+    private func reportHostsFailure(_ failure: DeveloperNetworkService.HostsError) {
+        let location: String
+        if case .invalidLine(let line) = failure { location = "/etc/hosts:\(line)" }
+        else { location = "/etc/hosts" }
+        TaskFeedbackNotice.reportFailure(messageKey: hostsFailureKey(failure),
+            details: [location], detailsAreLocalized: true)
+    }
+
+    private func hostsFailureKey(_ error: DeveloperNetworkService.HostsError) -> String {
         switch error {
-        case .unavailable: return "hosts 不是可安全编辑的系统文件，或当前无法读取。"
-        case .tooLarge: return "hosts 超过 64 KB，暂不支持在此编辑。"
-        case .invalidLine(let line): return "第 \(line) 行的 IP 地址或域名格式不正确。"
-        case .protectedMapping: return "请保留 127.0.0.1 localhost、::1 localhost 和 255.255.255.255 broadcasthost。"
-        case .changedExternally: return "hosts 已被其他应用修改。重新载入后再保存，当前草稿已保留。"
-        case .saveFailed: return "hosts 未能保存，请检查管理员授权；当前草稿已保留。"
-        case .skippedInTestMode: return "测试模式下不会修改系统配置。"
+        case .unavailable: return "task.reason.hostsUnavailable"
+        case .tooLarge: return "task.reason.hostsTooLarge"
+        case .invalidLine: return "task.reason.hostsInvalidLine"
+        case .protectedMapping: return "task.reason.hostsProtected"
+        case .changedExternally: return "task.reason.configChanged"
+        case .saveFailed: return "task.reason.hostsSave"
+        case .skippedInTestMode: return "task.reason.testMode"
         }
     }
 }

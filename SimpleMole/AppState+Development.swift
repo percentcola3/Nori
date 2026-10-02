@@ -22,14 +22,14 @@ extension AppState {
                     guard !Task.isCancelled, self.isDeveloperWorkspaceVisible else { return }
                     self.devWorkspaceRefreshPending = false
                     self.developerWorkspaceRefreshTask = nil
-                    self.scanDevEnv(announce: false, presentingPermissionCenter: false)
-                    self.scanGc(force: true)
+                    self.scanDevEnv(announce: false, presentingPermissionCenter: false, notifyingUser: true)
+                    self.scanGc(force: true, notifyingUser: true)
                 }
             } else {
-                scanDevEnv(announce: false, presentingPermissionCenter: false)
+                scanDevEnv(announce: false, presentingPermissionCenter: false, notifyingUser: true)
             }
         }
-        scanGc(force: true)
+        scanGc(force: true, notifyingUser: true)
     }
 
     private var isDeveloperWorkspaceVisible: Bool {

@@ -30,6 +30,44 @@ struct Stroke: Identifiable {
     var text: String = ""
 }
 
+/// AppKit owns cursor entry/exit so closing or resizing the editor cannot leak a cursor stack.
+/// The view passes all clicks through to the annotation gesture and text editor.
+private struct EditorCursorRegion: NSViewRepresentable {
+    let cursor: NSCursor
+
+    func makeNSView(context: Context) -> CursorView {
+        CursorView(cursor: cursor)
+    }
+
+    func updateNSView(_ view: CursorView, context: Context) {
+        view.cursor = cursor
+        view.window?.invalidateCursorRects(for: view)
+    }
+
+    final class CursorView: NSView {
+        var cursor: NSCursor
+
+        init(cursor: NSCursor) {
+            self.cursor = cursor
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func resetCursorRects() {
+            super.resetCursorRects()
+            addCursorRect(visibleRect, cursor: cursor)
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+}
+
 private let editorColors: [Color] = [
     Color(red: 1.0, green: 0.84, blue: 0.18),
     .red, .blue, .black, .white
@@ -50,6 +88,7 @@ struct ScreenshotEditorView: View {
     @State private var pendingTextAt: CGPoint?
     @State private var pendingTextInput = ""
     @State private var feedbackKey: String?
+    @State private var taskNotice: TaskFeedbackNotice?
     @State private var previewAvailableSize = CGSize(width: 640, height: 320)
     @ObservedObject private var l10n = L10n.shared
 
@@ -95,7 +134,7 @@ struct ScreenshotEditorView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: composition) { value in preferences.save(value) }
         .onChange(of: exportOptions) { value in preferences.save(value) }
-
+        .taskFeedback($taskNotice)
     }
 
     // MARK: 工具条
@@ -158,6 +197,7 @@ struct ScreenshotEditorView: View {
                 .contentShape(Rectangle())
                 .gesture(dragGesture)
         }
+        .overlay(EditorCursorRegion(cursor: tool == .text ? .iBeam : .crosshair))
         .overlay(pendingTextOverlay)
     }
 
@@ -439,6 +479,9 @@ struct ScreenshotEditorView: View {
     }
 
     private func showFeedback(_ key: String) {
+        if key == "shot.failed" {
+            taskNotice = TaskFeedbackNotice(message: l10n.t("task.failure.message"))
+        }
         feedbackKey = key
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
             if feedbackKey == key { feedbackKey = nil }

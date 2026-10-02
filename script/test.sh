@@ -266,13 +266,17 @@ test_island_contract() {
         fail "island panel does not accept clicks while the cursor is over its visible shape"
     /usr/bin/grep -Fq 'struct NotchShape: Shape' "$ROOT_DIR/SimpleMole/Views/IslandWindow.swift" || \
         fail "island notch shape is missing"
-    /usr/bin/grep -Fq 'safeTop: islandSafeTop' "$app_delegate" || \
+    /usr/bin/grep -Fq 'let safeTop = islandSafeTop(on: screen)' "$app_delegate" || \
+        fail "island safe-top does not use the captured screen"
+    /usr/bin/grep -Fq 'safeTop: safeTop,' "$app_delegate" || \
         fail "island does not avoid physical notch content"
     /usr/bin/grep -Fq 'state.cleanIslandResource(resource)' "$island" || \
         fail "CPU/memory resource cleanup is disconnected"
     /usr/bin/grep -Fq 'onOpenMain()' "$island" || \
         fail "island advanced action does not open main panel"
-    /usr/bin/grep -Fq 'y: screen.frame.maxY - size.height' "$app_delegate" || \
+    /usr/bin/grep -Fq 'IslandWindowGeometry.origin(' "$app_delegate" || \
+        fail "island window does not use shared physical-edge geometry"
+    /usr/bin/grep -Fq 'y: screenFrame.maxY - size.height' "$ROOT_DIR/SimpleMole/Views/IslandWindow.swift" || \
         fail "island is not anchored to the physical screen top"
     # 表面从物理顶边起画：刘海屏上若先垫一段 safeTop 空白，手柄就成了挂在
     # 刘海下沿的一条细条，肩角翘在刘海底边而不是屏幕顶边。
@@ -292,11 +296,14 @@ test_island_contract() {
     if /usr/bin/grep -Fq 'Color.black' "$ROOT_DIR/SimpleMole/Views/LiquidPresentation.swift"; then
         fail "island paints an opaque black curtain over the glass"
     fi
-    # 屏幕指标瞬断时沿用上次值，禁止回落默认值重建（刘海位置漂移）。
-    /usr/bin/grep -Fq 'return islandPanelSafeTop ?? 0' "$app_delegate" || \
-        fail "island safe-top flaps to 0 during screen/activation transitions"
-    /usr/bin/grep -Fq 'return islandPanelCollapsedWidth ?? IslandLayout.virtualNotchWidth' "$app_delegate" || \
-        fail "island collapsed width flaps to the default during screen transitions"
+    # 每次更新只捕获一块屏幕；主屏暂缺时用当前面板所在屏，无屏幕则保留面板。
+    # 同一屏幕的指标同步传入新视图，不能在重建与定位之间重新读取 NSScreen.main。
+    /usr/bin/grep -Fq 'guard let screen = NSScreen.main ?? islandPanel?.screen ?? NSScreen.screens.first else { return }' "$app_delegate" || \
+        fail "island update does not preserve a single screen snapshot during screen transitions"
+    /usr/bin/grep -Fq 'let collapsedWidth = islandCollapsedWidth(on: screen)' "$app_delegate" || \
+        fail "island collapsed width does not use the captured screen"
+    /usr/bin/grep -Fq 'collapsedWidth: collapsedWidth,' "$app_delegate" || \
+        fail "island view does not receive the captured collapsed width"
     # 无刘海屏折叠时只挂顶边句柄，不画整块菜单栏高度的虚拟刘海；展开内容仍避让菜单栏。
     /usr/bin/grep -Fq 'screen.frame.maxY - screen.visibleFrame.maxY' "$app_delegate" || \
         fail "expanded island does not clear the menu bar on notchless screens"
@@ -798,6 +805,12 @@ test_screenshot_presets() {
         -o "$binary" || fail "screenshot preset tests compile"
     "$binary" || fail "screenshot preset layout, preferences and export encoding"
     pass "screenshot presets: layout per aspect, preferences round-trip, PNG/JPEG export"
+    bash "$ROOT_DIR/script/test_screenshot_editor.sh" || fail "screenshot editor window reuse"
+    pass "screenshot editor: repeated sessions, window geometry and preview bounds"
+    bash "$ROOT_DIR/script/test_cleanup_presentation.sh" || fail "cleanup presentation layout"
+    pass "cleanup presentation: real view states retain screen-constrained window geometry"
+    bash "$ROOT_DIR/script/test_agent_presentation.sh" || fail "agent cleanup presentation layout"
+    pass "agent cleanup presentation: inline results and aligned actions retain window geometry"
 }
 
 test_destructive_sinks() {
@@ -2477,8 +2490,15 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_duplicate_deletion.sh" || fail "duplicate deletion safety tests"
     bash "$ROOT_DIR/script/test_similar_images.sh" || fail "similar image grouping tests"
     bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
+    bash "$ROOT_DIR/script/test_cleanup_page_state.sh" || fail "cleanup inline results and pending retry tests"
+    bash "$ROOT_DIR/script/test_administrator_cleanup.sh" || fail "administrator cleanup safety tests"
     bash "$ROOT_DIR/script/test_analysis_deletion.sh" || fail "analysis selection identity-bound Trash tests"
     bash "$ROOT_DIR/script/test_agents.sh" || fail "agent cleanup catalog, skills and MCP tests"
+    bash "$ROOT_DIR/script/test_agent_cli.sh" || fail "agent CLI uninstall execution tests"
+    bash "$ROOT_DIR/script/test_agent_workflow.sh" || fail "agent cleanup lifecycle tests"
+    bash "$ROOT_DIR/script/test_agent_icons.sh" || fail "agent icon tests"
+    bash "$ROOT_DIR/script/test_task_feedback.sh" || fail "task feedback queue tests"
+    bash "$ROOT_DIR/script/test_task_feedback_localization.sh" || fail "multilingual task feedback tests"
     # Agent 专清按用户选择直接永久删除，不弹确认、不进废纸篓；运行态与身份守卫仍在执行器里。
     /usr/bin/grep -Eq 'AgentCleanupExecutor\.execute\([^,]+, running: snapshot, home: home, permanent: true[,)]' \
         "$ROOT_DIR/SimpleMole/AppState+Agents.swift" || fail "agent cleanup no longer deletes permanently"

@@ -5,6 +5,7 @@ struct UpdateSettingsView: View {
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlActiveState) private var controlActiveState
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -17,10 +18,11 @@ struct UpdateSettingsView: View {
     }
 
     @ViewBuilder private var surface: some View {
-        if #available(macOS 26.0, *), !reduceTransparency {
+        if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
             content
                 .glassEffect(.regular.interactive(!reduceMotion),
                              in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .clipGlassEdge(in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         } else {
             content.background(GlassSurface(cornerRadius: 13, usesSystemGlass: false))
         }

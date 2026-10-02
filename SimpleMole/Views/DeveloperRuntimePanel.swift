@@ -5,14 +5,11 @@ struct DeveloperRuntimePanel: View {
     @ObservedObject var state: AppState
     var isExpanded = true
     @ObservedObject private var l10n = L10n.shared
-    @State private var search = ""
     @State private var onlyCleanable = false
 
     private var groups: [(manager: String, entries: [DevEnvEntry])] {
         let entries = state.devEnvEntries.filter { entry in
-            (!onlyCleanable || DeveloperRuntimePolicy.canClean(entry)) &&
-                (search.isEmpty || entry.name.localizedCaseInsensitiveContains(search)
-                 || entry.path.localizedCaseInsensitiveContains(search))
+            !onlyCleanable || DeveloperRuntimePolicy.canClean(entry)
         }
         let buckets = Dictionary(grouping: entries, by: \.manager)
         return buckets.keys.sorted { lhs, rhs in
@@ -31,8 +28,7 @@ struct DeveloperRuntimePanel: View {
     private var runtimeContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                TextField(DevWorkspaceText.choose("搜索版本、管理器或路径", "Search versions, managers, or paths"), text: $search)
-                    .textFieldStyle(.roundedBorder)
+                Spacer(minLength: 0)
                 Toggle(DevWorkspaceText.choose("仅可清理", "Cleanable only"), isOn: $onlyCleanable)
                     .toggleStyle(.checkbox).font(.system(size: 11))
             }
@@ -62,6 +58,7 @@ struct DeveloperRuntimePanel: View {
                                     state.devEnvSelection.insert(entry.path)
                                 }
                             }
+                            .padding(.leading, 16)
                         }
                     }
                 }
@@ -112,6 +109,7 @@ struct DeveloperRuntimePanel: View {
             ForEach(state.gcActions.filter { !["docker-builder", "docker-system", "simctl"].contains($0.id) }) { action in
                 DeveloperCacheActionRow(action: action, running: state.gcRunningId == action.id,
                                         enabled: !state.isBusy && !state.isRefreshingGc) { state.runGc(action) }
+                    .padding(.leading, 16)
             }
             if state.gcActions.isEmpty && !state.isRefreshingGc {
                 Text(DevWorkspaceText.choose("当前检查范围未发现可用的缓存清理工具。", "No cache cleanup tools were found in the current search paths."))

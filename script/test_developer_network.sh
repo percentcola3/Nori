@@ -13,6 +13,7 @@ swiftc -parse-as-library -framework CryptoKit -target "$(uname -m)-apple-macos13
 swiftc -typecheck -parse-as-library -framework SwiftUI -framework CryptoKit -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperNetworkService.swift" \
     "$ROOT_DIR/SimpleMole/Views/DeveloperNetworkPanel.swift" \
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift" \
     "$ROOT_DIR/script/DeveloperNetworkTests.swift" \
     "$ROOT_DIR/script/DeveloperNetworkViewTypecheck.swift"
 

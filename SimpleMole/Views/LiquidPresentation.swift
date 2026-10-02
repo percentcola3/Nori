@@ -36,13 +36,16 @@ private struct LiquidSurface: ViewModifier {
     @Environment(\.liquidNamespace) private var namespace
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.controlActiveState) private var controlActiveState
 
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency, let namespace {
+        if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key,
+           let namespace {
             content
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
                 .glassEffectID(id, in: namespace)
                 .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+                .clipGlassEdge(in: RoundedRectangle(cornerRadius: radius, style: .continuous))
         } else {
             content.background(GlassSurface(cornerRadius: radius, usesSystemGlass: false))
         }
@@ -83,16 +86,14 @@ struct LiquidActionButton: View {
             // Native glass is composed by the window-level container and can
             // escape ScrollView clipping. Only the modal uses liquidSurface.
             .background(RoundedRectangle(cornerRadius: 12).fill(Color.surface2))
-            .overlay(RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(Color.hairline, lineWidth: 1)
-                .allowsHitTesting(false))
         }
     }
 }
 
-struct IslandLiquidSurface: ViewModifier {
-    let shape: NotchShape
+struct IslandLiquidSurface<SurfaceShape: Shape>: ViewModifier {
+    let shape: SurfaceShape
     var isExpanded = true
+    var isInteractive = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -110,7 +111,8 @@ struct IslandLiquidSurface: ViewModifier {
             // 半透明暗纱，与展开面板共享同一玻璃质感。
             content
                 .background { handleVeil }
-                .glassEffect(Glass.regular.tint(Color.islandGlassTint), in: shape)
+                .glassEffect(Glass.regular.tint(Color.islandGlassTint)
+                    .interactive(isInteractive && !reduceMotion), in: shape)
                 .clipShape(shape)
                 .contentShape(shape)
         } else {

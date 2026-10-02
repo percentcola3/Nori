@@ -32,6 +32,8 @@ SimpleMole/Services/CleanupCache.swift|SimpleMole/Services/MediaSlimmer.swift) r
             esac ;;
         SimpleMole/Services/AgentCLIService.swift)
             [[ "$2" == 'defer { try? handle.close(); try? FileManager.default.removeItem(at: output) }' ]] && return 0 ;;
+        SimpleMole/Services/AdministratorCleanupService.swift)
+            [[ "$2" == 'defer { try? FileManager.default.removeItem(at: directory) }' ]] && return 0 ;;
         *) return 1 ;;
     esac
     return 1
@@ -64,6 +66,14 @@ done
     fail 'Shell profile is not revalidated before atomic replacement'
 grep -Fq 'temporaryDirectory.appendingPathComponent("nori-cli-" + UUID().uuidString)' \
     "$ROOT_DIR/SimpleMole/Services/AgentCLIService.swift" || fail 'Agent CLI cleanup no longer targets its own temporary log'
+admin_service="$ROOT_DIR/SimpleMole/Services/AdministratorCleanupService.swift"
+for contract in \
+    '.appendingPathComponent("nori-admin-cleanup-" + UUID().uuidString, isDirectory: true)' \
+    'guard mkdir(directory.path, 0o700) == 0 else {' \
+    'try data.write(to: manifest, options: .withoutOverwriting)' \
+    'try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)'; do
+    grep -Fq "$contract" "$admin_service" || fail 'Administrator manifest cleanup is not bound to its own private directory'
+done
 
 # ---- bridge 侧 ----
 # mole_delete <path> <needs_sudo> <identity>：三个参数都必须显式存在，

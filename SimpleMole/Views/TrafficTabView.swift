@@ -167,7 +167,6 @@ struct TrafficTabView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                         .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
-                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
                         .contentShape(RoundedRectangle(cornerRadius: 9))
                     }
                     .buttonStyle(.plain)
@@ -211,7 +210,6 @@ private struct TrafficSummaryCard: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator.opacity(0.4), lineWidth: 1))
     }
 }
 
@@ -255,7 +253,6 @@ private struct TrafficExitBadge: View {
             .padding(.horizontal, 6)
             .frame(height: 16)
             .background(Capsule().fill(tint.opacity(0.12)))
-            .overlay(Capsule().strokeBorder(tint.opacity(0.32), lineWidth: 1))
             .fixedSize()
     }
 }

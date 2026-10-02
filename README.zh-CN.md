@@ -6,6 +6,8 @@ Nori 是一个支持 **macOS 13 Ventura 及以上**的原生、轻量增强工�
 
 [下载最新版本](https://github.com/percentcola3/sweep/releases/latest) · [English](README.md) · [开发与维护](docs/development.md)
 
+> **早期开发阶段，目前尚不够稳定。** Nori 正在持续迭代，扫描、清理、权限处理和界面交互仍可能存在问题。删除前请核对所选路径，保留重要数据的备份；反馈问题时请附上 macOS 版本和复现步骤。
+
 ![Nori 中文主界面](docs/screenshots/zh-CN/overview.png)
 
 Nori 受到 [tw93](https://github.com/tw93) 的 [Mole](https://github.com/tw93/Mole) 启发。我们用 Swift 和 SwiftUI 原生界面、原生核心服务以及专用辅助脚本，将这种实用的清理理念带到可视化的 Mac 工具中。项目保留经过审计的 Mole 辅助库，并遵守 GPL v3 及上游署名要求。

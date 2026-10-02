@@ -10,6 +10,7 @@ struct CleanupTabView: View {
     @State private var userCollapsed: Set<CleanupGroupBucket>?
     /// 从可再生缓存行发起的自动清理规则创建。
     @State private var autoCleanIntent: AutoCleanupIntent?
+    @State private var showsOutcomeDetails = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var collapsedGroups: Set<CleanupGroupBucket> {
@@ -49,13 +50,10 @@ struct CleanupTabView: View {
         })
     }
 
-    /// 类别列表之外的独立内容源：安装包清单与系统数据库体检。
-    /// 空态必须把它们算进来，避免与安装包结果同时显示。
+    /// 系统数据库只展示体检确认有可执行维护任务的项目。
     private var hasAuxiliaryCleanupContent: Bool {
-        state.installerCandidates != nil
-            || !state.systemMaintenanceRows.isEmpty
+        !state.systemMaintenanceRows.isEmpty
             || state.isSystemMaintenanceRunning
-            || !state.systemMaintenanceStatus.isEmpty
     }
 
     private var hasAnyCleanupContent: Bool {
@@ -63,11 +61,15 @@ struct CleanupTabView: View {
     }
 
     private var showsCleanupResults: Bool {
-        hasAnyCleanupContent && state.cleanupOutcomeMood == nil
+        if state.cleanupCelebrating { return false }
+        if state.cleanupOutcomeMood == .attention { return false }
+        return hasAnyCleanupContent && state.cleanupOutcomeMood != .success
     }
 
     private var presentationPhase: Int {
         if state.isApplying || state.isCleanupScanning { return 1 }
+        if state.cleanupOutcomeMood == .success { return state.cleanupCelebrating ? 3 : 5 }
+        if state.cleanupOutcomeMood == .attention { return 4 }
         return showsCleanupResults ? 2 : 0
     }
 
@@ -84,34 +86,48 @@ struct CleanupTabView: View {
                     .padding(.bottom, 8)
             }
 
-            if !state.isCleanupScanning && !state.isApplying, state.cleanupOutcomeMood == .attention {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.warning)
-                    Text(state.statusText)
-                        .font(.system(size: 12, weight: .medium))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer()
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-            }
-
             if state.isApplying {
-                NoriScanActivity(text: state.statusText, assetName: "nori-tidying", quiet: true)
+                NoriCleanupTaskStage(phase: .working,
+                                     progress: state.cleanupTaskProgress,
+                                     statusText: state.statusText)
             } else if state.isCleanupScanning {
                 CleanupScanProgressView(state: state)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if state.cleanupOutcomeMood == .success && !state.cleanupCelebrating {
+                NoriPlaceholderStage { size in
+                    NoriIdlePlaceholder(state: state, size: size)
+                    scanButton
+                }
+            } else if state.cleanupOutcomeMood == .success {
+                let feedbackID = state.cleanupFeedbackID
+                NoriCleanupTaskStage(phase: .success,
+                                     completedCount: state.cleanupCompletedCount,
+                                     reclaimedBytes: state.cleanupReclaimedBytes,
+                                     feedbackID: feedbackID)
+                    // 约三秒后回闲置 SVG，并隐藏成功摘要。
+                    .task(id: feedbackID) {
+                        do {
+                            try await Task.sleep(nanoseconds: UInt64(NoriMotion.successFeedbackDuration * 1_000_000_000))
+                        } catch { return }
+                        state.finishCleanupCelebration(feedbackID: feedbackID)
+                    }
+            } else if state.cleanupOutcomeMood == .attention {
+                NoriCleanupTaskStage(phase: .attention,
+                                     statusText: state.statusText,
+                                     details: state.cleanupOutcomeDetails,
+                                     applications: state.cleanupFailureApplications,
+                                     feedbackID: state.cleanupFeedbackID,
+                                     retryAvailable: state.cleanupRetryAvailable,
+                                     onRetry: cleanFromResult)
             } else if !showsCleanupResults {
                 NoriPlaceholderStage { size in
                     NoriIdlePlaceholder(state: state, size: size)
-                    quickCleanButton
+                    scanButton
                 }
             } else {
                 ScrollView {
                     LiquidGlassGroup {
                     LazyVStack(spacing: 12) {
+                        cleanupOutcomeDetails
                         ForEach(groupedCategories) { group in
                             VStack(spacing: 8) {
                                 cleanupGroupHeader(group)
@@ -140,7 +156,6 @@ struct CleanupTabView: View {
                             .transition(.molePanelReveal)
                         }
 
-                        installerSection
                         systemMaintenanceSection
                     }
                     .padding(.horizontal, 16)
@@ -167,22 +182,18 @@ struct CleanupTabView: View {
         .onChange(of: state.cleanupScanComplete) { done in
             if done { state.scanSystemMaintenance() }
         }
+        .onChange(of: state.cleanupFeedbackID) { _ in
+            showsOutcomeDetails = false
+        }
         // 扫描中 → 结果/空态 的整块互换走弹簧过渡，而不是硬切。
     }
 
-    // MARK: 安装包与系统数据库维护（与类别列表同区滚动的独立内容源）
-
-    @ViewBuilder
-    private var installerSection: some View {
-        // 安装包与普通类目一致：只负责勾选，统一“清理”时分发到废纸篓路线。
-        if !state.isCleanupScanning, let installers = state.installerCandidates {
-            CategoryRowView(category: Binding(
-                get: { state.installerCandidates ?? installers },
-                set: { state.installerCandidates = $0 }),
-                selectionEnabled: !state.isBusy,
-                coveredPaths: [])
-        }
+    private func cleanFromResult() {
+        if state.cleanupRetryAvailable { state.retryFailedCleanup() }
+        else { state.startCleanupScan() }
     }
+
+    // MARK: 系统数据库维护
 
     @ViewBuilder
     private var systemMaintenanceSection: some View {
@@ -196,12 +207,11 @@ struct CleanupTabView: View {
         }
     }
 
-    private var quickCleanButton: some View {
+    private var scanButton: some View {
         Button {
             state.requestScanAccess(.quickOptimize)
         } label: {
-            Label(state.isCleanupScanning ? l10n.t("common.scanning") : l10n.t("cleanup.quickClean"),
-                  systemImage: "sparkles")
+            Label(l10n.t("cleanup.scan"), systemImage: "magnifyingglass")
         }
         .buttonStyle(PrimaryButtonStyle())
         .disabled(state.isBusyExcludingUninstall || state.cleanupQueued)
@@ -251,27 +261,56 @@ struct CleanupTabView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.accent.opacity(0.10) : Color.surface1))
             .contentShape(Rectangle())
         }
         .buttonStyle(MolePlainButtonStyle())
+        .modifier(ListRowGlass(selected: isSelected))
         .disabled(state.isBusy)
     }
 
     private var cleanupActions: some View {
         HStack(spacing: 8) {
+            Button { state.startCleanupScan() } label: {
+                Label(l10n.t("common.rescan"), systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .disabled(state.isBusyExcludingUninstall || state.cleanupQueued || state.isSystemMaintenanceRunning)
             // 全选/取消全选由各分组头的开关承担：底部只保留唯一的执行入口，
-            // 安装包与系统维护项的勾选也由它统一分发。
+            // 系统维护项的勾选也由它统一分发。
             Spacer()
             Button { state.applyCleanup() } label: {
                 Label(applyLabel, systemImage: "trash.fill")
             }
             .buttonStyle(PrimaryButtonStyle())
-            .disabled(!state.hasCleanupSelection || state.isBusyExcludingUninstall || state.cleanupQueued || !state.cleanupScanComplete)
+            .disabled(!state.hasCleanupSelection || state.isBusyExcludingUninstall || state.cleanupQueued
+                      || state.isSystemMaintenanceRunning || !state.cleanupScanComplete)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private var cleanupOutcomeDetails: some View {
+        if state.cleanupOutcomeMood == .attention {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(l10n.t("cleanup.execution.review"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                if !state.cleanupOutcomeDetails.isEmpty {
+                    DisclosureGroup(l10n.t("cleanup.execution.details"), isExpanded: $showsOutcomeDetails) {
+                        Text(state.cleanupOutcomeDetails.joined(separator: "\n\n"))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.system(size: 11))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .modifier(ListRowGlass(interactive: !state.cleanupOutcomeDetails.isEmpty))
+        }
     }
 
     private var applyLabel: String {
@@ -368,24 +407,20 @@ struct CleanupTabView: View {
     }
 }
 
-/// 扫描尚未产生结果时的占位：仅 SVG 动画 + 取消按钮，不再展示文字与
-/// 进度控件；底层只回传目录级事件，不会因 UI 更新拖慢文件遍历。
+/// 展示真实目录进度；轻量的进度子视图和吉祥物分别更新。
 private struct CleanupScanProgressView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
 
     var body: some View {
-        VStack(spacing: 20) {
-            NoriStatusAnimation(mood: .working, size: 156)
+        NoriPlaceholderStage { size in
+            NoriStatusAnimation(mood: .working, size: size)
+            NoriCurrentFileView(path: state.cleanupProgress.currentPath)
             Button { state.cancelCleanupScan() } label: {
                 Label(l10n.t("cleanup.cancelScan"), systemImage: "xmark.circle")
             }
-            .buttonStyle(SecondaryButtonStyle())
-            .controlSize(.small)
+            .buttonStyle(PrimaryButtonStyle())
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 }
 

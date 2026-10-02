@@ -176,6 +176,83 @@ struct AgentHostPresenceTests {
         try fm.moveItem(atPath: cursorRoot, toPath: savedCursorRoot)
         try fm.createSymbolicLink(atPath: cursorRoot, withDestinationPath: savedCursorRoot)
         expectHostPresence(!has(copilotIDs), "a symlinked extensions root was followed")
+
+        // The integrated Codex host is separate from an ordinary ChatGPT app.
+        // Presence and activity owners must use only the injected app roots.
+        let codex = AgentCatalog.definitions.first { $0.id == "codex" }!
+        let codexApp = AgentCatalog.definitions.first { $0.id == "codex-app" }!
+        let chatGPT = applications + "/ChatGPT.app"
+        let framework = chatGPT + "/Contents/Frameworks/Codex Framework.framework"
+        let version = framework + "/Versions/fixture-version"
+        let frameworkInfo = version + "/Resources/Info.plist"
+        func codexOwners() -> [String] { AgentHostPresence.integratedCodexOwners(context: context) }
+        func integratedInstalled() -> Bool {
+            AgentCatalog.isInstalled(codex, home: home, presence: context)
+                && AgentCatalog.isInstalled(codexApp, home: home, presence: context)
+        }
+        func frameworkPlist(bundleID: String = "com.openai.codex.framework", type: String = "FMWK") throws {
+            try write(frameworkInfo, data: PropertyListSerialization.data(
+                fromPropertyList: ["CFBundleIdentifier": bundleID, "CFBundlePackageType": type,
+                                   "CFBundleExecutable": "Codex Framework"], format: .xml, options: 0))
+        }
+        try write(home + "/.codex/models_cache.json", data: Data("{}".utf8))
+        try write(home + "/Library/Caches/com.openai.codex/cache-file", data: Data("cache".utf8))
+        expectHostPresence(!integratedInstalled() && codexOwners().isEmpty,
+                           "an injected fixture detected the machine's integrated Codex host")
+        try app(chatGPT, bundleID: "com.openai.codex", executableName: "ChatGPT")
+        expectHostPresence(!integratedInstalled() && codexOwners().isEmpty,
+                           "ChatGPT without a Codex framework established Codex presence")
+        try fm.createDirectory(atPath: framework, withIntermediateDirectories: true)
+        expectHostPresence(!integratedInstalled(), "an empty Codex framework directory established presence")
+        try frameworkPlist()
+        try fm.createSymbolicLink(atPath: framework + "/Versions/Current", withDestinationPath: "fixture-version")
+        expectHostPresence(!integratedInstalled(), "a framework manifest without its executable established presence")
+        try executable(version + "/Codex Framework", permissions: 0o644)
+        expectHostPresence(!integratedInstalled(), "a nonexecutable framework established Codex presence")
+        try executable(version + "/Codex Framework")
+        try app(version + "/Helpers/Codex (Service).app", bundleID: "com.openai.codex.helper",
+                executableName: "Codex (Service)")
+        try app(version + "/Helpers/Codex (Renderer).app", bundleID: "com.openai.codex.helper.renderer",
+                executableName: "Codex (Renderer)")
+        expectHostPresence(integratedInstalled()
+                           && !AgentCatalog.isOrphaned(codex, home: home, presence: context)
+                           && !AgentCatalog.isOrphaned(codexApp, home: home, presence: context),
+                           "a validated ChatGPT Codex framework was treated as an uninstalled Agent")
+        let integratedOwners: Set<String> = ["ChatGPT", "com.openai.codex", "Codex (Service)",
+            "com.openai.codex.helper", "Codex (Renderer)", "com.openai.codex.helper.renderer"]
+        expectHostPresence(Set(codexOwners()) == integratedOwners,
+                           "the integrated host did not return its actual app and helper owners")
+        for agent in [codex, codexApp] {
+            expectHostPresence(Set(AgentCatalog.runtimeOwners(for: agent, home: home, presence: context))
+                .isSuperset(of: integratedOwners), "Codex shared-data owners lost an integrated host")
+        }
+        let emptyContext = AgentPresenceContext(applicationDirs: [], searchPath: [bin])
+        expectHostPresence(!AgentCatalog.isInstalled(codexApp, home: home, presence: emptyContext)
+                           && AgentHostPresence.integratedCodexOwners(context: emptyContext).isEmpty,
+                           "integrated presence escaped the injected application search scope")
+        try app(chatGPT, bundleID: "com.openai.chat", executableName: "ChatGPT")
+        expectHostPresence(!integratedInstalled(), "a different ChatGPT bundle identity established Codex presence")
+        try app(chatGPT, bundleID: "com.openai.codex", executableName: "ChatGPT")
+        try frameworkPlist(bundleID: "invalid.framework")
+        expectHostPresence(!integratedInstalled(), "a lookalike framework identity established Codex presence")
+        try frameworkPlist(type: "APPL")
+        expectHostPresence(!integratedInstalled(), "a nonframework package established Codex presence")
+        try frameworkPlist()
+        try write(version + "/Codex Framework", data: Data())
+        expectHostPresence(!integratedInstalled(), "an empty executable file established Codex presence")
+        try executable(version + "/Codex Framework")
+        let frameworkCopy = home + "/saved-codex-framework"
+        try fm.moveItem(atPath: framework, toPath: frameworkCopy)
+        try fm.createSymbolicLink(atPath: framework, withDestinationPath: frameworkCopy)
+        expectHostPresence(!integratedInstalled(), "a symlinked Codex framework was followed")
+        try fm.removeItem(atPath: framework)
+        try fm.moveItem(atPath: frameworkCopy, toPath: framework)
+        try fm.removeItem(atPath: framework + "/Versions/Current")
+        try fm.createSymbolicLink(atPath: framework + "/Versions/Current", withDestinationPath: home)
+        expectHostPresence(!integratedInstalled(), "an external framework Current link was followed")
+        try fm.removeItem(atPath: framework + "/Versions/Current")
+        try fm.createSymbolicLink(atPath: framework + "/Versions/Current", withDestinationPath: "fixture-version")
+        expectHostPresence(integratedInstalled(), "restoring the real active framework did not restore presence")
         print("AgentHostPresenceTests: passed")
     }
 }
