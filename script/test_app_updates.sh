@@ -14,6 +14,7 @@ swiftc -sdk "${SDKROOT:-$(xcrun --sdk macosx --show-sdk-path)}" \
     -module-cache-path "$WORK/module-cache" -F "$SPARKLE_DIR" -framework Sparkle -framework AppKit \
     -Xlinker -rpath -Xlinker "$SPARKLE_DIR" \
     "$ROOT_DIR/SimpleMole/Services/AppUpdateController.swift" \
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift" \
     "$ROOT_DIR"/SimpleMole/L10n/*.swift "$ROOT_DIR/script/AppUpdateControllerTests.swift" \
     -o "$APP/Contents/MacOS/UpdaterTests"
 "$APP/Contents/MacOS/UpdaterTests"
