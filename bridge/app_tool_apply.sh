@@ -2,7 +2,8 @@
 set -euo pipefail
 run_uninstall() {
     local manager="$1" package="$2"
-    [[ "$package" =~ ^[A-Za-z0-9@._+:/-]+$ ]] || return 1
+    # A selected package must never become an option such as cargo's --all.
+    [[ "$package" != -* && "$package" =~ ^[A-Za-z0-9@._+:/-]+$ ]] || return 1
     case "$manager" in
         npm) npm uninstall --global "$package";; pnpm) pnpm remove --global "$package";;
         brew) brew uninstall "$package";; brew-cask) brew uninstall --cask "$package";;

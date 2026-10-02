@@ -1,0 +1,305 @@
+{
+  "schemaVersion": 1,
+  "features": [
+    {
+      "name": "清理与缓存、日志、垃圾",
+      "suites": [
+        "test_cleanup_scan.sh",
+        "test_cache_cleanup.sh",
+        "test_cleanup_risk_policy.sh",
+        "test_cleanup_commands.sh",
+        "test_cleanup_refresh.sh",
+        "test_feature_matrix.sh"
+      ]
+    },
+    {
+      "name": "定时与自定义目录清理",
+      "suites": [
+        "test_auto_cleanup_workflow.sh",
+        "test_feature_matrix.sh",
+        "test.sh"
+      ]
+    },
+    {
+      "name": "管理员清理、权限与维护",
+      "suites": [
+        "test_administrator_cleanup.sh",
+        "test_optimize.sh",
+        "test_feature_matrix.sh",
+        "test.sh"
+      ]
+    },
+    {
+      "name": "安装包清理、应用卸载与残留",
+      "suites": [
+        "test_uninstall_residue.sh",
+        "test.sh"
+      ]
+    },
+    {
+      "name": "磁盘分析、重复文件、相似图片",
+      "suites": [
+        "test_disk_analysis.sh",
+        "test_duplicates.sh",
+        "test_duplicate_responsiveness.sh",
+        "test_duplicate_deletion.sh",
+        "test_analysis_deletion.sh",
+        "test_similar_images.sh"
+      ]
+    },
+    {
+      "name": "图片、视频与归档瘦身",
+      "suites": [
+        "test_media.sh"
+      ]
+    },
+    {
+      "name": "Agent、CLI、Skills、MCP与版本清理",
+      "suites": [
+        "test_agents.sh",
+        "test_agent_cli.sh",
+        "test_agent_workflow.sh",
+        "test_agent_icons.sh",
+        "test_feature_matrix.sh"
+      ]
+    },
+    {
+      "name": "开发运行时、包管理器、Shell与环境刷新",
+      "suites": [
+        "test_developer_cli.sh",
+        "test_developer_shell.sh",
+        "test_developer_workspace.sh",
+        "test_cleanup_commands.sh",
+        "test.sh"
+      ]
+    },
+    {
+      "name": "开发网络、DNS与Hosts",
+      "suites": [
+        "test_developer_network.sh",
+        "test_optimize.sh"
+      ]
+    },
+    {
+      "name": "Docker、Simulator、Time Machine",
+      "suites": [
+        "test_inventory.sh",
+        "test_snapshots.sh",
+        "test_feature_matrix.sh"
+      ]
+    },
+    {
+      "name": "进程、资源监控、流量归属与排序",
+      "suites": [
+        "test_traffic.sh",
+        "test.sh"
+      ]
+    },
+    {
+      "name": "剪贴板、截图比例与编辑器",
+      "suites": [
+        "test_screenshot_editor.sh",
+        "test.sh"
+      ]
+    },
+    {
+      "name": "悬浮岛位置、拖拽、侧边布局、资源预算",
+      "suites": [
+        "test_island_drag.sh",
+        "test_island_position.sh",
+        "test_island_side_presentation.sh",
+        "test_island_window.sh",
+        "test_island_resources.sh"
+      ]
+    },
+    {
+      "name": "开机启动",
+      "suites": [
+        "test_login_item.sh"
+      ]
+    },
+    {
+      "name": "任务反馈、部分成功、重试和本地化",
+      "suites": [
+        "test_task_feedback.sh",
+        "test_task_feedback_localization.sh",
+        "test_cleanup_task_localization.sh",
+        "test_cleanup_page_state.sh",
+        "test_feature_matrix.sh"
+      ]
+    },
+    {
+      "name": "更新、安装回滚、版本、打包、Appcast与签名",
+      "suites": [
+        "test_app_updates.sh",
+        "test_install_update.sh",
+        "test_release_version.sh",
+        "test_release_packaging.sh",
+        "test_release_identity.sh",
+        "test_release_appcast.sh",
+        "test.sh"
+      ]
+    },
+    {
+      "name": "品牌、主题、布局和界面呈现",
+      "suites": [
+        "test_nori.sh",
+        "test_cleanup_manual_trigger.sh",
+        "test_cleanup_presentation.sh",
+        "test_agent_presentation.sh",
+        "test.sh"
+      ]
+    }
+  ],
+  "suites": [
+    {
+      "id": "full-regression",
+      "script": "test.sh",
+      "timeoutSeconds": 5400,
+      "contains": [
+        "test_administrator_cleanup.sh",
+        "test_agent_cli.sh",
+        "test_agent_icons.sh",
+        "test_agent_presentation.sh",
+        "test_agent_workflow.sh",
+        "test_agents.sh",
+        "test_analysis_deletion.sh",
+        "test_auto_cleanup_workflow.sh",
+        "test_cache_cleanup.sh",
+        "test_cleanup_manual_trigger.sh",
+        "test_cleanup_page_state.sh",
+        "test_cleanup_presentation.sh",
+        "test_cleanup_refresh.sh",
+        "test_cleanup_scan.sh",
+        "test_disk_analysis.sh",
+        "test_duplicate_deletion.sh",
+        "test_duplicate_responsiveness.sh",
+        "test_duplicates.sh",
+        "test_inventory.sh",
+        "test_island_resources.sh",
+        "test_island_window.sh",
+        "test_login_item.sh",
+        "test_media.sh",
+        "test_nori.sh",
+        "test_optimize.sh",
+        "test_release_identity.sh",
+        "test_release_packaging.sh",
+        "test_screenshot_editor.sh",
+        "test_similar_images.sh",
+        "test_task_feedback.sh",
+        "test_task_feedback_localization.sh",
+        "test_traffic.sh",
+        "test_uninstall_residue.sh"
+      ]
+    },
+    {
+      "id": "app_updates",
+      "script": "test_app_updates.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "cleanup_commands",
+      "script": "test_cleanup_commands.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "cleanup_risk_policy",
+      "script": "test_cleanup_risk_policy.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "cleanup_task_localization",
+      "script": "test_cleanup_task_localization.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_cli",
+      "script": "test_developer_cli.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_network",
+      "script": "test_developer_network.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_shell",
+      "script": "test_developer_shell.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_workspace",
+      "script": "test_developer_workspace.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "feature_matrix",
+      "script": "test_feature_matrix.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "install_update",
+      "script": "test_install_update.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "island_drag",
+      "script": "test_island_drag.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "island_position",
+      "script": "test_island_position.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "island_side_presentation",
+      "script": "test_island_side_presentation.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "release_appcast",
+      "script": "test_release_appcast.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "release_version",
+      "script": "test_release_version.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "snapshots",
+      "script": "test_snapshots.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "performance",
+      "script": "test_performance.sh",
+      "timeoutSeconds": 1800,
+      "contains": []
+    }
+  ],
+  "helpers": [
+    "test_developer_toolchain.sh"
+  ],
+  "alternateAggregates": [
+    "test_cleanup_safety.sh",
+    "test_all_features.sh"
+  ]
+}

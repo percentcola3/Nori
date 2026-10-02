@@ -3683,9 +3683,17 @@ final class AppState: ObservableObject {
                 guard let current = autoCleanupRules.first(where: { $0.id == snapshot.id }),
                       current.isEnabled, current.isSafetyAuthorized else { continue }
                 do {
+                    let protectedDirectories = protectedAutoCleanupDirectories(excluding: current.id)
                     let plan = try await AutoCleanupPlanner.plan(
                         for: current,
-                        protecting: protectedAutoCleanupDirectories(excluding: current.id))
+                        protecting: protectedDirectories)
+                    // Planning suspends the main actor. A disabled/edited rule or
+                    // newly nested rule must invalidate the old deletion plan.
+                    guard autoCleanupRules.first(where: { $0.id == current.id }) == current,
+                          protectedAutoCleanupDirectories(excluding: current.id) == protectedDirectories else {
+                        defaults.removeObject(forKey: Self.autoCleanupLastCheckKey)
+                        continue
+                    }
                     guard !plan.candidates.isEmpty else {
                         autoCleanupRuleIssues[current.id] = nil
                         continue
@@ -3738,7 +3746,8 @@ final class AppState: ObservableObject {
 
     private func applyAutoCleanup(rule: AutoCleanupRule, plan: AutoCleanupPlan) async
         -> (removed: Int, failed: Int, reclaimedBytes: UInt64, messages: [String]) {
-        guard rule.isSafetyAuthorized,
+        guard autoCleanupRules.first(where: { $0.id == rule.id }) == rule,
+              rule.isSafetyAuthorized,
               let authorizedRootIdentity = rule.authorizedRootIdentity,
               plan.candidates.allSatisfy(\.automaticEligible) else {
             return (0, max(1, plan.candidates.count), 0, [l10n.t("auto.status.authorizationRequired")])
@@ -3779,6 +3788,10 @@ final class AppState: ObservableObject {
         let reclaimed = failed == 0 && summary.removed == planned.count
             ? planned.reduce(0) { $0 &+ $1.bytes }
             : 0
+        if autoCleanupPreviewRuleID == rule.id {
+            autoCleanupPreview = nil
+            autoCleanupPreviewRuleID = nil
+        }
         if let index = autoCleanupRules.firstIndex(where: { $0.id == rule.id }) {
             autoCleanupRules[index].lastRunAt = Date()
             autoCleanupRules[index].lastReclaimedBytes = reclaimed

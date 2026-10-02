@@ -1,0 +1,122 @@
+Nori 全功能模拟与性能基准测试
+
+入口
+bash script/test_all_features.sh
+  串行执行默认完整回归、所有补充功能套件，最后执行性能基准。
+  17 个功能域映射到 18 个执行套件；默认完整回归自身包含大量独立 Swift/桥接测试。
+  新增 test_*.sh 未登记时直接失败。Swift 测试不能跳过。失败仍继续其他套件，最终返回非零。
+  每个套件记录耗时、退出码、超时状态和日志，结果保存为 JSON。
+
+bash script/test_all_features.sh --list
+  列出功能覆盖映射。
+bash script/test_feature_matrix.sh --simulate
+  单独执行 1,069 个新增确定性组合场景。
+bash script/test_performance.sh /absolute/path/current.json
+  单独生成性能基准。
+bash script/test_performance.sh /absolute/path/current.json /absolute/path/baseline.json
+  与同机基线比较，发生回归时返回非零。
+NORI_BENCH_REPETITIONS=7 bash script/test_performance.sh /absolute/path/current.json
+  调整采样次数（3...20，默认 5）。
+
+功能映射
+清理、缓存、日志、诊断报告、固件与废纸篓；定时/自定义目录；管理员清理与权限；
+安装包、卸载与残留；磁盘分析、重复文件及相似图片；图片/视频/归档瘦身；
+Agent 目录、CLI、Skills、MCP及版本；开发运行时、包管理器和Shell；开发网络、DNS、Hosts；
+Docker、Simulator与Time Machine；进程和资源监控、流量归属；剪贴板与截图；
+悬浮岛位置、拖拽、资源预算与布局；开机启动；任务反馈、部分成功、重试及本地化；
+更新、回滚、版本、Appcast与签名；品牌、主题与界面呈现。
+具体套件见 script/feature-test-manifest.json。
+
+新增模拟场景
+224：7 条生产扫描/删除路径 × 4 类文件名 × 8 种执行前变化。
+  路径：应用缓存、npm、Xcode、Cargo、浏览器、日志、废纸篓。
+  文件名：普通、中文空格、含连续点、以短横线开头。
+  变化：正常、消失、inode替换、软链接、白名单变化、占用、探测不可用、硬链接。
+  核对真实文件、扫描身份、删除统计以及用户数据/硬链接保留。
+80：2 种调度策略 × 2 种授权 × 5 个保留天数 × 4 个容量边界。
+256：Docker 4 类资源的空结果/命令失败/损坏输出/有效库存全部组合。
+56：Simulator 7 个状态 × 2 种可用状态 × 4 类设备名；未知和运行状态不能提交删除。
+405：9 个修改时间证据 × 9 个访问时间证据 × 5 个保留期；缺失和未来证据保守处理。
+4：反馈队列 1/10/100/1000 条，验证去重、FIFO、完整排空。
+44：权限 helper 36 种组合、6 个异常输出及2个受控读探针。
+这些测试直接调用生产实现；权限测试不请求、重置或更改系统 TCC 权限。
+
+基准方法
+使用 -O 编译的生产服务和固定种子 83 的真实文件数据。
+每项先进行一次排除在计时外的预热，再采样 5 次；中位数/P95采用最近秩算法。
+文件系统缓存为预热状态，不声称冷启动或冷磁盘性能。
+夹具创建、扫描前删除计划准备和编译不计入操作耗时；操作结果验证在操作计时内。
+删除测量永久删除，夹具全部在一次性 HOME 中；不清空用户废纸篓。
+清理矩阵使用确定性空占用快照；文件占用行为另由真实 fd 和生产 lsof 测试覆盖。
+重复文件基准使用普通 Documents 目录，遵守禁止扫描 Library 的生产策略。
+
+工作负载
+1千/1万/3万文件：快扫、深扫、磁盘分析、成对重复文件、主动取消和预先取消。
+1千/1万条：自动清理计划、Skills 库存、永久删除、Docker 库存解析、进程树聚合。
+1万个相同文件：单个大重复组。
+64/256张图片：相似图片解码与分组。
+1024/2048像素边长：图片瘦身副本（保留原件）。
+16 MiB：归档瘦身副本（保留原件）。
+原生 libproc：只读进程快照。
+记录每次 wall time、中位数、P95、吞吐量、CPU时间、进程累计峰值RSS和MainActor心跳最大额外延迟。
+RSS 是 Darwin ru_maxrss 的字节值，属于整个基准进程累计高水位，不是单项内存增量或泄漏判断。
+取消指标另记录发出取消到返回的最大耗时；整体操作计时也包含到达 hashing 阶段的时间。
+
+性能门槛
+普通单次操作默认60秒；原生采样5秒，预先取消2秒。
+MainActor额外延迟小于500毫秒，主动取消返回小于500毫秒，累计进程RSS小于2GiB。
+同机比较：中位数/P95/CPU/RSS/主线程延迟超过基线30%且超过对应噪声下限时失败。
+耗时/CPU噪声下限100毫秒，心跳延迟50毫秒，RSS32MiB。
+硬件、OS、SDK、编译器、采样次数、固定种子、缓存状态或测试代码指纹不同则拒绝比较。
+比较器自测包含主动注入耗时、CPU、RSS、响应延迟回归及错误基线。
+首次测量建立基线，不能声称已证明相对于历史版本没有性能退化。
+
+模拟范围
+生产文件扫描/删除、解码、统计和模型处理使用真实实现与隔离文件。
+系统权限、开机启动、更新发布和外部 CLI 的破坏性动作使用已有受控服务/录制桩；
+界面套件使用冻结状态运行真实视图。功能映射不等于每条 OS 内部路径都有覆盖。
+本轮不在用户数据上执行 Docker prune、备份 thinning、系统提权删除或真实系统权限重置。
+功能正确性、性能预算和实测基线分别报告，不以用例数量证明绝对安全。
+
+本轮功能验证结果
+完整 script/test.sh：All 45 checks passed，未跳过Swift，含全应用类型检查。
+既有清理安全聚合的12个补充入口全部通过（其中3个界面入口也在默认回归中执行）。
+独立补充：风险策略、悬浮岛拖拽/位置/侧边布局、Appcast签名和版本规则全部通过。
+新增 FeatureSimulationTests：1,069 个组合场景全部通过。
+悬浮岛侧边布局首轮编译失败来自Python启动器注入CLT默认SDK别名；
+统一入口将该别名重新解析为可用SDK后，重新运行通过。版本化SDK仍由调用方指定。
+当前功能证据覆盖统一清单的全部17个功能域；本轮按组件执行，避免重复跑完整回归。
+功能日志：.artifacts-cleanup-safety.lRGEb8/；.artifacts/all-features/supplemental-20261002/；
+SDK修复后通过的侧边布局：.artifacts/all-features/island-sdk-fixed-20261002/；
+新增组合矩阵：.artifacts/cleanup-safety/feature-matrix.log。
+取消基准的 units 是输入规模，unitsPerSecond 是该规模/总耗时，不能解读为已扫描文件吞吐量。
+判断取消表现应使用 cancellationMaxSeconds；预先取消则看整个调用的耗时。
+MainActor 指标是10毫秒心跳间隔之外的额外延迟，不是UI绘制帧时间。
+CPU/RSS是基准进程自身的指标，不包含外部子进程或GPU；归档等外部工具主要看wall time。
+删除基准允许生产执行器保留缓存根目录，核对其文件数/内容字节归零和实际回收统计。
+图片基准验证两种合法结果：副本至少节约10%，或收益不足时删除临时输出并保留原件；
+不把“压缩后一定更小”作为所有输入的前提。已有媒体功能套件另验证实际生成更小的图片/视频/归档结果。
+前两轮基准因测试预期不符合缓存目录保留和图片收益策略而中止；未将不完整采样用作最终基线。
+原始日志保留为 performance-first-pass.log 和 performance-second-pass.log。
+
+最终性能结果
+Apple M4 / 10逻辑CPU / 16GiB RAM / macOS 27.0.1。
+35个工作负载全部通过，每项预热1次、有效采样5次。
+工作负载 / 输入数量 / 中位数秒 / P95秒
+cleanup-quick / 30000 / 4.6971 / 5.0416
+cleanup-deep / 30000 / 4.5979 / 4.6728
+disk-analysis / 30000 / 0.1159 / 0.1171
+exact-duplicates-pairs / 30000 / 25.2790 / 27.9647
+auto-cleanup-plan / 10000 / 1.2630 / 1.2700
+agent-skills / 10000 / 0.8949 / 1.0517
+permanent-delete / 10000 / 1.9445 / 1.9512
+基准进程累计峰值RSS：181.3MiB；MainActor心跳最大额外延迟：46.13毫秒；主动取消最大返回延迟：0.566毫秒。
+实际JSON报告读取/同机兼容校验通过；在报告副本中注入10倍wall/P95/CPU/RSS退化，比较器输出4项REGRESSION并返回1，原始基线未修改。
+统一结果索引：.artifacts/cleanup-safety/all-feature-results.json；完整基线：performance-baseline-20261002.json；原始采样输出：performance-baseline-20261002.log。
+这是首次完整测量基线，没有历史同条件版本可供独立性能对比。
+
+安装与收尾
+script/install_update.sh 返回0，完整生产构建/验签/替换/启动成功，旧版与新版签名指定要求相同。
+安装后 codesign --verify --deep --strict /Applications/Nori.app 再次通过，Nori进程运行。
+Swift基准源码指纹与最终JSON一致，175个有效采样齐全；临时 .feature-tests.* 目录数量为0；shell语法和git diff --check通过。
+安装日志：.artifacts/cleanup-safety/all-features-install.log。

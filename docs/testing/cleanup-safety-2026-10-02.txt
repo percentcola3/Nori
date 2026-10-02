@@ -1,0 +1,67 @@
+Nori 清理能力测试记录
+日期：2026-10-02
+环境：macOS 27.0.1 / arm64；Swift 编译采用可用的 CommandLineTools 和 macOS 26.5 SDK。
+
+范围与方法
+1. 生产清理扫描/删除代码在隔离目录中处理真实文件；外部包管理器、系统维护、Docker、Simulator 和 Time Machine 的破坏性命令使用录制桩验证参数和失败路径。
+2. Nori 原生界面执行只读扫描；在专用 ui-cache 目录走完添加规则、确认可再生内容、保留 7 天预览、手动移入废纸篓、重新预览、开启规则自动执行、停用与删除规则。
+3. 用 Finder“放回原处”恢复两份真实清理的测试文件，并逐字节核对内容；近期文件保持原样。未清空用户废纸篓。
+4. 真实 npm Agent 安装在一次性 HOME/prefix 中，通过生产 AgentCLIService 识别及卸载；真实运行状态保护由隔离测试快照验证。没有登录 Agent 账号或发起付费推理。
+
+发现与修复
+A. 定时扫描等待期间停用/撤销/修改规则，旧计划仍可执行。删除前重新核对完整规则和嵌套规则目录集合；变化时放弃旧计划并取消限频，下一轮重新扫描。手动清理最终入口也核对当前规则。
+B. 自动清理完成后仍显示已删除候选的旧预览。执行结束清空该规则预览；回归直接运行生产执行方法验证。
+C. 开发工具卸载桥接将 --all 等选项接受为包名。调用任何包管理器前拒绝以 - 开头的包名；7 个卸载管理器均验证拒绝选项和命令元字符。
+
+覆盖矩阵
+通用扫描/清理：缓存分组、浏览器缓存与持久数据分离、开发缓存、自定义目录、7 天门槛、快扫/深扫、取消、权限/ACL/immutable、不完整扫描、空结果、再次扫描。
+删除安全：软链接祖先及叶节点、硬链接、inode/mtime 身份变化、安全目录描述符删除、打开文件、进程探测不可用、白名单、模型/会话/凭据/数据库/用户配置保留。
+Agent 专清：目录与版本识别、旧版本保留当前版本、宿主存在与残留、SQLite 家族、Skills 链接及配置同步、MCP 注册与实体、共享消费者、运行中拒绝、身份改变、部分卸载后重试、部分成功的统计和刷新。
+定时清理：未授权/停用规则、旧安全版本、容量阈值与保留天数、最近一小时写入保护、嵌套规则、根目录被替换、权限不足、任务忙/待处理反馈延后、重试合并、6 小时限频、强制执行、扫描失败/执行失败、规则在扫描期间改变、最终身份协议、旧预览失效。
+安装包清理：永久/废纸篓模式、类型、根目录、身份、白名单、软链接和运行状态保护。
+应用卸载：残留发现、共享 Bundle ID/名称、软链接、用户配置保留、身份与最终结果核实、队列/取消。原应用删除结果由隔离文件变化模拟；本轮没有卸载用户真实应用。
+磁盘分析/重复文件：目录层级与已分配大小、稀疏文件/硬链接、范围、取消、内容身份、保留至少一份、相似图片变化、未知/缺失 keeper、不在范围内的计划、删除结果。
+文件瘦身：图片、视频、归档真实输出，原件保留/移入废纸篓、临时输出约束、文件改变与失败保护。
+官方 GC：brew、npm、pnpm、yarn、bun、pip、pip3、uv、conda、gem、deno、Go 构建缓存/模块、Docker builder/system、simctl，共 16 种录制命令与失败处理。
+系统能力：管理员清理计划与拒绝路径、网络/维护参数、Simulator UUID/运行状态、Docker 只读库存、Time Machine 只读库存与 thinning 命令、失败后不刷新。
+界面与反馈：实际 SwiftUI 清理/Agent 视图在正常及受限尺寸渲染；成功、失败、部分成功、重试、语言反馈、取消与主线程响应。
+安装更新：签名连续性、更新失败回滚、实际新版编译/验签/安装/启动。
+
+证据
+.artifacts/cleanup-safety/ 下保留执行日志；失败前后的 scheduler/commands 日志用于记录复现与修复。
+可复用入口：bash script/test_cleanup_safety.sh --real-agents
+单独真实安装：bash script/test_agent_cli.sh --real-install
+
+边界
+测试通过证明本轮环境与已覆盖场景的行为，不构成所有 OS/SDK/第三方 Agent 版本或所有并发竞争都绝对安全的证明。
+管理员真实提权删除、真实 Docker 全量 prune、真实 Simulator 删除、真实 Time Machine 备份 thinning 未在用户数据上执行；以模拟、命令合约与拒绝路径验证。
+定时清理移入废纸篓，统计表示从源目录移走的内容量；废纸篓尚未清空时不能据此认定物理磁盘空间已释放。
+安装后再次操作 GUI 时 Mac 已锁屏，未绕过锁屏。安装和启动由安装脚本、签名校验和进程检查确认。
+
+真实 Agent 结果：Codex CLI 0.160.0、Claude Code 2.1.287 完整安装（含官方安装步骤和平台二进制），--version 成功；生产识别及隔离卸载成功。Node/npm 与非目标哨兵文件保留。
+原生 UI 清理后的两份测试文件均已恢复且核对内容，随后只删除自建测试文件与 Finder 元数据；测试规则列表恢复为空。
+
+最终结果
+全量 script/test.sh：All 45 checks passed（未跳过 Swift，含全应用类型检查）。
+额外界面/开发环境/更新回滚 10 个套件通过；调度生产方法回归、16 个 GC 与 7 个卸载命令、快照命令合约、完整真实 Agent 安装卸载及原生 UI/恢复验证均通过。
+script/install_update.sh 成功：编译、固定签名身份验证、替换、启动；安装后 codesign --verify --deep --strict 再次通过，Nori 进程运行。安装资源包含包名选项拒绝修复。
+全应用类型检查存在既有 Swift 编译器警告，未出现编译错误。git diff --check 通过。
+
+追加：缓存与垃圾单元测试 / 文件系统 E2E
+新增文件：script/CacheCleanupUnitTests.swift、script/CacheCleanupE2ETests.swift、script/test_cache_cleanup.sh。
+默认 script/test.sh 已调用 --all；script/test_cleanup_safety.sh 通过全量回归入口包含此套件。
+运行：bash script/test_cache_cleanup.sh --unit（单元）；--e2e（文件系统 E2E）；--all（两者，默认）。
+
+本轮结果：--all 返回 0；45 条单元断言、30 类真实文件往返和 7 个安全/近期缓存场景全部通过。
+单元断言：29 类缓存/日志/诊断/固件策略、4 类依赖仓库风险、5 个敏感路径、7 个时间与访问证据边界。
+往返矩阵：普通应用、诊断报告、日志、npm、yarn、bun、Gradle build、Cargo 下载、pip、uv、Homebrew 下载、Go 模块下载、Go build、pnpm、Poetry、NuGet 下载、Composer、node-gyp、SwiftPM、Bazel、Vite、Webpack、Xcode DerivedData、Simulator 缓存、固件、Chrome、Edge、Brave、Arc，以及隔离废纸篓垃圾。
+每个场景实际制造文件，调用生产 NativeCore 深扫，核对非空身份绑定计划，删除，逐字节核对保留项，再扫无候选，重放旧计划不重复计数；过期开发缓存还验证默认勾选。
+保留项包括用户文档、Agent 凭据/会话、模型、npm 非缓存数据；浏览器同一 profile 内另有 Cookies、Login Data 和 IndexedDB 哨兵。
+安全场景：占用探测不可用、文件被占用、目录 inode 被替换、扫描后新增白名单、软链接重定向、真实打开 fd 的部分成功，以及近期缓存可见但默认不选。
+Gradle 另验证默认便利白名单保留构建缓存；往返矩阵仅在一次性 HOME 中用空白名单取消便利排除，硬性安全排除仍生效。
+
+范围：这是文件系统 E2E，直接运行生产扫描/删除流程；不称作新增 GUI 自动化。矩阵占用快照使用注入空集合，真实 fd 场景使用生产 lsof。官方 GC 命令仍由已有命令合约套件验证；本次未实际执行 Docker/备份等破坏性清理。
+本轮未重跑此前约 26 分钟的整个默认回归；已执行新增 --all、shell 语法检查、git diff --check，以及完整生产构建/安装/验签。
+证据：.artifacts/cleanup-safety/cache-unit-e2e.log、cache-tests-install.log。
+script/install_update.sh 返回 0；安装后 codesign --verify --deep --strict 通过，Nori 进程运行；签名指定要求与旧版本相同。
+所有自建 E2E fixture 由退出清理移除，未修改真实 HOME 白名单或用户缓存。
