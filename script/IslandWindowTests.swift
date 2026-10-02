@@ -51,7 +51,7 @@ struct IslandWindowTests {
         host.islandDetailHitFrame = NSRect(x: 14, y: 180, width: 254, height: 240)
         precondition(hits(NSPoint(x: 330, y: 300)), "Vertical rail center must receive clicks")
         precondition(!hits(NSPoint(x: 281, y: 65)), "Rail inward corner must pass through")
-        precondition(hits(NSPoint(x: 367.9, y: 64.5)), "Right shoulder must meet the physical edge")
+        precondition(hits(NSPoint(x: 367.999, y: 64.5)), "Right shoulder must meet the physical edge")
         precondition(hits(NSPoint(x: 140, y: 300)), "Detached detail bubble must receive clicks")
         precondition(!hits(NSPoint(x: 15, y: 181)), "Detail bubble rounded corner must pass through")
         precondition(!hits(NSPoint(x: 274, y: 300)), "Gap between rail and detail must pass through")
@@ -105,14 +105,16 @@ struct IslandWindowTests {
         precondition(!path.cgPath.contains(CGPoint(x: 11, y: 111)), "Bottom corners must be rounded")
         let collapsed = NotchShape(bottomRadius: 5, shoulderRadius: 4)
             .path(in: CGRect(x: 0, y: 0, width: 72, height: 8))
-        precondition(collapsed.cgPath.contains(CGPoint(x: 0.5, y: 0.05)), "Collapsed shoulder must meet the top edge")
+        precondition(collapsed.cgPath.contains(CGPoint(x: 0.5, y: 0.005)), "Collapsed shoulder must meet the top edge")
         precondition(!collapsed.cgPath.contains(CGPoint(x: 3, y: 7.5)), "Collapsed bottom must retain visible rounding")
         let notch = NotchShape(bottomRadius: 9, shoulderRadius: 4)
             .path(in: CGRect(x: 0, y: 0, width: 193, height: 40))
-        precondition(notch.cgPath.contains(CGPoint(x: 0.5, y: 0.05)), "Notch shoulder must meet the screen top edge")
+        precondition(notch.cgPath.contains(CGPoint(x: 0.5, y: 0.005)), "Notch shoulder must meet the screen top edge")
         precondition(notch.cgPath.contains(CGPoint(x: 4.5, y: 20)), "Notch body must cover the hardware notch edge")
         precondition(!notch.cgPath.contains(CGPoint(x: 5, y: 39.5)), "Notch lip must round its bottom corners")
 
+        // Core Graphics evaluates the actual quadratic outline, including rotations.
+        // Shoulder samples stay inside the curve rather than its rectangular bounds.
         // Rotate the existing top outline into both physical side attachments.
         // Test nonzero bounds as reported by the hosting view's named space.
         let railRect = CGRect(x: 21, y: 35, width: 88, height: 480)
@@ -132,7 +134,7 @@ struct IslandWindowTests {
         for attachment in [IslandAttachment.left, .right] {
             let handleRect = CGRect(x: 13, y: 29, width: 12, height: 96)
             let handle = NotchShape(bottomRadius: 5, shoulderRadius: 4, attachment: attachment).path(in: handleRect)
-            let edgeX = attachment == .left ? handleRect.minX + 0.05 : handleRect.maxX - 0.05
+            let edgeX = attachment == .left ? handleRect.minX + 0.005 : handleRect.maxX - 0.005
             let inwardX = attachment == .left ? handleRect.maxX - 0.05 : handleRect.minX + 0.05
             precondition(handle.cgPath.contains(CGPoint(x: edgeX, y: handleRect.minY + 0.5)),
                          "Collapsed side shoulder must attach to the edge")
