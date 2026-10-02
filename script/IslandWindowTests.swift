@@ -126,7 +126,7 @@ struct IslandWindowTests {
                 precondition(leftRail.contains(CGPoint(x: railRect.minX + depth, y: railRect.minY + longAxis)) == expected,
                              "Left outline must preserve the top outline under rotation")
                 precondition(rightRail.contains(CGPoint(x: railRect.maxX - depth, y: railRect.minY + longAxis)) == expected,
-                             "Right outline must preserve the top outline under rotation")
+                             "Right outline mismatch long=\(longAxis) depth=\(depth) expected=\(expected), CG original=\(uprightRail.cgPath.contains(CGPoint(x: longAxis, y: depth))) rotated=\(rightRail.cgPath.contains(CGPoint(x: railRect.maxX - depth, y: railRect.minY + longAxis)))")
             }
         }
         for attachment in [IslandAttachment.left, .right] {
