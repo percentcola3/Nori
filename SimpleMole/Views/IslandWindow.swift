@@ -142,12 +142,12 @@ final class IslandHostingView<Content: View>: NSHostingView<Content> {
     }
 
     private func islandContains(_ localPoint: NSPoint) -> Bool {
-        if islandHitFrame.contains(localPoint), islandHitShape.path(in: islandHitFrame).contains(localPoint) {
+        if islandHitFrame.contains(localPoint), islandHitShape.path(in: islandHitFrame).cgPath.contains(localPoint) {
             return true
         }
         guard let detailFrame = islandDetailHitFrame, detailFrame.contains(localPoint) else { return false }
         return RoundedRectangle(cornerRadius: 20, style: .continuous)
-            .path(in: detailFrame).contains(localPoint)
+            .path(in: detailFrame).cgPath.contains(localPoint)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

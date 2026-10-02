@@ -99,19 +99,19 @@ struct IslandWindowTests {
         precondition(activations == 1, "Collapsed controls must not dispatch actions")
 
         let path = NotchShape(bottomRadius: 24).path(in: CGRect(x: 0, y: 0, width: 340, height: 112))
-        precondition(path.contains(CGPoint(x: 2, y: 0.1)), "Shoulder must meet screen top")
-        precondition(!path.contains(CGPoint(x: 2, y: 30)), "Shoulder must curve inward")
-        precondition(path.contains(CGPoint(x: 170, y: 111)), "Bottom center must be filled")
-        precondition(!path.contains(CGPoint(x: 11, y: 111)), "Bottom corners must be rounded")
+        precondition(path.cgPath.contains(CGPoint(x: 2, y: 0.1)), "Shoulder must meet screen top")
+        precondition(!path.cgPath.contains(CGPoint(x: 2, y: 30)), "Shoulder must curve inward")
+        precondition(path.cgPath.contains(CGPoint(x: 170, y: 111)), "Bottom center must be filled")
+        precondition(!path.cgPath.contains(CGPoint(x: 11, y: 111)), "Bottom corners must be rounded")
         let collapsed = NotchShape(bottomRadius: 5, shoulderRadius: 4)
             .path(in: CGRect(x: 0, y: 0, width: 72, height: 8))
-        precondition(collapsed.contains(CGPoint(x: 0.5, y: 0.05)), "Collapsed shoulder must meet the top edge")
-        precondition(!collapsed.contains(CGPoint(x: 3, y: 7.5)), "Collapsed bottom must retain visible rounding")
+        precondition(collapsed.cgPath.contains(CGPoint(x: 0.5, y: 0.05)), "Collapsed shoulder must meet the top edge")
+        precondition(!collapsed.cgPath.contains(CGPoint(x: 3, y: 7.5)), "Collapsed bottom must retain visible rounding")
         let notch = NotchShape(bottomRadius: 9, shoulderRadius: 4)
             .path(in: CGRect(x: 0, y: 0, width: 193, height: 40))
-        precondition(notch.contains(CGPoint(x: 0.5, y: 0.05)), "Notch shoulder must meet the screen top edge")
-        precondition(notch.contains(CGPoint(x: 4.5, y: 20)), "Notch body must cover the hardware notch edge")
-        precondition(!notch.contains(CGPoint(x: 5, y: 39.5)), "Notch lip must round its bottom corners")
+        precondition(notch.cgPath.contains(CGPoint(x: 0.5, y: 0.05)), "Notch shoulder must meet the screen top edge")
+        precondition(notch.cgPath.contains(CGPoint(x: 4.5, y: 20)), "Notch body must cover the hardware notch edge")
+        precondition(!notch.cgPath.contains(CGPoint(x: 5, y: 39.5)), "Notch lip must round its bottom corners")
 
         // Rotate the existing top outline into both physical side attachments.
         // Test nonzero bounds as reported by the hosting view's named space.
@@ -122,10 +122,10 @@ struct IslandWindowTests {
         let rightRail = NotchShape(bottomRadius: 24, shoulderRadius: 10, attachment: .right).path(in: railRect)
         for longAxis in stride(from: CGFloat(0.5), to: 480, by: 13) {
             for depth in stride(from: CGFloat(0.5), to: 88, by: 7) {
-                let expected = uprightRail.contains(CGPoint(x: longAxis, y: depth))
-                precondition(leftRail.contains(CGPoint(x: railRect.minX + depth, y: railRect.minY + longAxis)) == expected,
+                let expected = uprightRail.cgPath.contains(CGPoint(x: longAxis, y: depth))
+                precondition(leftRail.cgPath.contains(CGPoint(x: railRect.minX + depth, y: railRect.minY + longAxis)) == expected,
                              "Left outline must preserve the top outline under rotation")
-                precondition(rightRail.contains(CGPoint(x: railRect.maxX - depth, y: railRect.minY + longAxis)) == expected,
+                precondition(rightRail.cgPath.contains(CGPoint(x: railRect.maxX - depth, y: railRect.minY + longAxis)) == expected,
                              "Right outline mismatch long=\(longAxis) depth=\(depth) expected=\(expected), CG original=\(uprightRail.cgPath.contains(CGPoint(x: longAxis, y: depth))) rotated=\(rightRail.cgPath.contains(CGPoint(x: railRect.maxX - depth, y: railRect.minY + longAxis)))")
             }
         }
@@ -134,11 +134,11 @@ struct IslandWindowTests {
             let handle = NotchShape(bottomRadius: 5, shoulderRadius: 4, attachment: attachment).path(in: handleRect)
             let edgeX = attachment == .left ? handleRect.minX + 0.05 : handleRect.maxX - 0.05
             let inwardX = attachment == .left ? handleRect.maxX - 0.05 : handleRect.minX + 0.05
-            precondition(handle.contains(CGPoint(x: edgeX, y: handleRect.minY + 0.5)),
+            precondition(handle.cgPath.contains(CGPoint(x: edgeX, y: handleRect.minY + 0.5)),
                          "Collapsed side shoulder must attach to the edge")
-            precondition(!handle.contains(CGPoint(x: inwardX, y: handleRect.minY + 0.5)),
+            precondition(!handle.cgPath.contains(CGPoint(x: inwardX, y: handleRect.minY + 0.5)),
                          "Collapsed side inward corners must stay rounded")
-            precondition(handle.contains(CGPoint(x: handleRect.midX, y: handleRect.midY)),
+            precondition(handle.cgPath.contains(CGPoint(x: handleRect.midX, y: handleRect.midY)),
                          "Collapsed side handle must retain a visible body")
         }
 
