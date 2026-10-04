@@ -501,6 +501,13 @@ enum DiskAnalysisWorker {
         result.directoryReports = directoryReports
         return result
     }
+
+    /// 磁盘浏览器列布局：尾部两列完整显示，更早的层级折叠为窄条。
+    /// 纯函数便于单测：navigation 深于两级时只保留最近两列展开。
+    static func diskBrowserColumnLayout(_ nav: [String]) -> (collapsed: [String], expanded: [String]) {
+        let expandedCount = min(2, nav.count)
+        return (Array(nav.dropLast(expandedCount)), Array(nav.suffix(expandedCount)))
+    }
 }
 
 /// Session snapshot: navigation only reads reports, never touches the disk.

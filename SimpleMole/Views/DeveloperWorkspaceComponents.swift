@@ -1,7 +1,7 @@
 import SwiftUI
 import AppKit
 
-/// One glass layer per card. The header, rows and footer all sit on the same surface,
+/// One surface layer per card. The header, rows and footer all sit on the same surface,
 /// separated by hairlines instead of nested cards.
 struct DevCard<Header: View, Content: View>: View {
     let id: String
@@ -17,32 +17,21 @@ struct DevCard<Header: View, Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
-        .modifier(ListRowGlass(interactive: false))
+        .modifier(ListRowSurface())
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(id)
     }
 }
 
-/// Selected rows inside a card become a glass lens; unselected rows add no layer.
-struct DevSelectionLens: ViewModifier {
-    let id: String
+/// Selected rows inside a card take the selectionFill tint; unselected rows add no layer.
+struct DevSelectionSurface: ViewModifier {
     let selected: Bool
-    var groupNamespace: Namespace.ID? = nil
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.controlActiveState) private var controlActiveState
-    @Namespace private var localNamespace
 
-    @ViewBuilder func body(content: Content) -> some View {
-        if !selected {
-            content
-        } else if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
-            content
-                .glassEffect(.regular.tint(Color.moleAccent.opacity(0.20)).interactive(!reduceMotion), in: RoundedRectangle(cornerRadius: 8))
-                .glassEffectID(id, in: groupNamespace ?? localNamespace)
-                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-        } else {
-            content.background(GlassSurface(cornerRadius: 8, usesSystemGlass: false, highlighted: true))
+    func body(content: Content) -> some View {
+        content.background {
+            if selected {
+                RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.selectionFill)
+            }
         }
     }
 }

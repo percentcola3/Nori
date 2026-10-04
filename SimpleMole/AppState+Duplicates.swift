@@ -12,6 +12,12 @@ extension AppState {
     }
 
     /// 完全重复组每组保留一份后的可释放量。相似图片组大小不一，不估算。
+    var duplicateSelectionIncludesSimilar: Bool {
+        !duplicateSelection.isEmpty && duplicateGroups.contains { group in
+            group.kind == .similarImages && group.members.contains { duplicateSelection.contains($0.path) }
+        }
+    }
+
     var duplicateReclaimableBytes: UInt64 {
         guard duplicateMode == .exact, !duplicateGroups.isEmpty else { return 0 }
         return duplicateScanReclaimableBytes
@@ -111,8 +117,11 @@ extension AppState {
         }
         Task {
             let result = await Task.detached(priority: .utility) {
-                DuplicateScanWorker.scan(mode: mode, roots: roots, control: control,
-                    home: home, contentCache: contentCache, featureCache: featureCache, progress: progress)
+                mode == .exact
+                    ? DuplicateScanWorker.scanAll(roots: roots, control: control, home: home,
+                        contentCache: contentCache, featureCache: featureCache, progress: progress)
+                    : DuplicateScanWorker.scan(mode: mode, roots: roots, control: control,
+                        home: home, contentCache: contentCache, featureCache: featureCache, progress: progress)
             }.value
             guard duplicateScanControl === control else { return }
             finishDuplicateScan(result, cancelled: result.cancelled || control.isCancelled,
@@ -233,7 +242,8 @@ extension AppState {
         Task {
             let summary = await Task.detached(priority: .utility) { () -> NativeCore.ApplySummary? in
                 guard let plan = try? DuplicateDeletionPlan(groups: groups.map {
-                    DuplicateDeletionGroup(files: $0.members.map(\.file), requiresExactMatch: mode == .exact)
+                    DuplicateDeletionGroup(files: $0.members.map(\.file),
+                                           requiresExactMatch: mode == .exact && $0.kind == .exact)
                 }, selectedPaths: selectedPaths, roots: roots) else { return nil }
                 let core = NativeCore.shared
                 return core.applyCleanup(items: plan.items, permanent: false, allowedRoots: plan.roots,

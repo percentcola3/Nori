@@ -260,7 +260,8 @@ enum AgentCLIService {
 }
 enum AgentInventory {
     static func scan(home: String, control: CleanupScanControl, localize: (String) -> String,
-                     includingAgentIDs: Set<String> = []) -> AgentScanReport {
+                     includingAgentIDs: Set<String> = [],
+                     excludingGlobalCleanupCaches: Bool = false) -> AgentScanReport {
         precondition(home == workflowHome, "Workflow test attempted to scan a real home")
         let fixture = WorkflowFixture.current
         fixture.recordScan(includingAgentIDs)
@@ -308,6 +309,7 @@ final class AppState {
     var agentSelectedCLIInstallations = Set<String>()
     var agentScanning = false
     var agentScanCurrentPath = ""
+    var agentScanControl: CleanupScanControl?
     var agentApplying = false
     var agentHasScanned = true
     var agentScanComplete = true
@@ -468,6 +470,8 @@ struct AgentWorkflowTests {
     @MainActor static func main() async throws {
         try await scanKeepsInventoryRecommendations(complete: true)
         try await scanKeepsInventoryRecommendations(complete: false)
+        try await cancelledScan(emptyReport: false)
+        try await cancelledScan(emptyReport: true)
         try await liveCacheOnly(runtime: RunningApplicationSnapshot(processNames: ["FixtureHost"]))
         try await liveCacheOnly(runtime: .unavailable)
         try await mixedCache(runtimeAvailable: true)
@@ -583,6 +587,37 @@ struct AgentWorkflowTests {
         precondition(f.scanCount == 1 && f.cleanupCount == 0 && f.uninstallCount == 0 && state.taskNotice == nil,
                      "Scan fixtures must never initiate cleanup, uninstall, or popup work")
         print("Agent scan defaults: \(complete ? "complete" : "partial") report preserved the expected selection, bytes, risk, and manual resource state")
+    }
+
+    /// A cancelled scan keeps the partial inventory, every recommendation
+    /// unselected, no attention mood, and no header reaction. An empty
+    /// partial report returns the page to its unscanned empty state.
+    @MainActor private static func cancelledScan(emptyReport: Bool) async throws {
+        let (state, f) = prepare()
+        f.pauseScan = true
+        // A CLI-only fixture still synthesizes its agent group in the report,
+        // so the empty-state check needs no reported resources at all.
+        if emptyReport { f.report = AgentScanReport(); f.cli = [] }
+        state.scanAgents()
+        try await waitUntil { f.scanGate.started }
+        state.cancelAgentScan()
+        precondition(state.agentScanning,
+                     "Cancel only stops the worker; the scan UI state ends when it returns")
+        f.scanGate.release()
+        try await waitUntil { !state.agentScanning }
+        precondition(state.agentScanControl == nil,
+                     "A finished scan must release its cancel handle")
+        precondition(state.agentStatus == "agents.status.cancelled"
+                     && state.agentOutcomeMood == nil && !state.agentCleanupHasFeedback
+                     && state.agentOutcomeDetails.isEmpty && !state.agentScanComplete
+                     && state.agentSelectedCount == 0
+                     && state.agentCategories.allSatisfy { !$0.selected },
+                     "Cancelled scans keep partial results unselected without attention feedback")
+        precondition(state.agentHasScanned != emptyReport,
+                     "An empty partial report returns to the empty scan state")
+        precondition(f.scanCount == 1 && f.cleanupCount == 0 && f.uninstallCount == 0,
+                     "Cancelled scans must never run cleanup or uninstall work")
+        print("Agent scan cancel: \(emptyReport ? "empty" : "partial") report kept unselected without attention")
     }
 
     @MainActor private static func liveCacheOnly(runtime: RunningApplicationSnapshot) async throws {

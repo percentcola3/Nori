@@ -170,6 +170,9 @@ struct UninstallTabView: View {
                             plan: state.uninstallPlan(for: app),
                             job: state.uninstallJob(for: app),
                             queuePosition: state.uninstallQueuePosition(for: app),
+                            dataSelection: Binding(
+                                get: { state.uninstallDataSelections[app.id] ?? [] },
+                                set: { state.uninstallDataSelections[app.id] = $0.isEmpty ? nil : $0 }),
                             onCancel: { job in state.cancelQueuedUninstall(id: job.id) },
                             onUninstall: { state.previewUninstall(app) })
                     }
@@ -186,6 +189,7 @@ private struct UninstallAppRow: View {
     let plan: UninstallPlan?
     let job: UninstallJob?
     let queuePosition: Int?
+    @Binding var dataSelection: Set<String>
     let onCancel: (UninstallJob) -> Void
     let onUninstall: () -> Void
 
@@ -241,7 +245,8 @@ private struct UninstallAppRow: View {
 
             if isExpanded, let plan {
                 Divider().opacity(0.45).padding(.horizontal, 12)
-                UninstallFileDrawer(files: plan.files)
+                UninstallFileDrawer(files: plan.files, selection: $dataSelection,
+                                    selectable: job.map { !($0.state.isPending || $0.state.isActive) } ?? true)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
                     .transition(.molePanelReveal)
@@ -425,11 +430,45 @@ private struct BreakdownValue: View {
 
 private struct UninstallFileDrawer: View {
     let files: [UninstallFile]
+    @Binding var selection: Set<String>
+    var selectable = true
+
+    private var dataPaths: [String] { files.filter { $0.isOptionalData }.map(\.path) }
 
     var body: some View {
         LazyVStack(spacing: 4) {
-            ForEach(files) { file in
+            if !dataPaths.isEmpty {
                 HStack(spacing: 8) {
+                    Toggle(isOn: Binding(
+                        get: { !dataPaths.isEmpty && dataPaths.allSatisfy(selection.contains) },
+                        set: { selection = $0 ? Set(dataPaths) : [] })) {
+                        Text(L10n.shared.t("uninstall.data.includeAll"))
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .toggleStyle(.checkbox)
+                    .controlSize(.mini)
+                    .disabled(!selectable)
+                    Spacer()
+                    Text(L10n.shared.t("uninstall.data.hint"))
+                        .font(.system(size: 9))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 9)
+                .padding(.bottom, 2)
+            }
+            ForEach(files) { file in
+                let chosen = file.isOptionalData && selection.contains(file.path)
+                HStack(spacing: 8) {
+                    if file.isOptionalData {
+                        Toggle("", isOn: Binding(
+                            get: { selection.contains(file.path) },
+                            set: { if $0 { selection.insert(file.path) } else { selection.remove(file.path) } }))
+                            .toggleStyle(.checkbox)
+                            .controlSize(.mini)
+                            .labelsHidden()
+                            .disabled(!selectable)
+                    }
                     Image(systemName: symbol(for: file))
                         .font(.system(size: 10))
                         .foregroundStyle(file.informational
@@ -447,17 +486,19 @@ private struct UninstallFileDrawer: View {
                             .truncationMode(.middle)
                     }
                     Spacer()
-                    Text(file.informational
-                         ? L10n.shared.t("uninstall.notDeleted")
+                    Text(file.informational && !chosen
+                         ? (file.isOptionalData
+                            ? ByteFormat.format(file.bytes) + " · " + L10n.shared.t("uninstall.notDeleted")
+                            : L10n.shared.t("uninstall.notDeleted"))
                          : ByteFormat.format(file.bytes))
                         .font(.system(size: 9).monospacedDigit())
-                        .foregroundStyle(file.informational ? .tertiary : .secondary)
+                        .foregroundStyle(file.informational && !chosen ? .tertiary : .secondary)
                 }
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 7)
-                    .fill(Color.surface1.opacity(file.informational ? 0.6 : 1)))
-                .opacity(file.informational ? 0.7 : 1)
+                    .fill(Color.surface1.opacity(file.informational && !chosen ? 0.6 : 1)))
+                .opacity(file.informational && !chosen ? 0.7 : 1)
             }
         }
     }

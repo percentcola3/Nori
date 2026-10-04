@@ -109,6 +109,15 @@ struct AnalysisSelectionTests {
         state.toggleAnalysisFileSelection(.init(name: "large-video.mp4", path: video, size: 140))
         precondition(state.analysisSelection(for: .disk) == [otherImage],
                      "A previous column or forged item entered the current selection")
+        state.toggleDiskBrowserSelection(state.diskBrowserEntries(at: "/fixture")[0], in: "/fixture")
+        precondition(state.diskBrowserNavigation == ["/fixture"]
+            && state.analysisSelection(for: .disk) == ["/fixture/Pictures"],
+            "Checking an earlier column must return to its folder and select the reviewed row")
+        state.toggleDiskBrowserSelection(.init(name: "forged", path: "/fixture/forged", size: 1,
+                                              isDir: true), in: "/fixture")
+        precondition(state.analysisSelection(for: .disk) == ["/fixture/Pictures"],
+                     "A forged row entered disk selection")
+        state.openDiskBrowserDirectory(state.diskBrowserEntries(at: "/fixture")[0], in: "/fixture")
         state.navigateDiskBrowser(to: "/fixture")
         precondition(state.diskBrowserNavigation == ["/fixture"])
         precondition(state.analysisSelection(for: .disk).isEmpty,

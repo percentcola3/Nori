@@ -24,6 +24,20 @@ struct DuplicateFileRecord: Identifiable, Codable, Sendable {
 struct DuplicateFileGroup: Identifiable, Codable, Sendable {
     let id: String
     let members: [DuplicateFileRecord]
+    var kind: DuplicateMode = .exact
+
+    init(id: String, members: [DuplicateFileRecord], kind: DuplicateMode = .exact) {
+        self.id = id
+        self.members = members
+        self.kind = kind
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        members = try container.decode([DuplicateFileRecord].self, forKey: .members)
+        kind = try container.decodeIfPresent(DuplicateMode.self, forKey: .kind) ?? .exact
+    }
 }
 
 /// The scanner and the potentially large presentation mapping share one background job.
@@ -46,7 +60,7 @@ struct DuplicateScanSnapshot: Codable, Sendable {
         let invalidPaths = removedPaths.union(changedPaths)
         let remainingGroups = groups.compactMap { group -> DuplicateFileGroup? in
             let members = group.members.filter { !DuplicatePathMutation.contains($0.path, in: invalidPaths) }
-            return members.count > 1 ? DuplicateFileGroup(id: group.id, members: members) : nil
+            return members.count > 1 ? DuplicateFileGroup(id: group.id, members: members, kind: group.kind) : nil
         }
         let remainingScannedPaths = scannedPaths.filter { !DuplicatePathMutation.contains($0, in: removedPaths) }
         let removedCount = scannedPaths.count - remainingScannedPaths.count
@@ -55,7 +69,8 @@ struct DuplicateScanSnapshot: Codable, Sendable {
             skipped: skipped, partial: partial, cancelled: cancelled, error: error,
             exactCopiesSkipped: exactCopiesSkipped,
             reclaimableBytes: reclaimableBytes == 0 ? 0
-                : remainingGroups.reduce(0) { $0 + $1.members.dropFirst().reduce(0) { $0 + $1.size } },
+                : remainingGroups.filter { $0.kind == .exact }
+                    .reduce(0) { $0 + $1.members.dropFirst().reduce(0) { $0 + $1.size } },
             defaultSelection: defaultSelection.intersection(remainingPaths), scannedPaths: remainingScannedPaths)
     }
 }
@@ -189,12 +204,49 @@ enum DuplicateScanWorker {
                         DuplicateFileRecord(file: image.file,
                             imageInfo: DuplicateImageInfo(width: image.pixelWidth,
                                 height: image.pixelHeight, sharpness: image.sharpnessScore))
-                    })
+                    }, kind: .similarImages)
                 }, roots: result.roots, scanned: result.scannedFiles, skipped: result.skippedFiles,
                 partial: result.isPartial, cancelled: cancelled, error: result.error,
                 exactCopiesSkipped: result.exactCopiesSkipped, reclaimableBytes: 0,
                 defaultSelection: [], scannedPaths: result.scannedPaths)
         }
+    }
+}
+
+extension DuplicateScanWorker {
+    /// 一次查重：先完全重复，再相似图片，合并为一份清单。已在完全重复组里的
+    /// 文件不再进入相似组，任一路径只属于一个组，保留规则互不干扰。
+    static func scanAll(roots: [String], control: DuplicateScanControl,
+                        home: String = NSHomeDirectory(),
+                        contentCache: DuplicateContentCache? = nil,
+                        featureCache: SimilarImageFeatureCache? = nil,
+                        progress: ((DuplicateScanProgress) -> Void)? = nil) -> DuplicateScanSnapshot {
+        let exact = scan(mode: .exact, roots: roots, control: control, home: home,
+                         contentCache: contentCache, featureCache: featureCache, progress: progress)
+        guard !exact.cancelled, exact.error == nil, !control.isCancelled else { return exact }
+        let similar = scan(mode: .similarImages, roots: roots, control: control, home: home,
+                           contentCache: contentCache, featureCache: featureCache, progress: progress)
+        return merged(exact: exact, similar: similar)
+    }
+
+    static func merged(exact: DuplicateScanSnapshot, similar: DuplicateScanSnapshot) -> DuplicateScanSnapshot {
+        let similarUsable = !similar.cancelled && similar.error == nil
+        let exactPaths = Set(exact.groups.flatMap { $0.members.map(\.path) })
+        let reclaim = { (group: DuplicateFileGroup) in group.members.dropFirst().reduce(UInt64(0)) { $0 + $1.size } }
+        let total = { (group: DuplicateFileGroup) in group.members.reduce(UInt64(0)) { $0 + $1.size } }
+        let similarGroups = !similarUsable ? [] : similar.groups.compactMap { group -> DuplicateFileGroup? in
+            let members = group.members.filter { !exactPaths.contains($0.path) }
+            return members.count > 1
+                ? DuplicateFileGroup(id: "similar-" + group.id, members: members, kind: .similarImages) : nil
+        }
+        let groups = exact.groups.sorted { reclaim($0) > reclaim($1) } + similarGroups.sorted { total($0) > total($1) }
+        return DuplicateScanSnapshot(groups: groups, roots: exact.roots,
+            scanned: max(exact.scanned, similar.scanned), skipped: max(exact.skipped, similar.skipped),
+            partial: exact.partial || similar.partial || !similarUsable,
+            cancelled: similar.cancelled, error: nil, exactCopiesSkipped: 0,
+            reclaimableBytes: exact.reclaimableBytes,
+            defaultSelection: similar.cancelled ? [] : DuplicateSelectionPolicy.suggestedSelection(groups: groups, mode: .exact),
+            scannedPaths: exact.scannedPaths.union(similar.scannedPaths))
     }
 }
 
@@ -223,7 +275,7 @@ enum DuplicateSelectionPolicy {
         var selected: Set<String> = [], keepers: Set<String> = []
         for group in groups {
             let keeper: DuplicateFileRecord?
-            if mode == .similarImages {
+            if mode == .similarImages || group.kind == .similarImages {
                 keeper = group.members.min { left, right in
                     let leftPixels = (left.imageInfo?.width ?? 0) * (left.imageInfo?.height ?? 0)
                     let rightPixels = (right.imageInfo?.width ?? 0) * (right.imageInfo?.height ?? 0)

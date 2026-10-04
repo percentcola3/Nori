@@ -47,6 +47,11 @@ struct AnalysisFileDeletionPlan {
                 || MediaSlimPolicy.isEligible(path + "/nori-directory-entry", home: homeDirectory)
         }
         let policy = CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: homeDirectory)
+        // Disk browsing is an explicit user action, independent of the media
+        // compression policy. Ordinary app support items can be moved to Trash;
+        // audited caches still follow their existing age and execution checks.
+        if allowsDirectories, policy.risk != .safe,
+           isUserAppSupportItem(path, homeDirectory: homeDirectory) { return true }
         guard policy.risk == .safe && policy.disposal == .permanentDelete,
               !CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: homeDirectory,
                 rebuildableRoot: CleanupRiskPolicy.auditedRebuildableRoot(containing: path, homeDirectory: homeDirectory) ?? path,
@@ -60,6 +65,22 @@ struct AnalysisFileDeletionPlan {
             modified: Date(timeIntervalSince1970: TimeInterval(metadata.st_mtimespec.tv_sec)),
             accessed: Date(timeIntervalSince1970: TimeInterval(metadata.st_atimespec.tv_sec)),
             homeDirectory: homeDirectory)
+    }
+
+    private static func isUserAppSupportItem(_ path: String, homeDirectory: String) -> Bool {
+        let prefix = homeDirectory + "/Library/Application Support/"
+        guard path.hasPrefix(prefix) else { return false }
+        let components = String(path.dropFirst(prefix.count)).split(separator: "/")
+        guard let owner = components.first, !owner.hasPrefix("."),
+              !owner.lowercased().hasPrefix("com.apple."),
+              !["CloudDocs", "FileProvider", "Knowledge", "AddressBook", "SyncServices"]
+                .contains(String(owner)),
+              !CleanupRiskPolicy.isForbiddenAutomationPath(path, homeDirectory: homeDirectory),
+              !CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: homeDirectory)
+            else { return false }
+        var metadata = stat(), account = stat()
+        return lstat(path, &metadata) == 0 && lstat(homeDirectory, &account) == 0
+            && metadata.st_uid == account.st_uid
     }
 
     private struct Groups {

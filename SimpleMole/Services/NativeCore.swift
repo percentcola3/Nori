@@ -185,6 +185,25 @@ final class NativeCore: @unchecked Sendable {
     private let maxTraversalSeconds: TimeInterval = 3
     private let largeFileThreshold: UInt64 = 100 * 1024 * 1024
     private let cleanupOpenFileProbe: (() -> Set<String>?)?
+    private let cleanupOpenFileRecordsProbe: (() -> [OpenFileRecord]?)?
+
+    struct OpenFileRecord {
+        let pid: Int32
+        let process: String
+        let descriptor: String
+        let access: String
+        let path: String
+
+        /// Moving a stopped app to Trash does not invalidate an observer's
+        /// read-only metadata descriptor. Executables, mappings, cwd and all
+        /// writable/unknown handles still block removal.
+        var isReadOnlyBundleMetadata: Bool {
+            guard pid > 0, !process.isEmpty, access == "r", !descriptor.isEmpty,
+                  descriptor.allSatisfy(\.isNumber) else { return false }
+            if path.hasSuffix(".app/Contents/Info.plist") { return true }
+            return path.contains(".app/Contents/Resources/") && path.hasSuffix(".icns")
+        }
+    }
 
     private struct FileIdentity: Hashable {
         let device: UInt64
@@ -200,8 +219,10 @@ final class NativeCore: @unchecked Sendable {
 
     /// The optional probe keeps fixture tests deterministic; production uses
     /// the user-scoped lsof snapshot, and an unavailable probe always refuses.
-    init(cleanupOpenFileProbe: (() -> Set<String>?)? = nil) {
+    init(cleanupOpenFileProbe: (() -> Set<String>?)? = nil,
+         cleanupOpenFileRecordsProbe: (() -> [OpenFileRecord]?)? = nil) {
         self.cleanupOpenFileProbe = cleanupOpenFileProbe
+        self.cleanupOpenFileRecordsProbe = cleanupOpenFileRecordsProbe
     }
 
     // MARK: Cleanup
@@ -235,6 +256,12 @@ final class NativeCore: @unchecked Sendable {
             let agentDataRoots = AgentCatalog.definitions.flatMap {
                 AgentCatalog.dataRoots(for: $0, home: home.path)
             }.filter { AgentCatalog.isPhysical($0, home: home.path) }
+            let agentRetainedPaths = AgentCatalog.definitions.flatMap { agent in
+                agent.targets.filter { $0.tier != .safe }.flatMap { AgentCatalog.targetPaths($0, home: home.path) }
+            }
+            func overlaps(_ path: String, _ roots: [String]) -> Bool {
+                roots.contains { path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/") }
+            }
             // Uninstalled Agent data can contain history and credentials.
             // Its explicit review flow must never enter the junk inventory.
             for (root, label, _, _, retention) in roots {
@@ -249,9 +276,9 @@ final class NativeCore: @unchecked Sendable {
                           self.cleanupPathIsPhysical(entry, home: home),
                           !CleanupRiskPolicy.isAgentOwnedPath(path, homeDirectory: home.path),
                           (CleanupRiskPolicy.auditedRebuildableRoot(containing: path, homeDirectory: home.path) != nil
-                            || !agentDataRoots.contains(where: {
-                                path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/")
-                            })),
+                            || (CleanupRiskPolicy.isCoveredByGlobalCleanup(path, homeDirectory: home.path)
+                                && !overlaps(path, agentRetainedPaths))
+                            || !overlaps(path, agentDataRoots)),
                           !self.directlyMatchesWhitelist(path, entries: whitelist),
                           !Self.isCoveredByScannedRoot(path, roots: excludingScannedRoots) else { continue }
                     // A precise leaf replaces an overlapping broad parent before
@@ -278,7 +305,13 @@ final class NativeCore: @unchecked Sendable {
                             let supportPrefix = home.path + "/Library/Application Support/"
                             let cachePrefix = home.path + "/Library/Caches/"
                             if path.hasPrefix(supportPrefix) {
-                                name = String(path.dropFirst(supportPrefix.count).split(separator: "/").first ?? "")
+                                if let browser = Self.browserDisplayNames.first(where: { label.hasPrefix($0 + " ") }) {
+                                    name = browser
+                                } else if Self.namedSupportLabels.contains(label) {
+                                    name = label
+                                } else {
+                                    name = String(path.dropFirst(supportPrefix.count).split(separator: "/").first ?? "")
+                                }
                             } else if path.hasPrefix(cachePrefix) {
                                 name = String(path.dropFirst(cachePrefix.count).split(separator: "/").first ?? "")
                             } else {
@@ -374,7 +407,7 @@ final class NativeCore: @unchecked Sendable {
                 groups[key, default: []].append(index)
             }
             let scanNow = Date()
-            let categories = groups.values.map { indices -> CleanupCategory in
+            var categories = groups.values.map { indices -> CleanupCategory in
                 let first = candidates[indices[0]]
                 let sizes = Dictionary(uniqueKeysWithValues: indices.map {
                     (candidates[$0].path, measurements[$0].bytes)
@@ -412,6 +445,10 @@ final class NativeCore: @unchecked Sendable {
             // snapshot as complete, even if every admitted candidate was sized.
             if discoverySeconds >= control.totalBudget { deferred.append(home.path) }
             let ageGated = candidates.filter { $0.retention > 0 }.count
+            if !control.isCancelled, deferred.isEmpty {
+                categories += self.appDataReviewCategories(home: home, offered: categories.flatMap(\.paths),
+                                                           whitelist: whitelist)
+            }
             return CleanupScan(categories: categories.sorted(by: CleanupCategory.sizeDescending),
                 succeeded: !control.isCancelled,
                 error: control.isCancelled ? "Scan cancelled." : nil,
@@ -423,6 +460,282 @@ final class NativeCore: @unchecked Sendable {
                 administratorRequiredPaths: administratorPaths,
                 completedRoots: completedRoots)
         }.value
+    }
+
+    struct InstalledApplications {
+        let bundleIDs: Set<String>
+        let names: Set<String>
+        let bundleIDsByName: [String: Set<String>]
+
+        func owns(_ token: String) -> Bool {
+            let lower = token.lowercased()
+            if names.contains(lower) || bundleIDs.contains(lower) { return true }
+            return bundleIDs.contains { lower.hasPrefix($0 + ".") || $0.hasPrefix(lower + ".") }
+        }
+
+        func sharesVendor(_ token: String) -> Bool {
+            let parts = token.lowercased().split(separator: ".")
+            guard parts.count >= 3 else { return false }
+            let vendor = parts.prefix(2).joined(separator: ".") + "."
+            return bundleIDs.contains { $0.hasPrefix(vendor) }
+        }
+
+        func owners(for token: String) -> [String] {
+            ([token] + (bundleIDsByName[token.lowercased()] ?? [])).sorted()
+        }
+    }
+
+    func installedApplications(home: URL) -> InstalledApplications {
+        var ids = Set<String>(), names = Set<String>(), byName: [String: Set<String>] = [:]
+        for (root, _) in applicationRoots(home: home) {
+            for item in directChildren(of: root) where item.pathExtension.lowercased() == "app" && !isSymlink(item) {
+                let filename = item.deletingPathExtension().lastPathComponent.lowercased()
+                names.insert(filename)
+                if let metadata = applicationMetadata(at: item) {
+                    ids.insert(metadata.bundleID.lowercased())
+                    names.insert(metadata.name.lowercased())
+                    byName[filename, default: []].insert(metadata.bundleID)
+                    byName[metadata.name.lowercased(), default: []].insert(metadata.bundleID)
+                }
+            }
+        }
+        return InstalledApplications(bundleIDs: ids, names: names, bundleIDsByName: byName)
+    }
+
+    static func isOrphanedAppToken(_ token: String, installed: InstalledApplications) -> Bool {
+        CleanupRiskPolicy.isValidReverseDNSOwner(token) && !installed.owns(token) && !installed.sharesVendor(token)
+            && NSWorkspace.shared.urlForApplication(withBundleIdentifier: token) == nil
+            && !NSWorkspace.shared.runningApplications.contains {
+                $0.bundleIdentifier?.lowercased() == token.lowercased()
+            }
+    }
+
+    static func appDataOwnerToken(_ path: String) -> String {
+        var name = (path as NSString).lastPathComponent
+        for suffix in [".plist", ".savedState"] where name.hasSuffix(suffix) { name = String(name.dropLast(suffix.count)) }
+        if name.hasPrefix("group.") { name = String(name.dropFirst("group.".count)) }
+        if let range = name.range(of: #"^[A-Z0-9]{10}\."#, options: .regularExpression) {
+            name = String(name[range.upperBound...])
+        }
+        return name
+    }
+
+    func appDataReviewCategories(home: URL, offered: [String], whitelist: [String]) -> [CleanupCategory] {
+        let installed = installedApplications(home: home)
+        let control = CleanupScanControl(mode: .deep, totalBudget: 25, directoryBudget: 10)
+        let agentRoots = AgentCatalog.definitions.flatMap { AgentCatalog.dataRoots(for: $0, home: home.path) }
+        func overlaps(_ path: String, _ others: [String]) -> Bool {
+            others.contains { path == $0 || $0.hasPrefix(path + "/") || path.hasPrefix($0 + "/") }
+        }
+        func overlapsOffered(_ path: String) -> Bool { overlaps(path, offered) }
+        func admissible(_ url: URL) -> Bool {
+            let path = CleanupRiskPolicy.normalizedPathLiteral(url.path)
+            return CleanupRiskPolicy.isAppDataRoot(path, homeDirectory: home.path) && !isSymlink(url)
+                && cleanupPathIsPhysical(url, home: home)
+                && !CleanupRiskPolicy.isAgentOwnedPath(path, homeDirectory: home.path)
+                && !overlaps(path, agentRoots)
+                && !directlyMatchesWhitelist(path, entries: whitelist)
+        }
+        let roots = ["Library/Application Support", "Library/Containers", "Library/Group Containers",
+                     "Library/HTTPStorages", "Library/WebKit", "Library/Saved Application State",
+                     "Library/Preferences"].map { home.appendingPathComponent($0, isDirectory: true) }
+        var leftovers: [String: [(String, UInt64)]] = [:]
+        var leftoverNames: [String: String] = [:]
+        var large: [(path: String, bytes: UInt64, owner: String)] = []
+        for root in roots {
+            for child in directChildren(of: root) where admissible(child) && !control.shouldStop {
+                let path = CleanupRiskPolicy.normalizedPathLiteral(child.path)
+                let token = Self.appDataOwnerToken(path)
+                let reverseDNS = CleanupRiskPolicy.isValidReverseDNSOwner(token)
+                let orphaned = reverseDNS && Self.isOrphanedAppToken(token, installed: installed)
+                if overlapsOffered(path) && !orphaned {
+                    guard root.lastPathComponent == "Application Support", isDirectory(child) else { continue }
+                    for nested in directChildren(of: child) where admissible(nested) && !control.shouldStop {
+                        let nestedPath = CleanupRiskPolicy.normalizedPathLiteral(nested.path)
+                        guard !overlapsOffered(nestedPath) else { continue }
+                        let measurement = CleanupScanWorker.measure(nestedPath, control: control)
+                        guard measurement.bytes >= CleanupRiskPolicy.appDataReviewThreshold else { continue }
+                        large.append((nestedPath, measurement.bytes, token))
+                    }
+                    continue
+                }
+                if orphaned {
+                    let measurement = CleanupScanWorker.measure(path, control: control)
+                    leftovers[token.lowercased(), default: []].append((path, measurement.bytes))
+                    leftoverNames[token.lowercased()] = token
+                    continue
+                }
+                guard root.lastPathComponent == "Application Support" || root.lastPathComponent == "Containers"
+                else { continue }
+                let measurement = CleanupScanWorker.measure(path, control: control)
+                guard measurement.bytes >= CleanupRiskPolicy.appDataReviewThreshold else { continue }
+                large.append((path, measurement.bytes, token))
+            }
+        }
+        var result: [CleanupCategory] = []
+        var orphanedSettings: [(String, UInt64)] = []
+        var orphanedSettingOwners: [String] = []
+        for (key, entries) in leftovers {
+            let bytes = entries.reduce(UInt64(0)) { $0 &+ $1.1 }
+            guard bytes >= CleanupRiskPolicy.appDataLeftoverThreshold else {
+                orphanedSettings += entries.filter { $0.1 > 0 }
+                orphanedSettingOwners.append(leftoverNames[key] ?? key)
+                continue
+            }
+            let descriptor = CleanupRiskPolicy.appDataReview(leftover: true)
+            var category = CleanupCategory(name: (leftoverNames[key] ?? key) + " leftovers",
+                paths: entries.map(\.0), bytes: bytes,
+                pathBytes: Dictionary(entries.map { ($0.0, $0.1) }, uniquingKeysWith: { first, _ in first }),
+                selected: false, source: descriptor.source, risk: descriptor.risk,
+                disposal: descriptor.disposal, applyRoute: descriptor.applyRoute,
+                activityGuard: descriptor.activityGuard, reasonKey: descriptor.reasonKey)
+            category.activityOwners = [leftoverNames[key] ?? key]
+            result.append(category)
+        }
+        for entry in large {
+            let descriptor = CleanupRiskPolicy.appDataReview(leftover: false)
+            let leaf = (entry.path as NSString).lastPathComponent
+            let name = Self.appDataOwnerToken(entry.path) == entry.owner ? entry.owner : entry.owner + " · " + leaf
+            var category = CleanupCategory(name: name, paths: [entry.path], bytes: entry.bytes,
+                selected: false, source: descriptor.source, risk: descriptor.risk,
+                disposal: descriptor.disposal, applyRoute: descriptor.applyRoute,
+                activityGuard: descriptor.activityGuard, reasonKey: descriptor.reasonKey)
+            category.activityOwners = installed.owners(for: entry.owner)
+            result.append(category)
+        }
+        func reviewCategory(_ name: String, _ kind: CleanupRiskPolicy.ReviewTargetKind,
+                            _ entries: [(String, UInt64)], owners: [String] = []) -> CleanupCategory {
+            let descriptor = CleanupRiskPolicy.reviewDescriptor(kind)
+            var category = CleanupCategory(name: name, paths: entries.map(\.0),
+                bytes: entries.reduce(UInt64(0)) { $0 &+ $1.1 },
+                pathBytes: Dictionary(entries.map { ($0.0, $0.1) }, uniquingKeysWith: { first, _ in first }),
+                selected: false, source: descriptor.source, risk: descriptor.risk,
+                disposal: descriptor.disposal, applyRoute: descriptor.applyRoute,
+                activityGuard: descriptor.activityGuard, reasonKey: descriptor.reasonKey)
+            category.activityOwners = owners
+            return category
+        }
+        if !orphanedSettings.isEmpty {
+            let descriptor = CleanupRiskPolicy.appDataReview(leftover: true)
+            var category = CleanupCategory(name: "Orphaned Settings", paths: orphanedSettings.map(\.0),
+                bytes: orphanedSettings.reduce(UInt64(0)) { $0 &+ $1.1 },
+                pathBytes: Dictionary(orphanedSettings.map { ($0.0, $0.1) }, uniquingKeysWith: { first, _ in first }),
+                selected: false, source: descriptor.source, risk: descriptor.risk,
+                disposal: descriptor.disposal, applyRoute: descriptor.applyRoute,
+                activityGuard: descriptor.activityGuard, reasonKey: descriptor.reasonKey)
+            category.activityOwners = orphanedSettingOwners.sorted()
+            result.append(category)
+        }
+        let brokenAgents = brokenLaunchAgents(homeDirectory: home.path).broken
+            .map(\.plist).filter { !overlapsOffered($0) && !directlyMatchesWhitelist($0, entries: whitelist) }
+        if !brokenAgents.isEmpty {
+            result.append(reviewCategory("Broken Login Agents", .brokenLaunchAgent, brokenAgents.map { path in
+                var metadata = stat()
+                return (path, lstat(path, &metadata) == 0 ? UInt64(max(0, metadata.st_blocks)) * 512 : 0)
+            }))
+        }
+        let mailDownloads = home.appendingPathComponent("Library/Containers/com.apple.mail/Data/Library/Mail Downloads")
+        if cleanupPathIsPhysical(mailDownloads, home: home), !overlapsOffered(mailDownloads.path) {
+            let bytes = CleanupScanWorker.measure(mailDownloads.path, control: control).bytes
+            if bytes >= CleanupRiskPolicy.appDataLeftoverThreshold {
+                result.append(reviewCategory("Mail Downloads", .mailDownloads, [(mailDownloads.path, bytes)],
+                                             owners: ["com.apple.mail", "Mail"]))
+            }
+        }
+        let backups = home.appendingPathComponent("Library/Application Support/MobileSync/Backup")
+        for backup in directChildren(of: backups) where isDirectory(backup) && !isSymlink(backup) {
+            let info = NSDictionary(contentsOf: backup.appendingPathComponent("Info.plist"))
+            let device = info?["Device Name"] as? String ?? backup.lastPathComponent
+            let date = (info?["Last Backup Date"] as? Date).map {
+                DateFormatter.localizedString(from: $0, dateStyle: .medium, timeStyle: .none)
+            }
+            let bytes = CleanupScanWorker.measure(backup.path, control: control).bytes
+            guard bytes > 0 else { continue }
+            result.append(reviewCategory("iOS Backup · " + device + (date.map { " · " + $0 } ?? ""),
+                                         .deviceBackup, [(backup.path, bytes)],
+                                         owners: ["com.apple.AMPDevicesAgent", "AMPDeviceDiscoveryAgent"]))
+        }
+        var artifacts: [String: [(String, UInt64)]] = [:]
+        let artifactPaths = projectArtifactPaths(home: home).filter {
+            !overlapsOffered($0) && !directlyMatchesWhitelist($0, entries: whitelist)
+        }
+        var artifactSizes = [UInt64](repeating: 0, count: artifactPaths.count)
+        let sizeLock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: artifactPaths.count) { index in
+            let bytes = CleanupScanWorker.measure(artifactPaths[index], control: control).bytes
+            sizeLock.lock()
+            artifactSizes[index] = bytes
+            sizeLock.unlock()
+        }
+        for (path, bytes) in zip(artifactPaths, artifactSizes) where bytes >= 20 * 1024 * 1024 {
+            artifacts[(path as NSString).lastPathComponent, default: []].append((path, bytes))
+        }
+        for (name, entries) in artifacts {
+            let category = reviewCategory("Project " + name, .projectArtifact,
+                                          entries.sorted { $0.1 > $1.1 })
+            guard category.bytes >= 50 * 1024 * 1024 else { continue }
+            result.append(category)
+        }
+        return result
+    }
+
+    func projectArtifactPaths(home: URL, budget: TimeInterval = 8, maximumDirectories: Int = 120_000) -> [String] {
+        let started = Date()
+        let skippedTop: Set<String> = ["Library", "Applications", "Movies", "Music", "Pictures", "Public"]
+        var queue = directChildren(of: home).filter {
+            !$0.lastPathComponent.hasPrefix(".") && !skippedTop.contains($0.lastPathComponent)
+                && isDirectory($0) && !isSymlink($0)
+        }.map { ($0, 1) }
+        var found: [String] = []
+        var visited = 0
+        while visited < queue.count, visited < maximumDirectories, Date().timeIntervalSince(started) < budget {
+            let (directory, depth) = queue[visited]
+            visited += 1
+            for child in directChildren(of: directory) where isDirectory(child) && !isSymlink(child) {
+                let name = child.lastPathComponent
+                if CleanupRiskPolicy.projectArtifactMarkers[name] != nil {
+                    let path = CleanupRiskPolicy.normalizedPathLiteral(child.path)
+                    if CleanupRiskPolicy.isProjectArtifact(path, homeDirectory: home.path) { found.append(path) }
+                    continue
+                }
+                guard depth < 6, !name.hasPrefix("."), (name as NSString).pathExtension.isEmpty
+                        || !["app", "bundle", "framework", "photoslibrary", "musiclibrary"]
+                            .contains((name as NSString).pathExtension.lowercased()) else { continue }
+                queue.append((child, depth + 1))
+            }
+        }
+        return found
+    }
+
+    func applyAppDataReview(_ categories: [CleanupCategory],
+                            homeDirectory: String = NSHomeDirectory(),
+                            trashHandler: ((URL) throws -> Void)? = nil) -> ApplySummary {
+        guard !categories.isEmpty else { return ApplySummary(removed: 0, skipped: 0, failed: 0, messages: []) }
+        let home = URL(fileURLWithPath: homeDirectory, isDirectory: true).standardizedFileURL
+        let installed = installedApplications(home: home)
+        var refused: [String] = []
+        var items: [DeletionPlan.Item] = []
+        for category in categories where category.isAppDataReview {
+            for path in category.paths where category.isPathSelected(path) {
+                let normalized = CleanupRiskPolicy.normalizedPathLiteral(path)
+                let token = Self.appDataOwnerToken(normalized)
+                let stillOrphaned = category.reasonKey != "cleanup.risk.appDataLeftover"
+                    || Self.isOrphanedAppToken(token, installed: installed)
+                guard normalized == path, CleanupRiskPolicy.reviewTargetKind(normalized, homeDirectory: home.path) != nil,
+                      !CleanupRiskPolicy.isAgentOwnedPath(normalized, homeDirectory: home.path),
+                      stillOrphaned, let identity = category.pathIdentities[path], !identity.isEmpty else {
+                    refused.append("Skipped app data that no longer matches its review: " + path)
+                    continue
+                }
+                items.append(.init(record: path, identity: identity))
+            }
+        }
+        let applied = items.isEmpty ? ApplySummary(removed: 0, skipped: 0, failed: 0, messages: [])
+            : applyCleanup(items: items, permanent: false, homeDirectory: home.path,
+                           verifiedTargets: Set(items.map(\.record)), trashHandler: trashHandler)
+        return ApplySummary(removed: applied.removed, skipped: applied.skipped + refused.count,
+                            failed: applied.failed, messages: refused + applied.messages,
+                            removedPaths: applied.removedPaths, reclaimedBytes: applied.reclaimedBytes)
     }
 
     struct CleanupScanCandidate {
@@ -470,6 +783,13 @@ final class NativeCore: @unchecked Sendable {
         var result: [CleanupCategory] = []
         var deferred: [String] = []
         var administratorPaths = Set<String>()
+        for category in categories where category.isAppDataReview {
+            let intact = category.paths.filter {
+                CleanupRiskPolicy.reviewTargetKind($0, homeDirectory: homeDirectory) != nil
+                    && DeletionPlan.identity(at: $0) == category.pathIdentities[$0]
+            }
+            if let kept = category.retainingPaths(intact) { result.append(kept) }
+        }
         for category in categories where category.risk == .safe {
             if category.applyRoute == .toolCommand {
                 result.append(category)
@@ -681,7 +1001,12 @@ final class NativeCore: @unchecked Sendable {
         let systemEligible = systemCleanupMetadataEligible(path, metadata: metadata, homeDirectory: homeDirectory)
         if !directory && !systemEligible { return result }
         if directory { control.reportDirectory(path) }
-        if !directory && openFiles.contains(path) { return result }
+        // powerlog 遥测库由 powerlogd 常开：形状策略已精确限定这三个文件，
+        // 占用不构成拒绝理由（删除后由系统重建）。
+        if !directory && openFiles.contains(path)
+            && CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: homeDirectory) != .powerlogTelemetry {
+            return result
+        }
         let fd = openat(parentFD, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC
             | (directory ? O_DIRECTORY : 0))
         guard fd >= 0 else { return result }
@@ -689,7 +1014,11 @@ final class NativeCore: @unchecked Sendable {
         var current = stat()
         guard fstat(fd, &current) == 0, Self.sameCleanupEntry(metadata, current) else { return result }
         result.requiresAdministrator = deletionAccess == .administrator
-        result.wholeTreeEligible = systemEligible && (includingAdministratorRequired || !result.requiresAdministrator)
+        // 统一日志子目录是保留壳：子项合格也只提供直接子级 *.tracev3，
+        // 目录自身永不成项（与用户 T/C 根目录"只认子项、不认根"一致）。
+        result.wholeTreeEligible = systemEligible
+            && (includingAdministratorRequired || !result.requiresAdministrator)
+            && !CleanupRiskPolicy.isUnifiedLogDirectory(path)
         result.measurement.bytes = UInt64(max(0, metadata.st_blocks)) * 512
         if directory {
             guard let children = liveCacheEntries(in: fd, path: path, homeDirectory: homeDirectory, shouldStop: {
@@ -739,7 +1068,8 @@ final class NativeCore: @unchecked Sendable {
             // These exact archives explicitly permit SQLite payloads. Reading
             // their header cannot improve classification and would change
             // atime before the separate administrator worker can inspect them.
-            if !CleanupRiskPolicy.isArchivedPowerlogPath(path) {
+            if !CleanupRiskPolicy.isArchivedPowerlogPath(path)
+                && !CleanupRiskPolicy.isPowerlogTelemetryPath(path) {
                 guard let database = sqliteHeader(in: fd, path: path, homeDirectory: homeDirectory),
                       !database else { return .init() }
             }
@@ -772,6 +1102,14 @@ final class NativeCore: @unchecked Sendable {
         }
         return fileManager.fileExists(atPath: url.path)
     }
+
+    private static let browserDisplayNames = [
+        "Chrome Canary", "Chrome Beta", "Chromium", "Chrome", "Edge", "Brave", "Arc", "Dia",
+        "Vivaldi", "Opera", "Yandex Browser", "QQBrowser", "Helium", "Firefox"
+    ]
+    private static let namedSupportLabels: Set<String> = [
+        "GoogleUpdater Cache", "EdgeUpdater Cache", "ChromeDebug Profile"
+    ]
 
     private static let systemDiscoveryRoots: Set<String> = [
         "/Library/Caches", "/private/tmp", "/private/var/tmp", "/private/var/log",
@@ -943,7 +1281,9 @@ final class NativeCore: @unchecked Sendable {
               let kind = CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: homeDirectory) else { return false }
         var account = stat()
         guard lstat(homeDirectory, &account) == 0 else { return true }
-        return kind != .temporary || metadata.st_uid != account.st_uid
+        // 用户拥有的 T/C 与签名副本可用自身权限删除；其余系统内容或
+        // 非本账户拥有的条目必须走管理员工作进程。
+        return (kind != .temporary && kind != .codeSignClone) || metadata.st_uid != account.st_uid
     }
 
     /// Find cache/log leftovers for applications that are present in Trash.
@@ -1185,6 +1525,9 @@ final class NativeCore: @unchecked Sendable {
             }
             // confstr provides the current account's allocated T/C roots;
             // enumerating /var/folders would inspect other users' containers.
+            // 用户自己的 T/C 子项 24 小时即可回收（策略层同步为 24 小时）；
+            // /private/tmp、/private/var/tmp 仍是 7 天。
+            let userTemporaryRetention: TimeInterval = 24 * 60 * 60
             for key in [Int32(_CS_DARWIN_USER_TEMP_DIR), Int32(_CS_DARWIN_USER_CACHE_DIR)] {
                 let length = confstr(key, nil, 0)
                 guard length > 1 && length < 16_384 else { continue }
@@ -1195,7 +1538,41 @@ final class NativeCore: @unchecked Sendable {
                 guard lstat(home.path, &account) == 0, lstat(root.path, &metadata) == 0,
                       metadata.st_uid == account.st_uid else { continue }
                 for child in directChildren(of: root) {
-                    add(child, "System Temporary Files", .core, .openFile, retention)
+                    add(child, "System Temporary Files", .core, .openFile, userTemporaryRetention)
+                }
+                guard key == _CS_DARWIN_USER_TEMP_DIR else { continue }
+                // 浏览器更新在同级的 X 目录遗留 *.code_sign_clone 签名副本；
+                // 仍限定当前账户目录，不枚举其他用户的 /var/folders 容器。
+                let siblingX = root.deletingLastPathComponent()
+                    .appendingPathComponent("X", isDirectory: true)
+                var cloneRoot = stat()
+                guard lstat(siblingX.path, &cloneRoot) == 0,
+                      cloneRoot.st_mode & S_IFMT == S_IFDIR,
+                      cloneRoot.st_uid == account.st_uid else { continue }
+                for child in directChildren(of: siblingX)
+                    where child.lastPathComponent.hasSuffix(".code_sign_clone") && !isSymlink(child) {
+                    add(child, "Browser Signature Clone", .core, .browser)
+                }
+            }
+            // 统一日志旧分片：只在四个已知子目录下按 *.tracev3 直接子级
+            // 清理；uuidtext、timesync、logd 与嵌套内容由形状策略拒绝。
+            // 每个子目录最多一个条目，不逐文件罗列。
+            let diagnostics = URL(fileURLWithPath: "/private/var/db/diagnostics", isDirectory: true)
+            for child in directChildren(of: diagnostics)
+                where isDirectory(child)
+                    && CleanupRiskPolicy.systemCleanupKind(for: child.path,
+                                                           homeDirectory: home.path) == .unifiedLog {
+                add(child, "Unified Log " + child.lastPathComponent, .core, .openFile)
+            }
+            // powerlog 遥测主库仅在异常膨胀（≥512MB）时提供；-wal/-shm
+            // 与其同名成组呈现为一条。powerlogd 常开它，系统在删除后重建。
+            var telemetry = stat()
+            if lstat(CleanupRiskPolicy.powerlogTelemetryDatabase, &telemetry) == 0,
+               telemetry.st_mode & S_IFMT == S_IFREG,
+               telemetry.st_size >= 512 * 1024 * 1024 {
+                for suffix in ["", "-wal", "-shm"] {
+                    add(URL(fileURLWithPath: CleanupRiskPolicy.powerlogTelemetryDatabase + suffix),
+                        "Powerlog Telemetry DB", .core, .openFile)
                 }
             }
         }
@@ -1407,6 +1784,26 @@ final class NativeCore: @unchecked Sendable {
             }
         }
 
+        // 端侧 AI 模型（OptGuide / Gemini Nano）位于 user-data-dir 根部而非
+        // profile 内，体积可达数 GB；浏览器按需重新下载，归属 .browser 守卫。
+        // 只认审计过的 Chrome/Edge/Brave 三个 profile 根。
+        let onDeviceModelLeaves = ["OptGuideOnDeviceModel", "OptGuideOnDeviceClassifierModel",
+                                   "optimization_guide_model_store"]
+        for (relative, label) in [("Google/Chrome", "Chrome"), ("Microsoft Edge", "Edge"),
+                                  ("BraveSoftware/Brave-Browser", "Brave")] {
+            let browserRoot = appSupport.appendingPathComponent(relative, isDirectory: true)
+            for leaf in onDeviceModelLeaves {
+                add(browserRoot.appendingPathComponent(leaf, isDirectory: true),
+                    label + " On-Device Model", .core, .browser)
+            }
+        }
+        // 更新器已下载的组件包缓存：下次检查更新时重新拉取。
+        for (relative, label) in [("Google/GoogleUpdater/crx_cache", "GoogleUpdater Cache"),
+                                  ("Microsoft/EdgeUpdater/crx_cache", "EdgeUpdater Cache")] {
+            add(appSupport.appendingPathComponent(relative, isDirectory: true),
+                label, .core, .openFile)
+        }
+
         // Electron and IDE applications put rebuildable caches below
         // Application Support rather than Library/Caches.
         let appCacheRoots: [(String, String)] = [
@@ -1505,6 +1902,7 @@ final class NativeCore: @unchecked Sendable {
                       atomicFamilies: [[String]] = [],
                       liveCleanupTargets: Set<String> = [],
                       finalValidation: ((String) -> Bool)? = nil,
+                      trashHandler: ((URL) throws -> Void)? = nil,
                       onProgress: ((Int, Int, String) -> Void)? = nil,
                       onCurrentFile: ((String) -> Void)? = nil) -> ApplySummary {
         guard !items.isEmpty else {
@@ -1526,8 +1924,14 @@ final class NativeCore: @unchecked Sendable {
         var reclaimedBytes: UInt64 = 0
         Self.cleanupLogger.notice("Open-file safety check started")
         let openFiles: Set<String>?
-        if let cleanupOpenFileProbe { openFiles = cleanupOpenFileProbe() }
-        else { openFiles = openFileSnapshot() }
+        let openRecords: [OpenFileRecord]?
+        if let cleanupOpenFileProbe {
+            openFiles = cleanupOpenFileProbe()
+            openRecords = nil
+        } else {
+            openRecords = currentOpenFileRecords()
+            openFiles = openRecords.map { Set($0.map(\.path)) }
+        }
         let probeSeconds = Date().timeIntervalSince(probeStart)
         Self.cleanupLogger.notice("Open-file safety check finished in \(probeSeconds, privacy: .public)s; available=\(openFiles != nil, privacy: .public)")
         messages.append(String(format: "Open-file check %.2fs; available=%@", probeSeconds, openFiles == nil ? "no" : "yes"))
@@ -1592,6 +1996,13 @@ final class NativeCore: @unchecked Sendable {
             guard isHomePath || isAllowedRoot || auditedSystemPath else {
                 skipped += coveredCount
                 messages.append("Skipped outside authorized roots: \(path)")
+                continue
+            }
+            // 统一日志子目录是保留壳：无论哪条路径到达这里都不删目录本身；
+            // 合法条目只会是它的直接子级 *.tracev3。
+            guard !CleanupRiskPolicy.isUnifiedLogDirectory(path) else {
+                skipped += coveredCount
+                messages.append("Skipped retained diagnostics directory: \(path)")
                 continue
             }
             var metadata = stat()
@@ -1661,9 +2072,24 @@ final class NativeCore: @unchecked Sendable {
                 continue
             }
             let liveDirectory = liveCleanup && metadata.st_mode & S_IFMT == S_IFDIR
-            guard liveDirectory || !openFiles.contains(where: { $0 == path || $0.hasPrefix(path + "/") }) else {
+            // Only a reversible bundle move may ignore read-only Info.plist
+            // and icon observers. Residues and permanent cleanup keep the
+            // complete open-file snapshot and their existing protections.
+            let movingBundle = allowApplicationBundle && !permanent
+                && metadata.st_mode & S_IFMT == S_IFDIR && path.hasSuffix(".app")
+            let blockers = openRecords?.filter {
+                ($0.path == path || $0.path.hasPrefix(path + "/"))
+                    && !(movingBundle && $0.isReadOnlyBundleMetadata)
+            }
+            let pathIsOpen = blockers.map { !$0.isEmpty }
+                ?? openFiles.contains(where: { $0 == path || $0.hasPrefix(path + "/") })
+            guard liveDirectory || CleanupRiskPolicy.isPowerlogTelemetryPath(path)
+                    || !pathIsOpen else {
                 skipped += coveredCount
                 messages.append("Skipped while the path is open: \(path)")
+                if let blocker = blockers?.first {
+                    messages.append("Open by \(blocker.process) (PID \(blocker.pid)): \(blocker.path)")
+                }
                 continue
             }
 
@@ -1727,7 +2153,8 @@ final class NativeCore: @unchecked Sendable {
             } else {
                 do {
                     var resultingURL: NSURL?
-                    try fileManager.trashItem(at: url, resultingItemURL: &resultingURL)
+                    if let trashHandler { try trashHandler(url) }
+                    else { try fileManager.trashItem(at: url, resultingItemURL: &resultingURL) }
                     removed += coveredCount
                     removedPaths.formUnion(coveredPaths)
                 } catch {
@@ -2143,7 +2570,8 @@ final class NativeCore: @unchecked Sendable {
                 continue
             }
             let isDirectory = entry.metadata.st_mode & S_IFMT == S_IFDIR
-            if !isDirectory && openFiles.contains(child) {
+            if !isDirectory && openFiles.contains(child)
+                && CleanupRiskPolicy.systemCleanupKind(for: child, homeDirectory: homeDirectory) != .powerlogTelemetry {
                 result.skip(child, "Skipped while the path is open: ")
                 allRemoved = false
                 continue
@@ -2209,7 +2637,8 @@ final class NativeCore: @unchecked Sendable {
                     continue
                 }
                 guard let database else { result.fail(child); allRemoved = false; continue }
-                if database && !CleanupRiskPolicy.isArchivedPowerlogPath(child) {
+                if database && !CleanupRiskPolicy.isArchivedPowerlogPath(child)
+                    && !CleanupRiskPolicy.isPowerlogTelemetryPath(child) {
                     result.skip(child, "Skipped protected content: ")
                     allRemoved = false
                     continue
@@ -2516,11 +2945,18 @@ final class NativeCore: @unchecked Sendable {
             files.append(contentsOf: self.relatedUninstallCandidates(
                 app: app, home: home, hasSibling: hasSibling, otherApps: otherApps))
             let caskToken = self.nativeBrewCaskToken(for: app)
-            return UninstallPlan(files: files, needsAdmin: false,
+            return UninstallPlan(files: files, needsAdmin: self.uninstallRequiresAdministrator(app.path),
                                  isBrewCask: caskToken != nil,
                                  caskToken: caskToken ?? "-", includesProtectedAppData: true,
                                  scannedAt: Date())
         }.value
+    }
+
+    func uninstallRequiresAdministrator(_ path: String) -> Bool {
+        var metadata = stat()
+        guard lstat(path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR else { return false }
+        return geteuid() != 0 && (metadata.st_uid == 0
+            || cleanupDeletionAccess(path, metadata: metadata) == .administrator)
     }
 
     /// Resolve a Homebrew cask without depending on Mole's uninstall bridge.
@@ -2645,6 +3081,11 @@ final class NativeCore: @unchecked Sendable {
         for (relative, isDirectory) in reviewRoots {
             append(home.appendingPathComponent(relative, isDirectory: isDirectory), label: "review")
         }
+        if !hasSibling {
+            for root in AgentCatalog.uninstallDataRoots(appPath: app.path, appName: app.name, home: home.path) {
+                append(URL(fileURLWithPath: root), label: "review")
+            }
+        }
 
         // LaunchAgent/Daemon plists and privileged helpers are surfaced with
         // exact bundle evidence. They are intentionally informational until a
@@ -2717,19 +3158,29 @@ final class NativeCore: @unchecked Sendable {
         return names
     }
 
-    func applyUninstall(_ app: UninstallApp, plan: UninstallPlan,
-                        homeDirectory: String = NSHomeDirectory()) -> ApplySummary {
-        guard DeletionPlan.identity(at: app.path) == app.appIdentity,
-              DeletionPlan.identity(at: app.path + "/Contents/Info.plist") == app.infoIdentity else {
-            return ApplySummary(removed: 0, skipped: 0, failed: 1,
-                                messages: ["Application changed since it was scanned."])
+    func applyUninstall(_ app: UninstallApp, plan reviewedPlan: UninstallPlan,
+                        homeDirectory: String = NSHomeDirectory(),
+                        appAlreadyRemoved: Bool = false,
+                        includingData: Set<String> = []) -> ApplySummary {
+        let plan = reviewedPlan.includingData(includingData)
+        if appAlreadyRemoved {
+            guard !fileManager.fileExists(atPath: app.path), !isSymlink(URL(fileURLWithPath: app.path)) else {
+                return ApplySummary(removed: 0, skipped: 0, failed: 1,
+                                    messages: ["Application reappeared after administrator removal."])
+            }
+        } else {
+            guard DeletionPlan.identity(at: app.path) == app.appIdentity,
+                  DeletionPlan.identity(at: app.path + "/Contents/Info.plist") == app.infoIdentity else {
+                return ApplySummary(removed: 0, skipped: 0, failed: 1,
+                                    messages: ["Application changed since it was scanned."])
+            }
+            guard !isOwnedByRunningApplication(path: app.path, homeDirectory: homeDirectory) else {
+                return ApplySummary(removed: 0, skipped: 1, failed: 1,
+                                    messages: ["The application is still running."])
+            }
         }
-        guard !isOwnedByRunningApplication(path: app.path, homeDirectory: homeDirectory) else {
-            return ApplySummary(removed: 0, skipped: 1, failed: 1,
-                                messages: ["The application is still running."])
-        }
-        var appRemovedByBrew = false
-        if plan.isBrewCask {
+        var appRemovedByBrew = appAlreadyRemoved
+        if plan.isBrewCask && !appAlreadyRemoved {
             guard plan.caskToken.range(of: "^[A-Za-z0-9@._+/-]+$", options: .regularExpression) != nil,
                   let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
                       .first(where: { fileManager.isExecutableFile(atPath: $0) }),
@@ -2752,21 +3203,25 @@ final class NativeCore: @unchecked Sendable {
         }
         let missing = cleanableFiles.count - items.count
         var result = applyCleanup(items: items, permanent: false, homeDirectory: homeDirectory,
-                                  allowedRoots: [app.path], allowApplicationBundle: true)
+                                  allowedRoots: [app.path], allowApplicationBundle: true,
+                                  verifiedTargets: includingData.intersection(reviewedPlan.dataPaths))
         if appRemovedByBrew {
             result = ApplySummary(removed: result.removed + 1, skipped: result.skipped,
-                                  failed: result.failed, messages: result.messages)
+                                  failed: result.failed, messages: result.messages,
+                                  removedPaths: result.removedPaths.union([app.path]))
         }
         if missing > 0 {
             result = ApplySummary(removed: result.removed, skipped: result.skipped + missing,
                                   failed: result.failed,
-                                  messages: result.messages + ["Some uninstall paths had no confirmed identity or physical path."])
+                                  messages: result.messages + ["Some uninstall paths had no confirmed identity or physical path."],
+                                  removedPaths: result.removedPaths)
         }
         let appURL = URL(fileURLWithPath: app.path)
         if fileManager.fileExists(atPath: app.path) || isSymlink(appURL) {
             result = ApplySummary(removed: result.removed, skipped: result.skipped,
-                                  failed: result.failed + 1,
-                                  messages: result.messages + ["The application bundle was not removed."])
+                                  failed: max(result.failed, 1),
+                                  messages: result.messages + ["The application bundle was not removed."],
+                                  removedPaths: result.removedPaths)
         }
         return verifyUninstallResult(result, files: plan.files)
     }
@@ -3128,19 +3583,43 @@ final class NativeCore: @unchecked Sendable {
     /// A missing/failed probe is treated as unknown and causes the caller to
     /// skip the item rather than guessing that no process owns it.
     private func openFileSnapshot() -> Set<String>? {
+        currentOpenFileRecords().map { Set($0.map(\.path)) }
+    }
+
+    private func currentOpenFileRecords() -> [OpenFileRecord]? {
+        if let cleanupOpenFileRecordsProbe { return cleanupOpenFileRecordsProbe() }
         let executable = "/usr/sbin/lsof"
         guard fileManager.isExecutableFile(atPath: executable) else { return nil }
-        var arguments = ["-O", "-nP", "-F", "n"]
+        var arguments = ["-O", "-nP", "-F", "pcfan"]
         // An administrator worker operates on the requesting user's home,
         // so a root-only owner filter would miss every user's occupied file.
         if geteuid() != 0 { arguments.append(contentsOf: ["-a", "-u", NSUserName()]) }
         guard let text = SystemMetrics.commandOutput(executable,
             arguments: arguments) else { return nil }
-        return Set(text.split(whereSeparator: \.isNewline).compactMap { line in
-            guard line.first == "n" else { return nil }
-            let path = String(line.dropFirst())
-            return path.hasPrefix("/") ? CleanupRiskPolicy.canonicalOpenFilePath(path) : nil
-        })
+        return Self.openFileRecords(from: text)
+    }
+
+    static func openFileRecords(from text: String) -> [OpenFileRecord] {
+        var records: [OpenFileRecord] = []
+        var pid: Int32 = 0
+        var process = "", descriptor = "", access = ""
+        for line in text.split(whereSeparator: \.isNewline) {
+            let value = String(line.dropFirst())
+            switch line.first {
+            case "p":
+                pid = Int32(value) ?? 0
+                process = ""; descriptor = ""; access = ""
+            case "c": process = value
+            case "f": descriptor = value; access = ""
+            case "a": access = value
+            case "n":
+                guard value.hasPrefix("/") else { continue }
+                records.append(.init(pid: pid, process: process, descriptor: descriptor,
+                    access: access, path: CleanupRiskPolicy.canonicalOpenFilePath(value)))
+            default: break
+            }
+        }
+        return records
     }
 
     private func applicationMetadata(at url: URL) -> (name: String, bundleID: String)? {

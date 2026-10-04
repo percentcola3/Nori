@@ -23,6 +23,7 @@ swiftc -O -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     "$ROOT_DIR/SimpleMole/Services/NativeCore.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
     "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
+    "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
     "$ROOT_DIR/script/CacheCleanupUnitTests.swift" \
     "$ROOT_DIR/script/CacheCleanupE2ETests.swift" \

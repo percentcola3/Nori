@@ -17,7 +17,7 @@ enum SystemMetrics {
     private static var previousDiskSample: Double = 0
     private static let diskAvailableCapacityCache = DiskAvailableCapacityCache()
 
-    static func sample() -> MetricsSnapshot {
+    static func sample(includeBluetooth: Bool = false) -> MetricsSnapshot {
         var snapshot = MetricsSnapshot()
         snapshot.collectedAt = Date()
         snapshot.cpuPercent = cpuUsage()
@@ -26,7 +26,12 @@ enum SystemMetrics {
         snapshot.memoryUsedBytes = memory.usedBytes
         snapshot.memoryTotalBytes = memory.totalBytes
         snapshot.memoryAvailableBytes = memory.availableBytes
-        snapshot.memoryPressure = memory.pressure
+        snapshot.memoryPressure = SensorMetrics.memoryPressure() ?? memory.pressure
+        snapshot.cpuTemperature = SensorMetrics.cpuTemperature()
+        snapshot.thermalLevel = SensorMetrics.thermalLevel()
+        snapshot.gpuPercent = SensorMetrics.gpuUtilization()
+        snapshot.systemPowerWatts = SensorMetrics.systemPowerWatts()
+        if includeBluetooth { snapshot.bluetoothBatteries = BluetoothBatteryMonitor.shared.latest() }
         let cores = cpuCounts()
         snapshot.logicalCPUCount = cores.logical
         snapshot.physicalCPUCount = cores.physical

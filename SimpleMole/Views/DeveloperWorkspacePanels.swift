@@ -120,7 +120,7 @@ struct DeveloperOverviewPanel: View {
                     for command in commands { workspace.enqueue(command) }
                 }.buttonStyle(PrimaryButtonStyle()).disabled(restoreCommands.isEmpty)
             }
-        }.padding(20).frame(width: 570).modifier(ListRowGlass(interactive: false))
+        }.padding(20).frame(width: 570).modifier(ListRowSurface())
     }
     private var restoreCommands: [DeveloperCommand] {
         DeveloperSnapshotService.restoreCommands((restoreManifest?.items ?? []).filter { selectedRestoreItems.contains($0.id) && $0.command(environment: workspace.terminal.environment) != nil }, environment: workspace.terminal.environment, installed: workspace.versions)
@@ -163,7 +163,6 @@ struct DeveloperToolchainPanel: View {
     @State private var installVersion = ""
     @State private var candidate = "java"
     @State private var ltsOnly = false
-    @Namespace private var versionSelectionNamespace
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -244,7 +243,7 @@ struct DeveloperToolchainPanel: View {
                     Toggle(l10n.t("dev.toolchain.ltsOnly"), isOn: $ltsOnly).toggleStyle(.checkbox)
                 }
                 ScrollView {
-                    LiquidGlassGroup { LazyVStack(alignment: .leading, spacing: 4) {
+                    LazyVStack(alignment: .leading, spacing: 4) {
                         ForEach(result.versions.filter { !ltsOnly || $0.isLTS }.prefix(200)) { version in
                             Button { installVersion = version.version } label: {
                                 HStack {
@@ -253,10 +252,10 @@ struct DeveloperToolchainPanel: View {
                                     Spacer()
                                     if installVersion == version.version { Image(systemName: "checkmark").foregroundStyle(Color.success) }
                                 }.padding(6).contentShape(Rectangle())
-                                    .modifier(DevSelectionLens(id: "available-selection", selected: installVersion == version.version, groupNamespace: versionSelectionNamespace))
+                                    .modifier(DevSelectionSurface(selected: installVersion == version.version))
                             }.buttonStyle(.plain)
                         }
-                    } }
+                    }
                 }.frame(maxHeight: 230)
             }
             HStack {
@@ -268,7 +267,7 @@ struct DeveloperToolchainPanel: View {
                 Button(l10n.t("dev.action.install")) { if let manager = installManager { propose(manager, .install, installVersion, candidate); installManager = nil } }
                     .buttonStyle(PrimaryButtonStyle()).disabled(!DeveloperToolchainService.validIdentifier(installVersion))
             }
-        }.padding(20).frame(width: 470).modifier(ListRowGlass(interactive: false))
+        }.padding(20).frame(width: 470).modifier(ListRowSurface())
     }
 
     private var xcodeCard: some View {

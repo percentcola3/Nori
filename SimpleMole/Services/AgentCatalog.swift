@@ -203,7 +203,22 @@ enum AgentCatalog {
                 .init(.safe, .leaves(root: "Library/Caches/Codex/codex-browser-app",
                                      names: ["Cache", "Code Cache"]), "agents.label.appCache"),
                 .init(.safe, .path("Library/Caches/com.openai.codex"), "agents.label.cache"),
-                .init(.safe, .path("Library/Logs/com.openai.codex"), "agents.label.logs")
+                .init(.safe, .path("Library/Logs/com.openai.codex"), "agents.label.logs"),
+                // Codex 环境安装器下载的 Blender 镜像与校验值：可再生，
+                // 已安装的 Blender.app 本体只做复核（.app 永远不进 Safe）。
+                .init(.safe, .sqlite(dir: ".cache/codex-blender", prefix: "", ext: ".dmg"),
+                      "agents.label.installerImage"),
+                .init(.safe, .sqlite(dir: ".cache/codex-blender", prefix: "", ext: ".sha256"),
+                      "agents.label.installerImage"),
+                .init(.review, .path(".cache/codex-blender/Blender.app"),
+                      "agents.label.bundledApp"),
+                // codex-primary-runtime 是正在使用的主运行时；残留的
+                // codex-runtime-install-* 安装暂存才可丢弃。
+                .init(.safe, .sqlite(dir: ".cache/codex-runtimes",
+                                     prefix: "codex-runtime-install-", ext: ""),
+                      "agents.label.updateStaging"),
+                .init(.review, .path(".cache/codex-runtimes/codex-primary-runtime"),
+                      "agents.label.runtime")
             ],
             skillDirectories: [],
             mcpSources: []),
@@ -915,6 +930,23 @@ enum AgentCatalog {
         let fnmBins = fnmRoots.flatMap { root in childNames(of: root).map { root + "/" + $0 + "/installation/bin" } }
         var seen = Set<String>()
         return (environment + common + runtimeBins + fnmBins).filter { seen.insert($0).inserted }
+    }
+
+    static func uninstallDataRoots(appPath: String, appName: String, home: String,
+                                   searchPath: [String]? = nil) -> [String] {
+        let bundleName = URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent
+        let search = searchPath ?? executableSearchPath(home: home)
+        return definitions.flatMap { agent -> [String] in
+            guard let presence = installationPresence(for: agent),
+                  presence.bundleNames.contains(where: { $0 == bundleName || $0 == appName }) else { return [] }
+            let installedElsewhere = presence.commands.contains { command in
+                guard let resolved = resolveExecutable(command, searchPath: search, home: home) else { return false }
+                let target = URL(fileURLWithPath: resolved).resolvingSymlinksInPath().standardizedFileURL.path
+                return !target.hasPrefix(appPath + "/")
+            }
+            guard !installedElsewhere else { return [] }
+            return dataRoots(for: agent, home: home).filter { FileManager.default.fileExists(atPath: $0) }
+        }
     }
 
     static func resolveExecutable(_ command: String, searchPath: [String], home: String) -> String? {

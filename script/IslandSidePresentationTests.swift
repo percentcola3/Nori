@@ -187,7 +187,27 @@ struct IslandSidePresentationTests {
         print("Passed \(name): rail=\(rail), detail=\(String(describing: regions.detail)); \(path.path)")
     }
 
+    static func checkScreenFit() {
+        let all = AppState.IslandItem.allCases
+        let wide = IslandLayout.topRows(items: all, hardwareNotch: false, maxWidth: 1400)
+        check(wide.count == 1, "a wide screen keeps every metric on one row")
+        let narrow = IslandLayout.topRows(items: all, hardwareNotch: false, maxWidth: 600)
+        check(narrow.count == 2 && narrow.allSatisfy {
+            IslandLayout.expandedWidth(items: Set($0), hardwareNotch: false) <= 600
+        }, "a narrow screen wraps into balanced rows that each fit")
+        check(IslandLayout.topPanelWidth(rows: narrow, hardwareNotch: false, maxWidth: 600) <= 600,
+              "the expanded panel never exceeds the available width")
+        let short = IslandLayout.sideMetricScale(itemCount: all.count, maxRailHeight: 640)
+        check(short < 1 && IslandLayout.sideRailHeight(itemCount: all.count, metricScale: short) <= 640,
+              "a short screen scales the side rail to fit")
+        check(IslandLayout.sideMetricScale(itemCount: 3, maxRailHeight: 640) == 1,
+              "few metrics keep their natural size")
+        check(IslandLayout.sideWindowSize(maxRailHeight: 640).height <= 640 + IslandLayout.windowMargin * 2,
+              "the side window is sized to the screen")
+    }
+
     static func main() throws {
+        checkScreenFit()
         let output = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: ReadmeFixture.root, withIntermediateDirectories: true)

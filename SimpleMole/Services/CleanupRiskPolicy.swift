@@ -98,6 +98,7 @@ enum CleanupRiskPolicy {
 
     enum SystemCleanupKind: Sendable {
         case cache, temporary, archivedLog, archivedPowerlog
+        case unifiedLog, powerlogTelemetry, codeSignClone
     }
 
     /// Audited exceptions to system-directory protection. Discovery and the
@@ -117,11 +118,20 @@ enum CleanupRiskPolicy {
             let parts = String(path.dropFirst(folders.count)).split(separator: "/")
             // macOS allocates a two-level per-user directory. Only its T/C
             // children qualify, never the user container or either root.
-            if parts.count >= 4, parts[0].count == 2,
-               parts[2] == "T" || parts[2] == "C" { return .temporary }
+            if parts.count >= 4, parts[0].count == 2 {
+                if parts[2] == "T" || parts[2] == "C" { return .temporary }
+                // 浏览器更新遗留的代码签名副本：X 下仅 *.code_sign_clone 及其后代。
+                if parts[2] == "X", parts[3].hasSuffix(".code_sign_clone") {
+                    return .codeSignClone
+                }
+            }
         }
         let powerRoot = "/private/var/db/powerlog/"
-        if path.hasPrefix(powerRoot), isArchivedPowerlogPath(path) { return .archivedPowerlog }
+        if path.hasPrefix(powerRoot) {
+            if isPowerlogTelemetryPath(path) { return .powerlogTelemetry }
+            if isArchivedPowerlogPath(path) { return .archivedPowerlog }
+        }
+        if isUnifiedLogPath(path) { return .unifiedLog }
         if isStrictDescendant(path, of: "/private/var/log") {
             let name = (path as NSString).lastPathComponent.lowercased()
             if name.range(of: #"^.+\.[0-9]+(?:\.(?:gz|bz2|xz))?$"#,
@@ -147,10 +157,54 @@ enum CleanupRiskPolicy {
                           options: .regularExpression) != nil
     }
 
+    /// powerlog 遥测主库及其 SQLite 伴随文件。精确匹配：目录里还有
+    /// 别的遥测库、统计分片和 powerlogd 的当前句柄，一概不认领。
+    static let powerlogTelemetryDatabase =
+        "/private/var/db/powerlog/Library/PerfPowerTelemetry/BackgroundProcessing/CurrentBackgroundProcessingDB.BGSQL"
+
+    static func isPowerlogTelemetryPath(_ path: String) -> Bool {
+        path == powerlogTelemetryDatabase
+            || path == powerlogTelemetryDatabase + "-wal"
+            || path == powerlogTelemetryDatabase + "-shm"
+    }
+
+    /// 统一日志旧分片：四个已知子目录本身（供发现层按子目录聚合认领）及其
+    /// 直接子级 *.tracev3。uuidtext、timesync、logd、嵌套目录与其它扩展名
+    /// 一律不认领。目录本身永远是保留壳——预检不成项、删除不可达，只回收
+    /// 其子级分片（与用户 T/C 根"只认子项、不认根"一致）。
+    static let unifiedLogDirectories = [
+        "/private/var/db/diagnostics/Persist",
+        "/private/var/db/diagnostics/Special",
+        "/private/var/db/diagnostics/Signpost",
+        "/private/var/db/diagnostics/HighVolume"
+    ]
+
+    static func isUnifiedLogDirectory(_ path: String) -> Bool {
+        unifiedLogDirectories.contains(path)
+    }
+
+    static func isUnifiedLogPath(_ path: String) -> Bool {
+        unifiedLogDirectories.contains {
+            path == $0 || (isDirectChild(path, of: $0) && path.hasSuffix(".tracev3"))
+        }
+    }
+
     static func systemCleanupRetention(for path: String,
                                        homeDirectory: String = NSHomeDirectory()) -> TimeInterval? {
-        guard systemCleanupKind(for: path, homeDirectory: homeDirectory) != nil else { return nil }
-        return 7 * 24 * 60 * 60
+        guard let kind = systemCleanupKind(for: path, homeDirectory: homeDirectory) else { return nil }
+        switch kind {
+        case .powerlogTelemetry, .codeSignClone:
+            // 遥测库按体积门槛出现，签名副本浏览器按需重建：都无年龄门槛。
+            return nil
+        case .unifiedLog:
+            return 24 * 60 * 60
+        case .temporary:
+            // 当前用户自己的 T/C 临时目录 24 小时即可回收；系统级
+            // /private/tmp、/private/var/tmp 仍是 7 天。
+            return path.hasPrefix("/private/var/folders/") ? 24 * 60 * 60 : 7 * 24 * 60 * 60
+        case .cache, .archivedLog, .archivedPowerlog:
+            return 7 * 24 * 60 * 60
+        }
     }
 
     /// Mandatory system age/owner gate. Manual selection does not bypass it.
@@ -158,9 +212,12 @@ enum CleanupRiskPolicy {
     static func systemCleanupMetadataEligible(path: String, ownerUID: UInt32, userUID: UInt32,
                                              modified: Date, accessed: Date, now: Date = Date(),
                                              homeDirectory: String = NSHomeDirectory()) -> Bool {
-        guard let retention = systemCleanupRetention(for: path, homeDirectory: homeDirectory) else { return true }
+        guard let kind = systemCleanupKind(for: path, homeDirectory: homeDirectory),
+              let retention = systemCleanupRetention(for: path, homeDirectory: homeDirectory) else { return true }
         guard ownerUID == userUID || ownerUID == 0 else { return false }
-        let latest = max(modified, accessed)
+        // 统一日志只看 mtime：logd、备份与 Spotlight 会刷新 atime，
+        // 用 atime 会把全部旧分片误判成"活跃"。
+        let latest = kind == .unifiedLog ? modified : max(modified, accessed)
         return modified.timeIntervalSince1970 > 0 && accessed.timeIntervalSince1970 > 0
             && latest <= now && now.timeIntervalSince(latest) >= retention
     }
@@ -247,10 +304,25 @@ enum CleanupRiskPolicy {
 
         let home = normalize(homeDirectory)
 
-        if systemCleanupKind(for: normalized, homeDirectory: home) != nil {
-            return .init(source: .core, risk: .safe, disposal: .permanentDelete,
-                         applyRoute: .genericTrash, activityGuard: .openFile,
-                         reasonKey: "cleanup.risk.rebuildableCache")
+        if let kind = systemCleanupKind(for: normalized, homeDirectory: home) {
+            switch kind {
+            case .unifiedLog:
+                return .init(source: .core, risk: .safe, disposal: .permanentDelete,
+                             applyRoute: .genericTrash, activityGuard: .openFile,
+                             reasonKey: "cleanup.risk.unifiedLog")
+            case .powerlogTelemetry:
+                return .init(source: .core, risk: .safe, disposal: .permanentDelete,
+                             applyRoute: .genericTrash, activityGuard: .openFile,
+                             reasonKey: "cleanup.risk.powerlogTelemetry")
+            case .codeSignClone:
+                return .init(source: .core, risk: .safe, disposal: .permanentDelete,
+                             applyRoute: .genericTrash, activityGuard: .browser,
+                             reasonKey: "cleanup.risk.codeSignClone")
+            default:
+                return .init(source: .core, risk: .safe, disposal: .permanentDelete,
+                             applyRoute: .genericTrash, activityGuard: .openFile,
+                             reasonKey: "cleanup.risk.rebuildableCache")
+            }
         }
         if auditedRebuildableRoot(containing: normalized, homeDirectory: home) != nil {
             return .init(source: .aiCache, risk: .safe, disposal: .permanentDelete,
@@ -433,6 +505,118 @@ enum CleanupRiskPolicy {
                      reasonKey: "cleanup.risk.agentLeftover")
     }
 
+    static let appDataReviewThreshold: UInt64 = 300 * 1024 * 1024
+    static let appDataLeftoverThreshold: UInt64 = 1024 * 1024
+
+    private static let appleSupportNames: Set<String> = [
+        "addressbook", "callhistorydb", "callhistorytransactions", "clouddocs", "crashreporter",
+        "dock", "fileprovider", "knowledge", "mobilesync", "syncservices", "icloud", "accounts",
+        "differentialprivacy", "facetime", "animoji", "icdd", "applemediaservices", "caches",
+        "nori", "com.nori.app", "quick look", "spotlight", "networkserviceproxy", "familycircle",
+        "homeenergyd", "locationaccessstored", "screentimeagent", "contextstoreagent", "callservices"
+    ]
+
+    static func isAppDataRoot(_ path: String, homeDirectory: String = NSHomeDirectory()) -> Bool {
+        guard DeletionPlan.isLexicallySafePath(path) else { return false }
+        let home = normalize(homeDirectory), normalized = normalize(path)
+        let name = (normalized as NSString).lastPathComponent
+        let lower = name.lowercased()
+        guard !name.isEmpty, !name.hasPrefix("."), !lower.hasPrefix("com.apple."),
+              !lower.hasPrefix("group.com.apple."), !lower.contains(".com.apple."),
+              !appleSupportNames.contains(lower) else { return false }
+        let parent = (normalized as NSString).deletingLastPathComponent
+        switch parent {
+        case home + "/Library/Application Support", home + "/Library/Containers",
+             home + "/Library/Group Containers", home + "/Library/HTTPStorages", home + "/Library/WebKit":
+            return true
+        case home + "/Library/Saved Application State":
+            return lower.hasSuffix(".savedstate")
+        case home + "/Library/Preferences":
+            return lower.hasSuffix(".plist") && lower != ".globalpreferences.plist"
+        default:
+            return (parent as NSString).deletingLastPathComponent == home + "/Library/Application Support"
+                && isAppDataRoot(parent, homeDirectory: home)
+        }
+    }
+
+    static func appDataReview(leftover: Bool) -> CleanupPolicyDescriptor {
+        .init(source: leftover ? .appLeftover : .core, risk: .warning, disposal: .permanentDelete,
+              applyRoute: .genericTrash, activityGuard: .appData,
+              reasonKey: leftover ? "cleanup.risk.appDataLeftover" : "cleanup.risk.largeAppData")
+    }
+
+    enum ReviewTargetKind: Equatable { case appData, projectArtifact, deviceBackup, mailDownloads, brokenLaunchAgent }
+
+    static func launchAgentProgram(_ plistPath: String) -> String? {
+        guard let plist = NSDictionary(contentsOfFile: plistPath) else { return nil }
+        if let program = plist["Program"] as? String { return program }
+        return (plist["ProgramArguments"] as? [String])?.first
+    }
+
+    static func isBrokenLaunchAgent(_ path: String, homeDirectory: String = NSHomeDirectory()) -> Bool {
+        let home = normalize(homeDirectory), normalized = normalize(path)
+        guard isDirectChild(normalized, of: home + "/Library/LaunchAgents"),
+              normalized.lowercased().hasSuffix(".plist"),
+              let program = launchAgentProgram(normalized), program.hasPrefix("/"),
+              !FileManager.default.fileExists(atPath: program) else { return false }
+        if program.hasPrefix("/Volumes/") {
+            let volume = program.split(separator: "/").prefix(2).joined(separator: "/")
+            return FileManager.default.fileExists(atPath: "/" + volume)
+        }
+        return true
+    }
+
+    static let projectArtifactMarkers: [String: [String]] = [
+        "node_modules": ["package.json"], ".next": ["package.json"], ".nuxt": ["package.json"],
+        ".svelte-kit": ["package.json"], ".turbo": ["package.json"], ".parcel-cache": ["package.json"],
+        ".angular": ["angular.json"], "target": ["Cargo.toml", "pom.xml"], "Pods": ["Podfile"],
+        ".gradle": ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
+        ".dart_tool": ["pubspec.yaml"], ".venv": [], "venv": []
+    ]
+
+    static func isProjectArtifact(_ path: String, homeDirectory: String = NSHomeDirectory()) -> Bool {
+        let home = normalize(homeDirectory), normalized = normalize(path)
+        guard DeletionPlan.isLexicallySafePath(normalized), isStrictDescendant(normalized, of: home),
+              !isStrictDescendant(normalized, of: home + "/Library"),
+              !isStrictDescendant(normalized, of: home + "/.Trash") else { return false }
+        let name = (normalized as NSString).lastPathComponent
+        guard let markers = projectArtifactMarkers[name] else { return false }
+        let ancestors = normalized.dropFirst(home.count).split(separator: "/").dropLast()
+        guard !ancestors.contains(where: { projectArtifactMarkers[String($0)] != nil || $0 == ".git" }) else { return false }
+        let fm = FileManager.default
+        if markers.isEmpty { return fm.fileExists(atPath: normalized + "/pyvenv.cfg") }
+        let parent = (normalized as NSString).deletingLastPathComponent
+        return markers.contains { fm.fileExists(atPath: parent + "/" + $0) }
+    }
+
+    static func reviewTargetKind(_ path: String, homeDirectory: String = NSHomeDirectory()) -> ReviewTargetKind? {
+        let home = normalize(homeDirectory), normalized = normalize(path)
+        if normalized == home + "/Library/Containers/com.apple.mail/Data/Library/Mail Downloads" { return .mailDownloads }
+        if isDirectChild(normalized, of: home + "/Library/Application Support/MobileSync/Backup") { return .deviceBackup }
+        if isAppDataRoot(normalized, homeDirectory: home) { return .appData }
+        if isProjectArtifact(normalized, homeDirectory: home) { return .projectArtifact }
+        if isBrokenLaunchAgent(normalized, homeDirectory: home) { return .brokenLaunchAgent }
+        return nil
+    }
+
+    static func reviewDescriptor(_ kind: ReviewTargetKind) -> CleanupPolicyDescriptor {
+        switch kind {
+        case .appData: return appDataReview(leftover: false)
+        case .projectArtifact:
+            return .init(source: .developerCache, risk: .warning, disposal: .permanentDelete,
+                         applyRoute: .genericTrash, activityGuard: .appData, reasonKey: "cleanup.risk.projectArtifact")
+        case .deviceBackup:
+            return .init(source: .core, risk: .warning, disposal: .permanentDelete,
+                         applyRoute: .genericTrash, activityGuard: .appData, reasonKey: "cleanup.risk.deviceBackup")
+        case .mailDownloads:
+            return .init(source: .core, risk: .warning, disposal: .permanentDelete,
+                         applyRoute: .genericTrash, activityGuard: .appData, reasonKey: "cleanup.risk.mailDownloads")
+        case .brokenLaunchAgent:
+            return .init(source: .appLeftover, risk: .warning, disposal: .permanentDelete,
+                         applyRoute: .genericTrash, activityGuard: .appData, reasonKey: "cleanup.risk.brokenLaunchAgent")
+        }
+    }
+
     static func developerCache(path: String,
                                homeDirectory: String = NSHomeDirectory()) -> CleanupPolicyDescriptor {
         guard (path as NSString).isAbsolutePath else {
@@ -607,12 +791,6 @@ enum CleanupRiskPolicy {
     /// 它们只在 Agent 页按目录逐项呈现。与 `AgentCatalog` 的目录保持一致。
     static func agentOwnedRoots(homeDirectory: String = NSHomeDirectory()) -> [String] {
         let home = normalize(homeDirectory)
-        let caches = [
-            "Codex", "com.openai.codex", "com.todesktop.230313mzl4w4u92",
-            "com.todesktop.230313mzl4w4u92.ShipIt", "cursor-compile-cache", "copilot",
-            "com.anthropic.claudefordesktop", "com.anthropic.claudefordesktop.ShipIt",
-            "com.google.antigravity", "com.exafunction.windsurf", "dev.zed.Zed", "Zed"
-        ].map { home + "/Library/Caches/" + $0 }
         let support = [
             "Cursor", "Claude", "Codex", "Antigravity", "Devin", "Windsurf",
             "Qoder", "Kiro", "Trae", "Zed", "dev.warp.Warp-Stable"
@@ -623,15 +801,24 @@ enum CleanupRiskPolicy {
             ".qoder", ".kiro", ".trae", ".warp", ".devin", ".codeium", ".opencode",
             ".config/opencode", ".config/amp", ".config/crush", ".config/devin", ".config/zed",
             ".cache/amp", ".cache/crush", ".cache/.gemini", ".cache/chrome-devtools-mcp-cli",
+            ".cache/codex-blender", ".cache/codex-runtimes",
             ".local/share/amp", ".local/share/crush", ".local/state/opencode",
             ".local/share/opencode", ".local/share/claude", ".local/share/cursor-agent"
         ].map { home + "/" + $0 }
-        let logs = ["com.openai.codex", "Zed", "Claude", "warp.log", "warp_preview.log"]
-            .map { home + "/Library/Logs/" + $0 }
         let warp = ["dev.warp.Warp-Stable", "dev.warp.Warp-Preview"].map {
             home + "/Library/Group Containers/2BBY89MBSN.dev.warp/Library/Application Support/" + $0
         }
-        return caches + support + dotted + logs + warp
+        return support + dotted + warp
+    }
+
+    static func isCoveredByGlobalCleanup(_ path: String, homeDirectory: String = NSHomeDirectory()) -> Bool {
+        let home = normalize(homeDirectory), normalized = normalize(path)
+        if auditedRebuildableRoot(containing: normalized, homeDirectory: home) != nil { return true }
+        for root in [home + "/Library/Caches", home + "/Library/Logs"] where isStrictDescendant(normalized, of: root) {
+            guard let owner = normalized.dropFirst(root.count + 1).split(separator: "/").first else { return false }
+            return core(section: "Cache", path: root + "/" + owner, homeDirectory: home).risk == .safe
+        }
+        return false
     }
 
     static func isAgentOwnedPath(_ path: String,
@@ -747,6 +934,13 @@ enum CleanupRiskPolicy {
         "bookmarks", "bookmarks.bak", "web data", "sessions", "databases"
     ]
 
+    /// Chromium 系浏览器的端侧 AI 模型目录（OptGuide / Gemini Nano）。
+    /// 浏览器在需要时重新下载，删除前提与 Service Worker 缓存相同。
+    private static let browserOnDeviceModelLeaves: Set<String> = [
+        "optguideondevicemodel", "optguideondeviceclassifiermodel",
+        "optimization_guide_model_store"
+    ]
+
     private static let telegramGroupRootName = "6N38VWS5BX.ru.keepcoder.Telegram"
     private static let larkShellRelativeRoot = "LarkShell"
 
@@ -791,6 +985,17 @@ enum CleanupRiskPolicy {
             return protectedDescriptor(source: .core, reasonKey: "cleanup.risk.durableIMData")
         }
 
+        // --- 浏览器更新器已下载的组件包缓存：下次检查更新时重新拉取。
+        for updaterCache in ["Google/GoogleUpdater/crx_cache",
+                             "Microsoft/EdgeUpdater/crx_cache"] {
+            let root = appSupport + updaterCache
+            if path == root || isStrictDescendant(path, of: root) {
+                return .init(source: .core, risk: .safe, disposal: .permanentDelete,
+                              applyRoute: .genericTrash, activityGuard: .openFile,
+                              reasonKey: "cleanup.risk.rebuildableCache")
+            }
+        }
+
         // --- Chromium 系浏览器 profile。
         for relative in browserProfileRelativeRoots {
             let root = appSupport + relative
@@ -814,6 +1019,12 @@ enum CleanupRiskPolicy {
                 return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                               applyRoute: .genericTrash, activityGuard: .browser,
                               reasonKey: "cleanup.risk.rebuildableCache")
+            }
+            // 端侧 AI 模型整体可再生：浏览器按需重新下载。
+            if components.dropFirst().contains(where: browserOnDeviceModelLeaves.contains) {
+                return .init(source: .core, risk: .safe, disposal: .permanentDelete,
+                              applyRoute: .genericTrash, activityGuard: .browser,
+                              reasonKey: "cleanup.risk.browserOnDeviceModel")
             }
             // 其余部分（Cache/Code Cache 等）交给通用 Application Support
             // 缓存叶子规则裁决。
@@ -856,7 +1067,8 @@ enum CleanupRiskPolicy {
         let risk = currentRisk(category)
         // Agent 用户可选项同样要在执行前复核归属者；风险保持 Warning，
         // 只可能升级为 Protected，不会被降成 Safe。
-        let agentReview = risk == .warning && category.activityGuard == .aiAgent
+        let agentReview = risk == .warning
+            && (category.activityGuard == .aiAgent || category.activityGuard == .appData)
         guard risk == .safe || agentReview else {
             return .init(risk: risk, reasonKey: category.reasonKey)
         }
@@ -918,7 +1130,7 @@ enum CleanupRiskPolicy {
         var category = category
         category.risk = currentRisk(category)
         if usesFileActivityGuard(category) { return category }
-        if category.activityGuard == .aiAgent, category.risk != .protected {
+        if category.activityGuard == .aiAgent || category.activityGuard == .appData, category.risk != .protected {
             guard snapshot.isComplete,
                   !ownerIsRunning(for: category, snapshot: snapshot,
                                   homeDirectory: homeDirectory) else {
@@ -944,7 +1156,7 @@ enum CleanupRiskPolicy {
                                  homeDirectory: homeDirectory) == false
             }
             return category.selectingPaths(selectable)
-        case .browser, .xcode, .simulator, .ide, .messenger, .aiAgent:
+        case .browser, .xcode, .simulator, .ide, .messenger, .aiAgent, .appData:
             guard snapshot.isComplete else { return category.clearingSelection() }
             guard !ownerIsRunning(for: category, snapshot: snapshot,
                                   homeDirectory: homeDirectory) else {
@@ -966,7 +1178,8 @@ enum CleanupRiskPolicy {
                 // Warning 文件删除只对带归属守卫的 Agent 目录项开放：
                 // 它们的归属者刚被复核过且未运行，其余 Warning 仍不可执行。
                 return assessment.risk == .safe
-                    || (category.activityGuard == .aiAgent && assessment.risk == .warning)
+                    || ((category.activityGuard == .aiAgent || category.activityGuard == .appData)
+                        && assessment.risk == .warning)
             case .command:
                 return assessment.risk != .protected
             case .none:
@@ -1027,7 +1240,7 @@ enum CleanupRiskPolicy {
             || fullComponents.enumerated().contains { index, name in
                 name.hasSuffix(".app") && index + 1 < fullComponents.count && fullComponents[index + 1] == "contents"
             })
-        let archivedDatabase = isArchivedPowerlogPath(path)
+        let archivedDatabase = isArchivedPowerlogPath(path) || isPowerlogTelemetryPath(path)
         let homeRelativePath = isStrictDescendant(path, of: home) ? String(path.dropFirst(home.count)) : path
         if !templateSource && !runtimeSource && homeRelativePath.split(separator: "/").contains(where: {
             $0.lowercased() == "models" || $0.lowercased() == "model"
@@ -1155,6 +1368,9 @@ enum CleanupRiskPolicy {
         case .aiAgent:
             // 空归属者是目录显式声明的：旧版本目录、Skill 等不绑定进程，
             // 只由执行边界的打开文件快照把关（快照不可用时同样拒绝）。
+            return snapshotMatches(snapshot, bundles: category.activityOwners,
+                                   processes: category.activityOwners)
+        case .appData:
             return snapshotMatches(snapshot, bundles: category.activityOwners,
                                    processes: category.activityOwners)
         }
@@ -1556,7 +1772,8 @@ enum CleanupRiskPolicy {
         let prefix = "/private/var/folders/"
         guard path.hasPrefix(prefix) else { return true }
         let parts = String(path.dropFirst(prefix.count)).split(separator: "/").map(String.init)
-        guard parts.count >= 4, parts[0].count == 2, parts[2] == "T" || parts[2] == "C" else { return false }
+        guard parts.count >= 4, parts[0].count == 2 else { return false }
+        guard parts[2] == "T" || parts[2] == "C" || parts[2] == "X" else { return false }
         var account = stat(), container = stat(), scratch = stat()
         let userRoot = prefix + parts[0] + "/" + parts[1]
         return lstat(homeDirectory, &account) == 0 && lstat(userRoot, &container) == 0

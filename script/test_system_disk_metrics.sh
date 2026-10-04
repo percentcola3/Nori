@@ -18,6 +18,7 @@ swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -module-cache-path "$SYSTEM_DISK_METRICS_DIR/cache" \
     "$SYSTEM_DISK_METRICS_DIR/MetricsSnapshot.swift" \
     "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
+    "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift" \
     "$ROOT_DIR/script/SystemDiskMetricsTests.swift" \
     -framework IOKit -o "$SYSTEM_DISK_METRICS_DIR/tests"
 "$SYSTEM_DISK_METRICS_DIR/tests"

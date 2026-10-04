@@ -132,6 +132,27 @@ struct AnalysisFileDeletionTests {
             && folderResult.removedPaths == [folder.path] && !fm.fileExists(atPath: folder.path)
             && trashedData == Data("folder payload".utf8) && fm.fileExists(atPath: unrelated.path),
             "An explicitly selected directory must move intact into the isolated Trash")
+        let zed = home.appendingPathComponent("Library/Application Support/Zed")
+        let extensions = zed.appendingPathComponent("extensions")
+        try fm.createDirectory(at: extensions, withIntermediateDirectories: true)
+        try Data("user app data".utf8).write(to: extensions.appendingPathComponent("entry.txt"))
+        try expect(AnalysisFileDeletionPlan.isEligible(path: zed.path, homeDirectory: home.path,
+                                                       allowsDirectories: true),
+                   "User application support folders must support explicit disk selection")
+        try expect(!AnalysisFileDeletionPlan.isEligible(path: zed.path, homeDirectory: home.path),
+                   "Media classifications must not inherit disk app-data selection")
+        let appPlan = AnalysisFileDeletionPlan(requestedPaths: [extensions.path],
+            inventoryPaths: [extensions.path], allowsDirectories: true)
+        let appResult = appPlan.execute(homeDirectory: home.path)
+        try expect(appResult.removedPaths == [extensions.path]
+            && fm.fileExists(atPath: trash.appendingPathComponent("extensions/entry.txt").path),
+            "User app data must move intact to Trash instead of permanent deletion")
+        let protectedDB = zed.appendingPathComponent("state.db")
+        try Data("preserved database".utf8).write(to: protectedDB)
+        try expect(!AnalysisFileDeletionPlan.isEligible(path: protectedDB.path,
+            homeDirectory: home.path, allowsDirectories: true), "Protected database records remain excluded")
+        try expect(!AnalysisFileDeletionPlan.isEligible(path: home.appendingPathComponent("Library").path,
+            homeDirectory: home.path, allowsDirectories: true), "The entire user Library must remain excluded")
         print("PASS: disk directory deletion is opt-in, rejects stale scans, packages, roots and symlinks, and preserves nested contents in Trash")
         print("PASS: analysis deletion rejects foreign paths, stale identities and parent symlinks; current selection moves to isolated Trash once")
     }

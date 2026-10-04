@@ -548,21 +548,10 @@ test_productivity_feature_contract() {
         fail "the screenshot hotkey bypasses the unified permission preflight"
     /usr/bin/grep -Fq 'ClipboardFilterButtonStyle(isSelected: filter == item)' "$clipboard_view" || \
         fail "clipboard type filters do not use the themed icon capsules"
-    /usr/bin/grep -Fq 'Label(l10n.t("clip.clearUnpinned"), systemImage: "trash.fill")' "$clipboard_view" || \
-        fail "clipboard cleanup action is missing its themed icon"
-    /usr/bin/grep -Fq '.labelStyle(.titleAndIcon)' "$clipboard_view" || \
-        fail "clipboard cleanup action can collapse to icon-only layout"
-    /usr/bin/grep -Fq '.fixedSize(horizontal: true, vertical: false)' "$clipboard_view" || \
-        fail "clipboard cleanup action does not preserve its localized title width"
-    /usr/bin/grep -Fq '.buttonStyle(PrimaryButtonStyle())' "$clipboard_view" || \
-        fail "clipboard cleanup action does not use the primary theme style"
-    /usr/bin/grep -Fq 'minHeight: 84, maxHeight: 84' "$clipboard_view" || \
+    /usr/bin/grep -Fq 'minHeight: 140, maxHeight: 140' "$clipboard_view" || \
         fail "clipboard card preview is not bounded against long-content overflow"
-    /usr/bin/grep -Fq '.frame(height: 182, alignment: .topLeading)' "$clipboard_view" || \
+    /usr/bin/grep -Fq '.frame(height: 194, alignment: .topLeading)' "$clipboard_view" || \
         fail "clipboard cards do not keep a stable action-bar layout"
-    if /usr/bin/grep -Fq '.textSelection(.enabled)' "$clipboard_view"; then
-        fail "selectable clipboard previews can escape their line limit and overlap actions"
-    fi
     if /usr/bin/grep -Fq '.pickerStyle(.segmented)' "$clipboard_view"; then
         fail "clipboard type filters still use the system segmented control"
     fi
@@ -1001,6 +990,7 @@ test_runtime_store_aggregation() {
         "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
         "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
+        "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift" \
         "$ROOT_DIR/SimpleMole/Services/RuntimeStore.swift" \
         "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
         "$ROOT_DIR/script/RuntimeStoreTests.swift" \
@@ -2530,6 +2520,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     fi
     bash "$ROOT_DIR/script/test_login_item.sh" || fail "login item opt-in and system status tests"
     bash "$ROOT_DIR/script/test_uninstall_residue.sh" || fail "uninstall residue discovery and result tests"
+    bash "$ROOT_DIR/script/test_administrator_uninstall.sh" || fail "administrator uninstall and Trash safety tests"
 fi
 test_native_core_ownership_contract
 test_plists

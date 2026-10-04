@@ -42,6 +42,11 @@ struct AgentsTabView: View {
                     NoriPlaceholderStage { size in
                         NoriStatusAnimation(mood: .working, size: size, assetName: "nori-agent")
                         NoriCurrentFileView(path: state.agentScanCurrentPath)
+                        Button(action: state.cancelAgentScan) {
+                            Label(l10n.t("cleanup.cancelScan"), systemImage: "xmark.circle")
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                        .accessibilityIdentifier("agents-scan-cancel")
                     }
                 } else if !state.agentHasScanned {
                     emptyState
@@ -130,58 +135,56 @@ struct AgentsTabView: View {
 
     private var resourceList: some View {
         ScrollView {
-            LiquidGlassGroup {
-                LazyVStack(spacing: 12) {
-                    Text(l10n.t("agents.notice.installed"))
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    let groups = state.agentGroups.filter {
-                        $0.id != "shared-mcp" && $0.id != "chrome-devtools-mcp"
+            LazyVStack(spacing: 12) {
+                Text(l10n.t("agents.notice.installed"))
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                let groups = state.agentGroups.filter {
+                    $0.id != "shared-mcp" && $0.id != "chrome-devtools-mcp"
+                }
+                if groups.isEmpty && state.agentMCPInstallations.isEmpty &&
+                    !state.agentGroups.contains(where: { $0.id == "chrome-devtools-mcp" }) { emptyResult }
+                ForEach(groups) { group in
+                    VStack(spacing: 8) {
+                        groupHeader(group)
+                        if !collapsed.contains(group.id) {
+                            if group.id == "shared" {
+                                Text(l10n.t("agents.notice.skills"))
+                                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            LazyVStack(spacing: 8) { groupContents(group) }
+                                .padding(.leading, 14)
+                                .transition(.molePanelReveal)
+                        }
                     }
-                    if groups.isEmpty && state.agentMCPInstallations.isEmpty &&
-                        !state.agentGroups.contains(where: { $0.id == "chrome-devtools-mcp" }) { emptyResult }
-                    ForEach(groups) { group in
-                        VStack(spacing: 8) {
-                            groupHeader(group)
-                            if !collapsed.contains(group.id) {
-                                if group.id == "shared" {
-                                    Text(l10n.t("agents.notice.skills"))
+                    .clipped()
+
+                }
+                ForEach(state.agentGroups.filter { $0.id == "shared-mcp" || $0.id == "chrome-devtools-mcp" }) { group in
+                    VStack(spacing: 8) {
+                        groupHeader(group)
+                        if !collapsed.contains(group.id) {
+                            VStack(spacing: 8) {
+                                if group.id == "shared-mcp" {
+                                    Text(l10n.t("agents.notice.mcp"))
                                         .font(.system(size: 10)).foregroundStyle(.secondary)
                                         .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                LazyVStack(spacing: 8) { groupContents(group) }
-                                    .padding(.leading, 14)
-                                    .transition(.molePanelReveal)
-                            }
-                        }
-                        .clipped()
-
-                    }
-                    ForEach(state.agentGroups.filter { $0.id == "shared-mcp" || $0.id == "chrome-devtools-mcp" }) { group in
-                        VStack(spacing: 8) {
-                            groupHeader(group)
-                            if !collapsed.contains(group.id) {
-                                VStack(spacing: 8) {
-                                    if group.id == "shared-mcp" {
-                                        Text(l10n.t("agents.notice.mcp"))
-                                            .font(.system(size: 10)).foregroundStyle(.secondary)
-                                            .frame(maxWidth: .infinity, alignment: .leading)
-                                        ForEach(state.agentMCPInstallations) { installation in
-                                            installationRow(installation)
-                                        }
-                                    } else {
-                                        groupContents(group)
+                                    ForEach(state.agentMCPInstallations) { installation in
+                                        installationRow(installation)
                                     }
-                                }.padding(.leading, 14)
-                                .transition(.molePanelReveal)
-                            }
+                                } else {
+                                    groupContents(group)
+                                }
+                            }.padding(.leading, 14)
+                            .transition(.molePanelReveal)
                         }
-                        .clipped()
-
                     }
+                    .clipped()
+
                 }
-                .padding(.horizontal, 16).padding(.vertical, 4)
             }
+            .padding(.horizontal, 16).padding(.vertical, 4)
         }
         .frame(maxHeight: .infinity)
     }
@@ -224,7 +227,7 @@ struct AgentsTabView: View {
             .accessibilityValue(l10n.t(collapsed.contains(group.id) ? "agents.collapsed" : "agents.expanded"))
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .modifier(ListRowGlass())
+        .modifier(ListRowSurface(emphasis: .header))
     }
 
     @ViewBuilder private func groupContents(_ group: AgentGroupSummary) -> some View {
@@ -256,15 +259,12 @@ struct AgentsTabView: View {
     private func categoryBinding(for snapshot: CleanupCategory) -> Binding<CleanupCategory> {
         Binding(get: {
             let category = state.agentCategories.first(where: { $0.id == snapshot.id }) ?? snapshot
-            return category.selectingPaths(category.paths.filter {
-                state.isAgentCategorySelected(category, path: $0)
-            })
+            return state.isAgentCategoryIncludedByCLI(category)
+                ? category.selectingPaths(category.paths) : category
         }, set: { update in
             guard let index = state.agentCategories.firstIndex(where: { $0.id == snapshot.id }) else { return }
             var category = state.agentCategories[index]
-            let includedByCLI = state.agentGroups.contains {
-                state.agentCLISelectedAgentIDs.contains($0.id) && $0.categoryIDs.contains(category.id)
-            }
+            let includedByCLI = state.isAgentCategoryIncludedByCLI(category)
             // Expanding an implicitly selected row must not turn its derived
             // checkmarks into explicit data selections when the CLI is undone.
             if !includedByCLI && !state.isBusy {
@@ -330,7 +330,7 @@ struct AgentsTabView: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .modifier(ListRowGlass(selected: selected))
+        .modifier(ListRowSurface(selected: selected))
     }
 
     private func subsectionHeader(_ title: String, count: Int) -> some View {
@@ -373,7 +373,7 @@ struct AgentsTabView: View {
             if skill.bytes > 0 { SizeBadge(text: ByteFormat.format(skill.bytes), prominent: selected) }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .modifier(ListRowGlass(selected: selected))
+        .modifier(ListRowSurface(selected: selected))
     }
 
     private func serverRow(_ server: AgentMCPServer) -> some View {
@@ -414,7 +414,7 @@ struct AgentsTabView: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .modifier(ListRowGlass(selected: selected))
+        .modifier(ListRowSurface(selected: selected))
     }
 
     private func installationRow(_ installation: AgentMCPInstallation) -> some View {
@@ -439,7 +439,7 @@ struct AgentsTabView: View {
             Text(l10n.t("agents.mcp.bodyImpact")).font(.system(size: 10)).foregroundStyle(Color.warning)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .modifier(ListRowGlass(selected: selected))
+        .modifier(ListRowSurface(selected: selected))
     }
 
     private func issueText(_ issue: AgentMCPServer.Issue) -> String {

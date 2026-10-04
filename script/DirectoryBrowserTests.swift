@@ -205,6 +205,16 @@ struct DirectoryBrowserTests {
         precondition(!model.isSearching && model.entries.count == 2, "Clearing search did not restore normal folder browsing")
         try await Task.sleep(nanoseconds: 400_000_000)
         precondition(model.entries.count == 2 && model.pathMatchScores.isEmpty, "Cancelled global search overwrote folder browsing")
+        let limitToken = token + "-limit"
+        for number in 0..<301 {
+            try Data().write(to: elsewhere.appendingPathComponent("\(limitToken)-\(number).txt"))
+        }
+        _ = try await fixtureIndex.rebuild(roots: [workspace])
+        model.query = limitToken
+        try await settle { !model.isSearching }
+        precondition(model.entries.count == 300 && model.statusMessage != nil, "Search limit was not reported")
+        model.query = ""
+        precondition(model.entries.count == 2 && model.statusMessage == nil, "Clearing search retained the previous result-limit message")
         print("Unified search: immediate current results, global merge, proximity before exact name, deduplication, hidden files and cancellation passed")
     }
 

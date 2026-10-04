@@ -8,7 +8,6 @@ struct DirectoryTabView: View {
     @ObservedObject var model: DirectoryBrowserModel
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var rowNamespace
     @Namespace private var dragNamespace
     @Namespace private var dialogNamespace
     @State private var dialog: DirectoryDialog?
@@ -21,9 +20,8 @@ struct DirectoryTabView: View {
 
     var body: some View {
         ZStack {
-            VStack(spacing: 12) {
-                searchControls
-                navigationControls
+            VStack(spacing: 10) {
+                toolbar
                 fileList
                 footer
             }
@@ -64,8 +62,35 @@ struct DirectoryTabView: View {
             onRefresh: model.refresh)
     }
 
-    private var searchControls: some View {
-        HStack(spacing: 10) {
+    /// Finder 式单行工具栏：路径栏 + 刷新 + 显示隐藏 + 搜索（尾部含索引菜单）。
+    private var toolbar: some View {
+        HStack(spacing: 8) {
+            breadcrumbs
+                .padding(.leading, 6).padding(.trailing, 2)
+                .frame(height: 30)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.surface2))
+                .frame(minWidth: 200, maxWidth: .infinity)
+            Button(action: model.refresh) {
+                Group {
+                    if model.isLoading || model.isWorking {
+                        ProgressView().controlSize(.mini).scaleEffect(0.65)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                }
+            }
+            .buttonStyle(MoleIconButtonStyle(size: 30))
+            .disabled(model.isLoading || model.isWorking)
+            .help(l10n.t("dir.refresh"))
+            .accessibilityLabel(l10n.t("dir.refresh"))
+            Button { model.showHidden.toggle() } label: {
+                Image(systemName: model.showHidden ? "eye" : "eye.slash")
+            }
+            .buttonStyle(MoleIconButtonStyle(isActive: model.showHidden, size: 30))
+            .help(l10n.t("dir.hidden.hint"))
+            .accessibilityLabel(l10n.t("dir.hidden"))
+            .accessibilityAddTraits(model.showHidden ? .isSelected : [])
+            .accessibilityIdentifier("directory-hidden-toggle")
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField(l10n.t("dir.search.placeholder"), text: $model.query)
@@ -80,25 +105,12 @@ struct DirectoryTabView: View {
                         .accessibilityLabel(l10n.t("dir.search.clear"))
                 }
                 if model.isSearching { ProgressView().controlSize(.small).scaleEffect(0.7) }
+                indexMenu
             }
             .font(.system(size: 12))
-            .padding(.horizontal, 12).frame(height: 34)
-            .modifier(DirectoryControlSurface(interactive: false))
-            .frame(minWidth: 180, idealWidth: 320, maxWidth: 400)
-            indexMenu
-            Spacer(minLength: 0)
-        }
-    }
-
-    private var navigationControls: some View {
-        HStack(spacing: 16) {
-            breadcrumbs.frame(minWidth: 0, maxWidth: .infinity)
-            Toggle(l10n.t("dir.hidden"), isOn: $model.showHidden)
-                .toggleStyle(.switch).controlSize(.mini)
-                .font(.system(size: 11))
-                .help(l10n.t("dir.hidden.hint"))
-                .fixedSize()
-                .accessibilityIdentifier("directory-hidden-toggle")
+            .padding(.horizontal, 12).frame(height: 30)
+            .modifier(DirectoryControlSurface())
+            .frame(width: 240)
         }
     }
 
@@ -118,8 +130,8 @@ struct DirectoryTabView: View {
                 else { Image(systemName: "externaldrive.badge.magnifyingglass") }
             }
             .font(.system(size: 12)).foregroundStyle(.secondary)
-            .frame(width: 30, height: 30)
-            .modifier(DirectoryControlSurface())
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
         .fixedSize()
@@ -146,36 +158,33 @@ struct DirectoryTabView: View {
             .padding(.horizontal, 12).padding(.vertical, 4)
             Rectangle().fill(Color.hairline).frame(height: 1)
             ScrollView {
-                LiquidGlassGroup {
-                    LazyVStack(spacing: 4) {
-                        ForEach(model.entries) { entry in
-                            DirectoryFileRow(
-                                entry: entry,
-                                selected: model.selectedIDs.contains(entry.id),
-                                sizeState: model.sizeStates[entry.id] ?? .pending,
-                                sizeUpdatedAt: model.sizeUpdatedAt[entry.id],
-                                isPartialSize: model.sizePartialIDs.contains(entry.id),
-                                showParent: model.hasSearchQuery,
-                                pathMatch: model.pathMatchScores[entry.id],
-                                namespace: rowNamespace,
-                                dragNamespace: dragNamespace,
-                                onSelect: {
-                                    focusedField = .files
-                                    let flags = NSEvent.modifierFlags
-                                    withAnimation(reduceMotion ? nil : MoleMotion.selection) {
-                                        model.select(entry: entry, extending: flags.contains(.command), range: flags.contains(.shift))
-                                    }
-                                },
-                                onOpen: { if model.isPathQuery { model.reveal([entry.url]) } else { model.open(entry: entry) } },
-                                onDrop: { urls in model.importFiles(urls, into: entry.url) },
-                                menu: { rowMenu(for: entry) })
-                        }
+                LazyVStack(spacing: 4) {
+                    ForEach(model.entries) { entry in
+                        DirectoryFileRow(
+                            entry: entry,
+                            selected: model.selectedIDs.contains(entry.id),
+                            sizeState: model.sizeStates[entry.id] ?? .pending,
+                            sizeUpdatedAt: model.sizeUpdatedAt[entry.id],
+                            isPartialSize: model.sizePartialIDs.contains(entry.id),
+                            showParent: model.hasSearchQuery,
+                            pathMatch: model.pathMatchScores[entry.id],
+                            dragNamespace: dragNamespace,
+                            onSelect: {
+                                focusedField = .files
+                                let flags = NSEvent.modifierFlags
+                                withAnimation(reduceMotion ? nil : MoleMotion.selection) {
+                                    model.select(entry: entry, extending: flags.contains(.command), range: flags.contains(.shift))
+                                }
+                            },
+                            onOpen: { if model.isPathQuery { model.reveal([entry.url]) } else { model.open(entry: entry) } },
+                            onDrop: { urls in model.importFiles(urls, into: entry.url) },
+                            menu: { rowMenu(for: entry) })
                     }
-                    .padding(.vertical, 4)
-                    .modifier(DirectoryDragContainer(entries: model.entries,
-                                                     selectedIDs: model.selectedIDs,
-                                                     namespace: dragNamespace))
                 }
+                .padding(.vertical, 4)
+                .modifier(DirectoryDragContainer(entries: model.entries,
+                                                 selectedIDs: model.selectedIDs,
+                                                 namespace: dragNamespace))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
@@ -380,7 +389,6 @@ private struct DirectoryFileRow<MenuContent: View>: View {
     let isPartialSize: Bool
     let showParent: Bool
     let pathMatch: Int?
-    let namespace: Namespace.ID
     let dragNamespace: Namespace.ID
     let onSelect: () -> Void
     let onOpen: () -> Void
@@ -430,7 +438,7 @@ private struct DirectoryFileRow<MenuContent: View>: View {
         }
         .padding(.horizontal, 12)
         .contentShape(RoundedRectangle(cornerRadius: 9))
-        .modifier(DirectorySelectionSurface(selected: selected || isDropTarget, id: entry.id, namespace: namespace))
+        .modifier(DirectorySelectionSurface(selected: selected || isDropTarget))
         .contextMenu(menuItems: menu)
         .onDrop(of: [UTType.fileURL], isTargeted: $isDropTarget) { providers in
             guard entry.isDirectory else { return false }
@@ -559,39 +567,21 @@ private struct DirectoryListFocus: ViewModifier {
     }
 }
 
+/// 搜索框等工具控件的底色：内容层不用玻璃，surface2 实底。
 private struct DirectoryControlSurface: ViewModifier {
-    var interactive = true
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency {
-            content.glassEffect(.regular.interactive(interactive && !reduceMotion), in: RoundedRectangle(cornerRadius: 9))
-        } else {
-            content.background(GlassSurface(cornerRadius: 9, usesSystemGlass: false))
-        }
+        content.background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.surface2))
     }
 }
 
+/// 选中行只染 selectionFill；未选中行保持面板透明。
 private struct DirectorySelectionSurface: ViewModifier {
     let selected: Bool
-    let id: String
-    let namespace: Namespace.ID
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.controlActiveState) private var controlActiveState
 
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
-            content
-                .glassEffect(selected ? .regular.tint(Color.accent.opacity(0.20)).interactive(!reduceMotion) : .identity,
-                             in: RoundedRectangle(cornerRadius: 9))
-                .glassEffectID(id, in: namespace)
-                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-                .clipGlassEdge(in: RoundedRectangle(cornerRadius: 9))
-        } else {
-            content.background {
-                if selected { GlassSurface(cornerRadius: 9, usesSystemGlass: false, highlighted: true) }
+        content.background {
+            if selected {
+                RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.selectionFill)
             }
         }
     }

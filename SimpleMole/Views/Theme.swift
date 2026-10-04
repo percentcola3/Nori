@@ -6,11 +6,18 @@ import SwiftUI
 // 深色以墨蓝承托冰蓝 Logo 与按钮，浅色以近白底承托墨蓝文字与按钮。
 //
 // 规则：
-// - 玻璃只有一层（GlassSurface），任何不透明色块都不要叠在玻璃上，否则模糊
-//   与折射会被盖住，看起来就像"液态玻璃没生效"。
+// - 玻璃分层：L0 只保留窗口底的 GlassSurface；L1 导航与浮层（PillPicker
+//   选中、侧栏选中透镜、liquidSurface 弹层、灵动岛、启用态主操作按钮）
+//   才使用玻璃。内容层一律不用原生玻璃——滚动列表里的玻璃会逃出裁剪，
+//   泄漏到相邻视图。
+// - 内容平面用 surface：L2 工作区面板 surface1 圆角 14（contentPanel，
+//   仅带侧栏页套右侧；单列页不用面板，直接落在窗口玻璃上）；
+//   L3 行/卡片用 ListRowSurface——分组头 surface2，普通行 surface1，
+//   选中态 selectionFill，已打开路径 surface2。
 // - 卡片、行、按钮的底色用 surface1/2/3；不叠组件外围描边。hairline 仅用于
 //   内容分隔线。它们随外观取值，不要再写 Color.white.opacity(x)。
 // - 强调色只用于选中态、主按钮与关键数值；状态色用 success/warning/danger。
+// - 禁用控件不用玻璃，回退 surface1 实底；一屏玻璃不超过 3 处。
 
 /// 品牌配色的原始值：token 与对比度测试共用同一份数据。
 enum EarthBluePalette {
@@ -92,6 +99,9 @@ extension Color {
     /// 内容分隔线；玻璃组件的轮廓由材质本身呈现，不再叠外围描边。
     static let hairline = adaptive(light: NSColor.black.withAlphaComponent(0.10),
                                    dark: NSColor.white.withAlphaComponent(0.13))
+    /// 内容行/卡片的选中底：强调色轻染，选中语义与导航的玻璃透镜区分开。
+    static let selectionFill = adaptive(light: srgb(EarthBluePalette.accentLight, 0.10),
+                                        dark: srgb(EarthBluePalette.accentDark, 0.16))
 
     // 状态色
     static let success = adaptive(light: srgb(EarthBluePalette.successLight), dark: srgb(EarthBluePalette.successDark))

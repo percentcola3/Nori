@@ -91,53 +91,58 @@ extension AppState {
         }
         islandCleaningResource = resource
         islandResourceStatus[resource] = L10n.shared.t("island.clean.working")
+        let running = NSWorkspace.shared.runningApplications.filter { !$0.isTerminated }
+        let applicationPIDs = Set(running.map(\.processIdentifier))
+        let home = NSHomeDirectory()
+        let inUseRoots = running.flatMap { app -> [String] in
+            var roots = app.bundleURL.map { [$0.path] } ?? []
+            for owner in [app.localizedName, app.bundleIdentifier, app.bundleURL?.deletingPathExtension().lastPathComponent]
+                .compactMap({ $0 }) where !owner.isEmpty {
+                roots += [home + "/Library/Application Support/" + owner, home + "/Library/Caches/" + owner]
+            }
+            return roots
+        }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let bundlePath = Bundle.main.bundlePath
         Task {
-            let first = await sampleIslandProcesses()
-            let previousCPU = Dictionary(first.map { ($0.signalToken, $0.cpu) }, uniquingKeysWith: { a, _ in a })
-            try? await Task.sleep(nanoseconds: 600_000_000)
-            let current = await sampleIslandProcesses()
-            let sorted = current.sorted {
-                resource == .cpu ? $0.cpu > $1.cpu : $0.memBytes > $1.memBytes
+            let residuals = await Task.detached(priority: .userInitiated) { () -> [(IslandResourcePolicy.Residual, [Int32: ProcessIdentity])] in
+                let sampler = ProcessSampler()
+                let first = sampler.sample()
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                let current = sampler.sample()
+                let previous = Dictionary(first.map { ($0.identity, $0.cpuPercent) }, uniquingKeysWith: { a, _ in a })
+                let managed = IslandResourcePolicy.managedPIDs(fromLaunchctlList:
+                    SystemMetrics.commandOutput("/bin/launchctl", arguments: ["list"]) ?? "")
+                let facts = current.map { sample in
+                    IslandResourcePolicy.ProcessFacts(pid: sample.pid, ppid: sample.ppid, uid: sample.uid,
+                        name: sample.name, path: sample.path, cpu: sample.cpuPercent,
+                        previousCPU: previous[sample.identity] ?? 0, residentBytes: sample.residentBytes,
+                        elapsed: sample.elapsed, isZombie: sample.isZombie, isExiting: sample.isExiting)
+                }
+                let identities = Dictionary(current.map { ($0.pid, $0.identity) }, uniquingKeysWith: { a, _ in a })
+                return IslandResourcePolicy.residuals(resource: resource, processes: facts,
+                    applicationPIDs: applicationPIDs, managedPIDs: managed, ownPID: ownPID,
+                    uid: getuid(), ownBundlePath: bundlePath, inUseRoots: inUseRoots).map { ($0, identities) }
+            }.value
+            if resource == .memory { MosaicCache.shared.clear() }
+            var ended = 0, freed: UInt64 = 0
+            var remaining: [String] = []
+            for (residual, identities) in residuals {
+                var allGone = true
+                for pid in residual.pids {
+                    guard let identity = identities[pid] else { continue }
+                    if !(await ProcessTerminator.terminateThenKill(identity, grace: 1.5)) { allGone = false }
+                }
+                if allGone { ended += 1; freed += residual.residentBytes } else { remaining.append(residual.name) }
             }
-            var requested: [NSRunningApplication] = []
-            var attemptedApplications: [(name: String, application: NSRunningApplication)] = []
-            var attempted = 0
-            for row in sorted {
-                guard attempted < 3, let app = islandApplication(for: row),
-                      IslandResourcePolicy.isEligible(
-                        resource: resource, cpu: row.cpu, previousCPU: previousCPU[row.signalToken] ?? 0,
-                        memoryBytes: row.memBytes, isHidden: app.isHidden, isActive: app.isActive,
-                        isRegular: app.activationPolicy == .regular, isSameUser: row.uid == getuid(),
-                        isOwnApp: row.pid == ProcessInfo.processInfo.processIdentifier,
-                        executablePath: app.executableURL?.path ?? "", elapsed: row.elapsed) else { continue }
-                attempted += 1
-                attemptedApplications.append((row.name, app))
-                if app.terminate() { requested.append(app) }
-            }
-            var cacheBytes = 0
-            if resource == .memory {
-                MosaicCache.shared.clear()
-                URLCache.shared.removeAllCachedResponses()
-                cacheBytes = malloc_zone_pressure_relief(nil, 0)
-            }
-            for _ in 0..<25 where requested.contains(where: { !$0.isTerminated }) {
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-            let closed = attemptedApplications.filter { $0.application.isTerminated }.count
-            let result: String
-            if attempted > 0 {
-                result = L10n.shared.tf("island.clean.result", closed, attempted - closed)
-            } else {
-                result = L10n.shared.t("island.clean.none")
-            }
-            islandResourceStatus[resource] = result + (resource == .memory
-                ? " " + (cacheBytes > 0
-                    ? L10n.shared.tf("island.clean.cache", ByteFormat.format(UInt64(cacheBytes)))
-                    : L10n.shared.t("island.clean.cache.empty")) : "")
-            if attempted > closed {
-                presentTaskFailure(message: result, details: attemptedApplications.compactMap {
-                    $0.application.isTerminated ? nil : $0.name
-                }, detailsAreLocalized: true)
+            let result = residuals.isEmpty
+                ? L10n.shared.t("island.clean.none")
+                : resource == .memory
+                    ? L10n.shared.tf("island.clean.result.memory", ended, ByteFormat.format(freed), remaining.count)
+                    : L10n.shared.tf("island.clean.result", ended, remaining.count)
+            islandResourceStatus[resource] = result
+            if !remaining.isEmpty {
+                presentTaskFailure(message: result, details: remaining, detailsAreLocalized: true)
             }
             _ = await sampleIslandProcesses()
             // Completion is observed by the rings: publish it only after the

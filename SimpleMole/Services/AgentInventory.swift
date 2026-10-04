@@ -82,7 +82,8 @@ enum AgentInventory {
                         mode: .deep, totalBudget: 180, directoryBudget: 30),
                      localize: (String) -> String = { $0 },
                      presence context: AgentPresenceContext? = nil,
-                     includingAgentIDs: Set<String> = []) -> AgentScanReport {
+                     includingAgentIDs: Set<String> = [],
+                     excludingGlobalCleanupCaches: Bool = false) -> AgentScanReport {
         var report = AgentScanReport()
         let whitelist = NativeCore.shared.loadWhitelist(homeDirectory: home)
         let installed = AgentCatalog.definitions.filter {
@@ -95,7 +96,11 @@ enum AgentInventory {
         let active = installed.filter { !orphanedIDs.contains($0.id) || includingAgentIDs.contains($0.id) }
         let discoveredResolved = active.map { agent in
             (agent, AgentCatalog.resolve(agent, home: home, presence: context).compactMap { target -> AgentCatalog.ResolvedTarget? in
-                let paths = target.paths.filter { !NativeCore.shared.matchesWhitelist($0, entries: whitelist) }
+                let paths = target.paths.filter {
+                    !NativeCore.shared.matchesWhitelist($0, entries: whitelist)
+                        && !(excludingGlobalCleanupCaches && target.tier == .safe
+                             && CleanupRiskPolicy.isCoveredByGlobalCleanup($0, homeDirectory: home))
+                }
                 guard !paths.isEmpty else { return nil }
                 return AgentCatalog.ResolvedTarget(agentID: target.agentID, tier: target.tier,
                     labelKey: target.labelKey, owners: target.owners, paths: paths)

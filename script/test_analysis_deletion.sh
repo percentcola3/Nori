@@ -27,6 +27,7 @@ swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
     "$WORK/NativeCore.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
     "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
+    "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
     "$ROOT_DIR/script/AnalysisFileDeletionTests.swift" \
     -o "$WORK/tests"

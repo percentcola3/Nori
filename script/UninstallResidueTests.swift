@@ -100,6 +100,26 @@ struct UninstallResidueTests {
                          "Library/Group Containers/\(identifier)", "Library/Preferences/\(identifier).plist"] {
             expect(!automatic(plan, retained), "User/shared data was scheduled for removal: \(retained)")
         }
+        let preferences = home.appendingPathComponent("Library/Preferences/\(identifier).plist").path
+        let storage = home.appendingPathComponent("Library/HTTPStorages/\(identifier)").path
+        expect(plan.dataPaths.contains(preferences) && plan.dataPaths.contains(storage),
+               "App data must be offered for optional removal")
+        let opted = plan.includingData([preferences, storage, home.appendingPathComponent("Documents").path])
+        expect(automatic(opted, "Library/Preferences/\(identifier).plist")
+               && automatic(opted, "Library/HTTPStorages/\(identifier)"),
+               "Chosen app data must be removed with the app")
+        expect(!automatic(opted, "Library/Containers/\(identifier)") && !automatic(opted, "Documents"),
+               "Unchosen data and paths outside the plan must stay retained")
+        expect(opted.fileIdentities == plan.fileIdentities, "Choosing data must keep the reviewed identities")
+        let dataItems = opted.dataPaths.isEmpty ? [] : [preferences, storage].compactMap { path in
+            opted.fileIdentities[path].map { DeletionPlan.Item(record: path, identity: $0) }
+        }
+        var trashed: [String] = []
+        let dataResult = core.applyCleanup(items: dataItems, permanent: false, homeDirectory: home.path,
+            allowedRoots: [app.path], allowApplicationBundle: true, verifiedTargets: [preferences, storage],
+            trashHandler: { trashed.append($0.path) })
+        expect(Set(trashed) == [preferences, storage] && dataResult.failed == 0,
+               "Chosen app data must reach the Trash route: \(dataResult.messages)")
 
         // A fresh inventory must include a cache created after the displayed plan.
         let lateCache = "Library/Application Support/\(appName)/ShaderCache"

@@ -135,10 +135,20 @@ extension AppState {
         Set(agentCLIInstallations.filter { agentSelectedCLIInstallations.contains($0.id) }.map(\.agentID))
     }
 
-    func isAgentCategorySelected(_ category: CleanupCategory, path: String? = nil) -> Bool {
-        let includedByCLI = category.canSelect && agentGroups.contains {
-            agentCLISelectedAgentIDs.contains($0.id) && $0.categoryIDs.contains(category.id)
-        }
+    var agentCLIIncludedCategoryIDs: Set<UUID> {
+        let agentIDs = agentCLISelectedAgentIDs
+        guard !agentIDs.isEmpty else { return [] }
+        return Set(agentGroups.filter { agentIDs.contains($0.id) }.flatMap(\.categoryIDs))
+    }
+
+    func isAgentCategoryIncludedByCLI(_ category: CleanupCategory,
+                                      includedCategoryIDs: Set<UUID>? = nil) -> Bool {
+        category.canSelect && (includedCategoryIDs ?? agentCLIIncludedCategoryIDs).contains(category.id)
+    }
+
+    func isAgentCategorySelected(_ category: CleanupCategory, path: String? = nil,
+                                 includedCategoryIDs: Set<UUID>? = nil) -> Bool {
+        let includedByCLI = isAgentCategoryIncludedByCLI(category, includedCategoryIDs: includedCategoryIDs)
         if let path { return category.paths.contains(path) && (includedByCLI || category.isPathSelected(path)) }
         return includedByCLI || category.selected
     }
@@ -152,10 +162,13 @@ extension AppState {
     }
 
     private var effectiveAgentCleanupSelection: AgentCleanupSelection {
-        .init(categories: agentCategories.compactMap { category in
-            category.selectingPaths(category.paths.filter { isAgentCategorySelected(category, path: $0) }).selectedSubset
-        }, skills: agentSkills.filter(isAgentSkillSelected),
-        servers: agentServers.filter(isAgentServerSelected),
+        let included = agentCLIIncludedCategoryIDs
+        let cliAgentIDs = agentCLISelectedAgentIDs
+        return .init(categories: agentCategories.compactMap { category in
+            isAgentCategoryIncludedByCLI(category, includedCategoryIDs: included)
+                ? category.selectingPaths(category.paths).selectedSubset : category.selectedSubset
+        }, skills: agentSkills.filter { agentSelectedSkills.contains($0.path) || cliAgentIDs.contains($0.agentID) },
+        servers: agentServers.filter { agentSelectedServers.contains($0.id) || cliAgentIDs.contains($0.agentID) },
         installations: agentMCPInstallations.filter { agentSelectedMCPInstallations.contains($0.id) },
         cliInstallations: agentCLIInstallations.filter { agentSelectedCLIInstallations.contains($0.id) })
     }
@@ -225,7 +238,9 @@ extension AppState {
                     self.agentScanCurrentPath = path
                 }
             })
+        agentScanControl = control
         Task {
+            defer { agentScanControl = nil }
             let home = NSHomeDirectory()
             let (report, cli) = await Task.detached(priority: .utility) {
                 Self.loadAgentInventory(home: home, control: control)
@@ -237,6 +252,17 @@ extension AppState {
             agentSelectedCLIInstallations = []
             agentScanning = false
             agentScanCurrentPath = ""
+            // 取消的扫描保留已扫到的部分结果、全部不勾选，与清理页一致：
+            // 不标 attention、不触发标题栏反应；什么都没扫到时回空态。
+            if control.isCancelled {
+                for index in agentCategories.indices { agentCategories[index].selected = false }
+                agentScanComplete = false
+                agentOutcomeMood = nil
+                agentOutcomeDetails = []
+                if report.groups.isEmpty { agentHasScanned = false }
+                agentStatus = L10n.shared.t("agents.status.cancelled")
+                return
+            }
             // The inventory carries the default cleanup recommendation. A
             // safe-only reset here discarded reviewed caches and checkpoints.
             if completionStatus == nil {
@@ -265,7 +291,8 @@ extension AppState {
         control: CleanupScanControl = CleanupScanControl(mode: .deep, totalBudget: 180, directoryBudget: 30))
         -> (AgentScanReport, [AgentCLIInstallation]) {
         var report = AgentInventory.scan(home: home, control: control, localize: { L10n.shared.t($0) },
-                                         includingAgentIDs: includingAgentIDs)
+                                         includingAgentIDs: includingAgentIDs,
+                                         excludingGlobalCleanupCaches: true)
         let cli = AgentCatalog.definitions.flatMap { AgentCLIService.installations(for: $0, home: home) }
         for agent in AgentCatalog.definitions where cli.contains(where: { $0.agentID == agent.id }) {
             if !report.groups.contains(where: { $0.id == agent.id }) {
@@ -275,6 +302,10 @@ extension AppState {
             }
         }
         return (report, cli)
+    }
+
+    func cancelAgentScan() {
+        agentScanControl?.cancel()
     }
 
     private func updateAgentInventory(_ report: AgentScanReport, cli: [AgentCLIInstallation]) {

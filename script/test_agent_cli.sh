@@ -34,7 +34,8 @@ AGENT_CLI_SOURCES=(
     "$ROOT_DIR/SimpleMole/Services/MediaSlimmer.swift"
     "$ROOT_DIR/SimpleMole/Services/NativeCore.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift"
-    "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift"
+    "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
+    "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentProjectStorage.swift"

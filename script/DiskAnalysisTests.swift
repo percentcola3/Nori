@@ -295,6 +295,21 @@ struct DiskAnalysisTests {
         let decoded = try JSONDecoder().decode(AnalyzeEntry.self, from: legacy)
         expect(decoded.isPartial == nil,
                "old analysis records must remain decodable")
+
+        // Deep navigation folds older levels into collapsed strips and keeps
+        // only the last two columns fully expanded.
+        let flat = DiskAnalysisWorker.diskBrowserColumnLayout(["/"])
+        expect(flat.collapsed.isEmpty && flat.expanded == ["/"],
+               "a single root level never collapses")
+        let shallow = DiskAnalysisWorker.diskBrowserColumnLayout(["/", "/a"])
+        expect(shallow.collapsed.isEmpty && shallow.expanded == ["/", "/a"],
+               "two levels both stay expanded")
+        let deep = DiskAnalysisWorker.diskBrowserColumnLayout(["/", "/a", "/a/b", "/a/b/c"])
+        expect(deep.collapsed == ["/", "/a"] && deep.expanded == ["/a/b", "/a/b/c"],
+               "deep navigation collapses every level except the last two")
+        let deeper = DiskAnalysisWorker.diskBrowserColumnLayout(["/", "/a", "/a/b", "/a/b/c", "/a/b/c/d"])
+        expect(deeper.collapsed == ["/", "/a", "/a/b"] && deeper.expanded == ["/a/b/c", "/a/b/c/d"],
+               "navigating deeper shifts the collapsed/expanded boundary forward")
         print("PASS: partitioned overview totals, temporary Git checkouts/worktrees, device exclusion, directory hierarchy, allocated size, hardlinks, symlinks, sparse files, progress/cancellation, cleanup protection, errors and cached navigation")
     }
 }

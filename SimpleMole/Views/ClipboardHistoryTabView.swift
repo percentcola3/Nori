@@ -1,6 +1,13 @@
 import SwiftUI
 import AppKit
 
+private enum ClipboardResourceColors {
+    static let text = Color.blue
+    static let url = Color.teal
+    static let file = Color.orange
+    static let image = Color.purple
+}
+
 struct ClipboardHistoryTabView: View {
     @ObservedObject var manager: ClipboardHistoryManager
     @ObservedObject private var l10n = L10n.shared
@@ -16,10 +23,21 @@ struct ClipboardHistoryTabView: View {
             switch self {
             case .all: "square.grid.2x2"
             case .pinned: "pin.fill"
-            case .text: "text.alignleft"
+            case .text: "doc.plaintext"
             case .url: "link"
             case .file: "doc"
             case .image: "photo"
+            }
+        }
+
+        var iconTint: Color {
+            switch self {
+            case .all: Color.moleAccentText
+            case .pinned: Color.warning
+            case .text: ClipboardResourceColors.text
+            case .url: ClipboardResourceColors.url
+            case .file: ClipboardResourceColors.file
+            case .image: ClipboardResourceColors.image
             }
         }
     }
@@ -41,6 +59,42 @@ struct ClipboardHistoryTabView: View {
             set: { manager.updateCapacity($0) })
     }
 
+    private var capacityOptions: [Int] {
+        Array(Set([10, 20, 40, 50, 100, 200, 500, manager.capacity])).sorted()
+    }
+
+    private var capacityControl: some View {
+        Menu {
+            Picker(selection: capacityBinding) {
+                ForEach(capacityOptions, id: \.self) { value in
+                    Text(l10n.tf("clip.capacity", value)).tag(value)
+                }
+            } label: {
+                Text(l10n.t("clip.capacityLabel"))
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            HStack(spacing: 8) {
+                Text(l10n.tf("clip.capacity", manager.capacity))
+                    .font(.system(size: 12, weight: .medium).monospacedDigit())
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
+            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.hairline))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel(l10n.t("clip.capacityLabel"))
+        .accessibilityValue(l10n.tf("clip.capacity", manager.capacity))
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             HStack(spacing: 12) {
@@ -54,7 +108,12 @@ struct ClipboardHistoryTabView: View {
                                     withAnimation(MoleMotion.selection) { filter = item }
                                 }
                             } label: {
-                                Label(l10n.t(item.titleKey), systemImage: item.icon)
+                                Label {
+                                    Text(l10n.t(item.titleKey))
+                                } icon: {
+                                    Image(systemName: item.icon)
+                                        .foregroundStyle(item.iconTint)
+                                }
                             }
                             .buttonStyle(ClipboardFilterButtonStyle(isSelected: filter == item))
                         }
@@ -64,28 +123,16 @@ struct ClipboardHistoryTabView: View {
 
                 Spacer()
 
-                Stepper(value: capacityBinding, in: 10...500, step: 10) {
-                    HStack(spacing: 5) {
-                        Text(l10n.t("clip.capacity"))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                        Text("\(manager.capacity)")
-                            .font(.system(size: 11).monospacedDigit())
-                            .foregroundStyle(Color.moleAccentText)
-                    }
-                }
-                .controlSize(.small)
-                .fixedSize()
+                capacityControl
 
                 Button {
                     manager.clearUnpinned()
                 } label: {
-                    Label(l10n.t("clip.clearUnpinned"), systemImage: "trash.fill")
-                        .labelStyle(.titleAndIcon)
+                    Image(systemName: "trash")
                 }
-                .buttonStyle(PrimaryButtonStyle())
-                .fixedSize(horizontal: true, vertical: false)
-                .layoutPriority(2)
+                .buttonStyle(MoleIconButtonStyle(tint: Color.danger, size: 30))
+                .help(l10n.t("clip.clearUnpinned"))
+                .accessibilityLabel(l10n.t("clip.clearUnpinned"))
                 .disabled(manager.unpinnedCount == 0)
             }
 
@@ -143,22 +190,6 @@ private struct ClipboardFilterButtonStyle: ButtonStyle {
     }
 }
 
-private struct ClipboardIconButtonStyle: ButtonStyle {
-    let tint: Color
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(tint)
-            .frame(width: 26, height: 26)
-            .background(Circle().fill(configuration.isPressed ? Color.surface3 : Color.surface2))
-            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.92)
-            .animation(reduceMotion ? nil : MoleMotion.press,
-                       value: configuration.isPressed)
-    }
-}
-
 private struct ClipboardHistoryCard: View {
     let entry: ClipboardHistoryManager.Entry
     let onCopy: () -> Void
@@ -167,57 +198,81 @@ private struct ClipboardHistoryCard: View {
 
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.displayScale) private var displayScale
     @State private var copied = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 7) {
-                Label(l10n.t(kindTitleKey), systemImage: kindIcon)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(kindTint)
-                Spacer()
-                Text(entry.date, style: .relative)
-                    .font(.system(size: 9).monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                Button(action: onTogglePin) {
-                    Image(systemName: entry.isPinned ? "pin.fill" : "pin")
-                }
-                .buttonStyle(ClipboardIconButtonStyle(
-                    tint: entry.isPinned ? Color.moleAccentText : Color.secondary
-                ))
-            }
-
+        VStack(alignment: .leading, spacing: 0) {
             content
-                .frame(maxWidth: .infinity, minHeight: 84, maxHeight: 84,
-                       alignment: .topLeading)
+                .frame(maxWidth: .infinity, minHeight: 140, maxHeight: 140,
+                       alignment: entry.kind == .image ? .center : .topLeading)
                 .clipped()
+                .padding(10)
 
-            HStack(spacing: 8) {
-                Button {
-                    onCopy()
-                    copied = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
-                } label: {
-                    Label(l10n.t(copied ? "shot.copied" : "clip.copy"),
-                          systemImage: copied ? "checkmark" : "doc.on.doc")
-                }
-                .buttonStyle(SecondaryButtonStyle(tint: copied ? Color.moleAccentText : nil))
-
-                Spacer()
-
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(ClipboardIconButtonStyle(tint: .secondary))
-            }
+            footer
         }
-        .padding(12)
-        .frame(height: 182, alignment: .topLeading)
-        .clipped()
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(entry.isPinned ? Color.moleAccent.opacity(0.075) : Color.surface1))
+        .frame(height: 194, alignment: .topLeading)
+        .modifier(ListRowSurface(selected: entry.isPinned))
+        .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         .animation(reduceMotion ? nil : MoleMotion.selection, value: entry.isPinned)
         .animation(reduceMotion ? nil : MoleMotion.press, value: copied)
+        .task(id: copied) {
+            guard copied else { return }
+            do {
+                try await Task.sleep(for: .seconds(1.2))
+                copied = false
+            } catch { }
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 4) {
+            Image(systemName: kindIcon)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(kindTint)
+                .fixedSize()
+                .help(l10n.t(kindTitleKey))
+                .accessibilityLabel(l10n.t(kindTitleKey))
+
+            Spacer(minLength: 6)
+
+            Button {
+                onCopy()
+                copied = true
+            } label: {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+            }
+            .buttonStyle(MoleIconButtonStyle(isActive: copied,
+                                            tint: copied ? Color.success : Color.moleAccentText,
+                                            size: 24, showsBackground: copied))
+            .help(l10n.t(copied ? "shot.copied" : "clip.copy"))
+            .accessibilityLabel(l10n.t(copied ? "shot.copied" : "clip.copy"))
+
+            Button(action: onTogglePin) {
+                Image(systemName: entry.isPinned ? "pin.fill" : "pin")
+            }
+            .buttonStyle(MoleIconButtonStyle(isActive: entry.isPinned, size: 24,
+                                            showsBackground: entry.isPinned))
+            .help(l10n.t(entry.isPinned ? "clip.unpin" : "clip.pin"))
+            .accessibilityLabel(l10n.t(entry.isPinned ? "clip.unpin" : "clip.pin"))
+            .accessibilityAddTraits(entry.isPinned ? .isSelected : [])
+
+            Button(action: onDelete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(MoleIconButtonStyle(size: 24, showsBackground: false))
+            .help(l10n.t("clip.delete"))
+            .accessibilityLabel(l10n.t("clip.delete"))
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .background(Color.surface2)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.hairline)
+                .frame(height: 1 / max(displayScale, 1))
+                .allowsHitTesting(false)
+        }
     }
 
     @ViewBuilder
@@ -229,9 +284,7 @@ private struct ClipboardHistoryCard: View {
                     .resizable()
                     .interpolation(.high)
                     .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: 92)
-                    .background(RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.black.opacity(0.16)))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
                 Text(l10n.t("clip.imageUnavailable"))
@@ -241,23 +294,31 @@ private struct ClipboardHistoryCard: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text(entry.filePaths.map { URL(fileURLWithPath: $0).lastPathComponent }
                     .joined(separator: ", "))
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(2)
-                Text(entry.filePaths.joined(separator: "\n"))
-                    .font(.system(size: 9).monospaced())
-                    .foregroundStyle(.tertiary)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.primary)
                     .lineLimit(3)
+                Text(entry.filePaths.joined(separator: "\n"))
+                    .font(.system(size: 10).monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
             }
         case .url:
             Text(entry.text ?? "")
-                .font(.system(size: 11).monospaced())
+                .font(.system(size: 13).monospaced())
                 .foregroundStyle(Color.moleAccentText)
-                .lineLimit(4)
+                .lineSpacing(3)
+                .lineLimit(6)
         case .text:
-            Text(entry.text ?? "")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .lineLimit(5)
+            ScrollView(.vertical) {
+                Text(entry.text ?? "")
+                    .font(.system(size: 12).monospaced())
+                    .foregroundStyle(.primary)
+                    .lineSpacing(5)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(.trailing, 4)
+            }
         }
     }
 
@@ -265,7 +326,7 @@ private struct ClipboardHistoryCard: View {
 
     private var kindIcon: String {
         switch entry.kind {
-        case .text: "text.alignleft"
+        case .text: "doc.plaintext"
         case .url: "link"
         case .file: "doc"
         case .image: "photo"
@@ -274,10 +335,10 @@ private struct ClipboardHistoryCard: View {
 
     private var kindTint: Color {
         switch entry.kind {
-        case .text: .secondary
-        case .url: Color.accentText
-        case .file: Color.warning
-        case .image: .purple
+        case .text: ClipboardResourceColors.text
+        case .url: ClipboardResourceColors.url
+        case .file: ClipboardResourceColors.file
+        case .image: ClipboardResourceColors.image
         }
     }
 }

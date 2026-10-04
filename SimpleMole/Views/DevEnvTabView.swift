@@ -41,17 +41,18 @@ struct DevEnvTabView: View {
                     .accessibilityIdentifier("dev-workspace-search-activity")
                 }
             }
-            .frame(width: 158).frame(maxHeight: .infinity, alignment: .topLeading)
-            .padding(.leading, 14).padding(.top, 14).padding(.bottom, 8)
+            .frame(width: 120).frame(maxHeight: .infinity, alignment: .topLeading)
+            .padding(.leading, 10).padding(.top, 14).padding(.bottom, 8)
             ScrollView {
-                LiquidGlassGroup {
-                    VStack(alignment: .leading, spacing: 12) {
-                        sectionContent
-                        DeveloperCommandPanel(workspace: workspace)
-                    }.frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(.leading, 14).padding(.trailing, 20).padding(.vertical, 14)
-                }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(alignment: .leading, spacing: 12) {
+                    sectionContent
+                    DeveloperCommandPanel(workspace: workspace)
+                }.frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(10)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentPanel()
+            .padding(EdgeInsets(top: 12, leading: 10, bottom: 12, trailing: 12))
         }.frame(maxHeight: .infinity).environment(\.liquidNamespace, glassNamespace)
         .task(id: state.devWorkspaceRefreshToken) {
             workspace.attach(state: state)
@@ -180,39 +181,24 @@ struct DevSectionSidebar: View {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(DeveloperWorkspaceSection.allCases) { item in
                     Button { selection = item.rawValue } label: {
-                        HStack(spacing: 8) {
+                        HStack(spacing: 6) {
                             Image(systemName: item.symbol).font(.system(size: 12, weight: .medium)).frame(width: 16)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(l10n.t(item.titleKey)).font(.system(size: 12, weight: selection == item.rawValue ? .semibold : .medium))
-                                if let detail = details[item], !detail.isEmpty { Text(detail).font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1) }
+                                    .lineLimit(1).minimumScaleFactor(0.85)
+                                if let detail = details[item], !detail.isEmpty { Text(detail).font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1).minimumScaleFactor(0.85) }
                             }
                             Spacer(minLength: 0)
-                        }.padding(.horizontal, 8).padding(.vertical, 9)
+                        }.padding(.horizontal, 6).padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading).contentShape(RoundedRectangle(cornerRadius: 10))
-                        .modifier(SelectionLens(selected: selection == item.rawValue, namespace: namespace))
+                        .modifier(SidebarSelectionLens(selected: selection == item.rawValue,
+                            id: "dev-section-selection", namespace: namespace))
                     }.buttonStyle(MolePlainButtonStyle(pressedScale: 0.98))
                     .accessibilityIdentifier("dev-section-" + item.rawValue)
                     .accessibilityAddTraits(selection == item.rawValue ? .isSelected : [])
                 }
             }
         }.animation(reduceMotion ? nil : MoleMotion.selection, value: selection).accessibilityIdentifier("dev-workspace-sections")
-    }
-    private struct SelectionLens: ViewModifier {
-        let selected: Bool
-        let namespace: Namespace.ID
-        @Environment(\.accessibilityReduceMotion) private var reduceMotion
-        @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-        @Environment(\.controlActiveState) private var controlActiveState
-        @ViewBuilder func body(content: Content) -> some View {
-            if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
-                if selected {
-                    content.glassEffect(.regular.interactive(!reduceMotion), in: RoundedRectangle(cornerRadius: 10))
-                        .glassEffectID("dev-section-selection", in: namespace).glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-                } else { content }
-            } else {
-                content.background { if selected { GlassSurface(cornerRadius: 10, usesSystemGlass: false, highlighted: true) } }
-            }
-        }
     }
 }
 
@@ -221,6 +207,8 @@ struct WhitelistSheet: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
     @State private var newPath = ""
+    @State private var validationMessage: String?
+    @FocusState private var isPathFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -292,23 +280,90 @@ struct WhitelistSheet: View {
             }
 
             Divider()
-            HStack(spacing: 8) {
-                TextField(l10n.t("wl.add.placeholder"), text: $newPath)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    TextField(l10n.t("wl.add.placeholder"), text: Binding(
+                        get: { newPath },
+                        set: { newPath = $0; validationMessage = nil }
+                    ))
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(size: 11))
-                Button {
-                    state.addWhitelistEntry(newPath)
-                    newPath = ""
-                } label: {
-                    Label(l10n.t("wl.add"), systemImage: "plus")
+                    .font(.system(size: 11, design: .monospaced))
+                    .focused($isPathFocused)
+                    .onSubmit(addPath)
+
+                    Button(action: pastePath) {
+                        Label(l10n.t("wl.paste"), systemImage: "doc.on.clipboard")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .help(l10n.t("wl.paste"))
+
+                    Button(action: chooseFolder) {
+                        Label(l10n.t("wl.chooseFolder"), systemImage: "folder")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .help(l10n.t("wl.chooseFolder"))
+
+                    Button(action: addPath) {
+                        Label(l10n.t("wl.add"), systemImage: "plus")
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .help(l10n.t("wl.add"))
+                    .disabled(newPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                .buttonStyle(SecondaryButtonStyle())
                 .labelStyle(.iconOnly)
-                .disabled(!newPath.trimmingCharacters(in: .whitespaces).hasPrefix("/"))
+
+                if let validationMessage {
+                    Text(validationMessage)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.danger)
+                }
             }
             .padding(16)
         }
         .frame(width: 520, height: 420)
         .onAppear { state.loadWhitelist() }
+    }
+
+    private func chooseFolder() {
+        // The app hosts SwiftUI in an AppKit window; attach the native picker
+        // explicitly so it cannot open behind the custom whitelist overlay.
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else {
+            validationMessage = l10n.t("wl.error.chooseFolder")
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else { return }
+            newPath = url.path
+            addPath()
+        }
+    }
+
+    private func addPath() {
+        newPath = newPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        validationMessage = state.addWhitelistEntry(newPath)
+        if validationMessage == nil { newPath = "" }
+        isPathFocused = true
+    }
+
+    private func pastePath() {
+        guard let value = NSPasteboard.general.string(forType: .string) else {
+            validationMessage = l10n.t("wl.error.clipboard")
+            return
+        }
+        newPath = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            newPath = try WhitelistPath.validated(newPath)
+            validationMessage = nil
+        } catch WhitelistPath.ValidationError.missing {
+            validationMessage = l10n.t("wl.error.missing")
+        } catch {
+            validationMessage = l10n.t("wl.error.invalid")
+        }
+        isPathFocused = true
     }
 }

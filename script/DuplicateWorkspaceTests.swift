@@ -124,6 +124,38 @@ struct DuplicateWorkspaceTests {
         try await Task.sleep(nanoseconds: 300_000_000)
         expect(racedRestore.duplicateResultCache.isEmpty && !racedRestore.duplicateScanFinished,
                "a late disk restore must not resurrect results invalidated by a known concurrent cleanup")
-        print("Duplicate workspace: mode reuse, preserved cancellation/failure, scheduler continuation, incremental cleanup, keep-one selection and persistent restart reuse passed")
+        func record(_ name: String, _ size: UInt64, pixels: Int? = nil) -> DuplicateFileRecord {
+            DuplicateFileRecord(file: DuplicateFile(path: "/merge/" + name, name: name, size: size,
+                                                    identity: DuplicateFileIdentity(stat()), sha256: name),
+                                imageInfo: pixels.map { DuplicateImageInfo(width: $0, height: $0, sharpness: 1) })
+        }
+        func snapshot(_ groups: [DuplicateFileGroup], cancelled: Bool = false, error: String? = nil) -> DuplicateScanSnapshot {
+            DuplicateScanSnapshot(groups: groups, roots: ["/merge"], scanned: 6, skipped: 0, partial: false,
+                cancelled: cancelled, error: error, exactCopiesSkipped: 1, reclaimableBytes: 30, defaultSelection: [])
+        }
+        let small = DuplicateFileGroup(id: "e1", members: [record("a", 10), record("b", 10)])
+        let large = DuplicateFileGroup(id: "e2", members: [record("c", 20), record("d", 20)])
+        let similarGroups = [
+            DuplicateFileGroup(id: "s1", members: [record("a", 10, pixels: 9), record("x", 50, pixels: 10)],
+                               kind: .similarImages),
+            DuplicateFileGroup(id: "s2", members: [record("y", 40, pixels: 10), record("z", 30, pixels: 20)],
+                               kind: .similarImages)
+        ]
+        let merged = DuplicateScanWorker.merged(exact: snapshot([small, large]), similar: snapshot(similarGroups))
+        expect(merged.groups.map(\.id) == ["e2", "e1", "similar-s2"]
+               && merged.groups.map(\.kind) == [.exact, .exact, .similarImages],
+               "merged results must list exact groups by reclaimable size first, then similar groups")
+        expect(merged.defaultSelection.contains("/merge/y") && !merged.defaultSelection.contains("/merge/z")
+               && merged.defaultSelection.count == 3 && merged.reclaimableBytes == 30 && merged.exactCopiesSkipped == 0,
+               "similar groups must pre-select all but the highest resolution copy without changing exact reclaim")
+        let failedSimilar = DuplicateScanWorker.merged(exact: snapshot([small]), similar: snapshot(similarGroups, error: "x"))
+        expect(failedSimilar.groups.map(\.id) == ["e1"] && failedSimilar.partial && failedSimilar.error == nil,
+               "a failed image comparison must keep exact results and mark coverage as partial")
+        let encoded = try PropertyListEncoder().encode(similarGroups[0])
+        let decoded = try PropertyListDecoder().decode(DuplicateFileGroup.self, from: encoded)
+        expect(decoded.kind == .similarImages,
+               "group kind must survive persistence")
+
+        print("Duplicate workspace: merged exact/similar listing, mode reuse, preserved cancellation/failure, scheduler continuation, incremental cleanup, keep-one selection and persistent restart reuse passed")
     }
 }

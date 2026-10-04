@@ -53,7 +53,7 @@ struct AnalyzeTabView: View {
             AnalyzeSidebar(selection: $state.analyzeMode, details: sidebarDetails,
                            scanningMode: state.isScanningDuplicates ? .duplicates : state.analyzingMode,
                            isSearching: state.isIncrementalAnalysisScanning)
-                .frame(width: 166).padding(.leading, 14).padding(.vertical, 14)
+                .frame(width: 120).padding(.leading, 10).padding(.vertical, 14)
             VStack(spacing: 0) {
                 header
                 NoriPageTransition(phase: fullScanning ? 1 : scanned ? 2 : 0) { content }
@@ -61,6 +61,8 @@ struct AnalyzeTabView: View {
                 if (hasResults || scanned) && !fullScanning { footer }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentPanel()
+            .padding(EdgeInsets(top: 12, leading: 10, bottom: 12, trailing: 12))
         }
         .frame(maxHeight: .infinity)
         .sheet(isPresented: $state.showSlimSheet) { SlimOptionsSheet(state: state) }
@@ -85,20 +87,16 @@ struct AnalyzeTabView: View {
     }
 
     @ViewBuilder private var header: some View {
-        if mode == .duplicates {
-            HStack(spacing: 8) {
-                PillPicker(items: [l10n.t("duplicates.mode.exact"), l10n.t("duplicates.mode.similar")],
-                    selection: Binding(
-                        get: { state.duplicateMode == .exact ? 0 : 1 },
-                        set: { state.setDuplicateMode($0 == 0 ? .exact : .similarImages) }),
-                    alignment: .leading)
-                    .frame(width: 220)
-                    .disabled(state.isBusy || state.isScanningDuplicates)
-                    .accessibilityLabel(l10n.t("duplicates.mode.label"))
-                    .accessibilityIdentifier("analysis-duplicate-mode")
-                Spacer(minLength: 8)
-            }
-            .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 8)
+        if mode == .duplicates, !fullScanning, !state.duplicateGroups.isEmpty {
+            let similarCount = state.duplicateGroups.reduce(0) { $0 + ($1.kind == .similarImages ? 1 : 0) }
+            Text(l10n.tf("duplicates.summary.merged", state.duplicateGroups.count - similarCount,
+                         ByteFormat.format(state.duplicateReclaimableBytes), similarCount))
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
+                .accessibilityIdentifier("analysis-duplicate-summary")
         }
     }
 
@@ -134,17 +132,15 @@ struct AnalyzeTabView: View {
                             onPreview: { previewURL = URL(fileURLWithPath: $0) })
         } else {
             ScrollView {
-                LiquidGlassGroup {
-                    LazyVStack(spacing: 8) {
-                        if mode == .duplicates {
-                            DuplicatesSectionCard(state: state,
-                                onPreview: { previewURL = URL(fileURLWithPath: $0) }, showsControls: false)
-                        } else {
-                            ForEach(state.analysisFileItems(for: mode)) { item in analysisFileRow(item) }
-                        }
+                LazyVStack(spacing: 8) {
+                    if mode == .duplicates {
+                        DuplicatesSectionCard(state: state,
+                            onPreview: { previewURL = URL(fileURLWithPath: $0) }, showsControls: false)
+                    } else {
+                        ForEach(state.analysisFileItems(for: mode)) { item in analysisFileRow(item) }
                     }
-                    .padding(.horizontal, 20).padding(.vertical, 4)
                 }
+                .padding(.horizontal, 8).padding(.vertical, 4)
             }
             .accessibilityIdentifier("analysis-results-" + mode.rawValue)
         }
@@ -189,7 +185,7 @@ struct AnalyzeTabView: View {
                 .accessibilityLabel(l10n.t("analyze.reveal") + ": " + item.name)
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .modifier(ListRowGlass(selected: selected))
+        .modifier(ListRowSurface(selected: selected))
         .accessibilityIdentifier("analysis-file-" + item.path)
     }
 
@@ -268,7 +264,7 @@ struct AnalyzeTabView: View {
                 }
             }
         }
-        .padding(.horizontal, 20).padding(.bottom, 12)
+        .padding(.horizontal, 8).padding(.bottom, 2)
     }
 
     private var sidebarDetails: [AnalyzeMode: String] {
@@ -297,7 +293,7 @@ struct AnalyzeTabView: View {
     private var trashConfirmationMessage: String {
         l10n.tf("duplicates.selection.count", state.duplicateSelectedCount,
                 ByteFormat.format(state.duplicateSelectedBytes)) + "\n\n"
-            + l10n.t(state.duplicateMode == .exact ? "duplicates.trash.message" : "duplicates.trash.similarMessage")
+            + l10n.t(state.duplicateSelectionIncludesSimilar ? "duplicates.trash.similarMessage" : "duplicates.trash.message")
     }
 }
 
@@ -309,30 +305,25 @@ private struct AnalysisSelectionButtons: View {
     let onSelectAll: () -> Void
     let onDeselectAll: () -> Void
     @ObservedObject private var l10n = L10n.shared
-    @Namespace private var selectionNamespace
 
     var body: some View {
-        LiquidGlassGroup {
-            HStack(spacing: 8) {
-                Button(action: onSelectAll) { AnalysisSelectionGlyph(checkmark: true) }
-                    .buttonStyle(AnalysisSelectionButtonStyle(isActive: allSelected,
-                        id: "all", namespace: selectionNamespace))
-                    .disabled(!canSelectAll)
-                    .help(l10n.t("analyze.selection.all"))
-                    .accessibilityLabel(l10n.t("analyze.selection.all"))
-                    .accessibilityAddTraits(allSelected ? .isSelected : [])
-                    .accessibilityRemoveTraits(allSelected ? [] : .isSelected)
-                    .accessibilityIdentifier("analysis-select-all")
-                Button(action: onDeselectAll) { AnalysisSelectionGlyph(checkmark: false) }
-                    .buttonStyle(AnalysisSelectionButtonStyle(isActive: noneSelected,
-                        id: "none", namespace: selectionNamespace))
-                    .disabled(!canDeselectAll)
-                    .help(l10n.t("analyze.selection.none"))
-                    .accessibilityLabel(l10n.t("analyze.selection.none"))
-                    .accessibilityAddTraits(noneSelected ? .isSelected : [])
-                    .accessibilityRemoveTraits(noneSelected ? [] : .isSelected)
-                    .accessibilityIdentifier("analysis-deselect-all")
-            }
+        HStack(spacing: 8) {
+            Button(action: onSelectAll) { AnalysisSelectionGlyph(checkmark: true) }
+                .buttonStyle(AnalysisSelectionButtonStyle(isActive: allSelected))
+                .disabled(!canSelectAll)
+                .help(l10n.t("analyze.selection.all"))
+                .accessibilityLabel(l10n.t("analyze.selection.all"))
+                .accessibilityAddTraits(allSelected ? .isSelected : [])
+                .accessibilityRemoveTraits(allSelected ? [] : .isSelected)
+                .accessibilityIdentifier("analysis-select-all")
+            Button(action: onDeselectAll) { AnalysisSelectionGlyph(checkmark: false) }
+                .buttonStyle(AnalysisSelectionButtonStyle(isActive: noneSelected))
+                .disabled(!canDeselectAll)
+                .help(l10n.t("analyze.selection.none"))
+                .accessibilityLabel(l10n.t("analyze.selection.none"))
+                .accessibilityAddTraits(noneSelected ? .isSelected : [])
+                .accessibilityRemoveTraits(noneSelected ? [] : .isSelected)
+                .accessibilityIdentifier("analysis-deselect-all")
         }
     }
 }
@@ -371,53 +362,28 @@ private struct AnalysisSelectionMark: Shape {
 
 private struct AnalysisSelectionButtonStyle: ButtonStyle {
     let isActive: Bool
-    let id: String
-    let namespace: Namespace.ID
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.controlActiveState) private var controlActiveState
     @State private var isHovering = false
     private var shape: Circle { Circle() }
 
-    @ViewBuilder func makeBody(configuration: Configuration) -> some View {
-        Group {
-            if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
-                icon(configuration)
-                    .glassEffect(glass(configuration), in: shape)
-                    .glassEffectID(isActive ? "selection" : id, in: namespace)
-                    .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-                    .clipGlassEdge(in: shape)
-            } else {
-                icon(configuration)
-                    .background {
-                        if isActive || (isEnabled && (isHovering || configuration.isPressed)) {
-                            GlassSurface(cornerRadius: 16, usesSystemGlass: false, highlighted: isActive)
-                        }
-                    }
-            }
-        }
-        .opacity(isEnabled ? 1 : isActive ? 0.75 : 0.4)
-        .scaleEffect(reduceMotion || !isEnabled || !configuration.isPressed ? 1 : 0.94)
-        .onHover { isHovering = $0 }
-        .animation(reduceMotion ? nil : MoleMotion.press, value: configuration.isPressed)
-        .animation(reduceMotion ? nil : MoleMotion.hover, value: isHovering)
-        .animation(reduceMotion ? nil : MoleMotion.selection, value: isActive)
-    }
-
-    private func icon(_ configuration: Configuration) -> some View {
+    func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(isActive ? Color.moleAccentText
                 : isEnabled && (isHovering || configuration.isPressed) ? Color.primary : Color.secondary)
             .frame(width: 32, height: 32)
+            .background {
+                if isEnabled && (isHovering || configuration.isPressed) {
+                    Circle().fill(Color.surface2)
+                }
+            }
             .contentShape(shape)
-    }
-
-    @available(macOS 26.0, *)
-    private func glass(_ configuration: Configuration) -> Glass {
-        let visible = isActive || (isEnabled && (isHovering || configuration.isPressed))
-        return (visible ? Glass.regular.tint(isActive ? Color.moleAccent.opacity(0.24) : .clear) : .identity)
-            .interactive(isEnabled && !reduceMotion)
+            .opacity(isEnabled ? 1 : isActive ? 0.75 : 0.4)
+            .scaleEffect(reduceMotion || !isEnabled || !configuration.isPressed ? 1 : 0.94)
+            .onHover { isHovering = $0 }
+            .animation(reduceMotion ? nil : MoleMotion.press, value: configuration.isPressed)
+            .animation(reduceMotion ? nil : MoleMotion.hover, value: isHovering)
+            .animation(reduceMotion ? nil : MoleMotion.selection, value: isActive)
     }
 }
 
@@ -431,7 +397,8 @@ private struct AnalysisIconButtonStyle: ButtonStyle {
             if quiet {
                 icon(configuration)
             } else {
-                icon(configuration).modifier(ActionGlassChrome())
+                icon(configuration)
+                    .background(Capsule().fill(Color.surface2))
             }
         }
         .opacity(isEnabled ? 1 : 0.5)
@@ -491,21 +458,24 @@ private struct AnalyzeSidebar: View {
                 VStack(spacing: 3) {
                     ForEach(AnalyzeMode.menuOrder) { item in
                         Button { selection = item } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: item.symbol).font(.system(size: 13, weight: .medium)).frame(width: 18)
+                            HStack(spacing: 6) {
+                                Image(systemName: item.symbol).font(.system(size: 13, weight: .medium)).frame(width: 16)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(l10n.t(item.titleKey))
                                         .font(.system(size: 12, weight: selection == item ? .semibold : .medium))
+                                        .lineLimit(1).minimumScaleFactor(0.85)
                                     Text(scanningMode == item ? l10n.t("analyze.scanning") : details[item] ?? "")
                                         .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                        .minimumScaleFactor(0.85)
                                 }
                                 Spacer(minLength: 0)
                                 if scanningMode == item { ProgressView().controlSize(.mini) }
                             }
-                            .padding(.horizontal, 8).padding(.vertical, 11)
+                            .padding(.horizontal, 6).padding(.vertical, 8)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(RoundedRectangle(cornerRadius: 10))
-                            .modifier(AnalysisSelectionLens(selected: selection == item, namespace: namespace))
+                            .modifier(SidebarSelectionLens(selected: selection == item,
+                                id: "analysis-selection", namespace: namespace))
                         }
                         .buttonStyle(MolePlainButtonStyle(pressedScale: 0.98))
                         .accessibilityAddTraits(selection == item ? .isSelected : [])
@@ -527,25 +497,5 @@ private struct AnalyzeSidebar: View {
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .animation(reduceMotion ? nil : MoleMotion.selection, value: selection)
         .accessibilityIdentifier("analysis-sidebar")
-    }
-}
-
-private struct AnalysisSelectionLens: ViewModifier {
-    let selected: Bool
-    let namespace: Namespace.ID
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.controlActiveState) private var controlActiveState
-
-    @ViewBuilder func body(content: Content) -> some View {
-        if selected {
-            if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
-                content.glassEffect(.regular.interactive(!reduceMotion), in: RoundedRectangle(cornerRadius: 10))
-                    .glassEffectID("analysis-selection", in: namespace)
-                    .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-            } else {
-                content.background(GlassSurface(cornerRadius: 10, usesSystemGlass: false, highlighted: true))
-            }
-        } else { content }
     }
 }

@@ -82,6 +82,18 @@ struct CleanupScanTests {
         try write("Library/iTunes/iPhone Software Updates/iPhone.ipsw")
         try write("Library/Application Support/Google/Chrome/component_crx_cache/entry")
         try write("Library/Application Support/Google/Chrome/Default/Login Data")
+        // 端侧 AI 模型（Chrome/Edge/Brave 三个审计过的 profile 根）、
+        // 更新器下载缓存，以及应归 Agent 页的 codex 环境缓存。
+        try write("Library/Application Support/Google/Chrome/OptGuideOnDeviceModel/data.dat")
+        try write("Library/Application Support/Google/Chrome/OptGuideOnDeviceClassifierModel/data.dat")
+        try write("Library/Application Support/Google/Chrome/optimization_guide_model_store/data.dat")
+        try write("Library/Application Support/Microsoft Edge/OptGuideOnDeviceModel/data.dat")
+        try write("Library/Application Support/BraveSoftware/Brave-Browser/OptGuideOnDeviceModel/data.dat")
+        try write("Library/Application Support/Google/GoogleUpdater/crx_cache/package.crx")
+        try write("Library/Application Support/Microsoft/EdgeUpdater/crx_cache/package.crx")
+        try write("Library/Application Support/Google/Chrome/Default/Preferences")
+        try write(".cache/codex-blender/blender-4.5.9-macos-arm64.dmg")
+        try write(".cache/codex-runtimes/codex-runtime-install-jnYG91/stage")
         // Hard-safety pattern: merged even though a user whitelist exists.
         try write("Library/Caches/CloudKit/entry")
         try write(".config/mole/whitelist", bytes: 0)
@@ -144,6 +156,20 @@ struct CleanupScanTests {
         expect(quickPaths.contains(home.path + "/Library/Application Support/Google/Chrome/component_crx_cache"),
                "Chrome CRX cache missing")
         expect(!quickPaths.contains(where: { $0.contains("Login Data") }), "durable browser data offered")
+        expect(quickPaths.contains(home.path + "/Library/Application Support/Google/Chrome/OptGuideOnDeviceModel")
+            && quickPaths.contains(home.path + "/Library/Application Support/Google/Chrome/OptGuideOnDeviceClassifierModel")
+            && quickPaths.contains(home.path + "/Library/Application Support/Google/Chrome/optimization_guide_model_store"),
+               "Chrome on-device model caches missing")
+        expect(quickPaths.contains(home.path + "/Library/Application Support/Microsoft Edge/OptGuideOnDeviceModel")
+            && quickPaths.contains(home.path + "/Library/Application Support/BraveSoftware/Brave-Browser/OptGuideOnDeviceModel"),
+               "Edge/Brave on-device model caches missing")
+        expect(quickPaths.contains(home.path + "/Library/Application Support/Google/GoogleUpdater/crx_cache")
+            && quickPaths.contains(home.path + "/Library/Application Support/Microsoft/EdgeUpdater/crx_cache"),
+               "updater component caches missing")
+        expect(!quickPaths.contains(where: { $0.contains("/Google/Chrome/Default") }),
+               "protected browser profile data offered")
+        expect(!quickPaths.contains(where: { $0.contains("codex-blender") || $0.contains("codex-runtimes") }),
+               "agent-owned Codex runtime caches leaked into the junk scan")
         expect(!quickPaths.contains(where: { $0.contains("/CloudKit") }),
                "Mole safety whitelist (CloudKit) was not merged into a user whitelist")
 
@@ -212,6 +238,82 @@ struct CleanupScanTests {
         expect(residualDeep.categories.flatMap(\.paths).allSatisfy {
             $0 == orphanHome.path + "/Library/Application Support/Cursor/Cache"
         }, "deep scan admitted Agent data outside audited cache")
+
+        // 真实账户 T/X 目录的只读预检：用户 T/C 子项 24 小时门槛生效，
+        // X 只认 *.code_sign_clone。夹具建在真实 T/X 下，用完即删，
+        // 验证只走到 preflight，不触发任何删除。
+        var confBytes = [CChar](repeating: 0, count: 4096)
+        expect(confstr(_CS_DARWIN_USER_TEMP_DIR, &confBytes, confBytes.count) > 0,
+               "account temp root unavailable")
+        let realT = CleanupRiskPolicy.canonicalOpenFilePath(String(cString: confBytes))
+        let freshTDir = realT + "/nori-scan-fresh-" + UUID().uuidString
+        let staleTDir = realT + "/nori-scan-stale-" + UUID().uuidString
+        let xDir = (realT as NSString).deletingLastPathComponent + "/X"
+        let cloneDir = xDir + "/nori-scan-" + UUID().uuidString + ".code_sign_clone"
+        let plainDir = xDir + "/nori-scan-" + UUID().uuidString + "-plain"
+        for dir in [freshTDir, staleTDir, cloneDir, plainDir] {
+            try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            try Data(repeating: 97, count: 128).write(to: URL(fileURLWithPath: dir + "/payload"))
+        }
+        defer { for dir in [freshTDir, staleTDir, cloneDir, plainDir] { try? fm.removeItem(atPath: dir) } }
+        let freshDate = Date().addingTimeInterval(-23 * 3600)
+        let staleDate = Date().addingTimeInterval(-25 * 3600)
+        for (dir, date) in [(freshTDir, freshDate), (staleTDir, staleDate)] {
+            for path in [dir, dir + "/payload"] {
+                // atime 与 mtime 都要超过保留期才算可回收，POSIX utimes 同时设置。
+                let seconds = Int(date.timeIntervalSince1970)
+                var times = [timeval(tv_sec: seconds, tv_usec: 0),
+                             timeval(tv_sec: seconds, tv_usec: 0)]
+                expect(utimes(path, &times) == 0, "could not age fixture " + path)
+            }
+        }
+        let systemCore = NativeCore(cleanupOpenFileProbe: { [] })
+        let systemCategory = CleanupCategory(name: "System", paths: [freshTDir, staleTDir, cloneDir, plainDir],
+            bytes: 0, selected: true, source: .core, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .openFile,
+            reasonKey: "cleanup.risk.temporaryFile")
+        let systemChecked = systemCore.preflightCleanupCategories([systemCategory],
+            homeDirectory: home.path)
+        expect(systemChecked.succeeded, "system preflight failed")
+        let systemOffered = Set(systemChecked.categories.flatMap(\.paths))
+        expect(systemOffered.contains(staleTDir), "25h user-T child blocked by the 24h gate")
+        expect(!systemOffered.contains(freshTDir), "23h user-T child offered past the 24h gate")
+        expect(systemOffered.contains(cloneDir), "code-sign clone blocked")
+        expect(!systemOffered.contains(plainDir), "non-clone X child offered")
+        expect(!systemChecked.administratorRequiredPaths.contains(cloneDir),
+               "user-owned code-sign clone must not require administrator")
+
+        // 统一日志子目录是保留壳：预检只产出直接子级 *.tracev3，目录本身
+        // 永不成项（无论其 mtime 多旧）；伪造的目录条目在 apply 层被跳过，
+        // 不会 rmdir。对真实目录做只读预检，不执行任何删除。
+        let diagnosticsCore = NativeCore(cleanupOpenFileProbe: { [] })
+        let diagnosticsCategory = CleanupCategory(name: "Unified Logs",
+            paths: CleanupRiskPolicy.unifiedLogDirectories.sorted(),
+            bytes: 0, selected: true, source: .core, risk: .safe,
+            disposal: .permanentDelete, applyRoute: .genericTrash,
+            activityGuard: .openFile, reasonKey: "cleanup.risk.unifiedLog")
+        let diagnosticsChecked = diagnosticsCore.preflightCleanupCategories(
+            [diagnosticsCategory], homeDirectory: home.path,
+            includingAdministratorRequired: true)
+        let diagnosticsOffered = diagnosticsChecked.categories.flatMap(\.paths)
+        expect(diagnosticsOffered.allSatisfy {
+            $0.hasSuffix(".tracev3")
+                && CleanupRiskPolicy.unifiedLogDirectories.contains(
+                    ($0 as NSString).deletingLastPathComponent)
+        }, "unified log scan must only offer direct *.tracev3 children")
+        expect(!diagnosticsOffered.contains { CleanupRiskPolicy.isUnifiedLogDirectory($0) },
+               "diagnostics container directory offered as a deletable entry")
+        let shellPath = "/private/var/db/diagnostics/Persist"
+        let forgedShell = NativeCore(cleanupOpenFileProbe: { [] }).applyCleanup(
+            items: [DeletionPlan.Item(record: shellPath,
+                                      identity: DeletionPlan.identity(at: shellPath) ?? "")],
+            permanent: true, homeDirectory: home.path)
+        expect(forgedShell.removed == 0 && forgedShell.failed == 0
+               && forgedShell.skipped == 1
+               && forgedShell.messages.contains { $0.contains("retained diagnostics") }
+               && fm.fileExists(atPath: shellPath),
+               "forged diagnostics container item must be refused without deletion")
+
         let cancelled = CleanupScanControl(mode: .quick)
         cancelled.cancel()
         let stopped = await NativeCore.shared.scanCleanup(homeDirectory: home.path, control: cancelled)
@@ -970,6 +1072,104 @@ struct CleanupScanTests {
                 permanent: true, homeDirectory: liveHome.path)
             expect(ownedClean.removedPaths.contains(ownedLeaf.path) && ownedClean.skipped == 0,
                    "running application ownership froze unoccupied fixture cache garbage")
+        }
+
+        let dataHome = fixture.appendingPathComponent("app-data-home")
+        func writeData(_ relative: String, bytes: Int = 600 * 1024) throws {
+            let url = dataHome.appendingPathComponent(relative)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: 101, count: bytes).write(to: url)
+        }
+        let gone = "com.example.nori-gone-app"
+        try writeData("Library/Application Support/\(gone)/state.db")
+        try writeData("Library/Containers/\(gone)/Data/Library/Cookies/Cookies.binarycookies")
+        try writeData("Library/Preferences/\(gone).plist", bytes: 512)
+        try writeData("Library/Application Support/com.apple.private-fixture/keep", bytes: 2 * 1024 * 1024)
+        try writeData("Library/Application Support/com.example.tiny-gone/keep", bytes: 64)
+        for project in ["Code/web-a", "Code/clients/web-b"] {
+            try writeData(project + "/package.json", bytes: 32)
+            try writeData(project + "/node_modules/lib/index.js", bytes: 30 * 1024 * 1024)
+            try writeData(project + "/node_modules/lib/node_modules/nested/index.js", bytes: 1024)
+        }
+        try writeData("Code/no-marker/node_modules/stray.js", bytes: 30 * 1024 * 1024)
+        try writeData("Code/py/.venv/pyvenv.cfg", bytes: 32)
+        try writeData("Code/py/.venv/lib/site.py", bytes: 64)
+        try writeData("Library/Application Support/Tool/project/package.json", bytes: 32)
+        let artifactPaths = Set(NativeCore.shared.projectArtifactPaths(home: dataHome))
+        expect(artifactPaths == Set([
+                   dataHome.appendingPathComponent("Code/web-a/node_modules").path,
+                   dataHome.appendingPathComponent("Code/clients/web-b/node_modules").path,
+                   dataHome.appendingPathComponent("Code/py/.venv").path]),
+               "project artifacts need their marker and must not descend into nested artifacts: \(artifactPaths)")
+        let reviewCategories = NativeCore.shared.appDataReviewCategories(
+            home: dataHome, offered: [], whitelist: [])
+        let leftover = reviewCategories.first { $0.name == gone + " leftovers" }
+        expect(leftover?.isAppDataReview == true && leftover?.source == .appLeftover && leftover?.selected == false
+               && Set(leftover?.paths ?? []) == Set([
+                   dataHome.appendingPathComponent("Library/Application Support/\(gone)").path,
+                   dataHome.appendingPathComponent("Library/Containers/\(gone)").path,
+                   dataHome.appendingPathComponent("Library/Preferences/\(gone).plist").path]),
+               "an uninstalled app's full data set must be offered as one unselected review item")
+        expect(!reviewCategories.contains { category in
+            category.paths.contains { $0.contains("com.apple.") }
+        }, "Apple data must not be offered")
+        let orphanedSettings = reviewCategories.first { $0.name == "Orphaned Settings" }
+        expect(orphanedSettings?.paths == [dataHome.appendingPathComponent("Library/Application Support/com.example.tiny-gone").path]
+               && orphanedSettings?.selected == false,
+               "small leftovers collapse into one unselected settings row")
+        try writeData("Library/LaunchAgents/com.example.gone-agent.plist", bytes: 0)
+        try (["Label": "com.example.gone-agent",
+              "ProgramArguments": [dataHome.appendingPathComponent("Applications/Gone.app/Contents/MacOS/agent").path]] as NSDictionary)
+            .write(to: dataHome.appendingPathComponent("Library/LaunchAgents/com.example.gone-agent.plist"))
+        try (["Label": "com.example.live-agent", "ProgramArguments": ["/bin/ls"]] as NSDictionary)
+            .write(to: dataHome.appendingPathComponent("Library/LaunchAgents/com.example.live-agent.plist"))
+        let brokenAgents = NativeCore.shared.appDataReviewCategories(home: dataHome, offered: [], whitelist: [])
+            .first { $0.name == "Broken Login Agents" }
+        expect(brokenAgents?.paths == [dataHome.appendingPathComponent("Library/LaunchAgents/com.example.gone-agent.plist").path]
+               && CleanupRiskPolicy.reviewTargetKind(brokenAgents!.paths[0], homeDirectory: dataHome.path) == .brokenLaunchAgent
+               && CleanupRiskPolicy.reviewTargetKind(dataHome.appendingPathComponent("Library/LaunchAgents/com.example.live-agent.plist").path,
+                                                     homeDirectory: dataHome.path) == nil,
+               "only launch agents whose program is missing are offered")
+        let modules = reviewCategories.first { $0.name == "Project node_modules" }
+        expect(modules?.paths.count == 2 && modules?.selected == false && modules?.source == .developerCache
+               && CleanupGroupBucket(category: modules!, homeDirectory: dataHome.path) == .developer,
+               "project dependencies must be offered as one unselected developer review item")
+        expect(CleanupRiskPolicy.isAppDataRoot(dataHome.path + "/Library/Application Support/Foo/Bar",
+                                               homeDirectory: dataHome.path)
+               && !CleanupRiskPolicy.isAppDataRoot(dataHome.path + "/Library/Application Support/Foo/Bar/Baz",
+                                                   homeDirectory: dataHome.path)
+               && !CleanupRiskPolicy.isAppDataRoot(dataHome.path + "/Documents/Foo", homeDirectory: dataHome.path)
+               && !CleanupRiskPolicy.isAppDataRoot(dataHome.path + "/Library/Preferences/.GlobalPreferences.plist",
+                                                   homeDirectory: dataHome.path),
+               "app data shapes must stay limited to known per-app roots")
+        if var leftover {
+            expect(!CleanupRiskPolicy.isEligible(leftover, mode: .quickClean, running: RunningApplicationSnapshot())
+                   && !CleanupRiskPolicy.isEligible(leftover, mode: .automatic, running: RunningApplicationSnapshot()),
+                   "app data review items must never run in quick or automatic cleanup")
+            leftover.selected = true
+            expect(CleanupCategory.manualCleanupCandidates(from: [leftover]).map(\.id) == [leftover.id]
+                   && CleanupCategory.safeCleanupCandidates(from: [leftover]).isEmpty,
+                   "selected app data must reach manual execution but never safe/quick candidate lists")
+            expect(CleanupRiskPolicy.isEligible(leftover, mode: .manual, running: RunningApplicationSnapshot())
+                   && !CleanupRiskPolicy.isEligible(leftover, mode: .manual, running: .unavailable)
+                   && !CleanupRiskPolicy.isEligible(leftover, mode: .manual,
+                        running: RunningApplicationSnapshot(bundleIdentifiers: [gone])),
+                   "manual app data cleanup requires a complete snapshot and an idle owner")
+            var trashed: [String] = []
+            let applied = NativeCore.shared.applyAppDataReview([leftover], homeDirectory: dataHome.path,
+                                                              trashHandler: { trashed.append($0.path) })
+            expect(Set(trashed) == Set(leftover.paths) && applied.failed == 0,
+                   "selected app data must reach the Trash route: \(applied.messages)")
+            try fm.createDirectory(at: dataHome.appendingPathComponent("Documents"), withIntermediateDirectories: true)
+            let descriptor = CleanupRiskPolicy.appDataReview(leftover: true)
+            let forged = CleanupCategory(name: "forged", paths: [dataHome.appendingPathComponent("Documents").path],
+                bytes: 1, selected: true, source: descriptor.source, risk: descriptor.risk,
+                disposal: descriptor.disposal, applyRoute: descriptor.applyRoute,
+                activityGuard: descriptor.activityGuard, reasonKey: descriptor.reasonKey)
+            let refusedForged = NativeCore.shared.applyAppDataReview([forged], homeDirectory: dataHome.path,
+                                                                    trashHandler: { _ in preconditionFailure("forged path trashed") })
+            expect(refusedForged.removed == 0 && refusedForged.skipped >= 1,
+                   "paths outside app data shapes must be refused at execution")
         }
 
         print(String(format: "PASS: catalog, grouping, deep scan, manual Agent residuals, exclusions, cancellation, partial sizes, hardlinks, pipe output, 7-day gate, sizing activity, custom locations, lexical guards, secure fd-walk deletion, leaf-level live caches, protected descendants, stable directory identity, open-file retry, scan-delete-rescan; 10000 files in %.3fs", benchmark.elapsed))

@@ -103,10 +103,14 @@ struct ActionGlassChrome: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.controlActiveState) private var controlActiveState
+    @Environment(\.isEnabled) private var isEnabled
 
     @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
+        if !isEnabled {
+            // 禁用控件不用玻璃：实底胶囊，避免次要操作与启用态同样醒目。
+            content.background(Capsule().fill(Color.surface1))
+        } else if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
             if let tint {
                 content
                     .glassEffect(.regular.tint(tint.opacity(0.24)).interactive(!reduceMotion), in: Capsule())
@@ -242,7 +246,7 @@ struct MoleSelectableRowButtonStyle: ButtonStyle {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, verticalPadding)
-            .modifier(ListRowGlass(selected: isSelected))
+            .modifier(ListRowSurface(selected: isSelected))
             .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .opacity(isEnabled ? 1 : 0.45)
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed,
@@ -253,27 +257,55 @@ struct MoleSelectableRowButtonStyle: ButtonStyle {
 
 }
 
-/// 清理、Agent 和分析共用的单层列表玻璃；布局先完成，再包住内容。
-struct ListRowGlass: ViewModifier {
+/// 清理、Agent 和分析共用的内容行/卡片底色；布局先完成，再包住内容。
+/// 内容层不使用玻璃：分组头 surface2，普通行 surface1，选中态 selectionFill。
+struct ListRowSurface: ViewModifier {
+    enum Emphasis { case row, header }
     var selected = false
-    var interactive = true
-    @Namespace private var namespace
+    var emphasis: Emphasis = .row
+
+    func body(content: Content) -> some View {
+        content.background {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(fillColor)
+        }
+    }
+
+    private var fillColor: Color {
+        if selected { return .selectionFill }
+        return emphasis == .header ? .surface2 : .surface1
+    }
+}
+
+extension View {
+    /// L2 工作区面板：surface1 圆角 14 的内容平面，不是玻璃。
+    /// 只在带侧栏的页面套右侧工作区；单列页内容直接落在窗口玻璃上。
+    func contentPanel() -> some View {
+        background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.surface1))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+}
+
+/// 侧栏选中透镜（L1）：分析与开发环境侧栏共用的导航选中玻璃。
+/// 同一侧栏使用同一个 id，选中块在行间做 matchedGeometry 流动。
+struct SidebarSelectionLens: ViewModifier {
+    let selected: Bool
+    let id: String
+    let namespace: Namespace.ID
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.controlActiveState) private var controlActiveState
 
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
-            content
-                .glassEffect(.regular.tint(selected ? Color.moleAccent.opacity(0.20) : .clear)
-                    .interactive(interactive && !reduceMotion), in: RoundedRectangle(cornerRadius: 9))
-                .glassEffectID("row", in: namespace)
-                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-                .clipGlassEdge(in: RoundedRectangle(cornerRadius: 9))
-        } else {
-            content.background(GlassSurface(cornerRadius: 9, usesSystemGlass: false,
-                                            highlighted: selected))
-        }
+        if selected {
+            if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
+                content.glassEffect(.regular.interactive(!reduceMotion), in: RoundedRectangle(cornerRadius: 10))
+                    .glassEffectID(id, in: namespace)
+                    .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+            } else {
+                content.background(GlassSurface(cornerRadius: 10, usesSystemGlass: false, highlighted: true))
+            }
+        } else { content }
     }
 }
 

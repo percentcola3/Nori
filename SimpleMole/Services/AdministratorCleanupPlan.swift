@@ -175,7 +175,7 @@ enum AdministratorCleanupPlan {
             }, reclaimedBytes: applied.reclaimedBytes)
     }
 
-    private static func readPrivatePlan(_ path: String, owner: uid_t) -> Data? {
+    static func readPrivatePlan(_ path: String, owner: uid_t) -> Data? {
         guard DeletionPlan.isLexicallySafePath(path) else { return nil }
         let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         guard descriptor >= 0 else { return nil }

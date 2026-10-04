@@ -11,7 +11,12 @@ struct CleanupTabView: View {
     /// 从可再生缓存行发起的自动清理规则创建。
     @State private var autoCleanIntent: AutoCleanupIntent?
     @State private var showsOutcomeDetails = false
+    @State private var confirmingAppData = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var selectedAppData: [CleanupCategory] {
+        state.categories.filter { $0.isAppDataReview && $0.selected }
+    }
 
     private var collapsedGroups: Set<CleanupGroupBucket> {
         userCollapsed ?? defaultCollapsedGroups
@@ -126,7 +131,6 @@ struct CleanupTabView: View {
                 }
             } else {
                 ScrollView {
-                    LiquidGlassGroup {
                     LazyVStack(spacing: 12) {
                         cleanupOutcomeDetails
                         ForEach(groupedCategories) { group in
@@ -164,7 +168,6 @@ struct CleanupTabView: View {
                     // 扫描结果入场/移除的液态流动：按 id 变化触发，勾选操作不参与。
                     .animation(reduceMotion ? nil : MoleMotion.panel,
                                value: state.categories.map(\.id))
-                    }
                 }
             }
 
@@ -260,7 +263,7 @@ struct CleanupTabView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(MolePlainButtonStyle())
-        .modifier(ListRowGlass(selected: isSelected))
+        .modifier(ListRowSurface(selected: isSelected))
         .disabled(state.isBusy)
     }
 
@@ -274,12 +277,24 @@ struct CleanupTabView: View {
             // 全选/取消全选由各分组头的开关承担：底部只保留唯一的执行入口，
             // 系统维护项的勾选也由它统一分发。
             Spacer()
-            Button { state.applyCleanup() } label: {
+            Button {
+                if selectedAppData.isEmpty { state.applyCleanup() } else { confirmingAppData = true }
+            } label: {
                 Label(applyLabel, systemImage: "trash.fill")
             }
             .buttonStyle(PrimaryButtonStyle())
             .disabled(!state.hasCleanupSelection || state.isBusyExcludingUninstall || state.cleanupQueued
                       || state.isSystemMaintenanceRunning || !state.cleanupScanComplete)
+            .alert(l10n.tf("cleanup.appData.confirm.title", selectedAppData.count),
+                   isPresented: $confirmingAppData) {
+                Button(l10n.t("common.cancel"), role: .cancel) {}
+                Button(l10n.t("cleanup.appData.confirm.action"), role: .destructive) { state.applyCleanup() }
+            } message: {
+                Text(l10n.tf("cleanup.appData.confirm.message",
+                             selectedAppData.prefix(6).map {
+                                 L10nLocalizationAuditTables.categoryName($0.name, isAppLeftover: $0.source == .appLeftover)
+                             }.joined(separator: "、")))
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -305,7 +320,7 @@ struct CleanupTabView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .modifier(ListRowGlass(interactive: !state.cleanupOutcomeDetails.isEmpty))
+            .modifier(ListRowSurface())
         }
     }
 
@@ -354,12 +369,6 @@ struct CleanupTabView: View {
                     Text(l10n.t(group.kind.titleKey))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.primary)
-                    Text(groupSelectionCount(group))
-                        .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.surface3))
                     Spacer(minLength: 8)
                     Text(ByteFormat.format(group.bytes))
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
@@ -377,30 +386,27 @@ struct CleanupTabView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .modifier(ListRowGlass())
+        .modifier(ListRowSurface(emphasis: .header))
     }
 
     private func groupSelection(_ group: CleanupPresentationGroup) -> Binding<Bool> {
         Binding(
             get: {
-                let categories = state.categories.filter { group.categoryIDs.contains($0.id) }
+                let categories = state.categories.filter {
+                    group.categoryIDs.contains($0.id) && (!$0.isAppDataReview || group.kind == .appData)
+                }
                 return !categories.isEmpty && categories.allSatisfy(\.allSelected)
             },
             set: { selected in
                 for index in state.categories.indices
-                    where group.categoryIDs.contains(state.categories[index].id) {
+                    where group.categoryIDs.contains(state.categories[index].id)
+                        && (!selected || !state.categories[index].isAppDataReview) {
                     state.categories[index].selected = selected
                 }
             }
         )
     }
 
-    private func groupSelectionCount(_ group: CleanupPresentationGroup) -> String {
-        let categories = state.categories.filter { group.categoryIDs.contains($0.id) }
-        let selected = categories.reduce(0) { $0 + $1.selectedPathCount }
-        let total = categories.reduce(0) { $0 + $1.paths.count }
-        return selected == total ? "\(total)" : "\(selected)/\(total)"
-    }
 }
 
 /// 展示真实目录进度；轻量的进度子视图和吉祥物分别更新。
@@ -434,17 +440,19 @@ extension CleanupGroupBucket {
         case .cache: return "sparkles"
         case .trash: return "trash.fill"
         case .developer: return "hammer.fill"
-        case .ai: return "brain"
+        case .system: return "gearshape.2.fill"
         case .leftovers: return "app.badge.checkmark"
+        case .appData: return "externaldrive.badge.questionmark"
         }
     }
     var sortOrder: Int {
         switch self {
         case .cache: return 0
-        case .leftovers: return 1
-        case .trash: return 2
-        case .developer: return 3
-        case .ai: return 4
+        case .system: return 1
+        case .leftovers: return 2
+        case .appData: return 3
+        case .trash: return 4
+        case .developer: return 5
         }
     }
 }
@@ -484,9 +492,6 @@ struct CategoryRowView: View {
                             .font(.system(size: 12, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Text(selectionCountText)
-                            .font(.system(size: 10).monospacedDigit())
-                            .foregroundStyle(.secondary)
                         if sensitive {
                             Text(l10n.t("agents.risk.high"))
                                 .font(.system(size: 9, weight: .semibold))
@@ -497,7 +502,8 @@ struct CategoryRowView: View {
                 }
                 .buttonStyle(MolePlainButtonStyle(pressedScale: 0.99))
                 Spacer()
-                SizeBadge(text: ByteFormat.format(category.bytes), prominent: category.selected)
+                SizeBadge(text: ByteFormat.format(category.partiallySelected ? category.selectedPathBytes : category.bytes),
+                          prominent: category.selected)
                 if !coveredPaths.isEmpty {
                     HStack(spacing: 3) {
                         Image(systemName: "clock.fill")
@@ -573,7 +579,7 @@ struct CategoryRowView: View {
             }
         }
         .clipped()
-        .modifier(ListRowGlass(selected: category.selected))
+        .modifier(ListRowSurface(selected: category.selected))
         .animation(reduceMotion ? nil : MoleMotion.selection, value: category.selected)
         .opacity(category.risk == .protected ? 0.72 : 1)
     }
@@ -585,11 +591,6 @@ struct CategoryRowView: View {
 
     private func toggleExpanded() {
         withAnimation(reduceMotion ? nil : MoleMotion.panel) { category.expanded.toggle() }
-    }
-
-    private var selectionCountText: String {
-        guard category.partiallySelected else { return "\(category.paths.count)" }
-        return "\(category.selectedPathCount)/\(category.paths.count)"
     }
 
     private func childSelection(for path: String) -> Binding<Bool> {

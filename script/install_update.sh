@@ -12,7 +12,7 @@ case "$RUN_ARCH" in
     arm64|x86_64) ;;
     *) echo "error: install_update.sh requires one architecture" >&2; exit 2 ;;
 esac
-APP_BUNDLE="$ROOT_DIR/dist/$RUN_ARCH/Nori.app"
+APP_BUNDLE="${SM_OUTPUT_DIR:-$ROOT_DIR/dist}/$RUN_ARCH/Nori.app"
 INSTALLED="$INSTALL_DIR/$APP_NAME.app"
 source "$ROOT_DIR/script/release_signing_common.sh"
 load_release_signing_config "$ROOT_DIR"

@@ -130,14 +130,12 @@ struct AutoCleanupRulesView: View {
             .padding(24)
         } else {
             ScrollView {
-                LiquidGlassGroup {
-                    LazyVStack(spacing: 10) {
-                        ForEach(state.autoCleanupRules) { rule in
-                            AutoCleanupRuleRow(state: state, rule: rule)
-                        }
+                LazyVStack(spacing: 10) {
+                    ForEach(state.autoCleanupRules) { rule in
+                        AutoCleanupRuleRow(state: state, rule: rule)
                     }
-                    .padding(16)
                 }
+                .padding(16)
             }
         }
     }
@@ -199,7 +197,7 @@ private struct AutoCleanupRuleRow: View {
             }
         }
         .padding(12)
-        .modifier(ListRowGlass())
+        .modifier(ListRowSurface())
     }
 
     private var summary: some View {

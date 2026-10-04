@@ -60,6 +60,7 @@ enum L10nAgentsTables {
         "agents.rescan": "Rescan",
         "agents.empty.hint": "Finds space used by Claude Code, Codex, Cursor, Copilot, Gemini, Grok, opencode and other agents, and checks their skills and MCP servers. Select items and click Clean to remove them.",
         "agents.status.scanning": "Scanning agent directories…",
+        "agents.status.cancelled": "Scan cancelled. Partial results are shown unselected.",
         "agents.status.empty": "No agent data found.",
         "agents.status.done": "%ld agents · %@ in total",
         "agents.status.partial": "Some folders were too large to measure fully",
@@ -114,6 +115,9 @@ enum L10nAgentsTables {
         "agents.label.conversationDatabase": "Conversation database",
         "agents.label.worktrees": "Worktrees",
         "agents.label.plans": "Plans",
+        "agents.label.installerImage": "Installer images",
+        "agents.label.bundledApp": "Bundled app",
+        "agents.label.runtime": "Runtime",
         "agents.label.appData": "App data"
     ]
 
@@ -174,6 +178,7 @@ enum L10nAgentsTables {
         "agents.rescan": "重新扫描",
         "agents.empty.hint": "找出 Claude Code、Codex、Cursor、Copilot、Gemini、Grok、opencode 等 Agent 占用的空间，并检查它们的 Skills 和 MCP 服务。勾选后点击「清理」才会删除。",
         "agents.status.scanning": "正在扫描 Agent 目录…",
+        "agents.status.cancelled": "扫描已取消，已扫到的部分结果均未勾选。",
         "agents.status.empty": "没有发现 Agent 数据。",
         "agents.status.done": "%ld 个 Agent · 共 %@",
         "agents.status.partial": "部分目录过大，未能完整计量",
@@ -228,6 +233,9 @@ enum L10nAgentsTables {
         "agents.label.conversationDatabase": "对话数据库",
         "agents.label.worktrees": "工作树",
         "agents.label.plans": "计划",
+        "agents.label.installerImage": "安装镜像",
+        "agents.label.bundledApp": "捆绑应用",
+        "agents.label.runtime": "运行时",
         "agents.label.appData": "应用数据"
     ]
 
@@ -244,6 +252,7 @@ enum L10nAgentsTables {
         "agents.rescan": "重新掃描",
         "agents.empty.hint": "找出 Claude Code、Codex、Cursor、Copilot、Gemini、Grok、opencode 等 Agent 佔用的空間，並檢查它們的 Skills 和 MCP 服務。勾選後點擊「清理」才會刪除。",
         "agents.status.scanning": "正在掃描 Agent 目錄…",
+        "agents.status.cancelled": "掃描已取消，已掃到的部分結果均未勾選。",
         "agents.status.empty": "沒有發現 Agent 資料。",
         "agents.status.done": "%ld 個 Agent · 共 %@",
         "agents.status.partial": "部分目錄過大，未能完整計量",

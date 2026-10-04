@@ -60,7 +60,7 @@ struct SlimSectionCard: View {
                 .disabled(state.isBusy)
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
-        .modifier(ListRowGlass())
+        .modifier(ListRowSurface(emphasis: .header))
     }
 
     private var summary: String {
@@ -101,7 +101,7 @@ struct DuplicatesSectionCard: View {
                 headerRow
                 statusLine
             }
-            if state.duplicateMode == .similarImages && !state.duplicateGroups.isEmpty {
+            if state.duplicateGroups.contains(where: { $0.kind == .similarImages }) {
                 Text(l10n.t("duplicates.similar.hint"))
                     .font(.system(size: 10))
                     .foregroundStyle(Color.warning)
@@ -157,17 +157,6 @@ struct DuplicatesSectionCard: View {
 
     private var statusLine: some View {
         HStack(spacing: 8) {
-            Picker(l10n.t("duplicates.mode.label"), selection: Binding(
-                get: { state.duplicateMode },
-                set: { state.setDuplicateMode($0) }
-            )) {
-                Text(l10n.t("duplicates.mode.exact")).tag(DuplicateMode.exact)
-                Text(l10n.t("duplicates.mode.similar")).tag(DuplicateMode.similarImages)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 200)
-            .disabled(working || state.isBusy)
             HStack(spacing: 6) {
                 Text(statusText)
                     .foregroundStyle(.secondary)
@@ -219,18 +208,23 @@ struct DuplicatesSectionCard: View {
                 }
             } label: {
                 HStack(spacing: 8) {
-                    Text(l10n.tf(state.duplicateMode == .exact
-                        ? "duplicates.group.exact" : "duplicates.group.similar", index + 1, group.members.count))
+                    DuplicateKindBadge(kind: group.kind)
+                    Text(l10n.tf("duplicates.group.title", index + 1, group.members.count))
                         .font(.system(size: 12, weight: .semibold))
+                        .monospacedDigit()
                     Spacer()
-                    Text(l10n.t("duplicates.keepOne")).font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(group.kind == .exact
+                         ? l10n.tf("duplicates.group.reclaim", ByteFormat.format(
+                            group.members.dropFirst().reduce(0) { $0 + $1.size }))
+                         : l10n.t("duplicates.group.similarReview"))
+                        .font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary)
                     Image(systemName: "chevron.down")
                         .font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
                         .rotationEffect(.degrees(collapsed ? -90 : 0))
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .contentShape(Rectangle())
-                .modifier(ListRowGlass())
+                .modifier(ListRowSurface(emphasis: .header))
             }
             .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
             if !collapsed {
@@ -271,7 +265,8 @@ struct DuplicateFileRow: View {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 14))
                         .foregroundStyle(isSelected ? Color.moleAccentText : Color.secondary)
-                    DuplicateThumbnail(path: member.path, isImage: member.imageInfo != nil)
+                    DuplicateThumbnail(path: member.path,
+                                       isImage: member.imageInfo != nil || DuplicateThumbnail.isImagePath(member.path))
                     VStack(alignment: .leading, spacing: 3) {
                         Text(member.name)
                             .font(.system(size: 12, weight: .medium))
@@ -290,6 +285,10 @@ struct DuplicateFileRow: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    if !isSelected {
+                        DevTag(text: l10n.t("duplicates.row.keep"), color: .success)
+                            .help(canSelect ? "" : l10n.t("duplicates.keepOne"))
+                    }
                     Text(ByteFormat.format(member.size))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -299,7 +298,7 @@ struct DuplicateFileRow: View {
             }
             .buttonStyle(MolePlainButtonStyle(pressedScale: 0.99))
             .disabled(disabled || !canSelect)
-            .opacity(disabled || !canSelect ? 0.45 : 1)
+            .opacity(disabled ? 0.45 : 1)
             .accessibilityLabel(member.path)
             .accessibilityValue(isSelected ? l10n.t("duplicates.row.selected") : l10n.t("duplicates.row.kept"))
             Button(action: onPreview) { Image(systemName: "eye") }
@@ -318,7 +317,17 @@ struct DuplicateFileRow: View {
             .disabled(disabled)
         }
         .padding(.horizontal, 12).padding(.vertical, 6)
-        .modifier(ListRowGlass(selected: isSelected))
+        .modifier(ListRowSurface(selected: isSelected))
+    }
+}
+
+struct DuplicateKindBadge: View {
+    let kind: DuplicateMode
+    @ObservedObject private var l10n = L10n.shared
+
+    var body: some View {
+        DevTag(text: l10n.t(kind == .exact ? "duplicates.mode.exact" : "duplicates.mode.similar"),
+               color: kind == .exact ? .moleAccentText : .warning)
     }
 }
 
@@ -326,6 +335,11 @@ struct DuplicateFileRow: View {
 struct DuplicateThumbnail: View {
     let path: String
     let isImage: Bool
+
+    static func isImagePath(_ path: String) -> Bool {
+        ["png", "jpg", "jpeg", "heic", "heif", "gif", "webp", "tif", "tiff", "bmp"]
+            .contains((path as NSString).pathExtension.lowercased())
+    }
     @State private var thumbnail: NSImage?
     private static let queue = DispatchQueue(label: "Nori.duplicate-thumbnails", qos: .utility)
 

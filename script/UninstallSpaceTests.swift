@@ -130,6 +130,10 @@ struct UninstallSpaceTests {
         try! JSONSerialization.data(withJSONObject: oldCache).write(to: cacheURL)
         expect(UninstallInventoryCache.restore(from: cacheURL).isEmpty,
                "old inventories with installer-alias duplicates must be invalidated")
+        oldCache["version"] = 4
+        try! JSONSerialization.data(withJSONObject: oldCache).write(to: cacheURL)
+        expect(UninstallInventoryCache.restore(from: cacheURL).isEmpty,
+               "old inventories with incorrect administrator permissions must be invalidated")
         UninstallInventoryCache.save([.init(app: fixtureApp, plan: fixturePlan)], to: cacheURL)
         try? FileManager.default.removeItem(at: appURL)
         expect(UninstallInventoryCache.restore(from: cacheURL).isEmpty,

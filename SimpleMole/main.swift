@@ -5,6 +5,10 @@ if CommandLine.arguments.dropFirst().first == AdministratorCleanupPlan.workerArg
     exit(AdministratorCleanupPlan.runWorker(arguments: Array(CommandLine.arguments.dropFirst(2))))
 }
 
+if CommandLine.arguments.dropFirst().first == AdministratorUninstallPlan.workerArgument {
+    exit(AdministratorUninstallPlan.runWorker(arguments: Array(CommandLine.arguments.dropFirst(2))))
+}
+
 // 权限中心的实时复检模式：屏幕录制（`CGPreflightScreenCaptureAccess`）与
 // 完全磁盘访问的判定都按进程缓存，主进程授权后必须重启才能看到变化。主进程
 // 用同一可执行文件拉起一个全新进程只做这一件事，输出一行状态后立刻退出——

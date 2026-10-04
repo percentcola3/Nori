@@ -17,6 +17,7 @@ types = source[source.index('enum AnalyzeSection:'):source.index('@MainActor')]
 names = ['slimCandidates', 'slimSelectedCandidates', 'slimSelectedBytes',
          'analysisFileItems', 'analysisFileSelectedItems', 'analysisFileSelectedBytes',
          'diskBrowserEntries', 'diskBrowserCanSelect', 'openDiskBrowserDirectory', 'navigateDiskBrowser',
+         'toggleDiskBrowserSelection',
          'toggleAnalysisFileSelection', 'analysisSelection', 'setAnalysisSelection',
          'selectAllAnalysisFiles', 'deselectAllAnalysisFiles', 'selectDefaultAnalysisFiles',
          'toggleSelectAllAnalysisFiles']

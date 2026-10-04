@@ -8,20 +8,18 @@ struct DiskBrowserView: View {
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var currentPath: String {
-        state.diskBrowserNavigation.last ?? state.diskBrowserRootPath
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let nav = state.diskBrowserNavigation
+        let layout = DiskAnalysisWorker.diskBrowserColumnLayout(nav)
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Button {
-                    if let parent = state.diskBrowserNavigation.dropLast().last {
+                    if let parent = nav.dropLast().last {
                         state.navigateDiskBrowser(to: parent)
                     }
                 } label: { Image(systemName: "chevron.left") }
                 .buttonStyle(MoleIconButtonStyle(showsBackground: false))
-                .disabled(state.diskBrowserNavigation.count <= 1)
+                .disabled(nav.count <= 1)
                 .help(l10n.t("analyze.browser.back"))
                 .accessibilityLabel(l10n.t("analyze.browser.back"))
                 Button { state.navigateDiskBrowser(to: state.diskBrowserRootPath) } label: {
@@ -30,49 +28,44 @@ struct DiskBrowserView: View {
                 .buttonStyle(MoleIconButtonStyle(showsBackground: false))
                 .help(l10n.t("analyze.section.disk"))
                 .accessibilityLabel(l10n.t("analyze.section.disk"))
-                Text(abbreviate(currentPath))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle)
+                DiskBreadcrumb(nav: nav, title: title(for:),
+                               onNavigate: { state.navigateDiskBrowser(to: $0) })
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 8)
 
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal) {
-                    HStack(alignment: .top, spacing: 0) {
-                        ForEach(state.diskBrowserNavigation, id: \.self) { path in
-                            DiskBrowserColumn(
-                                path: path,
-                                title: title(for: path),
-                                entries: entries(for: path),
-                                totalSize: directorySize(path),
-                                isPartial: directoryIsPartial(path),
-                                isOverview: path == state.diskBrowserRootPath,
-                                openedPath: openedPath(after: path),
-                                selectedPaths: state.analysisSelection(for: .disk),
-                                disabled: state.isBusy || scanning,
-                                canSelect: { path == currentPath && state.diskBrowserCanSelect($0) },
-                                onOpen: { state.openDiskBrowserDirectory($0, in: path) },
-                                onToggle: {
-                                    guard path == currentPath else { return }
-                                    state.toggleAnalysisFileSelection(.init(name: $0.name, path: $0.path, size: $0.size))
-                                },
-                                onPreview: onPreview, onReveal: state.revealPath)
-                                .frame(width: 270)
-                                .id(path)
-                        }
+            // 层级深于两列时更早的层级折叠为窄条；横向不再滚动。
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(layout.collapsed, id: \.self) { path in
+                    DiskBrowserCollapsedColumn(path: path, title: title(for: path)) {
+                        state.navigateDiskBrowser(to: path)
                     }
-                    .padding(.horizontal, 20)
                 }
-                .task(id: currentPath) {
-                    withAnimation(reduceMotion ? nil : MoleMotion.panel) {
-                        proxy.scrollTo(currentPath, anchor: .trailing)
-                    }
+                ForEach(layout.expanded, id: \.self) { path in
+                    DiskBrowserColumn(
+                        path: path,
+                        title: title(for: path),
+                        entries: entries(for: path),
+                        totalSize: directorySize(path),
+                        isPartial: directoryIsPartial(path),
+                        isOverview: path == state.diskBrowserRootPath,
+                        openedPath: openedPath(after: path),
+                        selectedPaths: state.analysisSelection(for: .disk),
+                        disabled: state.isBusy || scanning,
+                        canSelect: state.diskBrowserCanSelect,
+                        onOpen: { state.openDiskBrowserDirectory($0, in: path) },
+                        onToggle: {
+                            state.toggleDiskBrowserSelection($0, in: path)
+                        },
+                        onPreview: onPreview, onReveal: state.revealPath)
+                        .frame(minWidth: 240, maxWidth: .infinity)
+                        .transition(.opacity)
                 }
             }
+            .padding(.horizontal, 8)
+            .animation(reduceMotion ? nil : MoleMotion.panel, value: nav)
         }
-        .padding(.top, 14)
+        .padding(.top, 2)
         .accessibilityIdentifier("analysis-disk-browser")
     }
 
@@ -80,12 +73,6 @@ struct DiskBrowserView: View {
         guard let index = state.diskBrowserNavigation.firstIndex(of: path),
               state.diskBrowserNavigation.indices.contains(index + 1) else { return nil }
         return state.diskBrowserNavigation[index + 1]
-    }
-
-    private func abbreviate(_ path: String) -> String {
-        if path == state.diskBrowserRootPath { return l10n.t("analyze.section.disk") }
-        let home = state.diskBrowserHomePath
-        return path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 
     private func title(for path: String) -> String {
@@ -152,7 +139,6 @@ private struct DiskBrowserColumn: View {
     let onPreview: (String) -> Void
     let onReveal: (String) -> Void
     @ObservedObject private var l10n = L10n.shared
-    @Namespace private var selectionNamespace
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -167,21 +153,18 @@ private struct DiskBrowserColumn: View {
             .padding(.horizontal, 10)
             Divider()
             ScrollView {
-                LiquidGlassGroup {
-                    LazyVStack(spacing: 4) {
-                        ForEach(entries) { entry in
-                            DiskBrowserRow(entry: entry,
-                                isSelected: selectedPaths.contains(entry.path),
-                                isOpened: entry.isDir && openedPath == entry.path,
-                                canSelect: canSelect(entry), disabled: disabled,
-                                showsPath: isOverview,
-                                namespace: selectionNamespace,
-                                onOpen: { onOpen(entry) }, onToggle: { onToggle(entry) },
-                                onPreview: { onPreview(entry.path) }, onReveal: { onReveal(entry.path) })
-                        }
+                LazyVStack(spacing: 4) {
+                    ForEach(entries) { entry in
+                        DiskBrowserRow(entry: entry,
+                            isSelected: selectedPaths.contains(entry.path),
+                            isOpened: entry.isDir && openedPath == entry.path,
+                            canSelect: canSelect(entry), disabled: disabled,
+                            showsPath: isOverview,
+                            onOpen: { onOpen(entry) }, onToggle: { onToggle(entry) },
+                            onPreview: { onPreview(entry.path) }, onReveal: { onReveal(entry.path) })
                     }
-                    .padding(.horizontal, 6).padding(.bottom, 8)
                 }
+                .padding(.horizontal, 6).padding(.bottom, 8)
                 if entries.isEmpty {
                     Text(l10n.t(isPartial ? "analyze.browser.unreadable" : "analyze.browser.empty"))
                         .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 20)
@@ -195,6 +178,122 @@ private struct DiskBrowserColumn: View {
     }
 }
 
+/// 折叠的历史层级：固定 36pt 窄条，点按回到该层级。
+/// 名称为 90° 旋转（自上而下）的单行文字，长名中间截断。
+private struct DiskBrowserCollapsedColumn: View {
+    let path: String
+    let title: String
+    let onOpen: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onOpen) {
+            VStack(spacing: 10) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color.moleAccentText)
+                verticalTitle
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.top, 12)
+            .background(isHovering ? Color.surface2 : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier("analysis-disk-collapsed-" + path)
+        .frame(width: 36)
+        .clipped()
+        .overlay(alignment: .trailing) { Rectangle().fill(Color.hairline).frame(width: 1) }
+        .transition(.opacity)
+    }
+
+    /// 旋转只改变绘制不改变布局：先把文字框在 140×14 的槽里，
+    /// 旋转 90°（自上而下阅读）后外层再框成 14×140，竖排内容不外溢。
+    private var verticalTitle: some View {
+        Text(title)
+            .font(.system(size: 10))
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(width: 140, height: 14)
+            .rotationEffect(.degrees(90))
+            .frame(width: 14, height: 140)
+    }
+}
+
+/// 路径面包屑：每个层级一个按钮，末段加粗且不可点；
+/// 超过 4 段时中间层级收进「…」菜单。
+private struct DiskBreadcrumb: View {
+    let nav: [String]
+    let title: (String) -> String
+    let onNavigate: (String) -> Void
+
+    private var visible: [String] {
+        nav.count > 4 ? [nav[0]] + Array(nav.suffix(3)) : nav
+    }
+    private var omitted: [String] {
+        nav.count > 4 ? Array(nav.dropFirst().dropLast(3)) : []
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(visible.enumerated()), id: \.element) { index, path in
+                if index > 0 {
+                    separator
+                    if index == 1 && !omitted.isEmpty {
+                        overflowMenu
+                        separator
+                    }
+                }
+                segment(path)
+            }
+        }
+        .lineLimit(1)
+    }
+
+    private var separator: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 7, weight: .bold))
+            .foregroundStyle(.tertiary)
+            .accessibilityHidden(true)
+    }
+
+    private var overflowMenu: some View {
+        Menu {
+            ForEach(omitted, id: \.self) { path in
+                Button(title(path)) { onNavigate(path) }
+            }
+        } label: {
+            Text("…")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 14, minHeight: 14)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityIdentifier("analysis-disk-breadcrumb-overflow")
+    }
+
+    private func segment(_ path: String) -> some View {
+        let isLast = path == nav.last
+        return Button { onNavigate(path) } label: {
+            Text(title(path))
+                .font(.system(size: 11, weight: isLast ? .semibold : .regular))
+                .foregroundStyle(isLast ? Color.primary : Color.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .buttonStyle(MolePlainButtonStyle(pressedScale: 0.98))
+        .disabled(isLast)
+        .accessibilityIdentifier("analysis-disk-breadcrumb-" + path)
+    }
+}
+
 private struct DiskBrowserRow: View {
     let entry: AnalyzeEntry
     let isSelected: Bool
@@ -202,7 +301,6 @@ private struct DiskBrowserRow: View {
     let canSelect: Bool
     let disabled: Bool
     let showsPath: Bool
-    let namespace: Namespace.ID
     let onOpen: () -> Void
     let onToggle: () -> Void
     let onPreview: () -> Void
@@ -211,13 +309,22 @@ private struct DiskBrowserRow: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Toggle(entry.name, isOn: Binding(get: { isSelected }, set: { _ in onToggle() }))
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-                .disabled(!canSelect || disabled)
-                .help(l10n.t(canSelect ? "analyze.browser.select" : "analyze.browser.selection.unavailable"))
-                .accessibilityLabel(l10n.t("analyze.browser.select") + ": " + entry.name)
-                .accessibilityIdentifier("analysis-disk-select-" + entry.path)
+            if canSelect {
+                Toggle(entry.name, isOn: Binding(get: { isSelected }, set: { _ in onToggle() }))
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .disabled(disabled)
+                    .help(l10n.t("analyze.browser.select"))
+                    .accessibilityLabel(l10n.t("analyze.browser.select") + ": " + entry.name)
+                    .accessibilityIdentifier("analysis-disk-select-" + entry.path)
+            } else {
+                Image(systemName: "lock")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 16)
+                    .help(l10n.t("analyze.browser.selection.unavailable"))
+                    .accessibilityLabel(l10n.t("analyze.browser.selection.unavailable") + ": " + entry.name)
+            }
             Button(action: entry.isDir ? onOpen : onToggle) {
                 HStack(spacing: 7) {
                     Image(systemName: entry.isDir ? "folder.fill" : "doc")
@@ -262,32 +369,21 @@ private struct DiskBrowserRow: View {
             }
         }
         .padding(.horizontal, 8).padding(.vertical, 7)
-        .modifier(DiskBrowserRowSurface(selected: isSelected || isOpened, isOpened: isOpened && !isSelected,
-                                       id: entry.path, namespace: namespace))
+        .modifier(DiskBrowserRowSurface(selected: isSelected, isOpened: isOpened && !isSelected))
         .accessibilityIdentifier("analysis-disk-entry-" + entry.path)
     }
 }
 
+/// 行底不再使用玻璃：勾选 selectionFill，已打开路径 surface2，其余透明。
 private struct DiskBrowserRowSurface: ViewModifier {
     let selected: Bool
     let isOpened: Bool
-    let id: String
-    let namespace: Namespace.ID
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.controlActiveState) private var controlActiveState
 
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
-            content
-                .glassEffect(selected ? .regular.tint(Color.moleAccent.opacity(0.20)).interactive(!reduceMotion)
-                    : .identity, in: RoundedRectangle(cornerRadius: 8))
-                .glassEffectID(isOpened ? "directory-navigation" : id, in: namespace)
-                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-                .clipGlassEdge(in: RoundedRectangle(cornerRadius: 8))
-        } else {
-            content.background {
-                if selected { GlassSurface(cornerRadius: 8, usesSystemGlass: false, highlighted: true) }
+    func body(content: Content) -> some View {
+        content.background {
+            if selected || isOpened {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(selected ? Color.selectionFill : Color.surface2)
             }
         }
     }

@@ -3,7 +3,8 @@ import SwiftUI
 
 enum IslandLayout {
     /// 窗口预留全部指标及无刘海屏 Nori 所需的最大宽度。
-    static let panelWidth: CGFloat = 468
+    static let panelWidth: CGFloat = max(468, expandedWidth(items: Set(AppState.IslandItem.allCases),
+                                                            hardwareNotch: false))
     static let minimumPanelWidth: CGFloat = 344
     static let metricWidth: CGFloat = 84
     static let networkWidth: CGFloat = 112
@@ -47,14 +48,60 @@ enum IslandLayout {
     static let sideCollapsedWidth: CGFloat = 12
     static let sideCollapsedHeight: CGFloat = 96
     static let sideMetricHeight: CGFloat = 82
-    static let sideRailBudget: CGFloat = 480
+    static let sideRailBudget: CGFloat = max(480, sideRailHeight(itemCount: AppState.IslandItem.allCases.count))
     static let sideWindowSize = NSSize(
         width: sideRailWidth + sideDetailWidth + sideDetailGap + windowMargin,
         height: sideRailBudget + windowMargin * 2)
 
-    static func sideRailHeight(itemCount: Int) -> CGFloat {
-        28 + CGFloat(itemCount) * sideMetricHeight + 32
+    static func sideRailHeight(itemCount: Int, metricScale: CGFloat = 1) -> CGFloat {
+        28 + CGFloat(itemCount) * sideMetricHeight * metricScale + 32
             + CGFloat(itemCount + 1) * 8 + 24
+    }
+
+    static let minimumSideMetricScale: CGFloat = 0.6
+    static let rowSpacing: CGFloat = 8
+
+    static func sideMetricScale(itemCount: Int, maxRailHeight: CGFloat) -> CGFloat {
+        guard itemCount > 0 else { return 1 }
+        let fixed = sideRailHeight(itemCount: itemCount, metricScale: 0)
+        let scale = (maxRailHeight - fixed) / (CGFloat(itemCount) * sideMetricHeight)
+        return min(1, max(minimumSideMetricScale, scale))
+    }
+
+    static func sideRailBudget(maxRailHeight: CGFloat) -> CGFloat {
+        let count = AppState.IslandItem.allCases.count
+        return max(sideRailHeight(itemCount: 4),
+                   min(sideRailBudget, sideRailHeight(itemCount: count,
+                       metricScale: sideMetricScale(itemCount: count, maxRailHeight: maxRailHeight))))
+    }
+
+    static func sideWindowSize(maxRailHeight: CGFloat) -> NSSize {
+        NSSize(width: sideWindowSize.width, height: sideRailBudget(maxRailHeight: maxRailHeight) + windowMargin * 2)
+    }
+
+    static func topRows(items: [AppState.IslandItem], hardwareNotch: Bool,
+                        maxWidth: CGFloat) -> [[AppState.IslandItem]] {
+        guard !items.isEmpty else { return [[]] }
+        for rowCount in 1...items.count {
+            let perRow = Int((Double(items.count) / Double(rowCount)).rounded(.up))
+            let rows = stride(from: 0, to: items.count, by: perRow).map {
+                Array(items[$0..<min(items.count, $0 + perRow)])
+            }
+            if rows.allSatisfy({ expandedWidth(items: Set($0), hardwareNotch: hardwareNotch) <= maxWidth }) {
+                return rows
+            }
+        }
+        return items.map { [$0] }
+    }
+
+    static func topPanelWidth(rows: [[AppState.IslandItem]], hardwareNotch: Bool, maxWidth: CGFloat) -> CGFloat {
+        min(maxWidth, rows.map { expandedWidth(items: Set($0), hardwareNotch: hardwareNotch) }.max() ?? minimumPanelWidth)
+    }
+
+    static func topWindowContentSize(hardwareNotch: Bool, maxWidth: CGFloat) -> (width: CGFloat, extraHeight: CGFloat) {
+        let rows = topRows(items: AppState.IslandItem.allCases, hardwareNotch: hardwareNotch, maxWidth: maxWidth)
+        return (topPanelWidth(rows: rows, hardwareNotch: hardwareNotch, maxWidth: maxWidth),
+                CGFloat(rows.count - 1) * (tileHeight + rowSpacing))
     }
 }
 
@@ -65,6 +112,10 @@ extension AppState.IslandItem {
         case .memory: return "memorychip"
         case .disk: return "internaldrive"
         case .network: return "network"
+        case .gpu: return "cube.transparent"
+        case .thermal: return "thermometer.medium"
+        case .power: return "bolt"
+        case .bluetooth: return "headphones"
         }
     }
     var labelKey: String { "island.item.\(rawValue)" }
@@ -84,6 +135,8 @@ struct FloatingIslandView: View {
     var safeTop: CGFloat = 0
     var hardwareNotch = false
     var collapsedWidth: CGFloat = IslandLayout.virtualNotchWidth
+    var maxPanelWidth: CGFloat = .greatestFiniteMagnitude
+    var maxRailHeight: CGFloat = .greatestFiniteMagnitude
     var edge: AppState.IslandEdge = .top
     var onOpenMain: () -> Void
     var onHitFrameChange: (CGRect, NotchShape) -> Void
@@ -131,17 +184,38 @@ struct FloatingIslandView: View {
         hardwareNotch ? safeTop : IslandLayout.nonNotchExpandedTopInset
     }
 
-    private var expandedPanelWidth: CGFloat {
-        IslandLayout.expandedWidth(items: state.islandItems, hardwareNotch: hardwareNotch)
+    private var orderedItems: [AppState.IslandItem] {
+        AppState.IslandItem.allCases.filter { state.islandItems.contains($0) }
     }
 
-    private var motion: Animation? {
-        reduceMotion ? nil : .spring(response: 0.52, dampingFraction: 0.8)
+    private var topRows: [[AppState.IslandItem]] {
+        IslandLayout.topRows(items: orderedItems, hardwareNotch: hardwareNotch, maxWidth: maxPanelWidth)
+    }
+
+    private var expandedPanelWidth: CGFloat {
+        IslandLayout.topPanelWidth(rows: topRows, hardwareNotch: hardwareNotch, maxWidth: maxPanelWidth)
+    }
+
+    private var railBudget: CGFloat { IslandLayout.sideRailBudget(maxRailHeight: maxRailHeight) }
+
+    private var sideMetricScale: CGFloat {
+        IslandLayout.sideMetricScale(itemCount: orderedItems.count, maxRailHeight: min(maxRailHeight, railBudget))
+    }
+
+    private var motion: Animation? { islandMotion(expanding: expanded) }
+    private func islandMotion(expanding: Bool) -> Animation? {
+        guard !reduceMotion else { return nil }
+        return expanding ? .spring(response: 0.62, dampingFraction: 0.74, blendDuration: 0.12)
+                         : .spring(response: 0.5, dampingFraction: 0.9, blendDuration: 0.12)
     }
     /// 详情展开/收起也走弹簧：表面高度跟随生长的“液态”手感来自轻微过冲，
     /// easeInOut 的匀速段落会让生长显得机械。
     private var detailMotion: Animation? {
         reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)
+    }
+    /// 内容淡入淡出与表面形变错峰：展开时等表面先长开再淡入，收起时先于表面淡出。
+    private func contentFade(visible: Bool) -> Animation? {
+        reduceMotion ? nil : visible ? .easeOut(duration: 0.32).delay(0.08) : .easeIn(duration: 0.14)
     }
     private var visibleShape: NotchShape {
         let attachment: IslandAttachment = edge == .left ? .left : edge == .right ? .right : .top
@@ -214,6 +288,9 @@ struct FloatingIslandView: View {
                         }
                     }
                     .opacity(expanded ? 1 : 0)
+                    .animation(contentFade(visible: expanded), value: expanded)
+                    .scaleEffect(expanded || reduceMotion ? 1 : 0.88, anchor: .top)
+                    .blur(radius: expanded || reduceMotion ? 0 : 8)
                     .allowsHitTesting(expanded)
                     .accessibilityHidden(!expanded)
                 // 刘海屏把 Nori 放在刘海左侧的肩位，不额外占高度。
@@ -221,10 +298,13 @@ struct FloatingIslandView: View {
                     mascot(size: min(30, safeTop))
                         .padding(.leading, 20)
                         .frame(width: expandedPanelWidth, height: safeTop, alignment: .leading)
-                        .transition(.opacity)
+                        .transition(.asymmetric(
+                            insertion: .opacity.animation(contentFade(visible: true)),
+                            removal: .opacity.animation(contentFade(visible: false))))
                 }
                 collapsedHandle
                     .opacity(expanded ? 0 : 1)
+                    .animation(contentFade(visible: !expanded), value: expanded)
                     .allowsHitTesting(!expanded)
                     .accessibilityHidden(expanded)
             }
@@ -278,7 +358,7 @@ struct FloatingIslandView: View {
         HStack(spacing: IslandLayout.sideDetailGap) {
             if edge == .right { sideDetailSlot }
             sideRail
-                .frame(width: IslandLayout.sideRailWidth, height: IslandLayout.sideRailBudget,
+                .frame(width: IslandLayout.sideRailWidth, height: railBudget,
                        alignment: edge == .left ? .leading : .trailing)
             if edge == .left { sideDetailSlot }
         }
@@ -298,24 +378,31 @@ struct FloatingIslandView: View {
         ZStack {
             VStack(spacing: 8) {
                 sideExpandedDragHandle
-                ForEach(AppState.IslandItem.allCases.filter { state.islandItems.contains($0) }, id: \.self) { item in
+                ForEach(orderedItems, id: \.self) { item in
                     metric(item)
                         .frame(width: IslandLayout.sideRailWidth - 16, height: IslandLayout.sideMetricHeight)
+                        .scaleEffect(sideMetricScale)
+                        .frame(height: IslandLayout.sideMetricHeight * sideMetricScale)
                 }
                 moreControl
                     .frame(height: 32)
             }
             .padding(.vertical, 12)
             .opacity(expanded ? 1 : 0)
+            .animation(contentFade(visible: expanded), value: expanded)
+            .scaleEffect(expanded || reduceMotion ? 1 : 0.88, anchor: edge == .left ? .leading : .trailing)
+            .blur(radius: expanded || reduceMotion ? 0 : 8)
             .allowsHitTesting(expanded)
             .accessibilityHidden(!expanded)
             sideCollapsedHandle
                 .opacity(expanded ? 0 : 1)
+                .animation(contentFade(visible: !expanded), value: expanded)
                 .allowsHitTesting(!expanded)
                 .accessibilityHidden(expanded)
         }
         .frame(width: expanded ? IslandLayout.sideRailWidth : IslandLayout.sideCollapsedWidth,
-               height: expanded ? IslandLayout.sideRailHeight(itemCount: state.islandItems.count)
+               height: expanded ? IslandLayout.sideRailHeight(itemCount: orderedItems.count,
+                                                              metricScale: sideMetricScale)
                                 : IslandLayout.sideCollapsedHeight)
         .modifier(IslandLiquidSurface(shape: visibleShape, isExpanded: expanded, isInteractive: true))
         .background {
@@ -418,11 +505,12 @@ struct FloatingIslandView: View {
                             scheduleResourceDismissal()
                         }
                     }
-                    .transition(reduceMotion ? .identity : .opacity.combined(
-                        with: .offset(x: edge == .left ? -8 : 8)))
+                    .transition(reduceMotion ? .identity : .asymmetric(
+                        insertion: .opacity.combined(with: .offset(x: edge == .left ? -8 : 8)),
+                        removal: .opacity.animation(contentFade(visible: false))))
             }
         }
-        .frame(width: IslandLayout.sideDetailWidth, height: IslandLayout.sideRailBudget)
+        .frame(width: IslandLayout.sideDetailWidth, height: railBudget)
         .environment(\.layoutDirection, layoutDirection)
     }
 
@@ -483,17 +571,27 @@ struct FloatingIslandView: View {
     /// 指标块同高同排版：标题、数值、底部进度。悬停只改标题颜色，不画底框。
     /// 「更多」是行尾的箭头图标入口，不再单独占一行。
     private var headerRow: some View {
-        HStack(alignment: .center, spacing: IslandLayout.metricSpacing) {
-            if !hardwareNotch && expanded {
-                mascot(size: IslandLayout.mascotWidth)
+        let rows = topRows
+        return VStack(spacing: IslandLayout.rowSpacing) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                HStack(alignment: .center, spacing: IslandLayout.metricSpacing) {
+                    if !hardwareNotch {
+                        Group {
+                            if expanded && index == 0 { mascot(size: IslandLayout.mascotWidth) }
+                            else { Color.clear }
+                        }
+                        .frame(width: IslandLayout.mascotWidth, height: IslandLayout.mascotWidth)
+                    }
+                    ForEach(row, id: \.self) { item in
+                        metric(item)
+                            .frame(minWidth: item == .network ? IslandLayout.networkWidth : IslandLayout.metricWidth,
+                                   maxWidth: .infinity,
+                                   alignment: .leading)
+                    }
+                    if index == 0 { moreControl }
+                    else { Color.clear.frame(width: IslandLayout.moreWidth, height: 1) }
+                }
             }
-            ForEach(AppState.IslandItem.allCases.filter { state.islandItems.contains($0) }, id: \.self) { item in
-                metric(item)
-                    .frame(minWidth: item == .network ? IslandLayout.networkWidth : IslandLayout.metricWidth,
-                           maxWidth: .infinity,
-                           alignment: .leading)
-            }
-            moreControl
         }
         .padding(.horizontal, IslandLayout.contentInset)
         .padding(.top, 6)
@@ -664,6 +762,12 @@ struct FloatingIslandView: View {
         case .memory: return state.metrics.memoryPercent / 100
         case .disk: return state.metrics.diskUsedPercent / 100
         case .network: return 0
+        case .gpu: return (state.metrics.gpuPercent ?? 0) / 100
+        case .thermal:
+            if let temperature = state.metrics.cpuTemperature { return min(1, temperature / 100) }
+            return Double(state.metrics.thermalLevel) / 3
+        case .power: return min(1, (state.metrics.systemPowerWatts ?? 0) / 60)
+        case .bluetooth: return Double(state.metrics.bluetoothBatteries.first?.percent ?? 0) / 100
         }
     }
 
@@ -737,7 +841,23 @@ struct FloatingIslandView: View {
     private func healthColor(_ item: AppState.IslandItem) -> Color {
         // 流量高低不是健康程度；网络保留活动色，不把下载高峰误报为异常。
         guard item != .network else { return Color.success }
-        switch IslandResourcePolicy.health(percent: progress(item) * 100) {
+        let health: IslandResourcePolicy.Health
+        switch item {
+        case .memory where state.metrics.memoryPressure == "critical": health = .high
+        case .memory where state.metrics.memoryPressure == "warning": health = .elevated
+        case .memory where state.metrics.memoryPressure == "normal": health = .healthy
+        case .thermal:
+            let temperature = state.metrics.cpuTemperature ?? 0
+            let level = state.metrics.thermalLevel
+            health = level >= 2 || temperature >= 90 ? .high : level == 1 || temperature >= 75 ? .elevated : .healthy
+        case .bluetooth:
+            guard let lowest = state.metrics.bluetoothBatteries.first?.percent else { return Color.secondary }
+            health = lowest <= 10 ? .high : lowest <= 25 ? .elevated : .healthy
+        case .gpu where state.metrics.gpuPercent == nil, .power where state.metrics.systemPowerWatts == nil:
+            return Color.secondary
+        default: health = IslandResourcePolicy.health(percent: progress(item) * 100)
+        }
+        switch health {
         case .healthy: return Color.success
         case .elevated: return Color.warning
         case .high: return Color.danger
@@ -750,15 +870,29 @@ struct FloatingIslandView: View {
         case .memory: return String(format: "%.0f%%", state.metrics.memoryPercent)
         case .disk: return ByteFormat.short(state.metrics.diskFreeBytes)
         case .network: return ""
+        case .gpu: return state.metrics.gpuPercent.map { String(format: "%.0f%%", $0) } ?? "—"
+        case .thermal:
+            if let temperature = state.metrics.cpuTemperature { return String(format: "%.0f°", temperature) }
+            return l10n.t("island.thermal.\(state.metrics.thermalLevel)")
+        case .power: return state.metrics.systemPowerWatts.map { String(format: "%.1fW", $0) } ?? "—"
+        case .bluetooth: return state.metrics.bluetoothBatteries.first.map { "\($0.percent)%" } ?? "—"
         }
     }
 
     private func valueText(_ item: AppState.IslandItem) -> String {
         switch item {
-        case .cpu: return String(format: "%.0f%%", state.metrics.cpuPercent)
-        case .memory: return String(format: "%.0f%%", state.metrics.memoryPercent)
+        case .memory:
+            return String(format: "%.0f%%", state.metrics.memoryPercent) + " · "
+                + l10n.tf("island.swap", ByteFormat.format(state.metrics.swapUsedBytes))
         case .disk: return ByteFormat.format(state.metrics.diskFreeBytes)
         case .network: return String(format: "↓%.1f ↑%.1f MB/s", state.metrics.networkRxMBps, state.metrics.networkTxMBps)
+        case .thermal:
+            return [state.metrics.cpuTemperature.map { String(format: "%.0f °C", $0) },
+                    l10n.t("island.thermal.\(state.metrics.thermalLevel)")].compactMap { $0 }.joined(separator: " · ")
+        case .bluetooth:
+            return state.metrics.bluetoothBatteries.isEmpty ? l10n.t("island.bluetooth.none")
+                : state.metrics.bluetoothBatteries.map { "\($0.name) \($0.percent)%" }.joined(separator: ", ")
+        case .cpu, .gpu, .power: return primaryValue(item)
         }
     }
 
@@ -769,6 +903,13 @@ struct FloatingIslandView: View {
                 Text(l10n.t(resource == .cpu ? "island.top.cpu" : "island.top.memory"))
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
+                if resource == .memory {
+                    Text(l10n.t("island.pressure.\(state.metrics.memoryPressure)") + " · "
+                         + l10n.tf("island.swap", ByteFormat.format(state.metrics.swapUsedBytes)))
+                        .font(.system(size: 10, weight: .medium).monospacedDigit())
+                        .foregroundStyle(healthColor(.memory))
+                        .lineLimit(1)
+                }
                 Spacer()
                 Text(resource == .cpu ? l10n.t("audit.island.cpuPercent") : l10n.t("island.item.memory"))
                     .font(.system(size: 10, weight: .medium))
@@ -914,7 +1055,7 @@ struct FloatingIslandView: View {
 
     private func setExpanded(_ value: Bool) {
         guard expanded != value else { return }
-        withAnimation(motion) {
+        withAnimation(islandMotion(expanding: value)) {
             expanded = value
             if !value {
                 ringReplay?.cancel()

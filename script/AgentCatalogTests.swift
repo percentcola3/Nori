@@ -399,6 +399,11 @@ struct AgentCatalogTests {
         let report = AgentInventory.scan(home: home, presence: sandboxPresence)
         let statsig = report.categories.first { $0.paths.contains(home + "/.claude/statsig") }
         expect(statsig?.risk == .safe && statsig?.allSelected == true, "safe agent cache not preselected")
+        let pageReport = AgentInventory.scan(home: home, presence: sandboxPresence, excludingGlobalCleanupCaches: true)
+        expect(!pageReport.categories.contains { $0.paths.contains(home + "/.claude/statsig") }
+               && CleanupRiskPolicy.isCoveredByGlobalCleanup(home + "/.claude/statsig", homeDirectory: home)
+               && pageReport.categories.contains { $0.paths.contains(home + "/.claude/projects/-Users-me-repo/session.jsonl") },
+               "the Agent page must leave rebuildable caches to the cleanup page and keep Agent data")
         let checkpoints = report.categories.first {
             $0.paths.contains(home + "/Library/Application Support/Cursor/snapshots")
         }
@@ -493,6 +498,14 @@ struct AgentCatalogTests {
         try write("Library/Caches/com.openai.codex/entry")
         try write("Library/Application Support/Codex/Cache/entry")
         try write(".codex/log/idle.log")
+        // Codex 环境缓存：Blender 安装镜像/校验值可弃，Blender.app 与主运行时
+        // 只做复核，无关同名邻居不认领。
+        try write(".cache/codex-blender/blender-4.5.9-macos-arm64.dmg")
+        try write(".cache/codex-blender/blender-4.5.9-macos-arm64.dmg.sha256")
+        try write(".cache/codex-blender/Blender.app/Contents/Info.plist")
+        try write(".cache/codex-runtimes/codex-runtime-install-jnYG91/payload")
+        try write(".cache/codex-runtimes/codex-primary-runtime/bin/python")
+        try write(".cache/codex-runtimes/codex-unrelated/keep")
         let cursorCache = home + "/Library/Application Support/Cursor/Cache"
         let cursorCodeCache = home + "/Library/Application Support/Cursor/Code Cache"
         let liveReport = AgentInventory.scan(home: home, presence: sandboxPresence)
@@ -504,6 +517,28 @@ struct AgentCatalogTests {
             $0.paths.contains(home + "/Library/Application Support/Codex/Cache")
         }!
         let codexLogsCategory = liveReport.categories.first { $0.paths.contains(home + "/.codex/log") }!
+        let blender = home + "/.cache/codex-blender"
+        let runtimes = home + "/.cache/codex-runtimes"
+        expect(liveReport.categories.contains {
+            $0.name == "agents.label.installerImage" && $0.risk == .safe
+            && Set($0.paths) == Set([blender + "/blender-4.5.9-macos-arm64.dmg",
+                                     blender + "/blender-4.5.9-macos-arm64.dmg.sha256"])
+        }, "codex-blender installer images lost their safe tier")
+        expect(liveReport.categories.contains {
+            $0.name == "agents.label.bundledApp" && $0.risk != .safe
+            && $0.paths == [blender + "/Blender.app"]
+        }, "Blender.app must stay a review-tier bundle")
+        expect(liveReport.categories.contains {
+            $0.name == "agents.label.updateStaging" && $0.risk == .safe
+            && $0.paths.contains(runtimes + "/codex-runtime-install-jnYG91")
+        }, "leftover codex-runtime-install-* staging lost its safe tier")
+        expect(liveReport.categories.contains {
+            $0.name == "agents.label.runtime" && $0.risk != .safe
+            && $0.paths == [runtimes + "/codex-primary-runtime"]
+        }, "codex-primary-runtime must stay a review-tier target")
+        expect(!liveReport.categories.contains { category in
+            category.paths.contains { $0.contains("codex-unrelated") }
+        }, "unmatched codex-runtimes sibling offered")
         let runningClients = RunningApplicationSnapshot(processNames: ["Cursor", "codex"])
         let codexSafeCategories = [codexCacheCategory, codexAppCacheCategory, codexLogsCategory]
         let safePlan = AgentCleanupExecutor.plan([cacheCategory] + codexSafeCategories,
@@ -1133,9 +1168,13 @@ struct AgentCatalogTests {
                "uninstalling an unknown CLI link traversed its external target")
 
         // --- 磁盘清理默认流程不再收 Agent 目录。
+        // 已审计的可再生缓存（如 Cursor/Cache）仍归通用清理流程，不属于
+        // Agent 专有——边界断言要同时覆盖两侧。
         expect(CleanupRiskPolicy.isAgentOwnedPath(home + "/.codex/logs_2.sqlite", homeDirectory: home)
-               && CleanupRiskPolicy.isAgentOwnedPath(home + "/Library/Application Support/Cursor/Cache",
+               && CleanupRiskPolicy.isAgentOwnedPath(home + "/Library/Application Support/Qoder",
                                                      homeDirectory: home)
+               && !CleanupRiskPolicy.isAgentOwnedPath(
+                   home + "/Library/Application Support/Cursor/Cache", homeDirectory: home)
                && !CleanupRiskPolicy.isAgentOwnedPath(home + "/Library/Caches/com.example.app",
                                                       homeDirectory: home),
                "agent ownership boundary is wrong")

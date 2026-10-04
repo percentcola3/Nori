@@ -191,7 +191,7 @@ private struct DeveloperRuntimeRow: View {
             .accessibilityLabel(L10n.shared.t("dev.cleanup.reveal"))
         }
         .padding(.horizontal, 8).padding(.vertical, 7)
-        .modifier(DevSelectionLens(id: "dev-runtime-" + entry.id, selected: selected))
+        .modifier(DevSelectionSurface(selected: selected))
         .padding(.horizontal, 6)
         .accessibilityIdentifier("dev-runtime-" + entry.id)
     }

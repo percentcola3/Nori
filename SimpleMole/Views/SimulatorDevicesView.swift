@@ -80,25 +80,23 @@ struct SimulatorDevicesView: View {
             }
         } else {
             ScrollView {
-                LiquidGlassGroup {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        if case .failed(let message) = store.phase {
-                            errorBanner(message)
-                        }
-                        ForEach(store.groupedDevices, id: \.runtime) { group in
-                            VStack(alignment: .leading, spacing: 5) {
-                                Text(group.runtime)
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 4)
-                                ForEach(group.devices) { device in
-                                    deviceRow(device)
-                                }
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    if case .failed(let message) = store.phase {
+                        errorBanner(message)
+                    }
+                    ForEach(store.groupedDevices, id: \.runtime) { group in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(group.runtime)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 4)
+                            ForEach(group.devices) { device in
+                                deviceRow(device)
                             }
                         }
                     }
-                    .padding(16)
                 }
+                .padding(16)
             }
         }
     }
@@ -185,7 +183,7 @@ struct SimulatorDevicesView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .modifier(ListRowGlass(interactive: false))
+        .modifier(ListRowSurface())
     }
 
     private func localizedState(_ state: String) -> String {

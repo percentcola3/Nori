@@ -55,7 +55,6 @@ struct CleanupRiskPolicyTests {
                      home + "/Library/Application Support/Zed/threads/threads.db",
                      home + "/Library/Application Support/Zed/extensions/installed/plugin",
                      home + "/Library/Application Support/Blender/4.5/config/userpref.blend",
-                     "/private/var/db/powerlog/Library/PerfPowerTelemetry/BackgroundProcessing/CurrentBackgroundProcessingDB.BGSQL",
                      "/private/var/db/powerlog/Library/BatteryLife/CurrentPowerlog.PLSQL-wal",
                      "/System/Volumes/VM/swapfile0", "/private/var/vm/swapfile0"] {
             try expect(CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home).risk != .safe,
@@ -83,7 +82,134 @@ struct CleanupRiskPolicyTests {
             try expect(CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) == nil,
                        "system parent/active log promoted: " + path)
         }
-        let now = Date(timeIntervalSince1970: 2_000_000_000), old = Date(timeIntervalSince1970: 2_000_000_000 - 8 * 86400)
+
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        // powerlog 遥测主库：只精确命中三个文件，伴随文件不再当 sidecar 保护；
+        // 邻近的 BatteryLife、其它 telemetry 库与嵌套路径一律不认领。
+        let telemetry = CleanupRiskPolicy.powerlogTelemetryDatabase
+        for path in [telemetry, telemetry + "-wal", telemetry + "-shm"] {
+            try expect(CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) == .powerlogTelemetry,
+                       "powerlog telemetry family not admitted: " + path)
+            try expect(!CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: home),
+                       "powerlog telemetry family still sidecar-protected: " + path)
+            let descriptor = CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home)
+            try expect(descriptor.risk == .safe && descriptor.reasonKey == "cleanup.risk.powerlogTelemetry",
+                       "powerlog telemetry descriptor wrong: " + path)
+        }
+        for path in [telemetry + "-journal",
+                     "/private/var/db/powerlog/Library/PerfPowerTelemetry/BackgroundProcessing/OtherDB.BGSQL",
+                     "/private/var/db/powerlog/Library/PerfPowerTelemetry/OtherDir/CurrentBackgroundProcessingDB.BGSQL",
+                     telemetry + "/child"] {
+            try expect(CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) != .powerlogTelemetry,
+                       "powerlog telemetry shape over-matched: " + path)
+        }
+        try expect(CleanupRiskPolicy.systemCleanupRetention(for: telemetry, homeDirectory: home) == nil,
+                   "powerlog telemetry must not carry an age gate")
+
+        // 统一日志：四个子目录本身（聚合条目）与直接子级 *.tracev3 命中；
+        // uuidtext、timesync、嵌套目录与 .log/.jsonl 不认领。
+        for path in ["/private/var/db/diagnostics/Persist",
+                     "/private/var/db/diagnostics/Special",
+                     "/private/var/db/diagnostics/Signpost",
+                     "/private/var/db/diagnostics/HighVolume",
+                     "/private/var/db/diagnostics/Persist/00000000000005fe.tracev3",
+                     "/private/var/db/diagnostics/Special/abc.tracev3"] {
+            try expect(CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) == .unifiedLog,
+                       "unified log path not admitted: " + path)
+            try expect(CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home)
+                        .reasonKey == "cleanup.risk.unifiedLog",
+                       "unified log descriptor wrong: " + path)
+            try expect(CleanupRiskPolicy.systemCleanupRetention(for: path, homeDirectory: home) == 86400,
+                       "unified log must carry the 24h retention: " + path)
+        }
+        for path in ["/private/var/db/diagnostics/uuidtext",
+                     "/private/var/db/diagnostics/uuidtext/AA.tracev3",
+                     "/private/var/db/diagnostics/timesync",
+                     "/private/var/db/diagnostics/logd",
+                     "/private/var/db/diagnostics/Persist/x.log",
+                     "/private/var/db/diagnostics/Persist/x.jsonl",
+                     "/private/var/db/diagnostics/Persist/nested/x.tracev3",
+                     "/private/var/db/diagnostics/Other/x.tracev3",
+                     "/private/var/db/diagnostics",
+                     "/private/var/log/system.log.0.tracev3"] {
+            try expect(CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) == nil,
+                       "unified log shape over-matched: " + path)
+        }
+
+        // code_sign_clone：只认当前账户 X 下的 *.code_sign_clone；非副本子项与
+        // 其它子目录名称都不认领（账户范围由 lstat 复核，这里验证形状）。
+        let clone = "/private/var/folders/aa/user-id/X/com.google.Chrome.code_sign_clone"
+        for path in [clone, clone + "/Contents/Resources/app"] {
+            try expect(CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) == .codeSignClone,
+                       "code-sign clone not admitted: " + path)
+            try expect(CleanupRiskPolicy.systemCleanupRetention(for: path, homeDirectory: home) == nil,
+                       "code-sign clone must not carry an age gate: " + path)
+            let descriptor = CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home)
+            try expect(descriptor.risk == .safe && descriptor.activityGuard == .browser
+                       && descriptor.reasonKey == "cleanup.risk.codeSignClone",
+                       "code-sign clone descriptor wrong: " + path)
+        }
+        for path in ["/private/var/folders/aa/user-id/X/com.google.Chrome.clone",
+                     "/private/var/folders/aa/user-id/X/com.google.Chrome.code_sign_cloneX",
+                     "/private/var/folders/aa/user-id/X",
+                     clone + ".txt"] {
+            try expect(CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) == nil,
+                       "code-sign clone shape over-matched: " + path)
+        }
+        // 形状匹配不验证账户：别的账户下的同名副本仍被账户范围复核拒绝。
+        try expect(!CleanupRiskPolicy.systemCleanupAccountScopeEligible(
+            path: "/private/var/folders/aa/other-id/X/com.google.Chrome.code_sign_clone/extra",
+            homeDirectory: home),
+            "another account's code-sign clone passed the account-scope check")
+
+        // 用户 T/C 24 小时；/private/tmp 与 /private/var/tmp 仍是 7 天。
+        let tempChild = "/private/var/folders/aa/user-id/T/scratch.cache"
+        try expect(CleanupRiskPolicy.systemCleanupRetention(for: tempChild, homeDirectory: home) == 86400,
+                   "user T retention must be 24h")
+        try expect(CleanupRiskPolicy.systemCleanupRetention(for: "/private/var/tmp/old.cache",
+                                                            homeDirectory: home) == 604800,
+                   "system /var/tmp retention must stay 7d")
+        let recentT = Date(timeIntervalSince1970: 2_000_000_000 - 23 * 3600)
+        let staleT = Date(timeIntervalSince1970: 2_000_000_000 - 25 * 3600)
+        try expect(!CleanupRiskPolicy.systemCleanupMetadataEligible(path: tempChild, ownerUID: 501, userUID: 501,
+            modified: recentT, accessed: recentT, now: now, homeDirectory: home),
+            "23h T child slipped past the 24h gate")
+        try expect(CleanupRiskPolicy.systemCleanupMetadataEligible(path: tempChild, ownerUID: 501, userUID: 501,
+            modified: staleT, accessed: staleT, now: now, homeDirectory: home),
+            "25h T child blocked by the 24h gate")
+        try expect(!CleanupRiskPolicy.systemCleanupMetadataEligible(path: "/private/var/tmp/old.cache",
+            ownerUID: 0, userUID: 501, modified: recentT, accessed: recentT, now: now, homeDirectory: home),
+            "23h /var/tmp child slipped past the 7d gate")
+
+        // 端侧 AI 模型与更新器缓存：审计过的浏览器/更新器目录命中可再生规则；
+        // profile 配置目录与邻近更新器数据不受影响。
+        for path in [home + "/Library/Application Support/Google/Chrome/OptGuideOnDeviceModel",
+                     home + "/Library/Application Support/Google/Chrome/OptGuideOnDeviceClassifierModel",
+                     home + "/Library/Application Support/Google/Chrome/optimization_guide_model_store",
+                     home + "/Library/Application Support/Microsoft Edge/OptGuideOnDeviceModel",
+                     home + "/Library/Application Support/BraveSoftware/Brave-Browser/OptGuideOnDeviceModel"] {
+            let descriptor = CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home)
+            try expect(descriptor.risk == .safe && descriptor.activityGuard == .browser
+                       && descriptor.reasonKey == "cleanup.risk.browserOnDeviceModel",
+                       "on-device model not rebuildable: " + path)
+        }
+        for path in [home + "/Library/Application Support/Google/GoogleUpdater/crx_cache",
+                     home + "/Library/Application Support/Google/GoogleUpdater/crx_cache/pkg.crx",
+                     home + "/Library/Application Support/Microsoft/EdgeUpdater/crx_cache"] {
+            let descriptor = CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home)
+            try expect(descriptor.risk == .safe && descriptor.activityGuard == .openFile
+                       && descriptor.reasonKey == "cleanup.risk.rebuildableCache",
+                       "updater cache not rebuildable: " + path)
+        }
+        for path in [home + "/Library/Application Support/Google/Chrome/Default",
+                     home + "/Library/Application Support/Google/Chrome/OptGuideOnDeviceModelX",
+                     home + "/Library/Application Support/Google/GoogleUpdater/keystone",
+                     home + "/Library/Application Support/Google/GoogleUpdater",
+                     home + "/Library/Application Support/Other/OptGuideOnDeviceModel"] {
+            try expect(CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home).risk != .safe,
+                       "adjacent browser/updater data promoted: " + path)
+        }
+        let old = Date(timeIntervalSince1970: 2_000_000_000 - 8 * 86400)
         for (owner, modified, accessed, expected) in [(UInt32(501), old, old, true), (0, old, old, true),
             (502, old, old, false), (501, now, old, false), (501, old, now, false)] {
             try expect(CleanupRiskPolicy.systemCleanupMetadataEligible(path: archive, ownerUID: owner, userUID: 501,

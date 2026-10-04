@@ -448,32 +448,12 @@ struct PortsTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top) {
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 6)
-
-            HStack(spacing: 6) {
-                if state.runtimeInFlight {
-                    ProgressView()
-                        .controlSize(.mini)
-                }
-                if !state.portStatus.isEmpty {
-                    Text(state.portStatus)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-
             if state.portRows.isEmpty {
-                EmptyStateView(symbol: "network",
-                               title: state.runtimeInFlight ? l10n.t("ports.status.reading") : l10n.t("ports.status.none"),
-                               subtitle: nil)
+                if state.runtimeInFlight {
+                    NoriScanActivity(text: l10n.t("ports.status.reading"), quiet: true)
+                } else {
+                    EmptyStateView(symbol: "network", title: l10n.t("ports.status.none"), subtitle: nil)
+                }
             } else {
                 ScrollView {
                     LazyVStack(spacing: 6) {
@@ -505,8 +485,22 @@ struct PortsTabView: View {
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
+                    .padding(.top, 14)
+                    .padding(.bottom, 4)
                 }
+                HStack(spacing: 8) {
+                    if state.runtimeInFlight {
+                        NoriStatusAnimation(mood: .working, size: 28, assetName: "nori-working")
+                    }
+                    Text(state.portStatus)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .frame(height: 32)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
             }
         }
     }

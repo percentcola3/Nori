@@ -86,15 +86,13 @@ struct DockerDetailsView: View {
                 emptyDetail(for: kind)
             } else {
                 ScrollView {
-                    LiquidGlassGroup {
-                        LazyVStack(spacing: 6) {
-                            ForEach(rows) { row in
-                                resourceRow(row)
-                            }
+                    LazyVStack(spacing: 6) {
+                        ForEach(rows) { row in
+                            resourceRow(row)
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 16)
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 16)
                 }
             }
         }
@@ -168,7 +166,7 @@ struct DockerDetailsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .modifier(ListRowGlass(interactive: false))
+        .modifier(ListRowSurface())
     }
 
     private func inventoryMessage(symbol: String, key: String, progress: Bool = false) -> some View {

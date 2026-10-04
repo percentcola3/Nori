@@ -4,6 +4,11 @@ import Foundation
 ///
 /// 基础指标用于主窗口和灵动岛；其余字段给状态面板和后续 JSON 导出
 /// 使用。所有字段都有安全的零值，采集失败不会阻塞主界面。
+struct BluetoothBattery: Equatable, Sendable {
+    let name: String
+    let percent: Int
+}
+
 struct MetricsSnapshot: Equatable, Sendable {
     var collectedAt: Date = Date()
     var cpuPercent: Double = 0
@@ -29,6 +34,11 @@ struct MetricsSnapshot: Equatable, Sendable {
     var networkTxMBps: Double = 0
     var uptimeSeconds: UInt64 = 0
     var healthScore: Int = 0
+    var cpuTemperature: Double?
+    var thermalLevel: Int = 0
+    var gpuPercent: Double?
+    var systemPowerWatts: Double?
+    var bluetoothBatteries: [BluetoothBattery] = []
 
     /// 1 分钟负载；采集失败时按 0。
     var loadOneMinute: Double { loadAverage.first ?? 0 }
@@ -123,24 +133,33 @@ enum CleanupActivityGuard: String, Codable, CaseIterable, Hashable, Sendable {
     /// Agent 可再生缓存按文件占用清理；会话、配置等资源仍由
     /// `activityOwners` 保护，不能用父目录选择绕过。
     case aiAgent
+    case appData
     case unsupported
 }
 
 /// 清理页的五个展示分桶。分组头渲染与长尾合并共用这一映射，避免两处
 /// 各自维护一套 source → 分组规则。
 enum CleanupGroupBucket: String, Hashable, CaseIterable {
-    case cache, leftovers, trash, developer, ai
+    case cache, system, leftovers, appData, trash, developer
 
     init(category: CleanupCategory, homeDirectory: String = NSHomeDirectory()) {
         if Self.isTrash(category, homeDirectory: homeDirectory) {
             self = .trash
             return
         }
+        if category.activityGuard == .appData, category.source != .appLeftover,
+           category.source != .developerCache {
+            self = .appData
+            return
+        }
+        let home = homeDirectory.hasSuffix("/") ? homeDirectory : homeDirectory + "/"
+        if !category.paths.isEmpty, category.paths.allSatisfy({ !$0.hasPrefix(home) }) {
+            self = .system
+            return
+        }
         switch category.source {
         case .developerCache, .xcodeCache, .xcodeArchive, .tool:
             self = .developer
-        case .aiSession, .aiCache, .aiModel:
-            self = .ai
         case .appLeftover:
             self = .leftovers
         case .core:
@@ -351,11 +370,17 @@ struct CleanupCategory: Identifiable, Equatable {
         categories.compactMap(\.safeCleanupCandidate).sorted(by: sizeDescending)
     }
 
+    var isAppDataReview: Bool {
+        risk == .warning && disposal == .permanentDelete && activityGuard == .appData
+            && applyRoute == .genericTrash
+    }
+
     /// 已卸载 Agent 的整个数据根可能含历史和凭据：只在手动清理中显示，
     /// 沿用用户的选择，不能像 Safe 缓存一样自动勾选。
     static func manualCleanupCandidates(from categories: [CleanupCategory]) -> [CleanupCategory] {
         categories.compactMap { category in
             if let safe = category.safeCleanupCandidate { return safe }
+            if category.isAppDataReview { return category }
             guard category.source == .appLeftover, category.risk == .warning,
                   category.disposal == .permanentDelete, category.activityGuard == .aiAgent,
                   category.reasonKey == "cleanup.risk.agentLeftover" else { return nil }
@@ -449,8 +474,13 @@ struct CleanupCategory: Identifiable, Equatable {
         }
         guard !paths.isEmpty, bytes > 0 else { return nil }
 
+        let guardKey = "cleanup.group.other." + first.activityGuard.rawValue
+        var name = L10n.shared.t(guardKey) == guardKey ? L10n.shared.t("cleanup.group.other") : L10n.shared.t(guardKey)
+        if first.reasonKey == "cleanup.risk.recentlyActive" {
+            name += " · " + L10n.shared.t("cleanup.group.other.recent")
+        }
         var merged = CleanupCategory(
-            name: L10n.shared.t("cleanup.group.other"),
+            name: name,
             paths: paths,
             bytes: bytes,
             pathBytes: pathBytes,
@@ -752,6 +782,7 @@ struct UninstallFile: Identifiable, Codable, Equatable, Sendable {
 
     var id: String { "\(label)\u{1F}\(path)" }
     var informational: Bool { label == "review" || label == "manual" }
+    var isOptionalData: Bool { label == "review" }
     var isAppBundle: Bool { label == "app" }
 
     /// Only cache roots accepted by the shared risk policy, plus explicit
@@ -838,6 +869,19 @@ struct UninstallPlan: Codable, Equatable, Sendable {
         self.scannedAt = scannedAt
         self.space = UninstallSpaceBreakdown(files: files)
     }
+
+    func includingData(_ paths: Set<String>) -> UninstallPlan {
+        guard !paths.isEmpty else { return self }
+        let files = files.map { file in
+            file.label == "review" && paths.contains(file.path)
+                ? UninstallFile(bytes: file.bytes, label: "data", path: file.path) : file
+        }
+        return UninstallPlan(files: files, fileIdentities: fileIdentities, needsAdmin: needsAdmin,
+                             isBrewCask: isBrewCask, caskToken: caskToken,
+                             includesProtectedAppData: includesProtectedAppData, scannedAt: scannedAt)
+    }
+
+    var dataPaths: [String] { files.filter(\.isOptionalData).map(\.path) }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)

@@ -14,7 +14,13 @@ final class DirectoryBrowserModel: ObservableObject {
     @Published private(set) var currentDirectory: URL
     @Published private(set) var entries: [DirectoryEntry] = []
     @Published var selectedIDs: Set<String> = []
-    @Published var query = "" { didSet { if query != oldValue { updateSearch() } } }
+    @Published var query = "" {
+        didSet {
+            guard query != oldValue else { return }
+            statusMessage = nil
+            updateSearch()
+        }
+    }
     @Published var showHidden: Bool {
         didSet {
             guard showHidden != oldValue else { return }

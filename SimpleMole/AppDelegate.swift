@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var islandPanelSafeTop: CGFloat?
     private var islandPanelCollapsedWidth: CGFloat?
     private var islandPanelEdge: AppState.IslandEdge?
+    private var islandPanelFit: CGSize?
     private var islandExpanded = false
     private var islandMouseMonitors: [Any] = []
     private var islandRoutingTimer: Timer?
@@ -283,7 +284,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let editMenuItem = NSMenuItem()
         let editMenu = NSMenu(title: L10n.shared.t("menu.edit"))
+        editMenu.addItem(withTitle: L10n.shared.t("menu.undo"), action: NSSelectorFromString("undo:"), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: L10n.shared.t("menu.redo"), action: NSSelectorFromString("redo:"), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: L10n.shared.t("menu.cut"), action: NSSelectorFromString("cut:"), keyEquivalent: "x")
         editMenu.addItem(withTitle: L10n.shared.t("menu.copy"), action: NSSelectorFromString("copy:"), keyEquivalent: "c")
+        editMenu.addItem(withTitle: L10n.shared.t("menu.paste"), action: NSSelectorFromString("paste:"), keyEquivalent: "v")
+        editMenu.addItem(withTitle: L10n.shared.t("menu.delete"), action: NSSelectorFromString("delete:"), keyEquivalent: "")
         editMenu.addItem(withTitle: L10n.shared.t("menu.selectAll"), action: NSSelectorFromString("selectAll:"), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
@@ -433,14 +441,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let safeTop = islandSafeTop(on: screen)
         let collapsedWidth = islandCollapsedWidth(on: screen)
         let edge = appState.islandEdge
+        let fit = islandFit(on: screen)
         // 屏幕参数或物理边缘变化时重建；侧边栏的窗口与内容采用纵向布局。
         if islandPanel == nil
             || islandPanelHardwareNotch != hardwareNotch
             || islandPanelSafeTop != safeTop
             || islandPanelCollapsedWidth != collapsedWidth
-            || islandPanelEdge != edge {
+            || islandPanelEdge != edge
+            || islandPanelFit != fit {
             createIslandPanel(hardwareNotch: hardwareNotch, safeTop: safeTop,
-                              collapsedWidth: collapsedWidth, edge: edge)
+                              collapsedWidth: collapsedWidth, edge: edge, fit: fit)
         }
         positionIslandPanel(on: screen, edge: edge)
         if let islandPanel, !islandPanel.isVisible {
@@ -453,12 +463,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func createIslandPanel(hardwareNotch: Bool, safeTop: CGFloat,
-                                   collapsedWidth: CGFloat, edge: AppState.IslandEdge) {
+                                   collapsedWidth: CGFloat, edge: AppState.IslandEdge, fit: CGSize) {
         cancelIslandSideDragTracking()
         dismissLiquidPanel(islandPanel)
         islandExpanded = false
         let size = islandWindowSize(hardwareNotch: hardwareNotch, safeTop: safeTop,
-                                    collapsedWidth: collapsedWidth, edge: edge)
+                                    collapsedWidth: collapsedWidth, edge: edge, fit: fit)
         let panel = IslandPanel(contentRect: NSRect(x: 0, y: 0, width: size.width, height: size.height),
                             styleMask: [.borderless, .nonactivatingPanel],
                             backing: .buffered, defer: false)
@@ -484,6 +494,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             safeTop: safeTop,
             hardwareNotch: hardwareNotch,
             collapsedWidth: collapsedWidth,
+            maxPanelWidth: fit.width,
+            maxRailHeight: fit.height,
             edge: edge,
             onOpenMain: { [weak self] in self?.openMainFromIsland() },
             onHitFrameChange: { [weak self, weak panel] frame, shape in
@@ -514,6 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         islandPanelSafeTop = safeTop
         islandPanelCollapsedWidth = collapsedWidth
         islandPanelEdge = edge
+        islandPanelFit = fit
         installIslandMouseRouting()
     }
 
@@ -624,12 +637,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return right.minX - left.maxX + 8
     }
 
+    private func islandFit(on screen: NSScreen) -> CGSize {
+        CGSize(width: floor(screen.frame.width - IslandLayout.windowMargin * 2 - 32),
+               height: floor(screen.visibleFrame.height - IslandLayout.windowMargin * 2 - 16))
+    }
+
     private func islandWindowSize(hardwareNotch: Bool, safeTop: CGFloat,
-                                  collapsedWidth: CGFloat, edge: AppState.IslandEdge) -> NSSize {
-        guard edge == .top else { return IslandLayout.sideWindowSize }
+                                  collapsedWidth: CGFloat, edge: AppState.IslandEdge, fit: CGSize) -> NSSize {
+        guard edge == .top else { return IslandLayout.sideWindowSize(maxRailHeight: fit.height) }
         let expandedTopInset = hardwareNotch ? safeTop : IslandLayout.nonNotchExpandedTopInset
-        return NSSize(width: max(IslandLayout.panelWidth, collapsedWidth) + IslandLayout.windowMargin * 2,
-               height: ceil(expandedTopInset) + IslandLayout.metricsHeight
+        let content = IslandLayout.topWindowContentSize(hardwareNotch: hardwareNotch, maxWidth: fit.width)
+        return NSSize(width: max(max(468, content.width), collapsedWidth) + IslandLayout.windowMargin * 2,
+               height: ceil(expandedTopInset) + IslandLayout.metricsHeight + content.extraHeight
                    + IslandLayout.detailBudget + IslandLayout.windowMargin)
     }
 

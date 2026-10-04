@@ -71,7 +71,7 @@ final class AppState: ObservableObject {
 
     /// 灵动岛展开时显示的快捷指标。
     enum IslandItem: String, CaseIterable, Identifiable {
-        case cpu, memory, disk, network
+        case cpu, memory, gpu, thermal, power, disk, network, bluetooth
         var id: String { rawValue }
     }
 
@@ -256,6 +256,8 @@ final class AppState: ObservableObject {
     @Published var cleanupScanMode: CleanupScanMode = .quick
     @Published var cleanupDeferredPaths: [String] = []
     private var cleanupScanControl: CleanupScanControl?
+    /// Agent 扫描的取消句柄：跨文件扩展内读写，与 cleanupScanControl 并列。
+    var agentScanControl: CleanupScanControl?
     private var cleanupProgressGeneration = 0
     var isCleanupScanning: Bool { isScanning }
 
@@ -328,6 +330,7 @@ final class AppState: ObservableObject {
 
     @Published var installedApps: [UninstallApp] = []
     @Published private(set) var uninstallPlans: [String: UninstallPlan] = [:]
+    @Published var uninstallDataSelections: [String: Set<String>] = [:]
     @Published var appListStatus: String
     @Published var isScanningApps = false
     @Published private(set) var isRestoringInstalledApps = true
@@ -1199,7 +1202,7 @@ final class AppState: ObservableObject {
     // MARK: - 指标
 
     func refreshMetrics() {
-        metrics = SystemMetrics.sample()
+        metrics = SystemMetrics.sample(includeBluetooth: islandItems.contains(.bluetooth))
         networkHistory.append(metrics.networkRxMBps)
         networkUploadHistory.append(metrics.networkTxMBps)
         if networkHistory.count > 60 { networkHistory.removeFirst(networkHistory.count - 60) }
@@ -1222,7 +1225,7 @@ final class AppState: ObservableObject {
     }
 
     private func resampleMetricsNow() {
-        metrics = SystemMetrics.sample()
+        metrics = SystemMetrics.sample(includeBluetooth: islandItems.contains(.bluetooth))
         refreshIslandProcesses(force: true)
     }
 
@@ -1732,6 +1735,7 @@ final class AppState: ObservableObject {
         // 普通清理只发布已经确认为垃圾的 Safe 单元。安装包可能是唯一
         // 副本，卸载 Agent 整根也可能含历史和凭据，不能借这次扫描推荐。
         let combined = CleanupCategory.safeCleanupCandidates(from: coreScan.categories)
+            + coreScan.categories.filter(\.isAppDataReview).map { $0.clearingSelection() }
         if control.isCancelled {
             let cancelledResult = RunResult(output: "", errorOutput: "Scan cancelled.", exitCode: 1, timedOut: false)
             return UnifiedCleanupScan(categories: [], sourceResults: [cancelledResult],
@@ -2331,9 +2335,13 @@ final class AppState: ObservableObject {
             let applied = await Task.detached(priority: .utility) {
                 let home = NSHomeDirectory()
                 let agentLeftovers = directCategories.filter { $0.reasonKey == "cleanup.risk.agentLeftover" }
-                let genericCategories = directCategories.filter { $0.reasonKey != "cleanup.risk.agentLeftover" }
+                let appDataCategories = directCategories.filter(\.isAppDataReview)
+                let genericCategories = directCategories.filter {
+                    $0.reasonKey != "cleanup.risk.agentLeftover" && !$0.isAppDataReview
+                }
                 let agentUnits = DeletionPlan.nonOverlappingPaths(agentLeftovers.flatMap(\.paths)).count
                 let genericUnits = DeletionPlan.nonOverlappingPaths(genericCategories.flatMap(\.paths)).count
+                let appData = NativeCore.shared.applyAppDataReview(appDataCategories, homeDirectory: home)
                 let routeUnits = agentUnits + genericUnits + administratorUnits
                 let agentOutcome = agentLeftovers.isEmpty
                     ? AgentCleanupExecutor.Outcome(summary: .init(removed: 0, skipped: 0, failed: 0, messages: []), refused: 0)
@@ -2364,12 +2372,12 @@ final class AppState: ObservableObject {
                         })
                 let agent = agentOutcome.summary
                 return NativeCore.ApplySummary(
-                    removed: generic.removed + agent.removed,
-                    skipped: generic.skipped + agent.skipped + agentOutcome.refused,
-                    failed: generic.failed + agent.failed,
-                    messages: generic.messages + agent.messages,
-                    removedPaths: generic.removedPaths.union(agent.removedPaths),
-                    reclaimedBytes: generic.reclaimedBytes &+ agent.reclaimedBytes)
+                    removed: generic.removed + agent.removed + appData.removed,
+                    skipped: generic.skipped + agent.skipped + agentOutcome.refused + appData.skipped,
+                    failed: generic.failed + agent.failed + appData.failed,
+                    messages: generic.messages + agent.messages + appData.messages,
+                    removedPaths: generic.removedPaths.union(agent.removedPaths).union(appData.removedPaths),
+                    reclaimedBytes: generic.reclaimedBytes &+ agent.reclaimedBytes &+ appData.reclaimedBytes)
             }.value
             let summary = applied
             if !summary.messages.isEmpty { log(summary.messages.joined(separator: "\n")) }
@@ -3102,10 +3110,25 @@ final class AppState: ObservableObject {
         uninstallQueue.markRunning(job.id)
         statusText = l10n.tf("status.uninstalling", target.name)
         log(l10n.tf("log.uninstallApply", target.name))
-        let result = await Task.detached(priority: .utility) {
-            NativeCore.shared.applyUninstall(target, plan: plan,
-                                             homeDirectory: NSHomeDirectory())
-        }.value
+        let includingData = (uninstallDataSelections[target.id] ?? []).intersection(plan.dataPaths)
+        let result: NativeCore.ApplySummary
+        if plan.needsAdmin && !plan.isBrewCask {
+            let elevated = await AdministratorUninstallService.apply(target)
+            if elevated.succeeded && elevated.removedPaths == [target.path] {
+                result = await Task.detached(priority: .utility) {
+                    NativeCore.shared.applyUninstall(target, plan: plan,
+                        homeDirectory: NSHomeDirectory(), appAlreadyRemoved: true,
+                        includingData: includingData)
+                }.value
+            } else { result = elevated }
+        } else {
+            result = await Task.detached(priority: .utility) {
+                NativeCore.shared.applyUninstall(target, plan: plan,
+                                                 homeDirectory: NSHomeDirectory(),
+                                                 includingData: includingData)
+            }.value
+        }
+        if result.succeeded { uninstallDataSelections[target.id] = nil }
         if !result.messages.isEmpty { log(result.messages.joined(separator: "\n")) }
         if result.removed > 0 { CleanupCache.invalidate() }
         uninstallInventoryGeneration += 1
@@ -3126,6 +3149,11 @@ final class AppState: ObservableObject {
             uninstallPlans.removeValue(forKey: target.id)
             persistUninstallInventory()
             var detail = l10n.tf("log.uninstallPartial", result.removed, result.failed)
+            let reasons = result.messages.filter {
+                !$0.hasPrefix("Open-file check ") && !$0.hasPrefix("Retained app data or shared/system item:")
+                    && !$0.hasPrefix("Uninstall residue remains:")
+            }
+            if !reasons.isEmpty { detail += "\n" + reasons.joined(separator: "\n") }
             if !result.remainingPaths.isEmpty {
                 detail += "\n" + l10n.tf("uninstall.remaining", result.remainingPaths.count)
                     + "\n" + result.remainingPaths.joined(separator: "\n")
@@ -4100,15 +4128,25 @@ final class AppState: ObservableObject {
             .filter { !$0.isEmpty && !$0.hasPrefix("#") }
     }
 
-    func addWhitelistEntry(_ rawPath: String) {
-        let path = rawPath.trimmingCharacters(in: .whitespaces)
-        guard path.hasPrefix("/"), !path.contains("..") else {
-            log(l10n.tf("log.wlInvalid", path))
-            return
+    /// Returns a visible error; only clear the editor once the entry is saved.
+    func addWhitelistEntry(_ rawPath: String) -> String? {
+        let path: String
+        do {
+            path = try WhitelistPath.validated(rawPath)
+        } catch WhitelistPath.ValidationError.missing {
+            return l10n.t("wl.error.missing")
+        } catch {
+            return l10n.t("wl.error.invalid")
         }
-        guard !whitelistEntries.contains(path) else { return }
+        guard !whitelistEntries.contains(where: {
+            (try? WhitelistPath.normalized($0)) == path
+        }) else { return l10n.t("wl.error.duplicate") }
         whitelistEntries.append(path)
-        saveWhitelist()
+        guard saveWhitelist() else {
+            whitelistEntries.removeLast()
+            return l10n.t("wl.error.save")
+        }
+        return nil
     }
 
     func removeWhitelistEntry(_ path: String) {
@@ -4116,18 +4154,25 @@ final class AppState: ObservableObject {
         saveWhitelist()
     }
 
-    func saveWhitelist() {
+    @discardableResult
+    func saveWhitelist() -> Bool {
         let header = """
         # Nori whitelist (shared by native clean / purge / bridge cleanup)
         # One absolute path or glob per line; built-in engine safety always applies.
 
         """
         let content = header + whitelistEntries.joined(separator: "\n") + "\n"
-        try? FileManager.default.createDirectory(
-            at: Self.whitelistFileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true)
-        try? content.write(to: Self.whitelistFileURL, atomically: true, encoding: .utf8)
+        do {
+            try FileManager.default.createDirectory(
+                at: Self.whitelistFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try content.write(to: Self.whitelistFileURL, atomically: true, encoding: .utf8)
+        } catch {
+            log(l10n.t("wl.error.save"))
+            return false
+        }
         CleanupCache.invalidate()
         log(l10n.tf("log.wlSaved", whitelistEntries.count))
+        return true
     }
 }

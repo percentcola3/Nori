@@ -19,7 +19,7 @@ struct DirectoryPathBar: View {
             widths: crumbs.map { crumb in
                 let textWidth = (crumb.title as NSString).size(withAttributes: [.font: font]).width
                 return ceil(textWidth) + 12
-            }, availableWidth: max(0, width - 68))
+            }, availableWidth: max(0, width - 32))
     }
 
     var body: some View {
@@ -30,12 +30,12 @@ struct DirectoryPathBar: View {
             let plan = makePlan(for: crumbs, width: geometry.size.width)
             HStack(spacing: 4) {
                 pathContent(crumbs: crumbs, plan: plan)
-                controls
                 Spacer(minLength: 0)
+                controls
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(height: 32)
+        .frame(height: 30)
         .accessibilityIdentifier("directory-breadcrumbs")
     }
 
@@ -60,14 +60,14 @@ struct DirectoryPathBar: View {
                 }
             }
         }
-        .frame(width: plan.totalWidth, height: 32, alignment: .leading)
+        .frame(width: plan.totalWidth, height: 30, alignment: .leading)
         .clipped()
     }
 
     private func separator(width: CGFloat) -> some View {
         Image(systemName: "chevron.right")
             .font(.system(size: 8, weight: .semibold)).foregroundStyle(.tertiary)
-            .frame(width: width, height: 28)
+            .frame(width: width, height: 26)
             .accessibilityHidden(true)
     }
 
@@ -78,11 +78,11 @@ struct DirectoryPathBar: View {
             }
         } label: {
             Text("…").font(.system(size: 13, weight: .medium))
-                .frame(width: width, height: 28)
+                .frame(width: width, height: 26)
                 .contentShape(Rectangle())
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
-        .frame(width: width, height: 28)
+        .frame(width: width, height: 26)
         .clipped()
         .help(l10n.t("dir.path.ancestors"))
         .accessibilityLabel(l10n.t("dir.path.ancestors"))
@@ -104,7 +104,7 @@ struct DirectoryPathBar: View {
             crumbLabel(crumb, width: width)
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
-        .frame(width: width, height: 28).clipped()
+        .frame(width: width, height: 26).clipped()
         .help(l10n.t("dir.path.root"))
         .accessibilityLabel(l10n.t("dir.path.root"))
     }
@@ -120,7 +120,7 @@ struct DirectoryPathBar: View {
             crumbLabel(crumb, width: width, current: true)
         }
         .menuStyle(.borderlessButton).menuIndicator(.hidden)
-        .frame(width: width, height: 28).clipped()
+        .frame(width: width, height: 26).clipped()
         .help(crumb.url.path)
         .accessibilityLabel(crumb.url.path)
     }
@@ -131,33 +131,21 @@ struct DirectoryPathBar: View {
             .foregroundStyle(current ? Color.accentText : Color.primary)
             .lineLimit(1).truncationMode(.middle)
             .padding(.horizontal, min(6, max(0, width / 4 - 1)))
-            .frame(width: width, height: 28, alignment: .leading)
+            .frame(width: width, height: 26, alignment: .leading)
             .contentShape(Rectangle())
     }
 
+    /// 路径字段尾部的复制按钮；刷新移到了工具栏独立图标。
     private var controls: some View {
-        HStack(spacing: 4) {
-            Button(action: onCopy) {
-                Image(systemName: isPathCopied ? "checkmark" : "doc.on.doc")
-                    .foregroundStyle(isPathCopied ? Color.success : Color.secondary).font(.system(size: 11, weight: .medium))
-                    .frame(width: 28, height: 28).contentShape(Rectangle())
-            }
-            .help(l10n.t(isPathCopied ? "dir.path.copied" : "dir.path.copy"))
-            .accessibilityLabel(l10n.t(isPathCopied ? "dir.path.copied" : "dir.path.copy"))
-            .accessibilityIdentifier("directory-copy-path")
-            Button(action: onRefresh) {
-                Group {
-                    if isRefreshing { ProgressView().controlSize(.mini).scaleEffect(0.65) }
-                    else { Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .medium)) }
-                }
-                .frame(width: 28, height: 28).contentShape(Rectangle())
-            }
-            .disabled(isRefreshing)
-            .help(l10n.t("dir.refresh"))
-            .accessibilityLabel(l10n.t("dir.refresh"))
+        Button(action: onCopy) {
+            Image(systemName: isPathCopied ? "checkmark" : "doc.on.doc")
+                .foregroundStyle(isPathCopied ? Color.success : Color.secondary).font(.system(size: 11, weight: .medium))
+                .frame(width: 28, height: 26).contentShape(Rectangle())
         }
         .buttonStyle(MolePlainButtonStyle())
-        .frame(width: 60, height: 28)
+        .help(l10n.t(isPathCopied ? "dir.path.copied" : "dir.path.copy"))
+        .accessibilityLabel(l10n.t(isPathCopied ? "dir.path.copied" : "dir.path.copy"))
+        .accessibilityIdentifier("directory-copy-path")
     }
 }
 

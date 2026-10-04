@@ -34,6 +34,7 @@ swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Services/NativeCore.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
     "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
+    "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentProjectStorage.swift" \

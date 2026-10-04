@@ -149,6 +149,13 @@ extension AppState {
         setAnalysisSelection([], for: .disk)
     }
 
+    func toggleDiskBrowserSelection(_ entry: AnalyzeEntry, in parentPath: String) {
+        guard !isBusy, diskBrowserNavigation.contains(parentPath), diskBrowserCanSelect(entry),
+              diskBrowserEntries(at: parentPath).contains(where: { $0.path == entry.path && $0.isDir == entry.isDir }) else { return }
+        navigateDiskBrowser(to: parentPath)
+        toggleAnalysisFileSelection(.init(name: entry.name, path: entry.path, size: entry.size))
+    }
+
     func navigateDiskBrowser(to path: String) {
         guard let index = diskBrowserNavigation.firstIndex(of: path) else { return }
         let navigation = Array(diskBrowserNavigation.prefix(index + 1))

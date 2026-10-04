@@ -61,26 +61,24 @@ struct SettingsTabView: View {
     @StateObject private var loginItem = LoginItemController()
 
     var body: some View {
-        // Clip the local glass compositor at the viewport. Clipping only the
-        // ScrollView lets glass descendants escape into MainWindowView's container.
-        LiquidGlassGroup {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    pagesSection
-                    islandSection
-                    maintenanceSection
-                    generalSection
-                    UpdateSettingsView(updater: .shared)
-                    SettingsSection(title: l10n.t("permissions.title")) {
-                        PermissionCenterView(state: state, embedded: true)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                    }
+        // Clip the scroll viewport; clipping only the ScrollView bounds the
+        // settings content to the visible area.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                pagesSection
+                islandSection
+                maintenanceSection
+                generalSection
+                UpdateSettingsView(updater: .shared)
+                SettingsSection(title: l10n.t("permissions.title")) {
+                    PermissionCenterView(state: state, embedded: true)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
                 }
-                .frame(maxWidth: 740, alignment: .leading)
-                .padding(20)
-                .frame(maxWidth: .infinity)
             }
+            .frame(maxWidth: 740, alignment: .leading)
+            .padding(20)
+            .frame(maxWidth: .infinity)
         }
         .clipped()
         .contentShape(Rectangle())
