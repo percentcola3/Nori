@@ -102,15 +102,12 @@ struct UninstallTabView: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
     }
 
-    // One status line follows the current operation; no separate task list.
+    // Show current work and failures; successful uninstalls leave no notice.
     private var statusJob: UninstallJob? {
         if state.isScanningApps && !state.uninstallQueue.hasWork { return nil }
         return state.uninstallQueue.activeJob
             ?? state.uninstallQueue.jobs.first { $0.state.isPending }
-            ?? state.uninstallQueue.jobs.last { job in
-                job.state == .failed
-                    || (job.state == .succeeded && job.message?.contains("\n") == true)
-            }
+            ?? state.uninstallQueue.jobs.last { $0.state == .failed }
     }
 
     private var statusRow: some View {
