@@ -146,11 +146,26 @@ private struct NoriSVGCanvas: NSViewRepresentable {
     let retainsResultBadge: Bool
     final class Coordinator { var loadedURL: URL?; var animates: Bool?; var retainsResultBadge: Bool? }
     func makeCoordinator() -> Coordinator { Coordinator() }
-    func makeNSView(context: Context) -> WKWebView {
+    /// 所有吉祥物共用一个 WebKit 配置和进程池：每个页面新建独立 WebContent 进程
+    /// 要几百毫秒，切换页面时会卡一下。
+    private static let sharedConfiguration: WKWebViewConfiguration = {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
+        configuration.processPool = WKProcessPool()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        return configuration
+    }()
+    private static let svgCache = NSCache<NSURL, NSString>()
+
+    private static func svgText(at url: URL) -> String? {
+        if let cached = svgCache.object(forKey: url as NSURL) { return cached as String }
+        guard let data = try? Data(contentsOf: url), let text = String(data: data, encoding: .utf8) else { return nil }
+        svgCache.setObject(text as NSString, forKey: url as NSURL)
+        return text
+    }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let view = WKWebView(frame: .zero, configuration: Self.sharedConfiguration)
         view.setValue(false, forKey: "drawsBackground")
         view.underPageBackgroundColor = .clear
         return view
@@ -158,7 +173,7 @@ private struct NoriSVGCanvas: NSViewRepresentable {
     func updateNSView(_ view: WKWebView, context: Context) {
         guard context.coordinator.loadedURL != url || context.coordinator.animates != animates
                 || context.coordinator.retainsResultBadge != retainsResultBadge,
-              let data = try? Data(contentsOf: url), var svg = String(data: data, encoding: .utf8) else { return }
+              var svg = Self.svgText(at: url) else { return }
         context.coordinator.loadedURL = url
         context.coordinator.animates = animates
         context.coordinator.retainsResultBadge = retainsResultBadge

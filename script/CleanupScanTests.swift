@@ -636,7 +636,7 @@ struct CleanupScanTests {
                "partial secure deletion lost its confirmed reclaimed bytes or removed a new lock")
         expect(progressEvents.map { $0.0 } == [0, 1, 2, 3]
                && progressEvents.allSatisfy { $0.1 == 3 }
-               && progressEvents.dropFirst().map { $0.2 } == progressItems.map(\.record),
+               && Set(progressEvents.dropFirst().map { $0.2 }) == Set(progressItems.map(\.record)),
                "root progress was not monotonic or failed to complete all outcomes")
         var emptyProgress: [(Int, Int)] = []
         _ = fixtureCore.applyCleanup(items: [], permanent: true, homeDirectory: home.path,

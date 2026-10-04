@@ -1898,6 +1898,13 @@ final class NativeCore: @unchecked Sendable {
     /// descendants are cleaned individually and occupied/durable data stays.
     /// Progress counts submitted, non-overlapping roots, including retained or
     /// failed roots. It runs on the caller's worker thread, never per child.
+    struct RootRemovalOutcome {
+        var removed = 0, skipped = 0, failed = 0
+        var messages: [String] = []
+        var removedPaths = Set<String>()
+        var reclaimedBytes: UInt64 = 0
+    }
+
     func applyCleanup(items: [DeletionPlan.Item], permanent: Bool,
                       homeDirectory: String = NSHomeDirectory(),
                       allowedRoots: [String] = [],
@@ -1953,11 +1960,20 @@ final class NativeCore: @unchecked Sendable {
             }
             if !intact { blockedFamilyMembers.formUnion(family) }
         }
-        for rawPath in nonOverlapping {
+        // 各根目录互不重叠，预检与删除并行执行；结果按原顺序汇总，消息顺序不变。
+        var outcomes = [RootRemovalOutcome?](repeating: nil, count: nonOverlapping.count)
+        let outcomeLock = NSLock()
+        DispatchQueue.concurrentPerform(iterations: nonOverlapping.count) { index in
+            let rawPath = nonOverlapping[index]
+            var outcome = RootRemovalOutcome()
             onCurrentFile?(rawPath)
             defer {
+                outcomeLock.lock()
+                outcomes[index] = outcome
                 completedRoots += 1
-                onProgress?(completedRoots, nonOverlapping.count, rawPath)
+                let finished = completedRoots
+                outcomeLock.unlock()
+                onProgress?(finished, nonOverlapping.count, rawPath)
             }
             let coveredPaths = itemByRecord.keys.filter { record in
                 if record == rawPath { return true }
@@ -1970,15 +1986,15 @@ final class NativeCore: @unchecked Sendable {
             let coveredCount = coveredPaths.count
             let expectedIdentity = itemByRecord[rawPath]?.identity ?? ""
             if blockedFamilyMembers.contains(rawPath) {
-                skipped += coveredCount
-                messages.append("Skipped database family that is open or changed: \(rawPath)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped database family that is open or changed: \(rawPath)")
+                return
             }
             // 第一道：词法校验（绝对路径、无控制字符、无 "."/".." 分量）。
             guard DeletionPlan.isLexicallySafePath(rawPath) else {
-                skipped += coveredCount
-                messages.append("Skipped unsafe path literal: \(rawPath)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped unsafe path literal: \(rawPath)")
+                return
             }
             let url = URL(fileURLWithPath: CleanupRiskPolicy.normalizedPathLiteral(rawPath))
             let path = url.path
@@ -1998,82 +2014,82 @@ final class NativeCore: @unchecked Sendable {
             let auditedSystemPath = permanent && cachePolicy.risk == .safe
                 && CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) != nil
             guard isHomePath || isAllowedRoot || auditedSystemPath else {
-                skipped += coveredCount
-                messages.append("Skipped outside authorized roots: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped outside authorized roots: \(path)")
+                return
             }
             // 统一日志子目录是保留壳：无论哪条路径到达这里都不删目录本身；
             // 合法条目只会是它的直接子级 *.tracev3。
             guard !CleanupRiskPolicy.isUnifiedLogDirectory(path) else {
-                skipped += coveredCount
-                messages.append("Skipped retained diagnostics directory: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped retained diagnostics directory: \(path)")
+                return
             }
             var metadata = stat()
             guard lstat(path, &metadata) == 0 else {
                 let error = errno
                 if error == ENOENT || error == ENOTDIR {
-                    skipped += coveredCount
-                    messages.append("Skipped path that is already absent: \(path)")
+                    outcome.skipped += coveredCount
+                    outcome.messages.append("Skipped path that is already absent: \(path)")
                 } else {
-                    failed += coveredCount
-                    messages.append("Could not access \(path): \(String(cString: strerror(error)))")
+                    outcome.failed += coveredCount
+                    outcome.messages.append("Could not access \(path): \(String(cString: strerror(error)))")
                 }
-                continue
+                return
             }
             guard metadata.st_mode & S_IFMT != S_IFLNK else {
-                skipped += coveredCount
-                messages.append("Skipped symbolic link: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped symbolic link: \(path)")
+                return
             }
             guard !auditedSystemPath || metadata.st_mode & S_IFMT == S_IFDIR
                     || systemCleanupMetadataEligible(path, metadata: metadata, homeDirectory: home) else {
-                skipped += coveredCount
-                messages.append("Skipped recent or foreign-owned system content: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped recent or foreign-owned system content: \(path)")
+                return
             }
             guard !isCleanupLockItem(path) else {
-                skipped += coveredCount
-                messages.append("Skipped lock file: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped lock file: \(path)")
+                return
             }
             guard verifiedTargets.contains(rawPath)
                     || !isProtectedCleanupItem(url, allowApplicationBundle: allowApplicationBundle,
                         homeDirectory: home, rebuildableRoot: liveCleanup ? path : nil,
                         rootIsVerifiedRebuildable: declaredLiveCleanup) else {
-                skipped += coveredCount
-                messages.append("Skipped protected content: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped protected content: \(path)")
+                return
             }
             guard !(liveCleanup
                     ? directlyMatchesWhitelist(path, entries: whitelist)
                     : matchesWhitelist(path, entries: whitelist)) else {
-                skipped += coveredCount
-                messages.append("Skipped path protected by whitelist: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped path protected by whitelist: \(path)")
+                return
             }
             guard Self.matchesCleanupIdentity(metadata, expected: expectedIdentity,
                         allowingDirectoryContentChanges: liveCleanup),
                   itemByRecord[rawPath]?.metadata?.matches(metadata, allowingDirectoryContentChanges: liveCleanup) != false else {
-                skipped += coveredCount
-                messages.append("Skipped changed or unavailable path: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped changed or unavailable path: \(path)")
+                return
             }
             guard liveCleanup || !isOwnedByRunningApplication(path: path, homeDirectory: home) else {
-                skipped += coveredCount
-                messages.append("Skipped while owning application is running: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped while owning application is running: \(path)")
+                return
             }
             guard cleanupDeletionAccess(path, metadata: metadata) == .user,
                   !systemCleanupRequiresAdministrator(path, metadata: metadata, homeDirectory: home) else {
-                skipped += coveredCount
-                messages.append("Skipped content that requires administrator access or cannot be deleted: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped content that requires administrator access or cannot be deleted: \(path)")
+                return
             }
             guard let openFiles else {
-                skipped += coveredCount
-                messages.append("Skipped because open-file state was unavailable: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped because open-file state was unavailable: \(path)")
+                return
             }
             let liveDirectory = liveCleanup && metadata.st_mode & S_IFMT == S_IFDIR
             // Only a reversible bundle move may ignore read-only Info.plist
@@ -2089,20 +2105,20 @@ final class NativeCore: @unchecked Sendable {
                 ?? openFiles.contains(where: { $0 == path || $0.hasPrefix(path + "/") })
             guard liveDirectory || CleanupRiskPolicy.isPowerlogTelemetryPath(path)
                     || !pathIsOpen else {
-                skipped += coveredCount
-                messages.append("Skipped while the path is open: \(path)")
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped while the path is open: \(path)")
                 if let blocker = blockers?.first {
-                    messages.append("Open by \(blocker.process) (PID \(blocker.pid)): \(blocker.path)")
+                    outcome.messages.append("Open by \(blocker.process) (PID \(blocker.pid)): \(blocker.path)")
                 }
-                continue
+                return
             }
 
             // Content-dependent plans (duplicates / similar images) must still
             // hold after the potentially slow runtime probes, at the Trash edge.
             if let finalValidation, !finalValidation(path) {
-                skipped += coveredCount
-                messages.append("Skipped because final content validation failed: \(path)")
-                continue
+                outcome.skipped += coveredCount
+                outcome.messages.append("Skipped because final content validation failed: \(path)")
+                return
             }
 
             if declaredLiveCleanup && !liveDirectory {
@@ -2110,9 +2126,9 @@ final class NativeCore: @unchecked Sendable {
                     whitelist: whitelist, control: .init(mode: .deep),
                     includingAdministratorRequired: false, rootIsVerifiedRebuildable: true)
                 guard checked.entries.contains(where: { $0.path == path }) else {
-                    skipped += coveredCount
-                    messages.append("Skipped protected or occupied cache leaf: \(path)")
-                    continue
+                    outcome.skipped += coveredCount
+                    outcome.messages.append("Skipped protected or occupied cache leaf: \(path)")
+                    return
                 }
             }
 
@@ -2121,13 +2137,13 @@ final class NativeCore: @unchecked Sendable {
                     expectedMetadata: metadata, whitelist: whitelist, openFiles: openFiles,
                     blockedFamilyMembers: blockedFamilyMembers, homeDirectory: home,
                     onCurrentFile: onCurrentFile)
-                removed += partial.removedPaths.count
-                skipped += partial.skippedPaths.count
-                failed += partial.failedPaths.count
-                messages.append(contentsOf: partial.messages)
-                removedPaths.formUnion(partial.removedPaths)
-                reclaimedBytes &+= partial.reclaimedBytes
-                continue
+                outcome.removed += partial.removedPaths.count
+                outcome.skipped += partial.skippedPaths.count
+                outcome.failed += partial.failedPaths.count
+                outcome.messages.append(contentsOf: partial.messages)
+                outcome.removedPaths.formUnion(partial.removedPaths)
+                outcome.reclaimedBytes &+= partial.reclaimedBytes
+                return
             }
 
             if permanent {
@@ -2143,29 +2159,40 @@ final class NativeCore: @unchecked Sendable {
                         expectedIdentity: expectedIdentity, homeDirectory: home,
                         accounting: &accounting, onCurrentFile: onCurrentFile)
                 } ?? false
-                reclaimedBytes &+= accounting.reclaimedBytes
+                outcome.reclaimedBytes &+= accounting.reclaimedBytes
                 guard succeeded else {
-                    removed += accounting.removedPaths.count
-                    removedPaths.formUnion(accounting.removedPaths)
-                    failed += coveredCount
+                    outcome.removed += accounting.removedPaths.count
+                    outcome.removedPaths.formUnion(accounting.removedPaths)
+                    outcome.failed += coveredCount
                     let error = errno
-                    messages.append("Failed secure removal of \(path): \(String(cString: strerror(error)))")
-                    continue
+                    outcome.messages.append("Failed secure removal of \(path): \(String(cString: strerror(error)))")
+                    return
                 }
-                removed += coveredCount
-                removedPaths.formUnion(coveredPaths)
+                outcome.removed += coveredCount
+                outcome.removedPaths.formUnion(coveredPaths)
             } else {
                 do {
                     var resultingURL: NSURL?
-                    if let trashHandler { try trashHandler(url) }
-                    else { try fileManager.trashItem(at: url, resultingItemURL: &resultingURL) }
-                    removed += coveredCount
-                    removedPaths.formUnion(coveredPaths)
+                    if let trashHandler {
+                        outcomeLock.lock()
+                        defer { outcomeLock.unlock() }
+                        try trashHandler(url)
+                    } else { try fileManager.trashItem(at: url, resultingItemURL: &resultingURL) }
+                    outcome.removed += coveredCount
+                    outcome.removedPaths.formUnion(coveredPaths)
                 } catch {
-                    failed += coveredCount
-                    messages.append("Failed to remove \(path): \(error.localizedDescription)")
+                    outcome.failed += coveredCount
+                    outcome.messages.append("Failed to remove \(path): \(error.localizedDescription)")
                 }
             }
+        }
+        for outcome in outcomes.compactMap({ $0 }) {
+            removed += outcome.removed
+            skipped += outcome.skipped
+            failed += outcome.failed
+            messages.append(contentsOf: outcome.messages)
+            removedPaths.formUnion(outcome.removedPaths)
+            reclaimedBytes &+= outcome.reclaimedBytes
         }
         return ApplySummary(removed: removed, skipped: skipped,
                             failed: failed, messages: messages, removedPaths: removedPaths,
