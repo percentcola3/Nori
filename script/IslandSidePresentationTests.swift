@@ -48,7 +48,7 @@ struct IslandSidePresentationTests {
                      height: (hardwareNotch ? safeTop : IslandLayout.nonNotchExpandedTopInset)
                         + IslandLayout.metricsHeight + IslandLayout.detailBudget + IslandLayout.windowMargin)
             : IslandLayout.sideWindowSize
-        let view = FloatingIslandView(state: state, safeTop: safeTop, hardwareNotch: hardwareNotch,
+        let view = FloatingIslandView(state: state, metricsStore: state.metricsStore, safeTop: safeTop, hardwareNotch: hardwareNotch,
             edge: edge, onOpenMain: {}, onHitFrameChange: { frame, shape in
                 regions.rail = frame
                 regions.shape = shape

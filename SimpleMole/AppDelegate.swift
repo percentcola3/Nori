@@ -491,6 +491,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.ignoresMouseEvents = true
         let hosting = IslandHostingView(rootView: FloatingIslandView(
             state: appState,
+            metricsStore: appState.metricsStore,
             safeTop: safeTop,
             hardwareNotch: hardwareNotch,
             collapsedWidth: collapsedWidth,

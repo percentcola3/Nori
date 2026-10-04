@@ -465,6 +465,8 @@ struct CategoryRowView: View {
     var onAutoClean: (() -> Void)? = nil
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 展开时的路径顺序只在路径集合变化时重排，滚动和勾选不再触发全量排序。
+    @State private var sortedPaths: [String] = []
 
     /// 类目下的路径是否全部已设置定时清理（决定徽标文案）。
     private var fullyScheduled: Bool {
@@ -543,7 +545,7 @@ struct CategoryRowView: View {
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(riskColor)
                         .padding(.bottom, 2)
-                    ForEach(category.pathsByDescendingSize, id: \.self) { path in
+                    ForEach(sortedPaths, id: \.self) { path in
                         HStack(spacing: 7) {
                             Toggle("", isOn: childSelection(for: path))
                                 .toggleStyle(.checkbox)
@@ -576,6 +578,7 @@ struct CategoryRowView: View {
                 .padding(.horizontal, 40)
                 .padding(.bottom, 10)
                 .transition(.molePanelReveal)
+                .task(id: pathOrderKey) { sortedPaths = category.pathsByDescendingSize }
             }
         }
         .clipped()
@@ -583,6 +586,9 @@ struct CategoryRowView: View {
         .animation(reduceMotion ? nil : MoleMotion.selection, value: category.selected)
         .opacity(category.risk == .protected ? 0.72 : 1)
     }
+
+    /// 路径数与总字节一起变化才重排；只勾选不会改变这两个值。
+    private var pathOrderKey: String { "\(category.paths.count):\(category.bytes)" }
 
     private var sensitive: Bool {
         highlightsSensitiveData && (category.reasonKey == "agents.reason.showOnly"

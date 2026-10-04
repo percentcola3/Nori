@@ -130,6 +130,7 @@ extension AppState.IslandItem {
 
 struct FloatingIslandView: View {
     @ObservedObject var state: AppState
+    @ObservedObject var metricsStore: MetricsStore
     @ObservedObject private var l10n = L10n.shared
     /// 刘海屏为硬件刘海高度，无刘海屏为菜单栏高度（虚拟刘海）。
     var safeTop: CGFloat = 0
@@ -758,16 +759,16 @@ struct FloatingIslandView: View {
 
     private func progress(_ item: AppState.IslandItem) -> Double {
         switch item {
-        case .cpu: return state.metrics.cpuPercent / 100
-        case .memory: return state.metrics.memoryPercent / 100
-        case .disk: return state.metrics.diskUsedPercent / 100
+        case .cpu: return metricsStore.metrics.cpuPercent / 100
+        case .memory: return metricsStore.metrics.memoryPercent / 100
+        case .disk: return metricsStore.metrics.diskUsedPercent / 100
         case .network: return 0
-        case .gpu: return (state.metrics.gpuPercent ?? 0) / 100
+        case .gpu: return (metricsStore.metrics.gpuPercent ?? 0) / 100
         case .thermal:
-            if let temperature = state.metrics.cpuTemperature { return min(1, temperature / 100) }
-            return Double(state.metrics.thermalLevel) / 3
-        case .power: return min(1, (state.metrics.systemPowerWatts ?? 0) / 60)
-        case .bluetooth: return Double(state.metrics.bluetoothBatteries.first?.percent ?? 0) / 100
+            if let temperature = metricsStore.metrics.cpuTemperature { return min(1, temperature / 100) }
+            return Double(metricsStore.metrics.thermalLevel) / 3
+        case .power: return min(1, (metricsStore.metrics.systemPowerWatts ?? 0) / 60)
+        case .bluetooth: return Double(metricsStore.metrics.bluetoothBatteries.first?.percent ?? 0) / 100
         }
     }
 
@@ -783,11 +784,11 @@ struct FloatingIslandView: View {
                 Text(l10n.t("island.item.network"))
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
-                rateLine(symbol: "arrow.down", text: ByteFormat.megabytesPerSecond(state.metrics.networkRxMBps),
+                rateLine(symbol: "arrow.down", text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkRxMBps),
                          tint: Color.success)
-                rateLine(symbol: "arrow.up", text: ByteFormat.megabytesPerSecond(state.metrics.networkTxMBps),
+                rateLine(symbol: "arrow.up", text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkTxMBps),
                          tint: Color.secondary)
-                IslandSparkline(primary: state.networkHistory, secondary: state.networkUploadHistory)
+                IslandSparkline(primary: metricsStore.networkHistory, secondary: metricsStore.networkUploadHistory)
                     .frame(height: 10)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -804,14 +805,14 @@ struct FloatingIslandView: View {
             Spacer(minLength: 3)
             VStack(alignment: .leading, spacing: 1) {
                 rateLine(symbol: "arrow.down",
-                         text: ByteFormat.megabytesPerSecond(state.metrics.networkRxMBps),
+                         text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkRxMBps),
                          tint: Color.success)
                 rateLine(symbol: "arrow.up",
-                         text: ByteFormat.megabytesPerSecond(state.metrics.networkTxMBps),
+                         text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkTxMBps),
                          tint: Color.secondary)
             }
             Spacer(minLength: 3)
-            IslandSparkline(primary: state.networkHistory, secondary: state.networkUploadHistory)
+            IslandSparkline(primary: metricsStore.networkHistory, secondary: metricsStore.networkUploadHistory)
                 .frame(height: 10)
         }
         .modifier(IslandTileFrame())
@@ -834,8 +835,8 @@ struct FloatingIslandView: View {
     }
 
     private var networkValue: String {
-        "↓" + ByteFormat.megabytesPerSecond(state.metrics.networkRxMBps)
-            + " ↑" + ByteFormat.megabytesPerSecond(state.metrics.networkTxMBps)
+        "↓" + ByteFormat.megabytesPerSecond(metricsStore.metrics.networkRxMBps)
+            + " ↑" + ByteFormat.megabytesPerSecond(metricsStore.metrics.networkTxMBps)
     }
 
     private func healthColor(_ item: AppState.IslandItem) -> Color {
@@ -843,17 +844,17 @@ struct FloatingIslandView: View {
         guard item != .network else { return Color.success }
         let health: IslandResourcePolicy.Health
         switch item {
-        case .memory where state.metrics.memoryPressure == "critical": health = .high
-        case .memory where state.metrics.memoryPressure == "warning": health = .elevated
-        case .memory where state.metrics.memoryPressure == "normal": health = .healthy
+        case .memory where metricsStore.metrics.memoryPressure == "critical": health = .high
+        case .memory where metricsStore.metrics.memoryPressure == "warning": health = .elevated
+        case .memory where metricsStore.metrics.memoryPressure == "normal": health = .healthy
         case .thermal:
-            let temperature = state.metrics.cpuTemperature ?? 0
-            let level = state.metrics.thermalLevel
+            let temperature = metricsStore.metrics.cpuTemperature ?? 0
+            let level = metricsStore.metrics.thermalLevel
             health = level >= 2 || temperature >= 90 ? .high : level == 1 || temperature >= 75 ? .elevated : .healthy
         case .bluetooth:
-            guard let lowest = state.metrics.bluetoothBatteries.first?.percent else { return Color.secondary }
+            guard let lowest = metricsStore.metrics.bluetoothBatteries.first?.percent else { return Color.secondary }
             health = lowest <= 10 ? .high : lowest <= 25 ? .elevated : .healthy
-        case .gpu where state.metrics.gpuPercent == nil, .power where state.metrics.systemPowerWatts == nil:
+        case .gpu where metricsStore.metrics.gpuPercent == nil, .power where metricsStore.metrics.systemPowerWatts == nil:
             return Color.secondary
         default: health = IslandResourcePolicy.health(percent: progress(item) * 100)
         }
@@ -866,32 +867,32 @@ struct FloatingIslandView: View {
 
     private func primaryValue(_ item: AppState.IslandItem) -> String {
         switch item {
-        case .cpu: return String(format: "%.0f%%", state.metrics.cpuPercent)
-        case .memory: return String(format: "%.0f%%", state.metrics.memoryPercent)
-        case .disk: return ByteFormat.short(state.metrics.diskFreeBytes)
+        case .cpu: return String(format: "%.0f%%", metricsStore.metrics.cpuPercent)
+        case .memory: return String(format: "%.0f%%", metricsStore.metrics.memoryPercent)
+        case .disk: return ByteFormat.short(metricsStore.metrics.diskFreeBytes)
         case .network: return ""
-        case .gpu: return state.metrics.gpuPercent.map { String(format: "%.0f%%", $0) } ?? "—"
+        case .gpu: return metricsStore.metrics.gpuPercent.map { String(format: "%.0f%%", $0) } ?? "—"
         case .thermal:
-            if let temperature = state.metrics.cpuTemperature { return String(format: "%.0f°", temperature) }
-            return l10n.t("island.thermal.\(state.metrics.thermalLevel)")
-        case .power: return state.metrics.systemPowerWatts.map { String(format: "%.1fW", $0) } ?? "—"
-        case .bluetooth: return state.metrics.bluetoothBatteries.first.map { "\($0.percent)%" } ?? "—"
+            if let temperature = metricsStore.metrics.cpuTemperature { return String(format: "%.0f°", temperature) }
+            return l10n.t("island.thermal.\(metricsStore.metrics.thermalLevel)")
+        case .power: return metricsStore.metrics.systemPowerWatts.map { String(format: "%.1fW", $0) } ?? "—"
+        case .bluetooth: return metricsStore.metrics.bluetoothBatteries.first.map { "\($0.percent)%" } ?? "—"
         }
     }
 
     private func valueText(_ item: AppState.IslandItem) -> String {
         switch item {
         case .memory:
-            return String(format: "%.0f%%", state.metrics.memoryPercent) + " · "
-                + l10n.tf("island.swap", ByteFormat.format(state.metrics.swapUsedBytes))
-        case .disk: return ByteFormat.format(state.metrics.diskFreeBytes)
-        case .network: return String(format: "↓%.1f ↑%.1f MB/s", state.metrics.networkRxMBps, state.metrics.networkTxMBps)
+            return String(format: "%.0f%%", metricsStore.metrics.memoryPercent) + " · "
+                + l10n.tf("island.swap", ByteFormat.format(metricsStore.metrics.swapUsedBytes))
+        case .disk: return ByteFormat.format(metricsStore.metrics.diskFreeBytes)
+        case .network: return String(format: "↓%.1f ↑%.1f MB/s", metricsStore.metrics.networkRxMBps, metricsStore.metrics.networkTxMBps)
         case .thermal:
-            return [state.metrics.cpuTemperature.map { String(format: "%.0f °C", $0) },
-                    l10n.t("island.thermal.\(state.metrics.thermalLevel)")].compactMap { $0 }.joined(separator: " · ")
+            return [metricsStore.metrics.cpuTemperature.map { String(format: "%.0f °C", $0) },
+                    l10n.t("island.thermal.\(metricsStore.metrics.thermalLevel)")].compactMap { $0 }.joined(separator: " · ")
         case .bluetooth:
-            return state.metrics.bluetoothBatteries.isEmpty ? l10n.t("island.bluetooth.none")
-                : state.metrics.bluetoothBatteries.map { "\($0.name) \($0.percent)%" }.joined(separator: ", ")
+            return metricsStore.metrics.bluetoothBatteries.isEmpty ? l10n.t("island.bluetooth.none")
+                : metricsStore.metrics.bluetoothBatteries.map { "\($0.name) \($0.percent)%" }.joined(separator: ", ")
         case .cpu, .gpu, .power: return primaryValue(item)
         }
     }
@@ -904,8 +905,8 @@ struct FloatingIslandView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                 if resource == .memory {
-                    Text(l10n.t("island.pressure.\(state.metrics.memoryPressure)") + " · "
-                         + l10n.tf("island.swap", ByteFormat.format(state.metrics.swapUsedBytes)))
+                    Text(l10n.t("island.pressure.\(metricsStore.metrics.memoryPressure)") + " · "
+                         + l10n.tf("island.swap", ByteFormat.format(metricsStore.metrics.swapUsedBytes)))
                         .font(.system(size: 10, weight: .medium).monospacedDigit())
                         .foregroundStyle(healthColor(.memory))
                         .lineLimit(1)

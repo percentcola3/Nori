@@ -6,6 +6,24 @@ import Combine
 import CryptoKit
 import Darwin
 
+/// 灵动岛指标的独立发布者：采样结果和网络趋势只通知观察它的视图。
+@MainActor
+final class MetricsStore: ObservableObject {
+    @Published var metrics = MetricsSnapshot()
+    @Published var networkHistory: [Double] = []
+    @Published var networkUploadHistory: [Double] = []
+
+    func record(_ sample: MetricsSnapshot) {
+        metrics = sample
+        networkHistory.append(sample.networkRxMBps)
+        networkUploadHistory.append(sample.networkTxMBps)
+        if networkHistory.count > 60 { networkHistory.removeFirst(networkHistory.count - 60) }
+        if networkUploadHistory.count > 60 {
+            networkUploadHistory.removeFirst(networkUploadHistory.count - 60)
+        }
+    }
+}
+
 /// 全局状态与业务流协调：指标采样、扫描/清理、卸载、开发环境、进程端口、
 /// 图片清单、日志与确认弹窗。核心清理、分析、卸载和优化走 NativeCore；
 /// 图片、Docker、Simulator 等特色能力继续使用各自桥接。文案统一经 L10n 取当前语言。
@@ -39,9 +57,21 @@ final class AppState: ObservableObject {
 
     // MARK: 指标
 
-    @Published var metrics = MetricsSnapshot()
-    @Published var networkHistory: [Double] = []
-    @Published var networkUploadHistory: [Double] = []
+    /// 指标每 2 秒刷新一次，只有灵动岛关心；独立成对象，避免每次采样让所有页面重算。
+    let metricsStore = MetricsStore()
+    var metrics: MetricsSnapshot {
+        get { metricsStore.metrics }
+        set { metricsStore.metrics = newValue }
+    }
+    var networkHistory: [Double] {
+        get { metricsStore.networkHistory }
+        set { metricsStore.networkHistory = newValue }
+    }
+    var networkUploadHistory: [Double] {
+        get { metricsStore.networkUploadHistory }
+        set { metricsStore.networkUploadHistory = newValue }
+    }
+    private var metricsSampleInFlight = false
     /// 灵动岛展示的内存占用最高应用组（按内存排序前 5）。
     @Published var topMemoryApps: [ProcessRow] = []
     @Published var topCPUApps: [ProcessRow] = []
@@ -1208,12 +1238,16 @@ final class AppState: ObservableObject {
     // MARK: - 指标
 
     func refreshMetrics() {
-        metrics = SystemMetrics.sample(includeBluetooth: islandItems.contains(.bluetooth))
-        networkHistory.append(metrics.networkRxMBps)
-        networkUploadHistory.append(metrics.networkTxMBps)
-        if networkHistory.count > 60 { networkHistory.removeFirst(networkHistory.count - 60) }
-        if networkUploadHistory.count > 60 {
-            networkUploadHistory.removeFirst(networkUploadHistory.count - 60)
+        guard !metricsSampleInFlight else { return }
+        metricsSampleInFlight = true
+        let includeBluetooth = islandItems.contains(.bluetooth)
+        Task { [weak self] in
+            let sample = await Task.detached(priority: .utility) {
+                SystemMetrics.sample(includeBluetooth: includeBluetooth)
+            }.value
+            guard let self else { return }
+            self.metricsSampleInFlight = false
+            self.metricsStore.record(sample)
         }
     }
 
@@ -1231,7 +1265,13 @@ final class AppState: ObservableObject {
     }
 
     private func resampleMetricsNow() {
-        metrics = SystemMetrics.sample(includeBluetooth: islandItems.contains(.bluetooth))
+        let includeBluetooth = islandItems.contains(.bluetooth)
+        Task { [weak self] in
+            let sample = await Task.detached(priority: .utility) {
+                SystemMetrics.sample(includeBluetooth: includeBluetooth)
+            }.value
+            self?.metricsStore.metrics = sample
+        }
         refreshIslandProcesses(force: true)
     }
 

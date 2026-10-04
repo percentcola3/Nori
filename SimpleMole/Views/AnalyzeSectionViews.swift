@@ -341,7 +341,14 @@ struct DuplicateThumbnail: View {
             .contains((path as NSString).pathExtension.lowercased())
     }
     @State private var thumbnail: NSImage?
-    private static let queue = DispatchQueue(label: "Nori.duplicate-thumbnails", qos: .utility)
+    private static let queue = DispatchQueue(label: "Nori.duplicate-thumbnails", qos: .utility,
+                                             attributes: .concurrent)
+    /// 滚回来的缩略图直接取缓存，不再重新解码。
+    private static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 600
+        return cache
+    }()
 
     var body: some View {
         ZStack {
@@ -360,6 +367,10 @@ struct DuplicateThumbnail: View {
         .task(id: path) {
             thumbnail = nil
             guard isImage else { return }
+            if let cached = Self.cache.object(forKey: path as NSString) {
+                thumbnail = cached
+                return
+            }
             let image: CGImage? = await withCheckedContinuation { continuation in
                 Self.queue.async {
                     let result = autoreleasepool { () -> CGImage? in
@@ -377,7 +388,9 @@ struct DuplicateThumbnail: View {
                 }
             }
             guard !Task.isCancelled, let image else { return }
-            thumbnail = NSImage(cgImage: image, size: .zero)
+            let decoded = NSImage(cgImage: image, size: .zero)
+            Self.cache.setObject(decoded, forKey: path as NSString)
+            thumbnail = decoded
         }
         .accessibilityHidden(true)
     }
