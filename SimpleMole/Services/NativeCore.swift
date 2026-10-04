@@ -207,6 +207,19 @@ final class NativeCore: @unchecked Sendable {
             if path.hasSuffix(".app/Contents/Info.plist") { return true }
             return path.contains(".app/Contents/Resources/") && path.hasSuffix(".icns")
         }
+
+        /// 系统代理（UserEventAgent、Spotlight、LaunchServices 等）常年持有 App 包目录
+        /// 的只读目录句柄用于监听；把包整体移到废纸篓不会使这种句柄失效。
+        static let bundleObserverProcesses: Set<String> = [
+            "UserEventAgent", "mds", "mds_stores", "mdworker", "mdworker_shared", "lsd",
+            "fseventsd", "Spotlight", "coreservicesd", "launchservicesd", "appstoreagent",
+            "com.apple.appkit.xpc.openAndSavePanelService", "QuickLookUIService"
+        ]
+
+        func isObserverDirectoryHandle(onBundle bundle: String) -> Bool {
+            pid > 0 && access == "r" && !descriptor.isEmpty && descriptor.allSatisfy(\.isNumber)
+                && path == bundle && Self.bundleObserverProcesses.contains(process)
+        }
     }
 
     private struct FileIdentity: Hashable {
@@ -2099,7 +2112,7 @@ final class NativeCore: @unchecked Sendable {
                 && metadata.st_mode & S_IFMT == S_IFDIR && path.hasSuffix(".app")
             let blockers = openRecords?.filter {
                 ($0.path == path || $0.path.hasPrefix(path + "/"))
-                    && !(movingBundle && $0.isReadOnlyBundleMetadata)
+                    && !(movingBundle && ($0.isReadOnlyBundleMetadata || $0.isObserverDirectoryHandle(onBundle: path)))
             }
             let pathIsOpen = blockers.map { !$0.isEmpty }
                 ?? openFiles.contains(where: { $0 == path || $0.hasPrefix(path + "/") })

@@ -98,6 +98,28 @@ struct AdministratorUninstallTests {
         try expect(!parsed[1].isReadOnlyBundleMetadata && parsed[1].access.isEmpty
                    && !parsed[2].isReadOnlyBundleMetadata && parsed[2].pid == 456,
                    "Executable/write handle or stale access classified as metadata")
+        let observers = NativeCore.openFileRecords(from: """
+        p330
+        cUserEventAgent
+        f12
+        ar
+        n\(appURL.path)
+        p331
+        cBlueStacks
+        f12
+        ar
+        n\(appURL.path)
+        p332
+        cUserEventAgent
+        fcwd
+        ar
+        n\(appURL.path)
+        """)
+        try expect(observers.count == 3 && observers[0].isObserverDirectoryHandle(onBundle: appURL.path)
+                   && !observers[1].isObserverDirectoryHandle(onBundle: appURL.path)
+                   && !observers[2].isObserverDirectoryHandle(onBundle: appURL.path)
+                   && !observers[0].isObserverDirectoryHandle(onBundle: appURL.path + "/Contents"),
+                   "only a system agent's read-only bundle directory handle may be ignored")
         for record in parsed.dropFirst() {
             let busy = AdministratorUninstallPlan.execute(freshRequest, home: home.path, uid: getuid(),
                 core: NativeCore(cleanupOpenFileRecordsProbe: { [parsed[0], record] }))
