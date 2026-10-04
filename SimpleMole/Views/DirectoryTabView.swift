@@ -62,14 +62,59 @@ struct DirectoryTabView: View {
             onRefresh: model.refresh)
     }
 
-    /// Finder 式单行工具栏：路径栏 + 刷新 + 显示隐藏 + 搜索（尾部含索引菜单）。
+    /// 两行工具栏：第一行搜索 + 常用目录快捷方式；第二行面包屑 + 复制/刷新/显示隐藏。
     private var toolbar: some View {
-        HStack(spacing: 8) {
-            breadcrumbs
-                .padding(.leading, 6).padding(.trailing, 2)
-                .frame(height: 30)
-                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.surface2))
-                .frame(minWidth: 200, maxWidth: .infinity)
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                searchField
+                Spacer(minLength: 8)
+                quickPlaces
+            }
+            HStack(spacing: 4) {
+                breadcrumbs
+                    .frame(minWidth: 120, maxWidth: .infinity)
+                pathControls
+            }
+        }
+    }
+
+    private var quickPlaces: some View {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let places: [(String, String, URL)] = [
+            ("dir.place.desktop", "menubar.dock.rectangle", home.appendingPathComponent("Desktop", isDirectory: true)),
+            ("dir.downloads", "arrow.down.circle", home.appendingPathComponent("Downloads", isDirectory: true)),
+            ("dir.place.documents", "doc.text", home.appendingPathComponent("Documents", isDirectory: true)),
+            ("dir.home", "house", home),
+            ("dir.place.applications", "square.grid.2x2", URL(fileURLWithPath: "/Applications", isDirectory: true)),
+            ("dir.path.root", "internaldrive", URL(fileURLWithPath: "/", isDirectory: true))
+        ]
+        return HStack(spacing: 4) {
+            ForEach(places, id: \.0) { key, symbol, url in
+                let current = model.breadcrumbDirectory.standardizedFileURL.path == url.standardizedFileURL.path
+                Button { model.navigate(to: url) } label: {
+                    Label(l10n.t(key), systemImage: symbol)
+                        .labelStyle(.iconOnly)
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(MoleIconButtonStyle(isActive: current, size: 30))
+                .help(l10n.t(key))
+                .accessibilityLabel(l10n.t(key))
+                .accessibilityAddTraits(current ? .isSelected : [])
+            }
+        }
+        .accessibilityIdentifier("directory-quick-places")
+    }
+
+    private var pathControls: some View {
+        HStack(spacing: 4) {
+            Button(action: model.copyBreadcrumbPath) {
+                Image(systemName: model.isBreadcrumbPathCopied ? "checkmark" : "doc.on.doc")
+                    .foregroundStyle(model.isBreadcrumbPathCopied ? Color.success : Color.secondary)
+            }
+            .buttonStyle(MoleIconButtonStyle(size: 30))
+            .help(l10n.t(model.isBreadcrumbPathCopied ? "dir.path.copied" : "dir.path.copy"))
+            .accessibilityLabel(l10n.t(model.isBreadcrumbPathCopied ? "dir.path.copied" : "dir.path.copy"))
+            .accessibilityIdentifier("directory-copy-path")
             Button(action: model.refresh) {
                 Group {
                     if model.isLoading || model.isWorking {
@@ -91,6 +136,10 @@ struct DirectoryTabView: View {
             .accessibilityLabel(l10n.t("dir.hidden"))
             .accessibilityAddTraits(model.showHidden ? .isSelected : [])
             .accessibilityIdentifier("directory-hidden-toggle")
+        }
+    }
+
+    private var searchField: some View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField(l10n.t("dir.search.placeholder"), text: $model.query)
@@ -110,8 +159,7 @@ struct DirectoryTabView: View {
             .font(.system(size: 12))
             .padding(.horizontal, 12).frame(height: 30)
             .modifier(DirectoryControlSurface())
-            .frame(width: 240)
-        }
+            .frame(minWidth: 220, maxWidth: 420)
     }
 
     private var indexMenu: some View {

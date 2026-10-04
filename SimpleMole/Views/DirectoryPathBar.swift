@@ -19,7 +19,7 @@ struct DirectoryPathBar: View {
             widths: crumbs.map { crumb in
                 let textWidth = (crumb.title as NSString).size(withAttributes: [.font: font]).width
                 return ceil(textWidth) + 12
-            }, availableWidth: max(0, width - 32))
+            }, availableWidth: max(0, width))
     }
 
     var body: some View {
@@ -31,7 +31,6 @@ struct DirectoryPathBar: View {
             HStack(spacing: 4) {
                 pathContent(crumbs: crumbs, plan: plan)
                 Spacer(minLength: 0)
-                controls
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -135,18 +134,6 @@ struct DirectoryPathBar: View {
             .contentShape(Rectangle())
     }
 
-    /// 路径字段尾部的复制按钮；刷新移到了工具栏独立图标。
-    private var controls: some View {
-        Button(action: onCopy) {
-            Image(systemName: isPathCopied ? "checkmark" : "doc.on.doc")
-                .foregroundStyle(isPathCopied ? Color.success : Color.secondary).font(.system(size: 11, weight: .medium))
-                .frame(width: 28, height: 26).contentShape(Rectangle())
-        }
-        .buttonStyle(MolePlainButtonStyle())
-        .help(l10n.t(isPathCopied ? "dir.path.copied" : "dir.path.copy"))
-        .accessibilityLabel(l10n.t(isPathCopied ? "dir.path.copied" : "dir.path.copy"))
-        .accessibilityIdentifier("directory-copy-path")
-    }
 }
 
 struct DirectoryPathCrumb: Identifiable, Equatable {
