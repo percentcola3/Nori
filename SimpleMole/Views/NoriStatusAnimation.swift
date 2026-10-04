@@ -151,7 +151,6 @@ private struct NoriSVGCanvas: NSViewRepresentable {
     private static let sharedConfiguration: WKWebViewConfiguration = {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
-        configuration.processPool = WKProcessPool()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
         return configuration
     }()

@@ -252,15 +252,15 @@ enum CommandLineToolInventory {
         case .uv: arguments = ["tool", "uninstall", tool.name]
         case .cargo: arguments = ["uninstall", tool.name]
         case .go:
-            guard DeletionPlan.isLexicallySafePath(tool.path), tool.path.hasPrefix(home + "/") else {
+            guard DeletionPlan.isLexicallySafePath(tool.path), tool.path.hasPrefix(home + "/"),
+                  let identity = DeletionPlan.identity(at: tool.path) else {
                 return Outcome(succeeded: false, messages: ["Go binaries outside the home folder are not removed."])
             }
-            do {
-                try FileManager.default.trashItem(at: URL(fileURLWithPath: tool.path), resultingItemURL: nil)
-                return Outcome(succeeded: true, messages: [], reclaimedBytes: before)
-            } catch {
-                return Outcome(succeeded: false, messages: [error.localizedDescription])
-            }
+            // 没有包管理器：经同一个审计过的删除入口移入废纸篓，保留身份与打开文件复核。
+            let summary = NativeCore.shared.applyCleanup(items: [.init(record: tool.path, identity: identity)],
+                permanent: false, homeDirectory: home, verifiedTargets: [tool.path])
+            return Outcome(succeeded: summary.removedPaths.contains(tool.path), messages: summary.messages,
+                           reclaimedBytes: summary.removedPaths.contains(tool.path) ? before : 0)
         }
         guard let executable = AgentCatalog.resolveExecutable(tool.manager == .homebrew ? "brew" : tool.manager.rawValue,
                                                               searchPath: searchPath, home: home) else {

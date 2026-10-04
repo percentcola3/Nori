@@ -64,11 +64,11 @@ test_native_core_ownership_contract() {
         fail "uninstall preview does not use NativeCore"
     /usr/bin/grep -Fq 'NativeCore.shared.applyUninstall' "$app_state" || \
         fail "uninstall apply does not use NativeCore"
-    /usr/bin/grep -Fq 'NativeCore.shared.scanAnalyze' "$app_state" || \
-        fail "analyze does not use NativeCore"
+    /usr/bin/grep -Fq 'AnalysisInventoryCache()' "$app_state" || \
+        fail "analyze does not use the native inventory cache"
     /usr/bin/grep -Fq 'NativeCore.shared.runMaintenanceTask' "$app_state" || \
         fail "system maintenance does not use NativeCore"
-    /usr/bin/grep -Fq 'metrics = SystemMetrics.sample()' "$app_state" || \
+    /usr/bin/grep -Fq 'SystemMetrics.sample(includeBluetooth:' "$app_state" || \
         fail "status sampling does not use SystemMetrics"
 
     if /usr/bin/grep -Eq 'MoleEngine|vendor/mole|bin/(clean|uninstall|analyze|optimize|status)\.sh|analyze-go|status-go' \
@@ -161,12 +161,12 @@ test_control_motion_contract() {
         fail "detail disclosure actions do not share an icon button style"
     /usr/bin/grep -Fq 'struct MolePlainButtonStyle: ButtonStyle' "$components" || \
         fail "surface-free buttons have no shared press feedback"
-    /usr/bin/grep -Fq '.buttonStyle(MoleSelectableRowButtonStyle' "$analyze_sections" || \
+    /usr/bin/grep -Fq '.buttonStyle(MolePlainButtonStyle(pressedScale' "$analyze_sections" || \
         fail "disk analysis duplicate rows bypass the selectable-row interaction"
     /usr/bin/grep -Fq '.buttonStyle(MoleSelectableRowButtonStyle' "$analyze_media" || \
         fail "disk analysis slim rows bypass the selectable-row interaction"
-    /usr/bin/grep -Fq '.toggleStyle(.checkbox)' "$dev_env" && \
-        /usr/bin/grep -Fq '.modifier(DevSelectionLens(id: "dev-runtime-" + entry.id, selected: selected))' "$dev_env" || \
+    /usr/bin/grep -Fq '.toggleStyle(.checkbox)' "$ROOT_DIR/SimpleMole/Views/DeveloperRuntimePanel.swift" && \
+        /usr/bin/grep -Fq '.modifier(DevSelectionSurface(selected: selected))' "$ROOT_DIR/SimpleMole/Views/DeveloperRuntimePanel.swift" || \
         fail "development environment rows lack checkbox semantics or glass selection"
     /usr/bin/grep -Fq '.buttonStyle(MolePlainButtonStyle' "$cleanup" || \
         fail "cleanup detail titles still bypass Button semantics"
@@ -344,9 +344,9 @@ test_island_contract() {
         fail "network is not shown as a throughput meter"
     /usr/bin/grep -Fq 'struct IslandSparkline' "$island" || \
         fail "network throughput has no trend"
-    /usr/bin/grep -Fq 'state.metrics.cpuPercent' "$island" || \
+    /usr/bin/grep -Fq 'metricsStore.metrics.cpuPercent' "$island" || \
         fail "island does not surface CPU occupancy"
-    /usr/bin/grep -Fq 'state.metrics.memoryPercent' "$island" || \
+    /usr/bin/grep -Fq 'metricsStore.metrics.memoryPercent' "$island" || \
         fail "island does not surface memory occupancy"
     if /usr/bin/grep -Eq 'l10n\.t\("metric\.(load|uptime|battery|swap)"\)' "$island"; then
         fail "island still shows load, uptime, battery or swap"
@@ -410,8 +410,8 @@ test_productivity_feature_contract() {
         fail "memory usage is not capped at physical memory"
     bash "$ROOT_DIR/script/test_cleanup_manual_trigger.sh" || \
         fail "cleanup manual-trigger lifecycle contract"
-    /usr/bin/grep -Fq 'ForEach(category.pathsByDescendingSize, id: \.self)' \
-        "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" || \
+    /usr/bin/grep -Fq 'ForEach(sortedPaths, id: \.self)' "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" && \
+        /usr/bin/grep -Fq 'sortedPaths = category.pathsByDescendingSize' "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" || \
         fail "expanded cleanup children are not selectable and sorted by size"
     /usr/bin/grep -Fq 'source.compactMap(\.selectedSubset)' "$app_state" || \
         fail "cleanup apply still submits whole categories instead of selected children"
@@ -566,9 +566,9 @@ test_productivity_feature_contract() {
         "$app_delegate" | /usr/bin/grep -Fq 'runScheduledAutoCleanup'; then
         fail "every app activation still launches a background filesystem scan"
     fi
-    /usr/bin/grep -Fq 'path: "/", overview: true, control: control,' "$app_state" || \
+    /usr/bin/grep -Fq 'AnalyzeReport(path: "/", overview: true' "$ROOT_DIR/SimpleMole/Services/AnalysisInventoryCache.swift" || \
         fail "disk analysis does not start from the native machine-wide overview"
-    /usr/bin/grep -Fq '.sorted(by: AnalyzeEntry.analysisOrder)' "$app_state" || \
+    /usr/bin/grep -Fq '.sorted(by: AnalyzeEntry.analysisOrder)' "$ROOT_DIR/SimpleMole/Services/DiskAnalysisWorker.swift" || \
         fail "disk analysis results are not size ordered"
     if sed -n '/private func startAnalyze(/,/MARK: APFS/p' "$app_state" | grep -Fq '.prefix(10)'; then
         fail "disk analysis still hides children beyond Top 10"
@@ -576,7 +576,7 @@ test_productivity_feature_contract() {
     # 结果页按 大文件/图片/视频/重复文件 子分类一页展示，不再有目录层级浏览。
     local analyze_sections="$ROOT_DIR/SimpleMole/Views/AnalyzeSectionViews.swift"
     local analyze_worker="$ROOT_DIR/SimpleMole/Services/DiskAnalysisWorker.swift"
-    /usr/bin/grep -Fq 'state.slimCandidates(in: .images)' "$analyze_view" || \
+    /usr/bin/grep -Fq 'func slimCandidates(in section: AnalyzeSection)' "$ROOT_DIR/SimpleMole/AppState+Media.swift" || \
         fail "disk analysis results are not rendered as scan sub-categories"
     /usr/bin/grep -Fq 'DuplicateScanActivity(progress: state.duplicateScanProgress' "$analyze_view" || \
         fail "duplicate scanning has no animated SVG progress placeholder"

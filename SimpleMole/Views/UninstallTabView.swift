@@ -215,7 +215,7 @@ private struct UninstallAppRow: View {
 
     private var space: UninstallSpaceBreakdown? { plan?.space }
     private var totalText: String {
-        space.map { ByteFormat.format($0.totalBytes) } ?? app.size
+        space.map { ByteFormat.format($0.footprintBytes) } ?? app.size
     }
     private var actionTitle: String {
         job?.state == .failed
@@ -234,6 +234,8 @@ private struct UninstallAppRow: View {
                 Spacer(minLength: 12)
                 breakdown
                 SizeBadge(text: totalText, prominent: plan != nil)
+                    .help(space.map { L10n.shared.tf("uninstall.space.footprint",
+                        ByteFormat.format($0.totalBytes), ByteFormat.format($0.optionalDataBytes)) } ?? "")
                 disclosureButton
                 if let job, job.state.isPending || job.state.isActive {
                     HStack(spacing: 5) {
@@ -312,7 +314,7 @@ private struct UninstallAppRow: View {
                            bytes: space?.cacheBytes, accented: true)
             BreakdownValue(symbol: "archivebox.fill",
                            label: L10n.shared.t("uninstall.space.data"),
-                           bytes: space?.dataBytes)
+                           bytes: space.map { $0.dataBytes &+ $0.optionalDataBytes })
         }
         .frame(width: 270)
     }

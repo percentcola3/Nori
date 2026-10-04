@@ -17,6 +17,9 @@ final class CleanupScanProgressSink: @unchecked Sendable {
     private let handler: (CleanupScanProgressEvent) -> Void
     private var lastSentAt = Date.distantPast
     private var lastPhase = ""
+    private var lastPath = ""
+    private var lastCompleted = -1
+    private var reportedChild = false
 
     init(handler: @escaping (CleanupScanProgressEvent) -> Void) {
         self.handler = handler
@@ -25,13 +28,29 @@ final class CleanupScanProgressSink: @unchecked Sendable {
     func send(_ event: CleanupScanProgressEvent) {
         // Directory roots can contain thousands of children. Coalesce updates
         // here, before creating a MainActor task, while always forwarding the
-        // final item so the bar can reach its terminal state.
+        // final item so the bar can reach its terminal state. The first child
+        // reported under the current unit's root is also forwarded, so a fast
+        // root still shows what it was working on.
         let now = Date()
         lock.lock()
+        let sameUnit = event.phase == lastPhase && event.completed == lastCompleted
+        let firstChild = sameUnit && !reportedChild && !lastPath.isEmpty
+            && event.currentPath.hasPrefix(lastPath + "/")
         let shouldSend = event.phase != lastPhase
             || (event.total > 0 && event.completed == event.total)
+            || firstChild
             || now.timeIntervalSince(lastSentAt) >= 0.15
-        if shouldSend { lastSentAt = now; lastPhase = event.phase }
+        if shouldSend {
+            lastSentAt = now
+            lastPhase = event.phase
+            if sameUnit {
+                reportedChild = reportedChild || firstChild
+            } else {
+                reportedChild = false
+                lastCompleted = event.completed
+            }
+            if !firstChild { lastPath = event.currentPath }
+        }
         lock.unlock()
         guard shouldSend else { return }
         handler(event)
@@ -3038,6 +3057,46 @@ final class NativeCore: @unchecked Sendable {
 
     /// Mixed app data stays review-only. Named app-support locations contribute
     /// only known disposable leaves, never their parent or a vendor-wide root.
+    /// 没有登记在 Agent 目录里的 App 也常把数据放在 `~/.name`、`~/.config/name` 等处
+    /// （例如 WorkBuddy 的 `~/.workbuddy`）。按 App 名和 Bundle ID 末段关联，名字太短、
+    /// 太通用或与其他已安装 App 重名的不关联；Agent 目录已登记的根交给 Agent 规则。
+    static let genericDotNames: Set<String> = [
+        "config", "local", "cache", "share", "state", "apps", "code", "git", "ssh", "npm",
+        "node", "python", "java", "rust", "cargo", "docker", "aws", "azure", "google", "apple",
+        "macos", "system", "library", "data", "tools", "home", "user", "users",
+        "test", "demo", "default", "lite", "beta", "studio", "desktop", "mail",
+        "music", "photos", "notes", "files", "cloud", "sync", "update", "updater", "helper"
+    ]
+
+    func dotDirectoryCandidates(for app: UninstallApp, home: URL, otherApps: [URL]) -> [URL] {
+        let appURL = URL(fileURLWithPath: app.path)
+        var names = Set(uninstallSupportNames(at: appURL, bundleID: app.bundleID).map { $0.lowercased() })
+        names.insert(app.name.lowercased())
+        names.insert(app.name.lowercased().replacingOccurrences(of: " ", with: ""))
+        names.insert(app.name.lowercased().replacingOccurrences(of: " ", with: "-"))
+        if let last = app.bundleID.split(separator: ".").last { names.insert(String(last).lowercased()) }
+        let shared = Set(otherApps.flatMap { other -> [String] in
+            guard let metadata = applicationMetadata(at: other) else { return [] }
+            var tokens = uninstallSupportNames(at: other, bundleID: metadata.bundleID).map { $0.lowercased() }
+            tokens.append(metadata.name.lowercased())
+            if let last = metadata.bundleID.split(separator: ".").last { tokens.append(String(last).lowercased()) }
+            return tokens
+        })
+        let agentRoots = AgentCatalog.definitions.flatMap { AgentCatalog.dataRoots(for: $0, home: home.path) }
+        var result: [URL] = []
+        for name in names.sorted() where name.count >= 4 && !Self.genericDotNames.contains(name)
+            && !shared.contains(name) && name.range(of: #"^[a-z0-9][a-z0-9._-]*$"#, options: .regularExpression) != nil {
+            for relative in ["." + name, ".config/" + name, ".local/share/" + name, ".local/state/" + name, ".cache/" + name] {
+                let url = home.appendingPathComponent(relative, isDirectory: true)
+                guard cleanupPathIsPhysical(url, home: home), isDirectory(url),
+                      !agentRoots.contains(where: { url.path == $0 || url.path.hasPrefix($0 + "/") || $0.hasPrefix(url.path + "/") })
+                else { continue }
+                result.append(url)
+            }
+        }
+        return result
+    }
+
     private func relatedUninstallCandidates(app: UninstallApp, home: URL,
                                             hasSibling: Bool, otherApps: [URL]) -> [UninstallFile] {
         var candidates: [UninstallFile] = []
@@ -3128,6 +3187,9 @@ final class NativeCore: @unchecked Sendable {
         if !hasSibling {
             for root in AgentCatalog.uninstallDataRoots(appPath: app.path, appName: app.name, home: home.path) {
                 append(URL(fileURLWithPath: root), label: "review")
+            }
+            for url in dotDirectoryCandidates(for: app, home: home, otherApps: otherApps) {
+                append(url, label: "review")
             }
         }
 

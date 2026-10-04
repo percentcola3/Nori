@@ -111,6 +111,19 @@ struct UninstallResidueTests {
         expect(!automatic(opted, "Library/Containers/\(identifier)") && !automatic(opted, "Documents"),
                "Unchosen data and paths outside the plan must stay retained")
         expect(opted.fileIdentities == plan.fileIdentities, "Choosing data must keep the reviewed identities")
+        // Dot directories named after the app are offered as optional data and
+        // counted in the footprint; generic or shared names are left alone.
+        try write(".\(appName.lowercased())/binaries/runtime", bytes: 4096)
+        try write(".config/\(appName.lowercased())/settings.json")
+        try write(".cache/code/keep")
+        let dotted = await core.uninstallPlan(for: app, homeDirectory: home.path)!
+        let dotRoot = home.appendingPathComponent(".\(appName.lowercased())").path
+        expect(dotted.dataPaths.contains(dotRoot)
+               && dotted.dataPaths.contains(home.appendingPathComponent(".config/\(appName.lowercased())").path)
+               && !dotted.files.contains { $0.path.hasSuffix("/.cache/code") },
+               "app-named dot directories must be associated as optional data: \(dotted.dataPaths)")
+        expect(dotted.space.optionalDataBytes >= 4096 && dotted.space.footprintBytes > dotted.space.totalBytes,
+               "optional data must count toward the footprint but not the default total")
         let dataItems = opted.dataPaths.isEmpty ? [] : [preferences, storage].compactMap { path in
             opted.fileIdentities[path].map { DeletionPlan.Item(record: path, identity: $0) }
         }

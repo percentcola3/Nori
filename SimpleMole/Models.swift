@@ -906,9 +906,15 @@ struct UninstallSpaceBreakdown: Equatable, Sendable {
     let appBytes: UInt64
     let cacheBytes: UInt64
     let dataBytes: UInt64
+    /// 需勾选才删除的应用数据（review）：不计入默认可回收量，但计入占用总量。
+    let optionalDataBytes: UInt64
 
     var totalBytes: UInt64 {
         Self.saturatedSum([appBytes, cacheBytes, dataBytes])
+    }
+
+    var footprintBytes: UInt64 {
+        Self.saturatedSum([totalBytes, optionalDataBytes])
     }
 
     init(files: [UninstallFile], homeDirectory: String = NSHomeDirectory()) {
@@ -947,6 +953,17 @@ struct UninstallSpaceBreakdown: Equatable, Sendable {
         appBytes = Self.saturatedSum(appFiles.map(\.bytes))
         cacheBytes = Self.saturatedSum(cacheFiles.map(\.bytes))
         dataBytes = Self.saturatedSum(dataFiles.map(\.bytes))
+        var optional: [UninstallFile] = []
+        for file in files.filter(\.isOptionalData).sorted(by: {
+            ($0.standardizedPath as NSString).pathComponents.count < ($1.standardizedPath as NSString).pathComponents.count
+        }) {
+            let path = file.standardizedPath
+            guard !coveredPaths.contains(where: { path == $0 || path.hasPrefix($0 + "/") }),
+                  !optional.contains(where: { path == $0.standardizedPath || path.hasPrefix($0.standardizedPath + "/") })
+            else { continue }
+            optional.append(file)
+        }
+        optionalDataBytes = Self.saturatedSum(optional.map(\.bytes))
     }
 
     private static func saturatedSum(_ values: [UInt64]) -> UInt64 {

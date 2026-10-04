@@ -77,9 +77,14 @@ final class AppState: ObservableObject {
         agentCategories.filter { group.categoryIDs.contains($0.id) }.reduce(0) { $0 + $1.bytes }
     }
     func isAgentCategorySelected(_ category: CleanupCategory, path: String) -> Bool { category.isPathSelected(path) }
+    func isAgentCategoryIncludedByCLI(_ category: CleanupCategory) -> Bool { false }
     func isAgentSkillSelected(_ skill: AgentSkill) -> Bool { false }
     func isAgentServerSelected(_ server: AgentMCPServer) -> Bool { false }
     func toggleAgentCLIInstallation(_ installation: AgentCLIInstallation) {}
+    func cancelAgentScan() { cancelRequests += 1 }
+    var uninstallSegment = 0
+    func jump(to key: PageKey) {}
+    enum PageKey { case uninstall, agents, cleanup }
     func toggleAgentMCPInstallation(_ installation: AgentMCPInstallation) {}
     func toggleAgentSkill(_ skill: AgentSkill) {}
     func toggleAgentServer(_ server: AgentMCPServer) {}
@@ -113,7 +118,7 @@ final class AppState: ObservableObject {
 // These auxiliary sections remain empty throughout the presentation fixtures.
 struct SystemMaintenanceRow: Identifiable {
     struct Item { let titleKey: String }
-    struct Preview { let summary: String }
+    struct Preview { let summary: String; var bytes: UInt64 = 0 }
     let id: String
     let item: Item
     let preview: Preview

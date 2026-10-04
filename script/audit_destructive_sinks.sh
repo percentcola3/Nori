@@ -33,8 +33,19 @@ SimpleMole/Services/CleanupCache.swift|SimpleMole/Services/MediaSlimmer.swift) r
             esac ;;
         SimpleMole/Services/AgentCLIService.swift)
             [[ "$2" == 'defer { try? handle.close(); try? FileManager.default.removeItem(at: output) }' ]] && return 0 ;;
-        SimpleMole/Services/AdministratorCleanupService.swift)
+        SimpleMole/Services/AdministratorCleanupService.swift|\
+SimpleMole/Services/AdministratorUninstallService.swift|\
+SimpleMole/Services/DeveloperShellProfiler.swift)
             [[ "$2" == 'defer { try? FileManager.default.removeItem(at: directory) }' ]] && return 0 ;;
+        SimpleMole/Services/DeveloperSSHGitService.swift)
+            [[ "$2" == 'guard descriptor >= 0 else { throw Failure.write }; defer { close(descriptor); unlinkat(directory, temporary, 0) }' ]] && return 0 ;;
+        SimpleMole/Services/DeveloperNetworkConfigStore.swift)
+            [[ "$2" == 'defer { close(descriptor); unlinkat(directory, temporary, 0) }' ]] && return 0 ;;
+        SimpleMole/Services/DeveloperShellBackupStore.swift)
+            case "$2" in
+                '} catch { unlinkat(directory, name, 0); throw error }'|\
+                '_ = unlinkat(directory, name, 0)') return 0 ;;
+            esac ;;
         SimpleMole/Services/DirectoryFileService.swift)
             case "$2" in
                 'try FileManager.default.trashItem(at: source, resultingItemURL: nil)'|\
@@ -75,7 +86,8 @@ for contract in \
     'temporaryDirectory.appendingPathComponent("nori-shell-check-\(UUID().uuidString)")' \
     'current.identity == profile.identity,' \
     'current.originalData == profile.originalData'; do
-    grep -Fq "$contract" "$shell_service" || fail 'Shell temporary-file ownership or identity validation changed'
+    grep -Fq "$contract" "$shell_service" "$ROOT_DIR/SimpleMole/Services/DeveloperShellBackupStore.swift" \
+        || fail 'Shell temporary-file ownership or identity validation changed'
 done
 [[ "$(grep -Fc 'try requireUnchanged(profile, directory: directory)' "$shell_service")" -ge 2 ]] || \
     fail 'Shell profile is not revalidated before atomic replacement'
