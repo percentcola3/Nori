@@ -25,7 +25,7 @@ final class HotKeyCenter {
         let hotKeyID = EventHotKeyID(signature: OSType(0x534D_484B), id: slot) // "SMHK"
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(keyCode, modifiers, hotKeyID,
-                                         GetEventDispatcherTarget(), 0, &ref)
+                                         GetApplicationEventTarget(), 0, &ref)
         guard status == noErr, let ref else { return false }
         hotKeys[slot] = ref
         handlers[slot] = handler
@@ -49,8 +49,9 @@ final class HotKeyCenter {
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                       eventKind: UInt32(kEventHotKeyPressed))
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        // 在 AppKit 分发前接收全局热键，主窗口、编辑器和覆盖层共用同一入口。
-        let status = InstallEventHandler(GetEventDispatcherTarget(), { _, event, userData -> OSStatus in
+        // 后台全局热键直接送到应用 target，不能依赖前台窗口的事件分发器。
+        // 主窗口、编辑器和覆盖层共用同一入口。
+        let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, userData -> OSStatus in
             guard let userData, let event else { return OSStatus(eventNotHandledErr) }
             var hotKeyID = EventHotKeyID()
             let status = GetEventParameter(event,

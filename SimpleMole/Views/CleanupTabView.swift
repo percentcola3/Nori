@@ -38,7 +38,8 @@ struct CleanupTabView: View {
               category.disposal == .permanentDelete,
               !category.paths.isEmpty else { return nil }
         return {
-            autoCleanIntent = AutoCleanupIntent(paths: category.paths, cacheVerified: true)
+            autoCleanIntent = AutoCleanupIntent(paths: category.paths, cacheVerified: true,
+                                               sourceName: L10nLocalizationAuditTables.categoryName(category.name, isAppLeftover: category.source == .appLeftover))
         }
     }
 
@@ -116,8 +117,8 @@ struct CleanupTabView: View {
                                      details: state.cleanupOutcomeDetails,
                                      applications: state.cleanupFailureApplications,
                                      feedbackID: state.cleanupFeedbackID,
-                                     retryAvailable: state.cleanupRetryAvailable,
-                                     onRetry: cleanFromResult)
+                                     scanDisabled: state.isBusyExcludingUninstall || state.cleanupQueued,
+                                     onScan: { state.requestScanAccess(.quickOptimize) })
             } else if !showsCleanupResults {
                 NoriPlaceholderStage { size in
                     NoriIdlePlaceholder(state: state, size: size)
@@ -186,11 +187,6 @@ struct CleanupTabView: View {
             showsOutcomeDetails = false
         }
         // 扫描中 → 结果/空态 的整块互换走弹簧过渡，而不是硬切。
-    }
-
-    private func cleanFromResult() {
-        if state.cleanupRetryAvailable { state.retryFailedCleanup() }
-        else { state.startCleanupScan() }
     }
 
     // MARK: 系统数据库维护
@@ -484,7 +480,7 @@ struct CategoryRowView: View {
                     .disabled(!category.canSelect || !selectionEnabled)
                 Button(action: toggleExpanded) {
                     HStack(spacing: 6) {
-                        Text(category.name)
+                        Text(L10nLocalizationAuditTables.categoryName(category.name, isAppLeftover: category.source == .appLeftover))
                             .font(.system(size: 12, weight: .medium))
                             .lineLimit(1)
                             .truncationMode(.tail)

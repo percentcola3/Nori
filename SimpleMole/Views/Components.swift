@@ -97,6 +97,9 @@ struct MoleSwitchToggleStyle: ToggleStyle {
 }
 
 struct ActionGlassChrome: ViewModifier {
+    /// Semantic tint is opt-in; neutral callers keep the existing glass surface.
+    var tint: Color? = nil
+
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.controlActiveState) private var controlActiveState
@@ -104,26 +107,41 @@ struct ActionGlassChrome: ViewModifier {
     @ViewBuilder
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
-            content
-                .glassEffect(.regular.interactive(!reduceMotion), in: Capsule())
-                .clipGlassEdge(in: Capsule())
+            if let tint {
+                content
+                    .glassEffect(.regular.tint(tint.opacity(0.24)).interactive(!reduceMotion), in: Capsule())
+                    .clipGlassEdge(in: Capsule())
+            } else {
+                content
+                    .glassEffect(.regular.interactive(!reduceMotion), in: Capsule())
+                    .clipGlassEdge(in: Capsule())
+            }
         } else {
             content
-                .background(GlassSurface(cornerRadius: 100, usesSystemGlass: false))
+                .background {
+                    GlassSurface(cornerRadius: 100, usesSystemGlass: false)
+                        .overlay {
+                            if let tint {
+                                Capsule().fill(tint.opacity(0.10))
+                            }
+                        }
+                }
         }
     }
 }
 
 struct PrimaryButtonStyle: ButtonStyle {
+    var tint: Color? = nil
+
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(isEnabled ? Color.primary : Color.secondary)
+            .foregroundStyle(isEnabled ? (tint ?? Color.primary) : Color.secondary)
             .padding(.horizontal, 20)
             .frame(minHeight: 36)
-            .modifier(ActionGlassChrome())
+            .modifier(ActionGlassChrome(tint: isEnabled ? tint : nil))
             .opacity(isEnabled ? 1 : 0.5)
             .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
     }
@@ -182,6 +200,7 @@ struct MoleIconButtonStyle: ButtonStyle {
     var isActive = false
     var tint: Color? = nil
     var size: CGFloat = 26
+    var showsBackground = true
 
     @Environment(\.isEnabled) private var isEnabled
 
@@ -200,6 +219,7 @@ struct MoleIconButtonStyle: ButtonStyle {
     }
 
     private func backgroundColor(isPressed: Bool) -> Color {
+        guard showsBackground else { return .clear }
         if isActive {
             return Color.moleAccent.opacity(isPressed ? 0.22 : 0.15)
         }
@@ -258,7 +278,7 @@ struct ListRowGlass: ViewModifier {
 }
 
 /// 通用按钮微交互。Reduce Motion 下保留颜色/亮度反馈，但不做缩放和位移。
-private struct MoleButtonFeedbackModifier: ViewModifier {
+struct MoleButtonFeedbackModifier: ViewModifier {
     let isPressed: Bool
     var pressedScale: CGFloat = 0.955
 
@@ -300,6 +320,7 @@ struct SizeBadge: View {
 struct PillPicker: View {
     let items: [String]
     @Binding var selection: Int
+    let alignment: Alignment
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -311,9 +332,10 @@ struct PillPicker: View {
 
     private var itemHorizontalPadding: CGFloat { items.count >= 8 ? 10 : 14 }
 
-    init(items: [String], selection: Binding<Int>) {
+    init(items: [String], selection: Binding<Int>, alignment: Alignment = .center) {
         self.items = items
         _selection = selection
+        self.alignment = alignment
         let initialSelection = selection.wrappedValue
         _previousSelection = State(initialValue: initialSelection)
         _settledSelection = State(initialValue: initialSelection)
@@ -322,7 +344,7 @@ struct PillPicker: View {
 
     @ViewBuilder
     var body: some View {
-        // 内容比窗口窄时居中；超出窗口时保留完整宽度，允许横向滚动。
+        // 内容比窗口窄时按调用方指定的方式对齐；超出窗口时允许横向滚动。
         GeometryReader { geometry in
             ScrollView(.horizontal, showsIndicators: false) {
                 Group {
@@ -337,7 +359,8 @@ struct PillPicker: View {
                     }
                 }
                 .fixedSize(horizontal: true, vertical: false)
-                .frame(minWidth: geometry.size.width, minHeight: geometry.size.height)
+                .frame(minWidth: geometry.size.width, minHeight: geometry.size.height,
+                       alignment: alignment)
             }
         }
         .frame(height: pickerHeight)

@@ -81,6 +81,28 @@ struct DuplicateScannerTests {
                "progress must include enumeration and completion")
         expect(reports.count < scan.files.count, "progress must be throttled")
         expect(pdfGroup.reclaimableBytes == 3, "candidate size counts only additional logical copies")
+        let blocked = try write("Documents/blocked-subtree/secret", Data("private fixture".utf8)).deletingLastPathComponent()
+        expect(chmod(blocked.path, 0) == 0, "permission-denied descendant fixture must be restricted")
+        defer { chmod(blocked.path, 0o700) }
+        let restricted = DuplicateScanner.scan(roots: [root.path, second.path],
+                                               control: DuplicateScanControl(), home: home.path)
+        expect(chmod(blocked.path, 0o700) == 0, "restore permission-denied descendant fixture")
+        expect(!restricted.isPartial && !restricted.cancelled && restricted.error == nil,
+               "permission-denied descendants are ordinary skips rather than an incomplete scan failure")
+        expect(restricted.skippedFiles > scan.skippedFiles && restricted.groups.count == scan.groups.count,
+               "permission skips remain counted while readable duplicate groups are retained")
+        expect(!restricted.files.contains { $0.path.hasPrefix(blocked.path + "/") },
+               "restricted descendant contents must not be scanned")
+
+        let unreadableRoot = try write("Unreadable/secret", Data("unreadable root fixture".utf8)).deletingLastPathComponent()
+        expect(chmod(unreadableRoot.path, 0) == 0, "selected unreadable root fixture must be restricted")
+        defer { chmod(unreadableRoot.path, 0o700) }
+        let rootFailure = DuplicateScanner.scan(roots: [unreadableRoot.path],
+                                                control: DuplicateScanControl(), home: home.path)
+        expect(chmod(unreadableRoot.path, 0o700) == 0, "restore selected unreadable root fixture")
+        expect(rootFailure.isPartial && rootFailure.error != nil && !rootFailure.cancelled
+               && rootFailure.files.isEmpty && rootFailure.groups.isEmpty,
+               "failure to read the selected root remains a real error rather than a complete empty result")
         for file in pdfGroup.files {
             try DuplicateScanner.revalidate(file, allowedRoots: scan.roots, control: DuplicateScanControl(), home: home.path)
         }
@@ -131,6 +153,44 @@ struct DuplicateScannerTests {
             }
         }
         expect(raced.isPartial && raced.groups.isEmpty, "changed file must not enter a complete duplicate group")
+        try testIncrementalCache(home: home)
         print("DuplicateScanner: all checks passed")
+    }
+
+    static func testIncrementalCache(home: URL) throws {
+        let root = home.appendingPathComponent("Documents/Cache")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let first = root.appendingPathComponent("a.dat"), second = root.appendingPathComponent("b.dat")
+        try Data(repeating: 31, count: 256 * 1_024).write(to: first)
+        try FileManager.default.copyItem(at: first, to: second)
+        let cache = DuplicateContentCache()
+        var reads: UInt64 = 0
+        func scan() -> DuplicateScanResult {
+            DuplicateScanner.scan(roots: [root.path], control: DuplicateScanControl(), home: home.path,
+                                  cache: cache) { reads = $0.bytesRead }
+        }
+        let initial = scan()
+        expect(initial.groups.count == 1 && reads > 0, "first cached scan must read and verify content")
+        let repeated = scan()
+        expect(repeated.groups.count == 1 && reads == 0,
+               "an unchanged re-scan must reuse sample and full digests without reading file content")
+        let old = repeated.files.first { $0.path == second.path }!
+        try Data(repeating: 32, count: 256 * 1_024).write(to: second)
+        let changed = scan()
+        expect(changed.groups.isEmpty && reads > 0 && cache.digest(for: old, sample: false) == nil,
+               "same-size replacement must invalidate old hashes and update only the changed content")
+        let added = root.appendingPathComponent("c.dat")
+        try FileManager.default.copyItem(at: first, to: added)
+        let appended = scan()
+        expect(appended.groups.count == 1 && appended.groups[0].files.map(\.path).contains(added.path),
+               "incremental re-scan must discover newly added duplicate files")
+        let removed = appended.files.first { $0.path == added.path }!
+        try FileManager.default.removeItem(at: added)
+        let pruned = scan()
+        expect(pruned.groups.isEmpty && cache.digest(for: removed, sample: false) == nil,
+               "successful discovery must prune vanished files from the content cache")
+        cache.invalidate(paths: [root.path])
+        expect(cache.digest(for: appended.files.first { $0.path == first.path }!, sample: false) == nil,
+               "a known directory mutation must invalidate all descendant cache entries")
     }
 }

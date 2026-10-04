@@ -19,11 +19,23 @@ extension AppState {
 
     func setDuplicateMode(_ mode: DuplicateMode) {
         guard !isBusy, !isScanningDuplicates, duplicateMode != mode else { return }
+        cacheCurrentDuplicateSelection()
         duplicateMode = mode
-        resetDuplicateResults()
+        restoreDuplicateResult()
     }
 
-    private func resetDuplicateResults() {
+    private func restoreDuplicateResult() {
+        if let cached = duplicateResultCache[duplicateMode] {
+            duplicateGroups = cached.snapshot.groups
+            duplicateSelection = cached.selection
+            duplicateScannedRoots = cached.snapshot.roots
+            duplicateScanFinished = true
+            duplicateStatus = cached.status
+            duplicateCoverage = cached.coverage
+            duplicateScanReclaimableBytes = cached.snapshot.reclaimableBytes
+            duplicateLastScanDate = cached.scannedAt
+            return
+        }
         duplicateGroups = []
         duplicateSelection = []
         duplicateScannedRoots = []
@@ -31,25 +43,66 @@ extension AppState {
         duplicateStatus = ""
         duplicateCoverage = ""
         duplicateScanReclaimableBytes = 0
+        duplicateLastScanDate = nil
         duplicateScanProgress.reset()
+    }
+
+    private func cacheCurrentDuplicateSelection() {
+        guard var cached = duplicateResultCache[duplicateMode] else { return }
+        cached.selection = duplicateSelection
+        duplicateResultCache[duplicateMode] = cached
+        persistDuplicateResults()
+    }
+
+    private func persistDuplicateResults() {
+        duplicateWorkspaceStore.save(duplicateResultCache, contentCache: duplicateContentCache,
+                                     featureCache: similarImageFeatureCache)
+    }
+
+    func restorePersistedDuplicateResults() {
+        let store = duplicateWorkspaceStore
+        let revision = store.currentRevision
+        let contentCache = duplicateContentCache
+        let featureCache = similarImageFeatureCache
+        Task {
+            let saved = await Task.detached(priority: .utility) {
+                store.load(contentCache: contentCache, featureCache: featureCache)
+            }.value
+            guard revision == store.currentRevision else { return }
+            duplicateResultCache.merge(saved) { current, _ in current }
+            if !isScanningDuplicates, !duplicateScanFinished { restoreDuplicateResult() }
+            runScheduledAnalysisScans()
+        }
     }
 
     /// 全盘扫描的重复文件子分类：家目录内做内容级比对，系统文件、
     /// 包目录与隐藏位置由扫描策略直接排除，用户无需选择范围。
-    func scanDuplicateFiles() {
-        guard !isBusy, !isScanningDuplicates else { return }
+    func scanDuplicateFiles(forceFull: Bool = false) {
+        guard !isBusy, !isAnalyzing, !isScanningDuplicates else { return }
         guard permissionCenter.fullDiskAccessGranted else {
             duplicateStatus = L10n.shared.t("duplicates.status.noAccess")
             presentTaskFailure(message: duplicateStatus)
             return
         }
-        resetDuplicateResults()
+        noteAnalysisScanAttempt(for: .duplicates)
+        beginDuplicateScan(roots: [NSHomeDirectory()], home: NSHomeDirectory(), forceFull: forceFull)
+    }
+
+    /// The production entry point uses the current home. Explicit roots make
+    /// the operation boundary testable with generated fixtures only.
+    func beginDuplicateScan(roots: [String], home: String, forceFull: Bool = false) {
+        guard !isBusy, !isAnalyzing, !isScanningDuplicates else { return }
+        cacheCurrentDuplicateSelection()
+        duplicateScanProgress.reset()
         let control = DuplicateScanControl()
         duplicateScanControl = control
+        analysisScanIsFull = forceFull || !duplicateScanFinished
         isScanningDuplicates = true
         duplicateStatus = L10n.shared.tf("duplicates.status.enumerating", 0)
-        let roots = [NSHomeDirectory()]
         let mode = duplicateMode
+        let previousResult = duplicateResultCache[mode]
+        let contentCache = forceFull ? nil : duplicateContentCache
+        let featureCache = forceFull ? nil : similarImageFeatureCache
         let progress: (DuplicateScanProgress) -> Void = { [weak self] event in
             Task { @MainActor [weak self] in
                 guard let self, self.duplicateScanControl === control, !control.isCancelled else { return }
@@ -58,50 +111,66 @@ extension AppState {
         }
         Task {
             let result = await Task.detached(priority: .utility) {
-                DuplicateScanWorker.scan(mode: mode, roots: roots, control: control, progress: progress)
+                DuplicateScanWorker.scan(mode: mode, roots: roots, control: control,
+                    home: home, contentCache: contentCache, featureCache: featureCache, progress: progress)
             }.value
             guard duplicateScanControl === control else { return }
-            let cancelled = result.cancelled || control.isCancelled
-            duplicateScanReclaimableBytes = cancelled ? 0 : result.reclaimableBytes
-            duplicateGroups = cancelled ? [] : result.groups
-            finishDuplicateScan(roots: result.roots, scanned: result.scanned,
-                skipped: result.skipped, partial: result.partial,
-                cancelled: cancelled, error: result.error)
-            if result.exactCopiesSkipped > 0 {
-                duplicateCoverage += " · " + L10n.shared.tf("duplicates.coverage.exactSkipped", result.exactCopiesSkipped)
-            }
+            finishDuplicateScan(result, cancelled: result.cancelled || control.isCancelled,
+                                previousResult: previousResult)
         }
     }
 
-    private func finishDuplicateScan(roots: [String], scanned: Int, skipped: Int,
-                                     partial: Bool, cancelled: Bool, error: String?) {
-        duplicateScannedRoots = roots
+    private func finishDuplicateScan(_ result: DuplicateScanSnapshot, cancelled: Bool,
+                                     previousResult: DuplicateCachedResult?) {
         isScanningDuplicates = false
+        analysisScanIsFull = false
         duplicateScanControl = nil
         duplicateScanProgress.reset()
-        duplicateScanFinished = true
-        duplicateCoverage = L10n.shared.tf("duplicates.coverage", scanned, skipped)
-        if partial { duplicateCoverage += " · " + L10n.shared.t("duplicates.coverage.partial") }
         if cancelled {
-            duplicateGroups = []
             duplicateStatus = L10n.shared.t("duplicates.status.cancelled")
-        } else if let error {
+        } else if let error = result.error {
             duplicateStatus = L10n.shared.t("duplicates.status.failed")
             log(error)
             presentTaskFailure(message: duplicateStatus, details: [error])
         } else {
+            duplicateGroups = result.groups
+            duplicateScannedRoots = result.roots
+            duplicateScanReclaimableBytes = result.reclaimableBytes
+            if let previousResult {
+                let knownPaths = Set(previousResult.snapshot.groups.flatMap { $0.members.map(\.path) })
+                duplicateSelection = DuplicateSelectionPolicy.safeSelection(
+                    previousResult.selection.union(result.defaultSelection.subtracting(knownPaths)),
+                    groups: result.groups, mode: duplicateMode)
+            } else { duplicateSelection = result.defaultSelection }
+            duplicateScanFinished = true
+            let scannedAt = Date()
+            duplicateLastScanDate = scannedAt
+            duplicateCoverage = duplicateCoverageDescription(result)
+            // Skipped items never become cleanup candidates. Partial coverage
+            // belongs in the status line, without interrupting result review.
             duplicateStatus = L10n.shared.tf("duplicates.status.complete", duplicateGroups.count)
-            if partial {
-                presentTaskFailure(message: L10n.shared.t("duplicates.coverage.partial"),
-                    details: [duplicateCoverage], detailsAreLocalized: true)
-            }
+            duplicateResultCache[duplicateMode] = DuplicateCachedResult(snapshot: result,
+                selection: duplicateSelection, status: duplicateStatus, coverage: duplicateCoverage,
+                scannedAt: scannedAt)
+            persistDuplicateResults()
         }
+        runScheduledAnalysisScans()
+    }
+
+    private func duplicateCoverageDescription(_ snapshot: DuplicateScanSnapshot) -> String {
+        var description = L10n.shared.tf("duplicates.coverage", snapshot.scanned, snapshot.skipped)
+        if snapshot.partial { description += " · " + L10n.shared.t("duplicates.coverage.partial") }
+        if snapshot.exactCopiesSkipped > 0 {
+            description += " · " + L10n.shared.tf("duplicates.coverage.exactSkipped", snapshot.exactCopiesSkipped)
+        }
+        return description
     }
 
     func cancelDuplicateScan() { duplicateScanControl?.cancel() }
 
     func canSelectDuplicate(_ record: DuplicateFileRecord, group: DuplicateFileGroup) -> Bool {
-        guard !isBusy, group.members.contains(where: { $0.path == record.path }) else { return false }
+        guard !isBusy, !isScanningDuplicates,
+              group.members.contains(where: { $0.path == record.path }) else { return false }
         if duplicateSelection.contains(record.path) { return true }
         return group.members.contains { $0.path != record.path && !duplicateSelection.contains($0.path) }
     }
@@ -111,6 +180,42 @@ extension AppState {
               canSelectDuplicate(record, group: group) else { return }
         if duplicateSelection.contains(record.path) { duplicateSelection.remove(record.path) }
         else { duplicateSelection.insert(record.path) }
+        cacheCurrentDuplicateSelection()
+    }
+
+    func selectAllDuplicates() { selectDefaultDuplicates() }
+
+    func deselectAllDuplicates() {
+        guard !isBusy, !isScanningDuplicates else { return }
+        duplicateSelection = []
+        cacheCurrentDuplicateSelection()
+    }
+
+    func selectDefaultDuplicates() {
+        guard !isBusy, !isScanningDuplicates else { return }
+        duplicateSelection = DuplicateSelectionPolicy.suggestedSelection(groups: duplicateGroups, mode: duplicateMode)
+        cacheCurrentDuplicateSelection()
+    }
+
+    /// Keep each cached submode synchronized after cleanup or image compression.
+    /// Only affected entries and groups change; this never starts another scan.
+    func refreshDuplicateResultsAfterMutation(removedPaths: Set<String>, changedPaths: Set<String> = []) {
+        guard !removedPaths.isEmpty || !changedPaths.isEmpty else { return }
+        duplicateWorkspaceStore.noteMutation()
+        cacheCurrentDuplicateSelection()
+        duplicateContentCache.invalidate(paths: removedPaths.union(changedPaths))
+        similarImageFeatureCache.invalidate(paths: removedPaths.union(changedPaths))
+        for mode in Array(duplicateResultCache.keys) {
+            guard var cached = duplicateResultCache[mode] else { continue }
+            cached.snapshot = cached.snapshot.refreshing(removedPaths: removedPaths, changedPaths: changedPaths)
+            cached.selection = DuplicateSelectionPolicy.safeSelection(cached.selection,
+                groups: cached.snapshot.groups, mode: mode)
+            cached.status = L10n.shared.tf("duplicates.status.complete", cached.snapshot.groups.count)
+            cached.coverage = duplicateCoverageDescription(cached.snapshot)
+            duplicateResultCache[mode] = cached
+        }
+        restoreDuplicateResult()
+        persistDuplicateResults()
     }
 
     /// Runs only after the section's explicit Trash confirmation. This native
@@ -145,14 +250,18 @@ extension AppState {
                 presentTaskFailure(message: duplicateStatus)
                 return
             }
-            resetDuplicateResults()
+            refreshAnalysisAfterMutation(removedPaths: summary.removedPaths)
             duplicateStatus = L10n.shared.tf("duplicates.status.deleted", summary.removed, summary.skipped, summary.failed)
+            if var cached = duplicateResultCache[mode] {
+                cached.status = duplicateStatus
+                duplicateResultCache[mode] = cached
+                persistDuplicateResults()
+            }
             for message in summary.messages { log(message) }
             if summary.failed > 0 || summary.skipped > 0 {
                 presentTaskFailure(message: duplicateStatus,
                     details: summary.messages.filter { !$0.hasPrefix("Open-file check ") })
             }
-            analyzeCache.clear()
             resampleAfterMutation()
         }
     }

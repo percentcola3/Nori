@@ -128,6 +128,63 @@ enum AutoCleanupPlannerTests {
         try expect(!retentionPlan.candidates.contains { $0.path == linkedOutside.path },
                    "retention rule included a top-level symlink")
 
+        // Each root is below the cap, but the task is above it. Select globally
+        // by age, then stop at the shared cap rather than applying it per root.
+        let taskA = fixtureRoot.appendingPathComponent("task-a-cache")
+        let taskB = fixtureRoot.appendingPathComponent("task-b-cache")
+        try fileManager.createDirectory(at: taskA, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: taskB, withIntermediateDirectories: true)
+        let itemA = taskA.appendingPathComponent("newer.cache")
+        let itemB = taskB.appendingPathComponent("older.cache")
+        try writeFixtureData(count: 60 * 1_048_576, seed: 11, to: itemA)
+        try writeFixtureData(count: 60 * 1_048_576, seed: 12, to: itemB)
+        try setModificationDate(now.addingTimeInterval(-2 * 86_400), at: itemA, fileManager: fileManager)
+        try setModificationDate(now.addingTimeInterval(-10 * 86_400), at: itemB, fileManager: fileManager)
+        let rootB = AutoCleanupRoot(directory: taskB.path,
+                                    authorizedIdentity: AutoCleanupRule.rootIdentity(at: taskB.path))
+        var combinedRule = AutoCleanupRule(directory: taskA.path, sourceName: "Combined cache",
+            additionalRoots: [rootB], policy: .sizeLimit,
+            sizeLimitBytes: AutoCleanupRule.minimumSizeLimitBytes, retentionDays: 7,
+            isEnabled: false, isRegenerable: true)
+        let combinedPlan = try await AutoCleanupPlanner.plan(for: combinedRule)
+        let itemABytes = try allocatedBytes(at: itemA)
+        let itemBBytes = try allocatedBytes(at: itemB)
+        try expect(combinedPlan.candidates.map(\.path) == [itemB.path]
+                   && combinedPlan.remainingBytes == itemABytes
+                   && combinedPlan.totalBytes == itemABytes + itemBBytes,
+                   "shared capacity did not combine roots or select globally by age")
+        var individualRule = combinedRule
+        individualRule.additionalRoots = []
+        let individualPlan = try await AutoCleanupPlanner.plan(for: individualRule)
+        try expect(individualPlan.candidates.isEmpty, "one below-limit root produced candidates")
+        let scopeProtectedPlan = try await AutoCleanupPlanner.plan(for: combinedRule, protecting: [itemB.path])
+        try expect(scopeProtectedPlan.candidates.map(\.path) == [itemA.path],
+                   "shared plan ignored a separately managed root")
+        combinedRule.policy = .retentionDays
+        let combinedRetention = try await AutoCleanupPlanner.plan(for: combinedRule)
+        try expect(combinedRetention.candidates.map(\.path) == [itemB.path],
+                   "shared retention policy did not span all roots")
+        combinedRule.policy = .sizeLimit
+        try setModificationDate(now, at: itemB, fileManager: fileManager)
+        let combinedRecent = try await AutoCleanupPlanner.plan(for: combinedRule)
+        try expect(combinedRecent.candidates.map(\.path) == [itemA.path],
+                   "shared capacity lost recent-write protection")
+        let oldTaskB = fixtureRoot.appendingPathComponent("replaced-task-b-cache")
+        try fileManager.moveItem(at: taskB, to: oldTaskB)
+        try fileManager.createDirectory(at: taskB, withIntermediateDirectories: true)
+        do {
+            _ = try await AutoCleanupPlanner.plan(for: combinedRule)
+            throw PlannerTestFailure(message: "recreated secondary root inherited task authorization")
+        } catch AutoCleanupPlannerError.rootAuthorizationChanged { }
+
+        var overlappingRule = individualRule
+        overlappingRule.additionalRoots = [AutoCleanupRoot(directory: itemA.path,
+            authorizedIdentity: overlappingRule.authorizedRootIdentity)]
+        do {
+            _ = try await AutoCleanupPlanner.plan(for: overlappingRule)
+            throw PlannerTestFailure(message: "overlapping task roots were counted twice")
+        } catch AutoCleanupPlannerError.protectedRoot { }
+
         let nestedContainer = managedRoot
             .appendingPathComponent("nested-managed", isDirectory: true)
         let nestedManagedRoot = nestedContainer
@@ -232,6 +289,7 @@ enum AutoCleanupPlannerTests {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         var storedRule = retentionRule
+        storedRule.sourceName = "Test Cache"
         storedRule.isEnabled = false
         storedRule.lastRunAt = Date(timeIntervalSince1970: 1_700_000_000)
         storedRule.lastReclaimedBytes = 12_345
@@ -239,6 +297,84 @@ enum AutoCleanupPlannerTests {
         AutoCleanupRuleStore.save(storedRules, to: defaults)
         try expect(AutoCleanupRuleStore.load(from: defaults) == storedRules,
                    "UserDefaults JSON roundtrip changed the rules")
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let chromePaths = [
+            "Library/Caches/Google/Chrome/Default/Cache/Cache_Data",
+            "Library/Application Support/Google/Chrome/Default/Service Worker/CacheStorage",
+            "Library/Caches/Google/Chrome/Default/Code Cache",
+            "Library/Application Support/Google/Chrome/extensions_crx_cache",
+            "Library/Application Support/Google/Chrome/Default/Service Worker/ScriptCache",
+            "Library/Application Support/Google/Chrome/component_crx_cache"
+        ]
+        let chromeRules = chromePaths.map { path in
+            var rule = retentionRule
+            rule.id = UUID()
+            rule.directory = home + "/" + path
+            rule.sizeLimitBytes = 2_000_000_000
+            return rule
+        }
+        let chromeGroups = AutoCleanupRuleGroup.groups(for: chromeRules)
+        try expect(chromeGroups.count == 1 && chromeGroups[0].sourceName == "Google"
+                   && chromeGroups[0].rules == chromeRules,
+                   "legacy Chrome rules were not grouped without altering execution data")
+        var legacyChromeRules = chromeRules
+        legacyChromeRules[1].isEnabled = false
+        let migratedTasks = AutoCleanupRuleStore.consolidatedTasks(from: legacyChromeRules)
+        try expect(migratedTasks.count == 1 && migratedTasks[0].sourceName == "Google"
+                   && migratedTasks[0].directories == legacyChromeRules.map(\.directory)
+                   && migratedTasks[0].roots.map(\.authorizedIdentity) == legacyChromeRules.map(\.authorizedRootIdentity)
+                   && migratedTasks[0].id == legacyChromeRules[0].id
+                   && !migratedTasks[0].isEnabled && migratedTasks[0].isSafetyAuthorized
+                   && migratedTasks[0].sizeLimitBytes == 2_000_000_000,
+                   "task migration lost scope, authorization, shared policy or enabled state")
+        AutoCleanupRuleStore.save(legacyChromeRules, to: defaults)
+        let originalChromeData = defaults.data(forKey: AutoCleanupRuleStore.storageKey)
+        try expect(AutoCleanupRuleStore.load(from: defaults) == migratedTasks
+                   && AutoCleanupRuleStore.load(from: defaults) == migratedTasks
+                   && defaults.data(forKey: AutoCleanupRuleStore.backupKey) == originalChromeData,
+                   "migration did not persist one task idempotently with the original backup")
+        var unauthorizedChrome = legacyChromeRules
+        unauthorizedChrome[2].isRegenerable = false
+        try expect(!AutoCleanupRuleStore.consolidatedTasks(from: unauthorizedChrome)[0].isSafetyAuthorized,
+                   "task migration authorized an unconfirmed directory")
+        let encodedTask = try JSONEncoder().encode(migratedTasks)
+        let decodedTask = try JSONDecoder().decode([AutoCleanupRule].self, from: encodedTask)
+        try expect(decodedTask == migratedTasks,
+                   "multi-root task JSON roundtrip lost authorized scope")
+        var namedChrome = chromeRules[0]
+        namedChrome.id = UUID()
+        namedChrome.sourceName = "Google"
+        let mergedGroups = AutoCleanupRuleGroup.groups(for: chromeRules + [namedChrome])
+        try expect(mergedGroups.count == 1 && mergedGroups[0].rules.count == 7
+                   && mergedGroups[0].id == chromeGroups[0].id,
+                   "explicit source metadata did not merge with legacy source grouping")
+        let unrelatedPaths = [
+            home + "/Library/Caches/Google/ChromeOther/Cache_Data",
+            home + "/Library/Caches/Google/Other/Cache_Data",
+            home + "/Projects/Library/Caches/Google/Chrome/Cache_Data"
+        ]
+        let unrelatedRules = unrelatedPaths.map { path in
+            var rule = retentionRule
+            rule.id = UUID()
+            rule.directory = path
+            return rule
+        }
+        let mixedGroups = AutoCleanupRuleGroup.groups(for: chromeRules + unrelatedRules + [storedRule])
+        try expect(mixedGroups.count == 5 && mixedGroups[0].rules == chromeRules
+                   && mixedGroups.dropFirst().prefix(3).allSatisfy { $0.sourceName == nil }
+                   && mixedGroups.last?.sourceName == "Test Cache",
+                   "unrelated manual directories inherited Google grouping")
+
+        var metadataFree = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode([storedRule])) as? [[String: Any]] ?? []
+        metadataFree[0].removeValue(forKey: "sourceName")
+        let metadataFreeRules = try JSONDecoder().decode([AutoCleanupRule].self,
+            from: JSONSerialization.data(withJSONObject: metadataFree))
+        var expectedMetadataFree = storedRule
+        expectedMetadataFree.sourceName = nil
+        try expect(metadataFreeRules == [expectedMetadataFree],
+                   "missing source metadata changed legacy rules")
 
         var legacyObject = try JSONSerialization.jsonObject(
             with: JSONEncoder().encode([retentionRule])) as? [[String: Any]] ?? []

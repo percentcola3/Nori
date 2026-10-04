@@ -82,12 +82,8 @@ struct AgentsTabView: View {
             details: TaskFeedbackDiagnostic.localized(state.agentOutcomeDetails),
             applications: state.agentFailureApplications,
             completedCount: state.agentCompletedCount, feedbackID: state.agentFeedbackID,
-            retryAvailable: true, onRetry: continueCleanup)
-    }
-
-    private func continueCleanup() {
-        if state.agentRetryAvailable { state.retryFailedAgentCleanup() }
-        else { state.requestScanAccess(.aiScan) }
+            scanSource: .agents, scanDisabled: state.isBusy,
+            onScan: { state.requestScanAccess(.aiScan) })
     }
 
     private var scanButton: some View {

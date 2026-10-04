@@ -174,6 +174,7 @@ private struct AnimatedTabContent: View {
             case .cleanup: CleanupTabView(state: state)
             case .agents: AgentsTabView(state: state)
             case .analyze: AnalyzeTabView(state: state)
+            case .directory: DirectoryTabView(model: state.directoryBrowser)
             case .uninstall: UninstallTabView(state: state)
             case .devenv: DevEnvTabView(state: state)
             case .processes: ProcessesTabView(state: state)

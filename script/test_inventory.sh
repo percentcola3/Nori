@@ -183,6 +183,9 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
         -module-cache-path "$INVENTORY_TEST_ROOT/module-cache" \
         "$ROOT_DIR/SimpleMole/Services/SimulatorInventory.swift" \
         "$ROOT_DIR/SimpleMole/Services/DockerInventory.swift" \
+        "$ROOT_DIR/SimpleMole/L10n/TablesDeveloperExisting.swift" \
+        "$ROOT_DIR/SimpleMole/L10n/TablesLocalizationAudit.swift" \
+        "$ROOT_DIR/script/LocalizationTableTestSupport.swift" \
         "$ROOT_DIR/script/InventoryTests.swift" \
         -o "$INVENTORY_TEST_ROOT/inventory-tests"
     "$INVENTORY_TEST_ROOT/inventory-tests" "$INVENTORY_TEST_ROOT/parser-fixture"

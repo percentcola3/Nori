@@ -65,8 +65,8 @@ struct DeveloperWorkspaceRefreshTests {
         let denied = AppState()
         denied.permissionCenter.fullDiskAccessGranted = false
         denied.refreshDeveloperWorkspace()
-        precondition(denied.runtimeScans == 0 && denied.devWorkspaceRefreshToken == 1,
-                     "Other panels refresh without requesting runtime permissions")
+        precondition(denied.runtimeScans == 1 && denied.devWorkspaceRefreshToken == 1,
+                     "Ordinary runtime roots refresh without requesting full disk access")
         print("Developer workspace: immediate, deferred, cancelled, coalesced, and permission-safe refresh passed")
     }
 }

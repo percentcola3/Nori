@@ -2,651 +2,550 @@ import AppKit
 import QuickLook
 import SwiftUI
 
-/// 全盘扫描结果按 大文件 / 重复文件 / 视频 / 图片 聚焦展示。
-/// 进入页面不主动扫描：空态是占位插画和分体扫描按钮。点选下拉类型立即扫描，
-/// 主按钮再次扫描当前类型。不提供扫描范围选择与目录层级浏览。
+/// 每类独立扫描并保留结果；侧边栏切换只改变展示，不启动扫描。
 struct AnalyzeTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var expandedSections: Set<AnalyzeSection> = [.largeFiles, .videos, .images]
     @State private var previewURL: URL?
     @State private var showTrashConfirmation = false
-    /// 大文件/视频删除的待确认清单（单行或批量）。
-    @State private var pendingDeletePaths: [String]?
-    /// 从磁盘分析行发起的“按目录定时清理”意图。
-    @State private var autoCleanIntent: AutoCleanupIntent?
-    @State private var scanMenuOpen = false
+    @State private var pendingDeletion: AnalysisDeletionRequest?
 
+    private var mode: AnalyzeMode { state.analyzeMode }
     private var scanning: Bool {
-        state.isAnalyzing || state.isScanningDuplicates
+        mode == .duplicates ? state.isScanningDuplicates : state.analyzingMode == mode
     }
-
-    private var hasResults: Bool {
-        // 按当前分类判断空态，其他分类的结果不能挤掉本页的 SVG 占位。
-        switch state.analyzeMode {
-        case .largeFiles:
-            return !state.analyzeLargeFiles.isEmpty
-        case .videos:
-            return state.analyzeMedia.contains { $0.kind == .video }
-        case .images:
-            return state.analyzeMedia.contains { $0.kind == .image }
-        case .duplicates:
-            return !state.duplicateGroups.isEmpty
+    private var fullScanning: Bool { scanning && state.analysisScanIsFull }
+    private var scanned: Bool { state.analysisHasScanned(mode) }
+    private var hasResults: Bool { resultCount(mode) > 0 }
+    private var hasSelectableResults: Bool {
+        mode == .disk ? !state.analysisFileItems(for: .disk).isEmpty : hasResults
+    }
+    private var selectedCount: Int {
+        mode == .duplicates ? state.duplicateSelectedCount : state.analysisFileSelectedItems.count
+    }
+    private var selectedBytes: UInt64 {
+        mode == .duplicates ? state.duplicateSelectedBytes : state.analysisFileSelectedBytes
+    }
+    private var allSelected: Bool {
+        guard hasResults, selectedCount > 0 else { return false }
+        if mode == .duplicates {
+            return state.duplicateGroups.allSatisfy { group in
+                group.members.lazy.filter { !state.duplicateSelection.contains($0.path) }.count == 1
+            }
         }
+        return selectedCount == state.analysisFileItems(for: mode).count
     }
-
-    private var presentationPhase: Int {
-        if scanning && !hasResults { return 1 }
-        return hasResults ? 2 : 0
+    private var selectedSize: String {
+        let gigabytes = Double(selectedBytes) / 1_000_000_000
+        let number = (gigabytes > 0 && gigabytes < 0.01 ? 0.01 : gigabytes)
+            .formatted(.number.precision(.fractionLength(2)))
+        return (gigabytes > 0 && gigabytes < 0.01 ? "< " : "") + number + " GB"
+    }
+    private var deletionConfirmationMessage: String {
+        guard let request = pendingDeletion else { return l10n.t("analyze.delete.confirm.msg") }
+        let home = request.mode == .disk ? state.diskBrowserHomePath : NSHomeDirectory()
+        return l10n.t(AnalysisFileDeletionPlan.requiresPermanentDeletion(paths: request.paths, homeDirectory: home)
+            ? "analyze.delete.confirm.cache" : "analyze.delete.confirm.msg")
     }
 
     var body: some View {
-        NoriPageTransition(phase: presentationPhase) {
-        VStack(spacing: 0) {
-            if hasResults { toolbar }
-            if scanning && !hasResults {
-                // 扫描中只保留 SVG 动画：下方展示当前正在分析的目录，
-                // 取消按钮也在动画之下，工具栏不再出现。
-                if state.isScanningDuplicates {
-                    DuplicateScanActivity(progress: state.duplicateScanProgress,
-                                          onCancel: state.cancelDuplicateScan)
-                        } else {
-                    NoriPlaceholderStage { size in
-                        NoriStatusAnimation(mood: .working, size: size, assetName: "nori-disk")
-                        Text(displayCurrentPath)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: 460)
-                            .animation(nil, value: displayCurrentPath)
-                        Button {
-                            state.cancelAnalyze()
-                        } label: {
-                            Label(l10n.t("common.cancel"), systemImage: "xmark.circle")
-                        }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .controlSize(.small)
-                    }
-                    }
-            } else if !scanning && !hasResults {
-                // 进入分析页不主动扫描：SVG 占位 + 带下拉面板的扫描按钮，
-                // 面板里选择 大文件/图片/视频/重复文件 后按类型触发分析。
-                NoriPlaceholderStage { size in
-                    NoriIdlePlaceholder(state: state, size: size)
-                    scanSplitButton
-                }
-            } else {
-                ScrollView {
-                    LiquidGlassGroup {
-                    LazyVStack(spacing: 12) {
-                        switch state.analyzeMode {
-                        case .largeFiles, .videos:
-                            // 大文件/视频：平铺删除清单，不套卡片。
-                            let items = state.analysisFileItems(for: state.analyzeMode)
-                            if items.isEmpty {
-                                modeEmptyHint(state.analyzeMode.section ?? .largeFiles)
-                            } else {
-                                analysisFileSection(items)
-                            }
-                        case .images:
-                            // 图片：唯一保留瘦身（降分辨率压缩）的分类。
-                            let candidates = state.slimCandidates(in: .images)
-                            if candidates.isEmpty {
-                                modeEmptyHint(.images)
-                            } else {
-                                slimSectionCard(.images, candidates: candidates)
-                            }
-                        case .duplicates:
-                            duplicatesCard
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 4)
-                    // 扫描中清单持续增长，避免逐帧追赶尚未稳定的结果。
-                    .animation(reduceMotion || scanning ? nil : MoleMotion.panel,
-                               value: state.analyzeLargeFiles.map(\.path))
-                    .animation(reduceMotion || scanning ? nil : MoleMotion.panel,
-                               value: state.analyzeMode)
-                    }
-                }
+        HStack(alignment: .top, spacing: 0) {
+            AnalyzeSidebar(selection: $state.analyzeMode, details: sidebarDetails,
+                           scanningMode: state.isScanningDuplicates ? .duplicates : state.analyzingMode,
+                           isSearching: state.isIncrementalAnalysisScanning)
+                .frame(width: 166).padding(.leading, 14).padding(.vertical, 14)
+            VStack(spacing: 0) {
+                header
+                NoriPageTransition(phase: fullScanning ? 1 : scanned ? 2 : 0) { content }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if (hasResults || scanned) && !fullScanning { footer }
             }
-
-            if !scanning && hasResults {
-                Divider()
-                footer
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        }
-        .sheet(isPresented: $state.showSlimSheet) {
-            SlimOptionsSheet(state: state)
-        }
-        .sheet(item: $autoCleanIntent) { intent in
-            AutoCleanupIntentSheet(state: state, intent: intent) {
-                autoCleanIntent = nil
-            }
-        }
+        .frame(maxHeight: .infinity)
+        .sheet(isPresented: $state.showSlimSheet) { SlimOptionsSheet(state: state) }
         .quickLookPreview($previewURL)
         .alert(l10n.tf("duplicates.trash.title", state.duplicateSelectedCount),
                isPresented: $showTrashConfirmation) {
             Button(l10n.t("common.cancel"), role: .cancel) {}
-            Button(l10n.t("duplicates.trash"), role: .destructive) {
-                state.deleteSelectedDuplicates()
-            }
-        } message: {
-            Text(trashConfirmationMessage)
-        }
-        .alert(l10n.tf("analyze.delete.confirm.title", pendingDeletePaths?.count ?? 0),
-               isPresented: Binding(
-                get: { pendingDeletePaths != nil },
-                set: { if !$0 { pendingDeletePaths = nil } })) {
-            Button(l10n.t("common.cancel"), role: .cancel) { pendingDeletePaths = nil }
+            Button(l10n.t("duplicates.trash"), role: .destructive) { state.deleteSelectedDuplicates() }
+        } message: { Text(trashConfirmationMessage) }
+        .alert(l10n.tf("analyze.delete.confirm.title", pendingDeletion?.paths.count ?? 0),
+               isPresented: Binding(get: { pendingDeletion != nil },
+                                    set: { if !$0 { pendingDeletion = nil } })) {
+            Button(l10n.t("common.cancel"), role: .cancel) { pendingDeletion = nil }
             Button(l10n.t("analyze.delete.ok"), role: .destructive) {
-                let paths = pendingDeletePaths ?? []
-                pendingDeletePaths = nil
-                state.deleteAnalysisFiles(paths)
-            }
-        } message: {
-            Text(l10n.t("analyze.delete.confirm.msg"))
-        }
-        // 扫描中 → 结果/空态 的整块互换走弹簧过渡。
-        .overlayPreferenceValue(ScanButtonAnchorKey.self) { anchor in
-            scanMenuOverlay(anchor)
-        }
-    }
-
-    private func toggleExpanded(_ section: AnalyzeSection) {
-        withAnimation(reduceMotion ? nil : MoleMotion.panel) {
-            if expandedSections.contains(section) { expandedSections.remove(section) }
-            else { expandedSections.insert(section) }
-        }
-    }
-
-    private func slimSectionCard(_ section: AnalyzeSection,
-                                 candidates: [SlimCandidate]) -> some View {
-        SlimSectionCard(
-            state: state,
-            section: section,
-            candidates: candidates,
-            isExpanded: expandedSections.contains(section)) {
-            toggleExpanded(section)
-        } onScheduleDirectory: { directory in
-            autoCleanIntent = AutoCleanupIntent(paths: [directory], cacheVerified: false)
-        }
-        .transition(.molePanelReveal)
-    }
-
-    private var duplicatesCard: some View {
-        DuplicatesSectionCard(
-            state: state,
-            onPreview: { previewURL = URL(fileURLWithPath: $0) })
-            .transition(.molePanelReveal)
-    }
-
-    /// 聚焦的分类暂无结果：轻量提示，不用整页空态（磁盘走查已经完成）。
-    private func modeEmptyHint(_ section: AnalyzeSection) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: section.symbol)
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-            Text(l10n.t("analyze.mode.empty"))
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
-    }
-
-    // MARK: 大文件/视频平铺删除清单
-
-    /// 不套卡片的全量平铺清单：行间细线分隔，每行勾选 + 定位 + 删除。
-    private func analysisFileSection(_ items: [AnalysisFileItem]) -> some View {
-        let section: AnalyzeSection = state.analyzeMode == .videos ? .videos : .largeFiles
-        return VStack(spacing: 8) {
-            Button { toggleExpanded(section) } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: section.symbol).foregroundStyle(Color.moleAccentText)
-                    Text(l10n.t(section.titleKey)).font(.system(size: 12, weight: .semibold))
-                    Text("\(items.count)").font(.system(size: 10)).foregroundStyle(.secondary)
-                    Spacer()
-                    Text(ByteFormat.format(items.reduce(0) { $0 + $1.size }))
-                        .font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary)
-                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
-                        .rotationEffect(.degrees(expandedSections.contains(section) ? 0 : -90))
+                if let request = pendingDeletion {
+                    pendingDeletion = nil
+                    state.deleteAnalysisFiles(request.paths, mode: request.mode)
                 }
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .contentShape(Rectangle())
-                .modifier(ListRowGlass())
             }
-            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
-            if expandedSections.contains(section) {
-                analysisFileList(items).padding(.leading, 14).transition(.molePanelReveal)
-            }
-        }
-        .clipped()
+        } message: { Text(deletionConfirmationMessage) }
+        .accessibilityIdentifier("analysis-workspace")
     }
 
-    private func analysisFileList(_ items: [AnalysisFileItem]) -> some View {
-        LazyVStack(spacing: 8) {
-            ForEach(items) { item in analysisFileRow(item) }
+    @ViewBuilder private var header: some View {
+        if mode == .duplicates {
+            HStack(spacing: 8) {
+                PillPicker(items: [l10n.t("duplicates.mode.exact"), l10n.t("duplicates.mode.similar")],
+                    selection: Binding(
+                        get: { state.duplicateMode == .exact ? 0 : 1 },
+                        set: { state.setDuplicateMode($0 == 0 ? .exact : .similarImages) }),
+                    alignment: .leading)
+                    .frame(width: 220)
+                    .disabled(state.isBusy || state.isScanningDuplicates)
+                    .accessibilityLabel(l10n.t("duplicates.mode.label"))
+                    .accessibilityIdentifier("analysis-duplicate-mode")
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 8)
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        if fullScanning {
+            if mode == .duplicates {
+                DuplicateScanActivity(progress: state.duplicateScanProgress, onCancel: state.cancelDuplicateScan)
+            } else {
+                NoriPlaceholderStage { size in
+                    NoriStatusAnimation(mood: .working, size: size, assetName: "nori-disk")
+                    Text(state.analysisStatus(for: mode)).font(.system(size: 11))
+                        .foregroundStyle(.secondary).lineLimit(1)
+                    Text(abbreviate(state.analyzeCurrentPath)).font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).frame(maxWidth: 420)
+                    Button(action: cancelScan) {
+                        Label(l10n.t("common.cancel"), systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .accessibilityIdentifier("analysis-full-scan-cancel")
+                }
+            }
+        } else if !hasResults {
+            NoriPlaceholderStage { size in
+                NoriIdlePlaceholder(state: state, size: size)
+                if scanned {
+                    Text(l10n.t("analyze.scan.empty"))
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                if !scanned { scanButton }
+            }
+        } else if mode == .disk {
+            DiskBrowserView(state: state, scanning: scanning,
+                            onPreview: { previewURL = URL(fileURLWithPath: $0) })
+        } else {
+            ScrollView {
+                LiquidGlassGroup {
+                    LazyVStack(spacing: 8) {
+                        if mode == .duplicates {
+                            DuplicatesSectionCard(state: state,
+                                onPreview: { previewURL = URL(fileURLWithPath: $0) }, showsControls: false)
+                        } else {
+                            ForEach(state.analysisFileItems(for: mode)) { item in analysisFileRow(item) }
+                        }
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 4)
+                }
+            }
+            .accessibilityIdentifier("analysis-results-" + mode.rawValue)
         }
     }
 
     private func analysisFileRow(_ item: AnalysisFileItem) -> some View {
-        let isSelected = state.analysisFileSelection.contains(item.path)
-        return HStack(spacing: 10) {
-            Button {
-                state.toggleAnalysisFileSelection(item)
-            } label: {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 14))
-                    .foregroundStyle(isSelected ? Color.moleAccentText : Color.secondary)
-            }
-            .buttonStyle(.plain)
-            .disabled(state.isBusy)
-            Image(systemName: state.analyzeMode == .videos ? "film" : "doc")
-                .font(.system(size: 12))
-                .foregroundStyle(Color.moleAccentText)
-                .frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.name)
-                    .font(.system(size: 12, weight: .medium))
-                    .lineLimit(1)
-                Text(item.path)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 8)
-            Text(ByteFormat.format(item.size))
-                .font(.system(size: 10).monospacedDigit())
-                .foregroundStyle(.secondary)
-            Button {
-                state.revealPath(item.path)
-            } label: {
-                Image(systemName: "folder")
-            }
-            .buttonStyle(MoleIconButtonStyle())
-            .help(l10n.t("analyze.reveal"))
-            Button {
-                pendingDeletePaths = [item.path]
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(MoleIconButtonStyle(tint: Color.warning))
-            .disabled(state.isBusy || state.isDeletingAnalysisFiles)
-            .help(l10n.t("analyze.delete.one"))
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .modifier(ListRowGlass(selected: isSelected))
-    }
-
-    private var toolbar: some View {
-        HStack(alignment: .center, spacing: 8) {
-            if !scanning {
-                Text(scanStatusText)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            Spacer(minLength: 8)
-        }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 8)
-    }
-
-    /// 主操作扫描当前类型；箭头打开菜单，选择类型后立即扫描。
-    private var scanSplitButton: some View {
-        AnalyzeScanSplitButton(
-            title: l10n.t(state.analyzeMode.actionKey),
-            menuOpen: scanMenuOpen,
-            enabled: !state.isBusy,
-            accessibilityMenu: l10n.t("analyze.scan.menu")
-        ) {
-            runSelectedScan()
-        } onToggleMenu: {
-            setScanMenuOpen(!scanMenuOpen)
-        }
-        .anchorPreference(key: ScanButtonAnchorKey.self, value: .bounds) { $0 }
-    }
-
-    @ViewBuilder
-    private func scanMenuOverlay(_ anchor: Anchor<CGRect>?) -> some View {
-        if scanMenuOpen, let anchor {
-            GeometryReader { proxy in
-                let frame = proxy[anchor]
-                let width: CGFloat = 248
-                let menuHeight: CGFloat = 180
-                let x = min(max(12, frame.maxX - width), max(12, proxy.size.width - width - 12))
-                let spaceBelow = proxy.size.height - frame.maxY
-                let y = spaceBelow >= menuHeight + 12
-                    ? frame.maxY + 8
-                    : max(8, frame.minY - 8 - menuHeight)
-                ZStack(alignment: .topLeading) {
-                    Color.black.opacity(0.001)
-                        .contentShape(Rectangle())
-                        .onTapGesture { setScanMenuOpen(false) }
-                    AnalyzeScanMenu(
-                        selection: state.analyzeMode,
-                        title: { l10n.t($0.titleKey) },
-                        detail: { l10n.t($0.detailKey) }
-                    ) { mode in
-                        chooseAnalyzeMode(mode)
+        let selected = state.analysisSelection(for: mode).contains(item.path)
+        return HStack(spacing: 8) {
+            Button { state.toggleAnalysisFileSelection(item) } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 14)).foregroundStyle(selected ? Color.moleAccentText : Color.secondary)
+                    if mode == .images {
+                        MediaThumbnail(path: item.path, size: item.size, kind: .image)
+                    } else {
+                        Image(systemName: mode.symbol).font(.system(size: 14))
+                            .foregroundStyle(Color.moleAccentText).frame(width: 26)
                     }
-                    .frame(width: width, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .offset(x: x, y: y)
-                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.98, anchor: .top)))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                        Text(abbreviate(item.path)).font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(ByteFormat.format(item.size)).font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.99))
+            .disabled(state.isBusy || scanning)
+            .opacity(state.isBusy || scanning ? 0.45 : 1)
+            .accessibilityLabel(item.path)
+            .accessibilityValue(l10n.t(selected ? "duplicates.row.selected" : "duplicates.row.kept"))
+            Button { previewURL = URL(fileURLWithPath: item.path) } label: { Image(systemName: "eye") }
+                .buttonStyle(MoleIconButtonStyle(size: 26, showsBackground: false))
+                .help(l10n.t("duplicates.preview"))
+                .accessibilityLabel(l10n.t("duplicates.preview") + ": " + item.name)
+            Button { state.revealPath(item.path) } label: { Image(systemName: "folder") }
+                .buttonStyle(MoleIconButtonStyle(size: 26, showsBackground: false))
+                .help(l10n.t("analyze.reveal"))
+                .accessibilityLabel(l10n.t("analyze.reveal") + ": " + item.name)
         }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .modifier(ListRowGlass(selected: selected))
+        .accessibilityIdentifier("analysis-file-" + item.path)
     }
 
-    /// 点选类型即开始对应扫描，包括重新选择当前类型。
-    private func chooseAnalyzeMode(_ mode: AnalyzeMode) {
-        guard !state.isBusy else { return }
-        state.analyzeMode = mode
-        runSelectedScan()
-    }
-
-    private func setScanMenuOpen(_ open: Bool) {
-        guard scanMenuOpen != open else { return }
-        if reduceMotion {
-            scanMenuOpen = open
-        } else {
-            withAnimation(MoleMotion.panel) { scanMenuOpen = open }
+    private var scanButton: some View {
+        Button { state.scanAnalysisMode(mode, forceFull: true) } label: {
+            Label(l10n.t(mode.actionKey), systemImage: "magnifyingglass")
         }
+        .buttonStyle(PrimaryButtonStyle(tint: .moleAccent))
+        .disabled(state.isBusy || state.isAnalyzing || state.isScanningDuplicates)
+        .accessibilityIdentifier("analysis-scan-" + mode.rawValue)
     }
 
-    /// 主按钮按当前类型开扫。重复文件做内容级比对；大文件、图片、视频
-    /// 共享一次磁盘走查，结果按所选分类展示。
-    private func runSelectedScan() {
-        setScanMenuOpen(false)
-        switch state.analyzeMode {
-        case .duplicates:
-            guard !state.isBusy, !state.isScanningDuplicates else { return }
-            state.scanDuplicateFiles()
-        case .largeFiles, .images, .videos:
-            guard !scanning else { return }
-            state.scanDiskOverview(force: true)
+    private var rescanButton: some View {
+        Button { state.scanAnalysisMode(mode, forceFull: true) } label: {
+            Image(systemName: "arrow.clockwise")
         }
-    }
-
-    private var scanStatusText: String {
-        if state.isAnalyzing { return state.analyzeStatus }
-        if state.isScanningDuplicates { return state.duplicateStatus }
-        return state.analyzeStatus
-    }
-
-    /// 扫描中展示的当前目录：主目录缩写为 ~；尚未回报路径时退化为扫描文案。
-    private var displayCurrentPath: String {
-        guard !state.analyzeCurrentPath.isEmpty else {
-            return l10n.t("analyze.scanning")
-        }
-        let home = NSHomeDirectory()
-        return state.analyzeCurrentPath.hasPrefix(home)
-            ? "~" + state.analyzeCurrentPath.dropFirst(home.count)
-            : state.analyzeCurrentPath
+        .buttonStyle(AnalysisIconButtonStyle())
+        .disabled(state.isBusy || state.isAnalyzing || state.isScanningDuplicates)
+        .help(l10n.t("analyze.scan.full"))
+        .accessibilityLabel(l10n.t("analyze.scan.full"))
+        .accessibilityIdentifier("analysis-scan-" + mode.rawValue)
     }
 
     private var footer: some View {
-        HStack(spacing: 8) {
+        VStack(spacing: 10) {
+            Divider()
             if let progress = state.slimProgress {
-                ProgressView(value: progress.fraction ?? 0)
-                    .progressViewStyle(.linear)
-                    .frame(width: 80)
-                    .opacity(progress.fraction == nil ? 0.35 : 1)
-                Text(l10n.tf("slim.progress", progress.index, progress.total, progress.name))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-                Button(l10n.t("common.cancel")) { state.cancelSlim() }
-                    .buttonStyle(SecondaryButtonStyle())
+                HStack(spacing: 10) {
+                    ProgressView(value: progress.fraction ?? 0).frame(width: 100)
+                    Text(l10n.tf("slim.progress", progress.index, progress.total, progress.name))
+                        .font(.system(size: 11)).lineLimit(1)
+                    Spacer()
+                    Button { state.cancelSlim() } label: { Image(systemName: "xmark") }
+                        .buttonStyle(AnalysisIconButtonStyle())
+                        .help(l10n.t("common.cancel"))
+                        .accessibilityLabel(l10n.t("common.cancel"))
+                }
             } else {
-                scanSplitButton
-                Spacer()
-                // 按当前模式分流：大文件/视频＝删除；重复文件＝清理；
-                // 图片＝瘦身（唯一可降分辨率压缩的分类）。
-                switch state.analyzeMode {
-                case .largeFiles, .videos:
-                    if !state.analysisFileSelectedItems.isEmpty {
+                HStack(spacing: 8) {
+                    AnalysisSelectionButtons(
+                        allSelected: allSelected,
+                        noneSelected: hasSelectableResults && selectedCount == 0,
+                        canSelectAll: hasSelectableResults && !state.isBusy && !scanning,
+                        canDeselectAll: selectedCount > 0 && !state.isBusy && !scanning,
+                        onSelectAll: selectAll, onDeselectAll: deselectAll)
+                    Spacer(minLength: 8)
+                    if mode == .images {
                         Button {
-                            pendingDeletePaths = state.analysisFileSelectedItems.map(\.path)
+                            state.slimSelection = state.analysisSelection(for: .images)
+                            state.requestSlim()
                         } label: {
-                            Label(l10n.tf("analyze.delete.selected",
-                                          state.analysisFileSelectedItems.count),
-                                  systemImage: "trash.fill")
+                            Label(l10n.t("slim.action"), systemImage: "arrow.down.right.and.arrow.up.left")
                         }
-                        .buttonStyle(PrimaryButtonStyle())
-                        .accessibilityValue(footerSummary)
-                        .disabled(state.isBusy || state.isDeletingAnalysisFiles)
+                        .buttonStyle(AnalysisActionButtonStyle(tint: .moleAccentText))
+                        .disabled(selectedCount == 0 || state.isBusy || scanning)
                     }
-                case .duplicates:
-                    if state.duplicateSelectedCount > 0 {
-                        Button { showTrashConfirmation = true } label: {
-                            Label(l10n.t("duplicates.trash"), systemImage: "trash.fill")
-                        }
-                        .buttonStyle(PrimaryButtonStyle())
-                        .accessibilityValue(footerSummary)
-                        .disabled(state.isBusy)
+                    if scanning {
+                        Button { cancelScan() } label: { Image(systemName: "xmark") }
+                            .buttonStyle(AnalysisIconButtonStyle())
+                            .help(l10n.t("common.cancel"))
+                            .accessibilityLabel(l10n.t("common.cancel"))
+                    } else {
+                        rescanButton
                     }
-                case .images:
-                    Button { state.requestSlim() } label: {
-                        Label(l10n.t("slim.action"), systemImage: "arrow.down.right.and.arrow.up.left")
+                    Button(role: .destructive) {
+                        if mode == .duplicates { showTrashConfirmation = true }
+                        else { pendingDeletion = AnalysisDeletionRequest(mode: mode,
+                            paths: state.analysisFileSelectedItems.map(\.path)) }
+                    } label: {
+                        Label(l10n.tf("cleanup.delete.withCount", selectedSize), systemImage: "trash")
+                            .monospacedDigit()
                     }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(state.slimSelectedCandidates.isEmpty || state.isBusy)
+                    .buttonStyle(AnalysisActionButtonStyle(tint: .danger))
+                    .disabled(selectedCount == 0 || state.isBusy || scanning)
+                    .accessibilityIdentifier("analysis-clean-selected")
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 20).padding(.bottom, 12)
     }
 
-    private var footerSummary: String {
-        var parts: [String] = []
-        if !state.slimSelectedCandidates.isEmpty {
-            parts.append(l10n.tf("slim.footer.selected", state.slimSelectedCandidates.count,
-                                 ByteFormat.format(state.slimSelectedBytes)))
-        }
-        if !state.analysisFileSelectedItems.isEmpty {
-            parts.append(l10n.tf("slim.footer.selected", state.analysisFileSelectedItems.count,
-                                 ByteFormat.format(state.analysisFileSelectedBytes)))
-        }
-        if state.duplicateSelectedCount > 0 {
-            parts.append(l10n.tf("duplicates.selection.count", state.duplicateSelectedCount,
-                                 ByteFormat.format(state.duplicateSelectedBytes)))
-        }
-        return parts.isEmpty ? l10n.t("slim.footer.hint") : parts.joined(separator: " · ")
+    private var sidebarDetails: [AnalyzeMode: String] {
+        Dictionary(uniqueKeysWithValues: AnalyzeMode.menuOrder.map { item in
+            (item, state.analysisHasScanned(item)
+                ? l10n.tf("analyze.sidebar.count", resultCount(item)) : l10n.t("analyze.scan.never"))
+        })
     }
-
+    private func resultCount(_ item: AnalyzeMode) -> Int {
+        if item == .disk { return state.diskBrowserEntries(at: state.diskBrowserRootPath).count }
+        return item == .duplicates ? state.duplicateGroups.count : state.analysisFileItems(for: item).count
+    }
+    private func selectAll() {
+        if mode == .duplicates { state.selectAllDuplicates() } else { state.selectAllAnalysisFiles() }
+    }
+    private func deselectAll() {
+        if mode == .duplicates { state.deselectAllDuplicates() } else { state.deselectAllAnalysisFiles() }
+    }
+    private func cancelScan() {
+        if mode == .duplicates { state.cancelDuplicateScan() } else { state.cancelAnalyze() }
+    }
+    private func abbreviate(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+    }
     private var trashConfirmationMessage: String {
-        let selection = l10n.tf("duplicates.selection.count", state.duplicateSelectedCount,
-                                ByteFormat.format(state.duplicateSelectedBytes))
-        let explanation = l10n.t(state.duplicateMode == .exact
-                                 ? "duplicates.trash.message" : "duplicates.trash.similarMessage")
-        return selection + "\n\n" + explanation
+        l10n.tf("duplicates.selection.count", state.duplicateSelectedCount,
+                ByteFormat.format(state.duplicateSelectedBytes)) + "\n\n"
+            + l10n.t(state.duplicateMode == .exact ? "duplicates.trash.message" : "duplicates.trash.similarMessage")
     }
 }
 
-private struct ScanButtonAnchorKey: PreferenceKey {
-    static var defaultValue: Anchor<CGRect>? = nil
-    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
-        value = nextValue() ?? value
-    }
-}
-
-/// 主操作 + 下拉箭头的胶囊按钮。箭头只打开选项，主区域才开始扫描。
-private struct AnalyzeScanSplitButton: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let title: String
-    let menuOpen: Bool
-    let enabled: Bool
-    let accessibilityMenu: String
-    let onPrimary: () -> Void
-    let onToggleMenu: () -> Void
+private struct AnalysisSelectionButtons: View {
+    let allSelected: Bool
+    let noneSelected: Bool
+    let canSelectAll: Bool
+    let canDeselectAll: Bool
+    let onSelectAll: () -> Void
+    let onDeselectAll: () -> Void
+    @ObservedObject private var l10n = L10n.shared
+    @Namespace private var selectionNamespace
 
     var body: some View {
-        HStack(spacing: 0) {
-            Button(action: onPrimary) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .lineLimit(1)
-                    .padding(.horizontal, 16)
-                    .frame(minWidth: 132, minHeight: 34)
+        LiquidGlassGroup {
+            HStack(spacing: 8) {
+                Button(action: onSelectAll) { AnalysisSelectionGlyph(checkmark: true) }
+                    .buttonStyle(AnalysisSelectionButtonStyle(isActive: allSelected,
+                        id: "all", namespace: selectionNamespace))
+                    .disabled(!canSelectAll)
+                    .help(l10n.t("analyze.selection.all"))
+                    .accessibilityLabel(l10n.t("analyze.selection.all"))
+                    .accessibilityAddTraits(allSelected ? .isSelected : [])
+                    .accessibilityRemoveTraits(allSelected ? [] : .isSelected)
+                    .accessibilityIdentifier("analysis-select-all")
+                Button(action: onDeselectAll) { AnalysisSelectionGlyph(checkmark: false) }
+                    .buttonStyle(AnalysisSelectionButtonStyle(isActive: noneSelected,
+                        id: "none", namespace: selectionNamespace))
+                    .disabled(!canDeselectAll)
+                    .help(l10n.t("analyze.selection.none"))
+                    .accessibilityLabel(l10n.t("analyze.selection.none"))
+                    .accessibilityAddTraits(noneSelected ? .isSelected : [])
+                    .accessibilityRemoveTraits(noneSelected ? [] : .isSelected)
+                    .accessibilityIdentifier("analysis-deselect-all")
             }
-            .buttonStyle(SplitSegmentStyle())
-            .disabled(!enabled)
-
-            Rectangle()
-                .fill(Color.hairline)
-                .frame(width: 1, height: 18)
-
-            Button(action: onToggleMenu) {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: 36, height: 34)
-                    .rotationEffect(.degrees(menuOpen ? 180 : 0))
-            }
-            .buttonStyle(SplitSegmentStyle())
-            .disabled(!enabled)
-            .accessibilityLabel(accessibilityMenu)
         }
-        .foregroundStyle(Color.primary)
-        .modifier(ActionGlassChrome())
-        .opacity(enabled ? 1 : 0.45)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: menuOpen)
     }
 }
 
-private struct SplitSegmentStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .opacity(configuration.isPressed ? 0.65 : 1)
-            .contentShape(Rectangle())
+private struct AnalysisSelectionGlyph: View {
+    let checkmark: Bool
+
+    var body: some View {
+        ZStack {
+            Circle().strokeBorder(lineWidth: 1.35)
+            AnalysisSelectionMark(checkmark: checkmark)
+                .stroke(style: StrokeStyle(lineWidth: 1.7, lineCap: .round, lineJoin: .round))
+                .frame(width: 12, height: 12)
+        }
+        .frame(width: 20, height: 20)
+        .accessibilityHidden(true)
     }
 }
 
-/// 扫描类型面板：标题加说明，点选后立即执行对应扫描。
-/// 选中态是液态玻璃透镜，在条目之间做 matchedGeometry 过渡；面板本身也是玻璃，
-/// 不再铺实色底。
-private struct AnalyzeScanMenu: View {
-    let selection: AnalyzeMode
-    let title: (AnalyzeMode) -> String
-    let detail: (AnalyzeMode) -> String
-    let onSelect: (AnalyzeMode) -> Void
+private struct AnalysisSelectionMark: Shape {
+    let checkmark: Bool
 
-    @Namespace private var selectionNamespace
+    func path(in rect: CGRect) -> Path {
+        Path { path in
+            if checkmark {
+                path.move(to: CGPoint(x: rect.minX + rect.width * 0.12, y: rect.minY + rect.height * 0.53))
+                path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.39, y: rect.minY + rect.height * 0.79))
+                path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.88, y: rect.minY + rect.height * 0.22))
+            } else {
+                path.move(to: CGPoint(x: rect.minX + rect.width * 0.15, y: rect.midY))
+                path.addLine(to: CGPoint(x: rect.minX + rect.width * 0.85, y: rect.midY))
+            }
+        }
+    }
+}
+
+private struct AnalysisSelectionButtonStyle: ButtonStyle {
+    let isActive: Bool
+    let id: String
+    let namespace: Namespace.ID
+    @Environment(\.isEnabled) private var isEnabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.controlActiveState) private var controlActiveState
+    @State private var isHovering = false
+    private var shape: Circle { Circle() }
 
-    private var menuShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
+    @ViewBuilder func makeBody(configuration: Configuration) -> some View {
+        Group {
+            if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
+                icon(configuration)
+                    .glassEffect(glass(configuration), in: shape)
+                    .glassEffectID(isActive ? "selection" : id, in: namespace)
+                    .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+                    .clipGlassEdge(in: shape)
+            } else {
+                icon(configuration)
+                    .background {
+                        if isActive || (isEnabled && (isHovering || configuration.isPressed)) {
+                            GlassSurface(cornerRadius: 16, usesSystemGlass: false, highlighted: isActive)
+                        }
+                    }
+            }
+        }
+        .opacity(isEnabled ? 1 : isActive ? 0.75 : 0.4)
+        .scaleEffect(reduceMotion || !isEnabled || !configuration.isPressed ? 1 : 0.94)
+        .onHover { isHovering = $0 }
+        .animation(reduceMotion ? nil : MoleMotion.press, value: configuration.isPressed)
+        .animation(reduceMotion ? nil : MoleMotion.hover, value: isHovering)
+        .animation(reduceMotion ? nil : MoleMotion.selection, value: isActive)
     }
+
+    private func icon(_ configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isActive ? Color.moleAccentText
+                : isEnabled && (isHovering || configuration.isPressed) ? Color.primary : Color.secondary)
+            .frame(width: 32, height: 32)
+            .contentShape(shape)
+    }
+
+    @available(macOS 26.0, *)
+    private func glass(_ configuration: Configuration) -> Glass {
+        let visible = isActive || (isEnabled && (isHovering || configuration.isPressed))
+        return (visible ? Glass.regular.tint(isActive ? Color.moleAccent.opacity(0.24) : .clear) : .identity)
+            .interactive(isEnabled && !reduceMotion)
+    }
+}
+
+private struct AnalysisIconButtonStyle: ButtonStyle {
+    var quiet = false
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @ViewBuilder func makeBody(configuration: Configuration) -> some View {
+        Group {
+            if quiet {
+                icon(configuration)
+            } else {
+                icon(configuration).modifier(ActionGlassChrome())
+            }
+        }
+        .opacity(isEnabled ? 1 : 0.5)
+        .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.96)
+        .animation(reduceMotion ? nil : MoleMotion.press, value: configuration.isPressed)
+    }
+
+    private func icon(_ configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(quiet ? Color.secondary : isEnabled ? Color.primary : Color.secondary)
+            .frame(width: 28, height: 28)
+            .contentShape(Capsule())
+    }
+}
+
+private struct AnalysisActionButtonStyle: ButtonStyle {
+    let tint: Color
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(isEnabled ? tint : Color.secondary)
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .contentShape(Capsule())
+            .modifier(ActionGlassChrome(tint: isEnabled ? tint : nil))
+            .opacity(isEnabled ? 1 : 0.45)
+            .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
+    }
+}
+
+private struct AnalysisDeletionRequest {
+    let mode: AnalyzeMode
+    let paths: [String]
+}
+
+extension AnalyzeMode {
+    var symbol: String {
+        self == .disk ? "internaldrive" : self == .duplicates ? "square.on.square" : (section?.symbol ?? "doc")
+    }
+}
+
+private struct AnalyzeSidebar: View {
+    @Binding var selection: AnalyzeMode
+    let details: [AnalyzeMode: String]
+    let scanningMode: AnalyzeMode?
+    let isSearching: Bool
+    @ObservedObject private var l10n = L10n.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var namespace
 
     var body: some View {
-        // 面板玻璃和选中透镜放在同一组里，合成成一块液态玻璃，而不是两层叠色。
-        LiquidGlassGroup {
-            VStack(alignment: .leading, spacing: 1) {
-                ForEach(AnalyzeMode.menuOrder) { mode in
-                    Button { onSelect(mode) } label: {
-                        scanRow(mode)
+        VStack(alignment: .leading, spacing: 10) {
+            LiquidGlassGroup {
+                VStack(spacing: 3) {
+                    ForEach(AnalyzeMode.menuOrder) { item in
+                        Button { selection = item } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: item.symbol).font(.system(size: 13, weight: .medium)).frame(width: 18)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(l10n.t(item.titleKey))
+                                        .font(.system(size: 12, weight: selection == item ? .semibold : .medium))
+                                    Text(scanningMode == item ? l10n.t("analyze.scanning") : details[item] ?? "")
+                                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                Spacer(minLength: 0)
+                                if scanningMode == item { ProgressView().controlSize(.mini) }
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 11)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(RoundedRectangle(cornerRadius: 10))
+                            .modifier(AnalysisSelectionLens(selected: selection == item, namespace: namespace))
+                        }
+                        .buttonStyle(MolePlainButtonStyle(pressedScale: 0.98))
+                        .accessibilityAddTraits(selection == item ? .isSelected : [])
+                        .accessibilityIdentifier("analysis-section-" + item.rawValue)
                     }
-                    .buttonStyle(.plain)
                 }
             }
-            .padding(4)
-            .modifier(ScanMenuChrome(reduceMotion: reduceMotion,
-                                     reduceTransparency: reduceTransparency,
-                                     shape: menuShape))
-        }
-        .shadow(color: .black.opacity(0.12), radius: 16, y: 8)
-    }
-
-    private func scanRow(_ mode: AnalyzeMode) -> some View {
-        let selected = mode == selection
-        return VStack(alignment: .leading, spacing: 1) {
-            Text(title(mode))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(selected ? Color.primary : Color.secondary)
-            Text(detail(mode))
-                .font(.system(size: 10))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background {
-            if selected {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.clear)
-                    .matchedGeometryEffect(id: "scan-selection", in: selectionNamespace)
+            Spacer(minLength: 0)
+            if isSearching {
+                HStack(spacing: 0) {
+                    NoriStatusAnimation(mood: .working, size: 36, assetName: "nori-working")
+                    Spacer(minLength: 0)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(l10n.t("analyze.scanning"))
+                .accessibilityIdentifier("analysis-search-activity")
             }
         }
-        .modifier(ScanSelectionGlass(selected: selected,
-                                     id: mode.rawValue,
-                                     namespace: selectionNamespace,
-                                     reduceMotion: reduceMotion,
-                                     reduceTransparency: reduceTransparency))
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .animation(reduceMotion ? nil : MoleMotion.selection, value: selection)
+        .accessibilityIdentifier("analysis-sidebar")
     }
 }
 
-/// 菜单玻璃必须包住内容。实色底会盖住折射，看起来就像玻璃没生效。
-private struct ScanMenuChrome: ViewModifier {
-    var reduceMotion: Bool
-    var reduceTransparency: Bool
-    var shape: RoundedRectangle
+private struct AnalysisSelectionLens: ViewModifier {
+    let selected: Bool
+    let namespace: Namespace.ID
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.controlActiveState) private var controlActiveState
 
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
-            content
-                .glassEffect(Glass.regular.interactive(!reduceMotion), in: shape)
-                .clipGlassEdge(in: shape)
-        } else {
-            content.background(GlassSurface(cornerRadius: 14, usesSystemGlass: false))
-        }
-    }
-}
-
-/// 选中行的玻璃透镜。文字是 glassEffect 的内容，不能把玻璃垫在文字后面。
-private struct ScanSelectionGlass: ViewModifier {
-    var selected: Bool
-    var id: String
-    var namespace: Namespace.ID
-    var reduceMotion: Bool
-    var reduceTransparency: Bool
-    @Environment(\.controlActiveState) private var controlActiveState
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *), !reduceTransparency, selected, controlActiveState == .key {
-            content
-                .glassEffect(
-                    Glass.regular
-                        .tint(Color.accent.opacity(0.22))
-                        .interactive(!reduceMotion),
-                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                )
-                .glassEffectID(id, in: namespace)
-                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
-                .clipGlassEdge(in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        } else if selected {
-            content.background(GlassSurface(cornerRadius: 8, usesSystemGlass: false,
-                                             highlighted: true))
-        } else {
-            content
-        }
+    @ViewBuilder func body(content: Content) -> some View {
+        if selected {
+            if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
+                content.glassEffect(.regular.interactive(!reduceMotion), in: RoundedRectangle(cornerRadius: 10))
+                    .glassEffectID("analysis-selection", in: namespace)
+                    .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+            } else {
+                content.background(GlassSurface(cornerRadius: 10, usesSystemGlass: false, highlighted: true))
+            }
+        } else { content }
     }
 }

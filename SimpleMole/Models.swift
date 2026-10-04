@@ -490,7 +490,8 @@ enum CleanupFamily: String {
 struct GcAction: Identifiable, Equatable {
     let id: String
     let command: String
-    let bytes: UInt64
+    /// nil means the cleanup command has no reliable size estimate.
+    let bytes: UInt64?
 }
 
 /// macOS `ps state` 映射。只有首字符 `Z` 代表已经死亡的僵尸进程；
@@ -1034,6 +1035,8 @@ struct AnalyzeReport: Codable {
     /// Bounded examples of incomplete traversal, with the full issue count.
     var scanIssues: [ScanIssue]? = nil
     var scanIssueCount: Int? = nil
+    /// Temporary Git checkouts are inspection-only.
+    var temporaryProjects: [AnalyzeEntry]? = nil
 
     struct ScanIssue: Codable {
         enum Kind: String, Codable { case readFailure, otherVolume, cancelled }
@@ -1059,6 +1062,7 @@ struct AnalyzeReport: Codable {
 
     enum CodingKeys: String, CodingKey {
         case path, overview, entries, isPartial, error, media, scanIssues, scanIssueCount
+        case temporaryProjects = "temporary_projects"
         case mediaSummary = "media_summary"
         case largeFiles = "large_files"
         case totalSize = "total_size"

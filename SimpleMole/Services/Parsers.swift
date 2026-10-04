@@ -93,8 +93,7 @@ enum Parsers {
         let backups = rows.map(\.detail).filter { $0.contains("backup") }
         let done = rows.filter { $0.state == "ok" }.count
         let skipped = rows.filter { $0.state == "skip" }.count
-        var summary = "\(done)/\(rows.count) steps"
-        if skipped > 0 { summary += ", \(skipped) skipped" }
+        var summary = L10n.shared.tf("audit.network.resetSummary", done, rows.count, skipped)
         if let first = backups.first, let open = first.firstIndex(of: "(") {
             summary += " \(first[open...])"
         }

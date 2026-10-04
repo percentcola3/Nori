@@ -3,13 +3,8 @@
 
 simplemole_active_bin_dir() {
     local command_name="$1"
-    local command_path="" resolved="" link_target="" candidate="" hops=0
+    local command_path="" resolved="" link_target="" hops=0
     command_path=$(command -v "$command_name" 2>/dev/null) || command_path=""
-    if [[ -z "$command_path" ]]; then
-        for candidate in "/opt/homebrew/bin/$command_name" "/usr/local/bin/$command_name"; do
-            if [[ -x "$candidate" ]]; then command_path="$candidate"; break; fi
-        done
-    fi
     [[ "$command_path" == /* ]] || return 1
     resolved="$command_path"
     while [[ -L "$resolved" && $hops -lt 8 ]]; do
@@ -127,6 +122,9 @@ simplemole_nvm_path_safe_to_delete() {
 
     local active_bin="" active_relative="" active_version="" active_dir=""
     active_bin=$(simplemole_active_bin_dir node) || active_bin=""
+    # An installation outside PATH does not establish the sampled active tool.
+    # Preserve nvm content when that source cannot be resolved.
+    [[ -n "$active_bin" ]] || return 1
     case "$active_bin" in
         "$root"/*)
             active_relative="${active_bin#"$root"/}"

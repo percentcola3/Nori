@@ -56,7 +56,7 @@ enum SimulatorInventoryError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidPayload:
-            return "simctl returned an invalid device inventory"
+            return L10n.shared.t("audit.simulator.invalidPayload")
         }
     }
 }

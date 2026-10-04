@@ -4,6 +4,12 @@ import SwiftUI
 /// While working, only the current file changes; result feedback appears after completion.
 struct NoriCleanupTaskStage: View {
     enum Phase: Hashable { case working, success, attention }
+    enum ScanSource {
+        case cleanup, agents
+
+        var titleKey: String { self == .agents ? "agents.scan" : "cleanup.scan" }
+        var symbol: String { self == .agents ? "sparkle.magnifyingglass" : "magnifyingglass" }
+    }
 
     let phase: Phase
     var progress: CleanupTaskProgress? = nil
@@ -13,8 +19,9 @@ struct NoriCleanupTaskStage: View {
     var completedCount = 0
     var reclaimedBytes: UInt64 = 0
     var feedbackID = 0
-    var retryAvailable = false
-    var onRetry: (() -> Void)? = nil
+    var scanSource: ScanSource = .cleanup
+    var scanDisabled = false
+    var onScan: (() -> Void)? = nil
 
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -67,14 +74,14 @@ struct NoriCleanupTaskStage: View {
         case .working:
             NoriCurrentFileView(path: progress?.phase == .cleaning ? progress?.currentItem ?? "" : "")
         case .success:
-            resultCard(icon: "checkmark.circle.fill", tint: .success) {
+            resultSummary(icon: "checkmark.circle.fill", tint: .success) {
                 Text(l10n.tf("cleanup.task.reclaimed", ByteFormat.format(reclaimedBytes)))
                     .font(.system(size: 17, weight: .semibold).monospacedDigit())
                     .multilineTextAlignment(.center)
             }
         case .attention:
             VStack(spacing: 14) {
-                resultCard(icon: "exclamationmark.triangle.fill", tint: .danger) {
+                resultSummary(icon: "exclamationmark.triangle.fill", tint: .danger) {
                     Text(l10n.t("cleanup.task.failed"))
                         .font(.system(size: 15, weight: .semibold))
                         .multilineTextAlignment(.center)
@@ -88,24 +95,30 @@ struct NoriCleanupTaskStage: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if !details.isEmpty {
-                    ScrollView {
-                        Text(details.joined(separator: "\n\n"))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .center)
+                    ViewThatFits(in: .vertical) {
+                        detailText
+                        ScrollView { detailText }
                     }
                     .frame(maxHeight: maxDetailHeight)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                cleanupButton
+                scanButton
             }
         }
     }
 
-    /// 结果摘要卡：surface 底色承托状态图标与关键数字，动画后随舞台一起离场。
-    private func resultCard<Label: View>(icon: String, tint: Color,
+    private var detailText: some View {
+        Text(details.joined(separator: "\n\n"))
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    /// 图标和文字直接显示在结果舞台上，不再单独垫一层卡片。
+    private func resultSummary<Label: View>(icon: String, tint: Color,
                                          @ViewBuilder label: () -> Label) -> some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
@@ -113,19 +126,17 @@ struct NoriCleanupTaskStage: View {
                 .foregroundStyle(tint)
             label()
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.surface2))
-        .fixedSize(horizontal: true, vertical: false)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder
-    private var cleanupButton: some View {
-        if let onRetry {
-            Button(action: onRetry) {
-                Label(l10n.t("cleanup.quickClean"), systemImage: "trash.fill")
+    private var scanButton: some View {
+        if let onScan {
+            Button(action: onScan) {
+                Label(l10n.t(scanSource.titleKey), systemImage: scanSource.symbol)
             }
             .buttonStyle(PrimaryButtonStyle())
+            .disabled(scanDisabled)
         }
     }
 }

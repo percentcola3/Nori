@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 enum EditorTool: String, CaseIterable, Identifiable {
     case rect, ellipse, arrow, pen, text, mosaic
     var id: String { rawValue }
+    var cursor: NSCursor { self == .text ? .iBeam : .crosshair }
     var icon: String {
         switch self {
         case .rect: return "rectangle"
@@ -30,9 +31,124 @@ struct Stroke: Identifiable {
     var text: String = ""
 }
 
+/// Derive indices from shape order so moving/resizing keeps them and undo reuses the last index.
+enum AnnotationIndexing {
+    static func numberedShapes(in strokes: [Stroke]) -> [(number: Int, stroke: Stroke)] {
+        strokes.filter { ($0.kind == .rect || $0.kind == .ellipse) && $0.points.count >= 2 }
+            .enumerated().map { (number: $0.offset + 1, stroke: $0.element) }
+    }
+
+    static func badgeRect(for bounds: CGRect, number: Int, canvasSize: CGSize,
+                          drawingScale: CGFloat) -> CGRect {
+        let margin = 2 * drawingScale
+        let height = min(16 * drawingScale, max(0, canvasSize.height - 2 * margin))
+        let width = min(max(16, CGFloat(String(number).count) * 6 + 8) * drawingScale,
+                        max(0, canvasSize.width - 2 * margin))
+        // Sit just above the upper-left border; clamp at image edges to keep every digit visible.
+        return CGRect(x: max(margin, min(bounds.minX + 4 * drawingScale, canvasSize.width - margin - width)),
+                      y: max(margin, min(bounds.minY - height - 4 * drawingScale, canvasSize.height - margin - height)),
+                      width: width, height: height)
+    }
+}
+
+/// Shape editing uses a snapshot from drag start, so repeated updates never compound deltas.
+enum AnnotationShapeEditing {
+    enum Handle: Int, CaseIterable {
+        case topLeft, top, topRight, right, bottomRight, bottom, bottomLeft, left
+        var horizontal: Int {
+            switch self {
+            case .topLeft, .bottomLeft, .left: return -1
+            case .topRight, .bottomRight, .right: return 1
+            default: return 0
+            }
+        }
+        var vertical: Int {
+            switch self {
+            case .topLeft, .top, .topRight: return -1
+            case .bottomLeft, .bottom, .bottomRight: return 1
+            default: return 0
+            }
+        }
+        func point(in rect: CGRect) -> CGPoint {
+            CGPoint(x: horizontal < 0 ? rect.minX : horizontal > 0 ? rect.maxX : rect.midX,
+                    y: vertical < 0 ? rect.minY : vertical > 0 ? rect.maxY : rect.midY)
+        }
+    }
+    struct Target {
+        let id: UUID
+        let handle: Handle?
+        var cursor: NSCursor {
+            guard let handle else { return .openHand }
+            if handle.horizontal == 0 { return .resizeUpDown }
+            if handle.vertical == 0 { return .resizeLeftRight }
+            return .crosshair
+        }
+    }
+    struct Session {
+        let target: Target
+        let original: Stroke
+        let start: CGPoint
+    }
+    static func supports(_ stroke: Stroke) -> Bool {
+        (stroke.kind == .rect || stroke.kind == .ellipse) && stroke.points.count >= 2
+    }
+    static func hit(at point: CGPoint, size: CGSize, strokes: [Stroke], selected: UUID?) -> Target? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        func bounds(_ stroke: Stroke) -> CGRect {
+            CGRect(points: stroke.points.map { CGPoint(x: $0.x * size.width, y: $0.y * size.height) })
+        }
+        if let stroke = strokes.first(where: { $0.id == selected && supports($0) }) {
+            let rect = bounds(stroke)
+            for handle in Handle.allCases {
+                let p = handle.point(in: rect)
+                if hypot(point.x - p.x, point.y - p.y) <= 9 {
+                    return Target(id: stroke.id, handle: handle)
+                }
+            }
+        }
+        // Borders select shapes; empty interiors remain available for drawing nested annotations.
+        for stroke in strokes.reversed() where supports(stroke) {
+            let rect = bounds(stroke)
+            let onBorder: Bool
+            if stroke.kind == .ellipse, rect.width > 0, rect.height > 0 {
+                let radius = hypot((point.x - rect.midX) / (rect.width / 2),
+                                   (point.y - rect.midY) / (rect.height / 2))
+                onBorder = abs(radius - 1) * min(rect.width, rect.height) / 2 <= 7
+            } else {
+                onBorder = rect.insetBy(dx: -7, dy: -7).contains(point)
+                    && !rect.insetBy(dx: 7, dy: 7).contains(point)
+            }
+            if onBorder { return Target(id: stroke.id, handle: nil) }
+        }
+        if let stroke = strokes.first(where: { $0.id == selected && supports($0) }),
+           bounds(stroke).contains(point) { return Target(id: stroke.id, handle: nil) }
+        return nil
+    }
+    static func updated(_ session: Session, to point: CGPoint, size: CGSize) -> Stroke {
+        var stroke = session.original
+        let rect = CGRect(points: stroke.points)
+        var x0 = rect.minX, x1 = rect.maxX, y0 = rect.minY, y1 = rect.maxY
+        let dx = point.x - session.start.x, dy = point.y - session.start.y
+        if let handle = session.target.handle {
+            let minimumX = min(rect.width, 4 / max(1, size.width))
+            let minimumY = min(rect.height, 4 / max(1, size.height))
+            if handle.horizontal < 0 { x0 = max(0, min(x1 - minimumX, x0 + dx)) }
+            if handle.horizontal > 0 { x1 = min(1, max(x0 + minimumX, x1 + dx)) }
+            if handle.vertical < 0 { y0 = max(0, min(y1 - minimumY, y0 + dy)) }
+            if handle.vertical > 0 { y1 = min(1, max(y0 + minimumY, y1 + dy)) }
+        } else {
+            let boundedX = min(1 - x1, max(-x0, dx))
+            let boundedY = min(1 - y1, max(-y0, dy))
+            x0 += boundedX; x1 += boundedX; y0 += boundedY; y1 += boundedY
+        }
+        stroke.points = [CGPoint(x: x0, y: y0), CGPoint(x: x1, y: y1)]
+        return stroke
+    }
+}
+
 /// AppKit owns cursor entry/exit so closing or resizing the editor cannot leak a cursor stack.
 /// The view passes all clicks through to the annotation gesture and text editor.
-private struct EditorCursorRegion: NSViewRepresentable {
+struct EditorCursorRegion: NSViewRepresentable {
     let cursor: NSCursor
 
     func makeNSView(context: Context) -> CursorView {
@@ -45,7 +161,13 @@ private struct EditorCursorRegion: NSViewRepresentable {
     }
 
     final class CursorView: NSView {
-        var cursor: NSCursor
+        var cursor: NSCursor {
+            didSet {
+                if isPointerInside, window?.isKeyWindow == true { cursor.set() }
+            }
+        }
+        private var cursorTrackingArea: NSTrackingArea?
+        private var isPointerInside = false
 
         init(cursor: NSCursor) {
             self.cursor = cursor
@@ -55,6 +177,42 @@ private struct EditorCursorRegion: NSViewRepresentable {
         required init?(coder: NSCoder) { nil }
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func updateTrackingAreas() {
+            if let cursorTrackingArea { removeTrackingArea(cursorTrackingArea) }
+            super.updateTrackingAreas()
+            // Cursor rects alone can be superseded by NSHostingView's arrow.
+            // Tracking still delivers hover events when hitTest passes clicks through.
+            let area = NSTrackingArea(rect: .zero,
+                                      options: [.inVisibleRect, .activeInKeyWindow,
+                                                .cursorUpdate, .mouseEnteredAndExited,
+                                                .mouseMoved, .enabledDuringMouseDrag],
+                                      owner: self, userInfo: nil)
+            addTrackingArea(area)
+            cursorTrackingArea = area
+        }
+
+        override func cursorUpdate(with event: NSEvent) { cursor.set() }
+
+        override func mouseEntered(with event: NSEvent) {
+            isPointerInside = true
+            cursor.set()
+        }
+
+        override func mouseMoved(with event: NSEvent) { cursor.set() }
+
+        override func mouseExited(with event: NSEvent) {
+            isPointerInside = false
+            NSCursor.arrow.set()
+        }
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            if newWindow == nil, isPointerInside {
+                isPointerInside = false
+                NSCursor.arrow.set()
+            }
+            super.viewWillMove(toWindow: newWindow)
+        }
 
         override func resetCursorRects() {
             super.resetCursorRects()
@@ -81,6 +239,10 @@ struct ScreenshotEditorView: View {
 
     @State private var strokes: [Stroke] = []
     @State private var draft: Stroke?
+    @State private var selectedStrokeID: UUID?
+    @State private var editSession: AnnotationShapeEditing.Session?
+    @State private var dragStarted = false
+    @State private var hoverCursor: NSCursor?
     @State private var tool: EditorTool = .rect
     @State private var colorIndex = 0
     @State private var composition: ScreenshotComposition
@@ -144,6 +306,8 @@ struct ScreenshotEditorView: View {
             ForEach(EditorTool.allCases) { t in
                 Button {
                     tool = t
+                    selectedStrokeID = nil
+                    hoverCursor = nil
                 } label: {
                     Image(systemName: t.icon)
                         .font(.system(size: 12, weight: .medium))
@@ -169,6 +333,8 @@ struct ScreenshotEditorView: View {
             Divider().frame(height: 18)
             Button {
                 strokes.removeLast()
+                selectedStrokeID = nil
+                hoverCursor = nil
             } label: {
                 Image(systemName: "arrow.uturn.backward")
                     .font(.system(size: 12, weight: .medium))
@@ -196,9 +362,42 @@ struct ScreenshotEditorView: View {
                 .frame(width: displaySize.width, height: displaySize.height)
                 .contentShape(Rectangle())
                 .gesture(dragGesture)
+            selectionOverlay.allowsHitTesting(false)
         }
-        .overlay(EditorCursorRegion(cursor: tool == .text ? .iBeam : .crosshair))
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let point):
+                hoverCursor = shapeTarget(at: point)?.cursor
+            case .ended: hoverCursor = nil
+            }
+        }
+        .overlay(EditorCursorRegion(cursor: editSession.map {
+            $0.target.handle == nil ? .closedHand : $0.target.cursor
+        } ?? hoverCursor ?? tool.cursor))
         .overlay(pendingTextOverlay)
+    }
+
+    private func shapeTarget(at point: CGPoint) -> AnnotationShapeEditing.Target? {
+        guard tool == .rect || tool == .ellipse else { return nil }
+        return AnnotationShapeEditing.hit(at: point, size: displaySize, strokes: strokes,
+                                          selected: selectedStrokeID)
+    }
+
+    private var selectionOverlay: some View {
+        Canvas { context, size in
+            guard let stroke = strokes.first(where: { $0.id == selectedStrokeID }),
+                  AnnotationShapeEditing.supports(stroke) else { return }
+            let rect = CGRect(points: stroke.points.map { CGPoint(x: $0.x * size.width, y: $0.y * size.height) })
+            context.stroke(Path(rect), with: .color(.moleAccent),
+                           style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            for handle in AnnotationShapeEditing.Handle.allCases {
+                let point = handle.point(in: rect)
+                let path = Path(ellipseIn: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))
+                context.fill(path, with: .color(.surface1))
+                context.stroke(path, with: .color(.moleAccent), lineWidth: 2)
+            }
+        }
+        .frame(width: displaySize.width, height: displaySize.height)
     }
 
     private var canvasArea: some View {
@@ -225,7 +424,21 @@ struct ScreenshotEditorView: View {
         DragGesture(minimumDistance: 0, coordinateSpace: .local)
             .onChanged { value in
                 guard tool != .text else { return }
+                if !dragStarted {
+                    dragStarted = true
+                    if let target = shapeTarget(at: value.startLocation),
+                       let original = strokes.first(where: { $0.id == target.id }) {
+                        selectedStrokeID = target.id
+                        editSession = .init(target: target, original: original, start: normalized(value.startLocation))
+                    } else {
+                        selectedStrokeID = nil
+                    }
+                }
                 let p = normalized(value.location)
+                if let editSession, let index = strokes.firstIndex(where: { $0.id == editSession.target.id }) {
+                    strokes[index] = AnnotationShapeEditing.updated(editSession, to: p, size: displaySize)
+                    return
+                }
                 if draft == nil {
                     guard tool != .mosaic || strokes.count + 1 <= 400 else { return }
                     draft = Stroke(kind: kindFor(tool), colorIndex: colorIndex, points: [p])
@@ -234,6 +447,11 @@ struct ScreenshotEditorView: View {
                 }
             }
             .onEnded { value in
+                defer { editSession = nil; dragStarted = false; hoverCursor = nil }
+                if let editSession, let index = strokes.firstIndex(where: { $0.id == editSession.target.id }) {
+                    strokes[index] = AnnotationShapeEditing.updated(editSession, to: normalized(value.location), size: displaySize)
+                    return
+                }
                 guard tool != .text else {
                     pendingTextAt = normalized(value.location)
                     pendingTextInput = ""
@@ -242,11 +460,13 @@ struct ScreenshotEditorView: View {
                 if var stroke = draft {
                     stroke.points.append(normalized(value.location))
                     // 单击（矩形/椭圆）给最小尺寸，避免零面积不可见
-                    if stroke.points.count == 2, stroke.kind == .rect || stroke.kind == .ellipse {
+                    if stroke.points.count == 2, stroke.points[0] == stroke.points[1],
+                       stroke.kind == .rect || stroke.kind == .ellipse {
                         stroke.points[1] = CGPoint(x: min(1, stroke.points[0].x + 0.05),
                                                    y: min(1, stroke.points[0].y + 0.05))
                     }
                     strokes.append(stroke)
+                    selectedStrokeID = AnnotationShapeEditing.supports(stroke) ? stroke.id : nil
                 }
                 draft = nil
             }
@@ -519,6 +739,21 @@ struct AnnotationCanvas: View {
                 Self.draw(stroke, points: points, color: color,
                           in: &context, canvasSize: canvasSize,
                           drawingScale: drawingScale, pixelated: pixelated)
+            }
+            // Draw indices last so overlapping annotations cannot hide the reference numbers.
+            for (number, stroke) in AnnotationIndexing.numberedShapes(in: strokes) {
+                let bounds = CGRect(points: stroke.points.map {
+                    CGPoint(x: $0.x * canvasSize.width, y: $0.y * canvasSize.height)
+                })
+                let badge = AnnotationIndexing.badgeRect(for: bounds, number: number,
+                                                        canvasSize: canvasSize, drawingScale: drawingScale)
+                let colorIndex = stroke.colorIndex % editorColors.count
+                context.fill(Path(roundedRect: badge, cornerRadius: 8 * drawingScale),
+                             with: .color(editorColors[colorIndex]))
+                context.draw(Text(verbatim: String(number))
+                    .font(.system(size: 10 * drawingScale, weight: .bold, design: .rounded))
+                    .foregroundColor(colorIndex == 0 || colorIndex == 4 ? Color.black : Color.white),
+                    at: CGPoint(x: badge.midX, y: badge.midY))
             }
         }
     }

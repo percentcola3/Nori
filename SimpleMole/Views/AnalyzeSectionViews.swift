@@ -85,6 +85,7 @@ struct SlimSectionCard: View {
 struct DuplicatesSectionCard: View {
     @ObservedObject var state: AppState
     let onPreview: (String) -> Void
+    var showsControls = true
     @ObservedObject private var l10n = L10n.shared
 
     @State private var collapsedGroups: Set<String> = []
@@ -96,8 +97,10 @@ struct DuplicatesSectionCard: View {
 
     var body: some View {
         LazyVStack(spacing: 8) {
-            headerRow
-            statusLine
+            if showsControls {
+                headerRow
+                statusLine
+            }
             if state.duplicateMode == .similarImages && !state.duplicateGroups.isEmpty {
                 Text(l10n.t("duplicates.similar.hint"))
                     .font(.system(size: 10))
@@ -237,7 +240,7 @@ struct DuplicatesSectionCard: View {
                             isSelected: state.duplicateSelection.contains(member.path),
                             canSelect: DuplicateSelectionPolicy.canSelect(
                                 isSelected: state.duplicateSelection.contains(member.path),
-                                unselectedCount: unselectedCount), disabled: state.isBusy,
+                                unselectedCount: unselectedCount), disabled: state.isBusy || state.isScanningDuplicates,
                             onToggle: { state.toggleDuplicateSelection(member) },
                             onPreview: { onPreview(member.path) })
                     }
@@ -291,14 +294,17 @@ struct DuplicateFileRow: View {
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(MoleSelectableRowButtonStyle(isSelected: isSelected, verticalPadding: 6))
+            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.99))
             .disabled(disabled || !canSelect)
+            .opacity(disabled || !canSelect ? 0.45 : 1)
             .accessibilityLabel(member.path)
             .accessibilityValue(isSelected ? l10n.t("duplicates.row.selected") : l10n.t("duplicates.row.kept"))
             Button(action: onPreview) { Image(systemName: "eye") }
-                .buttonStyle(MoleIconButtonStyle(size: 26))
+                .buttonStyle(MoleIconButtonStyle(size: 26, showsBackground: false))
+                .help(l10n.t("duplicates.preview"))
                 .accessibilityLabel(l10n.t("duplicates.preview") + ": " + member.name)
                 .disabled(disabled)
             Button {
@@ -306,10 +312,13 @@ struct DuplicateFileRow: View {
             } label: {
                 Image(systemName: "folder")
             }
-            .buttonStyle(MoleIconButtonStyle(size: 26))
+            .buttonStyle(MoleIconButtonStyle(size: 26, showsBackground: false))
+            .help(l10n.t("duplicates.reveal"))
             .accessibilityLabel(l10n.t("duplicates.reveal") + ": " + member.name)
             .disabled(disabled)
         }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .modifier(ListRowGlass(selected: isSelected))
     }
 }
 

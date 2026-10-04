@@ -8,6 +8,12 @@ enum AutoCleanupPolicy: String, Codable, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
+struct AutoCleanupRoot: Codable, Equatable, Sendable {
+    let directory: String
+    var authorizedIdentity: String?
+}
+
+/// One scheduled task with a shared policy across all of its cache roots.
 struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
     static let currentSafetyVersion = 4
     static let safetyToken = "safe-trash-v4"
@@ -16,6 +22,8 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
 
     var id: UUID
     var directory: String
+    var sourceName: String?
+    var additionalRoots: [AutoCleanupRoot]
     var policy: AutoCleanupPolicy
     var sizeLimitBytes: UInt64
     var retentionDays: Int
@@ -34,11 +42,20 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
 
     var isSafetyAuthorized: Bool {
         isRegenerable && safetyVersion == Self.currentSafetyVersion
-            && Self.isCurrentRootIdentity(authorizedRootIdentity)
+            && roots.allSatisfy { Self.isCurrentRootIdentity($0.authorizedIdentity) }
     }
+
+    var roots: [AutoCleanupRoot] {
+        [AutoCleanupRoot(directory: directory, authorizedIdentity: authorizedRootIdentity)]
+            + additionalRoots
+    }
+
+    var directories: [String] { roots.map(\.directory) }
 
     init(id: UUID = UUID(),
          directory: String,
+         sourceName: String? = nil,
+         additionalRoots: [AutoCleanupRoot] = [],
          policy: AutoCleanupPolicy,
          sizeLimitBytes: UInt64,
          retentionDays: Int,
@@ -52,6 +69,8 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
          totalReclaimedBytes: UInt64 = 0) {
         self.id = id
         self.directory = directory
+        self.sourceName = sourceName
+        self.additionalRoots = additionalRoots
         self.policy = policy
         self.sizeLimitBytes = sizeLimitBytes
         self.retentionDays = retentionDays
@@ -67,10 +86,12 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
         self.totalReclaimedBytes = totalReclaimedBytes
         self.isEnabled = isEnabled && isRegenerable
             && Self.isCurrentRootIdentity(resolvedRootIdentity)
+            && additionalRoots.allSatisfy { Self.isCurrentRootIdentity($0.authorizedIdentity) }
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, directory, policy, sizeLimitBytes, retentionDays, isEnabled
+        case id, directory, sourceName, policy, sizeLimitBytes, retentionDays, isEnabled
+        case additionalRoots
         case isRegenerable, safetyVersion, authorizedRootIdentity
         case lastRunAt, lastReclaimedBytes
         case executionCount, totalReclaimedBytes
@@ -80,6 +101,8 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(UUID.self, forKey: .id)
         directory = try values.decode(String.self, forKey: .directory)
+        sourceName = try values.decodeIfPresent(String.self, forKey: .sourceName)
+        additionalRoots = try values.decodeIfPresent([AutoCleanupRoot].self, forKey: .additionalRoots) ?? []
         policy = try values.decode(AutoCleanupPolicy.self, forKey: .policy)
         sizeLimitBytes = try values.decode(UInt64.self, forKey: .sizeLimitBytes)
         retentionDays = try values.decode(Int.self, forKey: .retentionDays)
@@ -93,6 +116,7 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
         let hasCurrentAuthorization = requestedRegenerable
             && decodedSafetyVersion == Self.currentSafetyVersion
             && identityFormatValid
+            && additionalRoots.allSatisfy { Self.isCurrentRootIdentity($0.authorizedIdentity) }
         // 运行时授权保持保守：安全版本或身份过期时规则一律视为未确认。
         // 但存储中的授权数据按原样保留——升级（或回滚）后重新勾选
         // “仅可再生内容”即可恢复规则，不需要重建，也不因中途保存而销毁。
@@ -120,6 +144,44 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
     private static func isCurrentRootIdentity(_ identity: String?) -> Bool {
         let fields = identity?.split(separator: ":") ?? []
         return fields.count == 3 && fields.allSatisfy { UInt64($0) != nil }
+    }
+}
+
+/// Identifies sources when migrating older directory rules to a single task.
+struct AutoCleanupRuleGroup: Identifiable, Equatable, Sendable {
+    let id: String
+    let sourceName: String?
+    var rules: [AutoCleanupRule]
+
+    static func groups(for rules: [AutoCleanupRule]) -> [Self] {
+        var groups: [Self] = []
+        var indices: [String: Int] = [:]
+        for rule in rules {
+            let explicitName = rule.sourceName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let sourceName = explicitName.flatMap { $0.isEmpty ? nil : $0 }
+                ?? legacySourceName(for: rule.directory)
+            let id = sourceName.map { "source:" + $0 } ?? "directory:" + rule.id.uuidString
+            if let index = indices[id] {
+                groups[index].rules.append(rule)
+            } else {
+                indices[id] = groups.count
+                groups.append(Self(id: id, sourceName: sourceName, rules: [rule]))
+            }
+        }
+        return groups
+    }
+
+    private static func legacySourceName(for directory: String) -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+        let path = URL(fileURLWithPath: directory).standardizedFileURL.path
+        // Older category rules omitted their source. Recognize only Chrome roots
+        // in this user's Library, with a component boundary after Chrome.
+        for relativeRoot in ["Library/Caches/Google/Chrome",
+                             "Library/Application Support/Google/Chrome"] {
+            let root = home.appendingPathComponent(relativeRoot).path
+            if path == root || path.hasPrefix(root + "/") { return "Google" }
+        }
+        return nil
     }
 }
 
@@ -155,7 +217,7 @@ enum AutoCleanupRuleStore {
     static func load(from defaults: UserDefaults = .standard) -> [AutoCleanupRule] {
         guard let data = defaults.data(forKey: storageKey) else { return [] }
         if let rules = try? JSONDecoder().decode([AutoCleanupRule].self, from: data) {
-            return rules
+            return migrate(rules, originalData: data, defaults: defaults)
         }
         guard let entries = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]]
         else { return [] }
@@ -167,7 +229,54 @@ enum AutoCleanupRuleStore {
             else { continue }
             salvaged.append(rule)
         }
-        return salvaged
+        return migrate(salvaged, originalData: data, defaults: defaults)
+    }
+
+    static func consolidatedTasks(from rules: [AutoCleanupRule]) -> [AutoCleanupRule] {
+        AutoCleanupRuleGroup.groups(for: rules).map { group in
+            var task = group.rules[0]
+            task.sourceName = group.sourceName
+            guard group.rules.count > 1 else { return task }
+            var roots: [AutoCleanupRoot] = []
+            var identitiesAgree = true
+            for root in group.rules.flatMap(\.roots) {
+                if let existing = roots.first(where: { $0.directory == root.directory }) {
+                    identitiesAgree = identitiesAgree && existing.authorizedIdentity == root.authorizedIdentity
+                } else {
+                    roots.append(root)
+                }
+            }
+            task.additionalRoots = Array(roots.dropFirst())
+            task.isRegenerable = identitiesAgree && group.rules.allSatisfy(\.isSafetyAuthorized)
+            // Migrating never turns on a previously disabled directory. Different
+            // old policies also require review of the new shared policy.
+            let samePolicy = group.rules.allSatisfy {
+                $0.policy == task.policy && $0.sizeLimitBytes == task.sizeLimitBytes
+                    && $0.retentionDays == task.retentionDays
+            }
+            task.isEnabled = samePolicy && task.isRegenerable && group.rules.allSatisfy(\.isEnabled)
+            task.lastRunAt = group.rules.compactMap(\.lastRunAt).max()
+            task.executionCount = group.rules.map(\.executionCount).max() ?? 0
+            func sum(_ values: [UInt64]) -> UInt64 {
+                values.reduce(0) { result, value in
+                    let (total, overflow) = result.addingReportingOverflow(value)
+                    return overflow ? UInt64.max : total
+                }
+            }
+            task.lastReclaimedBytes = sum(group.rules.map(\.lastReclaimedBytes))
+            task.totalReclaimedBytes = sum(group.rules.map(\.totalReclaimedBytes))
+            return task
+        }
+    }
+
+    private static func migrate(_ rules: [AutoCleanupRule], originalData: Data,
+                                defaults: UserDefaults) -> [AutoCleanupRule] {
+        let tasks = consolidatedTasks(from: rules)
+        if tasks != rules {
+            defaults.set(originalData, forKey: backupKey)
+            save(tasks, to: defaults)
+        }
+        return tasks
     }
 
     static func save(_ rules: [AutoCleanupRule], to defaults: UserDefaults = .standard) {
@@ -197,29 +306,29 @@ enum AutoCleanupPlannerError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidRoot(let path):
-            return "无法访问自动清理目录：\(path)"
+            return L10n.shared.tf("audit.auto.error.invalidRoot", path)
         case .protectedRoot(let path):
-            return "不能将受保护目录用于自动清理：\(path)"
+            return L10n.shared.tf("audit.auto.error.protectedRoot", path)
         case .symbolicLink(let path):
-            return "自动清理目录不能包含软链接路径：\(path)"
+            return L10n.shared.tf("audit.auto.error.symbolicLink", path)
         case .notDirectory(let path):
-            return "自动清理路径不是目录：\(path)"
+            return L10n.shared.tf("audit.auto.error.notDirectory", path)
         case .invalidRetentionDays(let days):
-            return "保留天数必须大于 0，当前为 \(days)"
+            return L10n.shared.tf("audit.auto.error.retention", days)
         case .invalidSizeLimit:
-            return "容量上限必须在 0.1–1024 GB 之间"
+            return L10n.shared.t("audit.auto.error.sizeLimit")
         case .regenerableConfirmationRequired(let path):
-            return "请先确认该目录只包含可再生内容：\(path)"
+            return L10n.shared.tf("audit.auto.error.confirmation", path)
         case .protectedContent(let path):
-            return "目录包含模型、会话、项目或用户数据，不能自动清理：\(path)"
+            return L10n.shared.tf("audit.auto.error.protectedContent", path)
         case .scanFailed(let path):
-            return "无法完整扫描自动清理目录：\(path)"
+            return L10n.shared.tf("audit.auto.error.scanFailed", path)
         case .sizeOverflow(let path):
-            return "目录大小超出可处理范围：\(path)"
+            return L10n.shared.tf("audit.auto.error.sizeOverflow", path)
         case .rootChanged(let path):
-            return "扫描期间自动清理目录发生了变化：\(path)"
+            return L10n.shared.tf("audit.auto.error.rootChanged", path)
         case .rootAuthorizationChanged(let path):
-            return "自动清理目录已被替换，请重新确认仅包含可再生内容：\(path)"
+            return L10n.shared.tf("audit.auto.error.authorizationChanged", path)
         }
     }
 }
@@ -320,9 +429,10 @@ enum AutoCleanupPlanner {
     /// 扫描与计算全部放到 utility 任务中；任何不完整读取都会让整个计划失败。
     static func plan(for rule: AutoCleanupRule,
                      protecting protectedDirectories: [String] = []) async throws -> AutoCleanupPlan {
-        guard !rule.directory.isEmpty,
-              (rule.directory as NSString).isAbsolutePath else {
-            throw AutoCleanupPlannerError.invalidRoot(rule.directory)
+        if let invalid = rule.directories.first(where: {
+            $0.isEmpty || !($0 as NSString).isAbsolutePath
+        }) {
+            throw AutoCleanupPlannerError.invalidRoot(invalid)
         }
         if rule.policy == .retentionDays, rule.retentionDays <= 0 {
             throw AutoCleanupPlannerError.invalidRetentionDays(rule.retentionDays)
@@ -337,17 +447,85 @@ enum AutoCleanupPlanner {
         }
 
         return try await Task.detached(priority: .utility) {
-            try makePlan(for: rule,
-                         protecting: protectedDirectories,
-                         now: Date())
+            // Browsers may add/remove cache entries while the task is scanned.
+            // Retry the whole snapshot; never execute a partially scanned plan.
+            for attempt in 0..<3 {
+                try Task.checkCancellation()
+                do {
+                    return try makePlan(for: rule, protecting: protectedDirectories, now: Date())
+                } catch AutoCleanupPlannerError.rootChanged where attempt < 2 {
+                    continue
+                } catch AutoCleanupPlannerError.scanFailed where attempt < 2 {
+                    continue
+                }
+            }
+            throw AutoCleanupPlannerError.scanFailed(rule.directory)
         }.value
     }
 
     private static func makePlan(for rule: AutoCleanupRule,
                                  protecting protectedDirectories: [String],
                                  now: Date) throws -> AutoCleanupPlan {
-        let root = try validateRoot(URL(fileURLWithPath: rule.directory, isDirectory: true))
-        guard let authorizedIdentity = rule.authorizedRootIdentity,
+        let directories = rule.directories
+        // Cache roots in one task must be disjoint: overlapping roots would
+        // count data twice and could move another root with its parent.
+        for (index, directory) in directories.enumerated() {
+            let path = URL(fileURLWithPath: directory).standardizedFileURL.path
+            for other in directories.dropFirst(index + 1) {
+                let otherPath = URL(fileURLWithPath: other).standardizedFileURL.path
+                if path == otherPath || path.hasPrefix(otherPath + "/") || otherPath.hasPrefix(path + "/") {
+                    throw AutoCleanupPlannerError.protectedRoot(otherPath)
+                }
+            }
+        }
+        var eligibleItems: [AutoCleanupCandidate] = []
+        var totalBytes: UInt64 = 0
+        for root in rule.roots {
+            try Task.checkCancellation()
+            let scan = try scanRoot(root, protecting: protectedDirectories)
+            totalBytes = try adding(totalBytes, scan.totalBytes, path: root.directory)
+            eligibleItems.append(contentsOf: scan.eligibleItems)
+        }
+        for root in rule.roots {
+            guard AutoCleanupRule.rootIdentity(at: root.directory) == root.authorizedIdentity else {
+                throw AutoCleanupPlannerError.rootAuthorizationChanged(root.directory)
+            }
+        }
+
+        let candidates: [AutoCleanupCandidate]
+        switch rule.policy {
+        case .sizeLimit:
+            candidates = sizeCandidates(from: eligibleItems,
+                                        totalBytes: totalBytes,
+                                        limit: rule.sizeLimitBytes,
+                                        now: now)
+        case .retentionDays:
+            guard let cutoff = Calendar.current.date(byAdding: .day,
+                                                     value: -rule.retentionDays,
+                                                     to: now) else {
+                throw AutoCleanupPlannerError.invalidRetentionDays(rule.retentionDays)
+            }
+            candidates = sortedByAge(eligibleItems.filter { $0.modifiedAt < cutoff })
+        }
+
+        var remainingBytes = totalBytes
+        for candidate in candidates {
+            remainingBytes = candidate.bytes >= remainingBytes
+                ? 0
+                : remainingBytes - candidate.bytes
+        }
+        return AutoCleanupPlan(root: rule.directory,
+                               totalBytes: totalBytes,
+                               candidates: candidates,
+                               remainingBytes: remainingBytes,
+                               reclaimableBytes: totalBytes - remainingBytes)
+    }
+
+    private static func scanRoot(_ authorizedRoot: AutoCleanupRoot,
+                                 protecting protectedDirectories: [String]) throws
+        -> (totalBytes: UInt64, eligibleItems: [AutoCleanupCandidate]) {
+        let root = try validateRoot(URL(fileURLWithPath: authorizedRoot.directory, isDirectory: true))
+        guard let authorizedIdentity = authorizedRoot.authorizedIdentity,
               AutoCleanupRule.rootIdentity(at: root.path) == authorizedIdentity else {
             throw AutoCleanupPlannerError.rootAuthorizationChanged(root.path)
         }
@@ -396,33 +574,7 @@ enum AutoCleanupPlanner {
             }
         }
 
-        let candidates: [AutoCleanupCandidate]
-        switch rule.policy {
-        case .sizeLimit:
-            candidates = sizeCandidates(from: eligibleItems,
-                                        totalBytes: totalBytes,
-                                        limit: rule.sizeLimitBytes,
-                                        now: now)
-        case .retentionDays:
-            guard let cutoff = Calendar.current.date(byAdding: .day,
-                                                     value: -rule.retentionDays,
-                                                     to: now) else {
-                throw AutoCleanupPlannerError.invalidRetentionDays(rule.retentionDays)
-            }
-            candidates = sortedByAge(eligibleItems.filter { $0.modifiedAt < cutoff })
-        }
-
-        var remainingBytes = totalBytes
-        for candidate in candidates {
-            remainingBytes = candidate.bytes >= remainingBytes
-                ? 0
-                : remainingBytes - candidate.bytes
-        }
-        return AutoCleanupPlan(root: root.path,
-                               totalBytes: totalBytes,
-                               candidates: candidates,
-                               remainingBytes: remainingBytes,
-                               reclaimableBytes: totalBytes - remainingBytes)
+        return (totalBytes, eligibleItems)
     }
 
     private static func sizeCandidates(from items: [AutoCleanupCandidate],

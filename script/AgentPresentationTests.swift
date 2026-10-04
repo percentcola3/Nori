@@ -75,6 +75,10 @@ struct AgentPresentationTests {
             state.agentOutcomeMood = .attention
             state.agentFeedbackID += 1
             state.agentStatus = "清理失败"
+            state.agentFailureApplications = ["ChatGPT", "Codex", "Cursor"]
+            state.agentOutcomeDetails = ["暂无更多详情，请重试。"]
+            render("failure-short-reasons")
+            state.agentFailureApplications = []
             state.agentOutcomeDetails = (1...12).map {
                 "Failed to remove /fixture/agent/cache/a-very-long-cache-directory/another-directory/item-\($0).bin: Operation not permitted"
             }

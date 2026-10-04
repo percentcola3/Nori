@@ -99,6 +99,28 @@ struct DeveloperCLIServiceTests {
         expect(entry("mvn", in: extended).preferredLocation?.source == "SDKMAN", "Identify Maven from SDKMAN")
         expect(jvm.allSatisfy { DeveloperCLIService.inspectVersion(of: $0, snapshot: extended) == .deferred }, "Do not execute Java launchers, Maven, or Gradle during automatic version checks")
         expect(!FileManager.default.fileExists(atPath: marker.path), "JVM source discovery never starts a toolchain or daemon")
+
+        for (tool, body) in [("helm", "v3.17.0"), ("terraform", "Terraform v1.11.0"), ("gh", "gh version 2.70.0"), ("mise", "2026.10.0"), ("jq", "jq-1.7"), ("rg", "ripgrep 14.1.0"), ("fd", "fd 10.2.0")] {
+            _ = try executable(first.appendingPathComponent(tool), body: "printf '%s\\n' " + DeveloperCLIService.shellQuote(body) + "\n")
+        }
+        let flutterBin = home.appendingPathComponent("flutter/bin", isDirectory: true)
+        _ = try executable(flutterBin.appendingPathComponent("flutter"), body: noBootstrap)
+        try FileManager.default.createDirectory(at: flutterBin.appendingPathComponent("cache"), withIntermediateDirectories: true)
+        try #"{"frameworkVersion":"3.35.1","channel":"stable"}"#.write(to: flutterBin.appendingPathComponent("cache/flutter.version.json"), atomically: true, encoding: .utf8)
+        try "JAVA_VERSION=\"21.0.8\"\nIMPLEMENTOR=\"Eclipse Adoptium\"\n".write(to: userJDK.deletingLastPathComponent().appendingPathComponent("release"), atomically: true, encoding: .utf8)
+        let metadata = DeveloperCLIService.discover(environment: ["PATH": flutterBin.path + ":" + userJDK.path + ":" + first.path], homePath: home.path, includeSystemDirectories: false)
+        expect(DeveloperCLIService.inspectVersion(of: entry("java", in: metadata), snapshot: metadata) == .value("21.0.8"), "Read the preferred JDK release metadata without executing Java")
+        expect(DeveloperCLIService.inspectVersion(of: entry("javac", in: metadata), snapshot: metadata) == .value("21.0.8"), "Read javac's JDK metadata without executing the compiler")
+        expect(DeveloperCLIService.inspectVersion(of: entry("flutter", in: metadata), snapshot: metadata) == .value("3.35.1"), "Read Flutter cache version metadata without running its bootstrap script")
+        for id in ["helm", "terraform", "gh", "mise", "jq", "rg", "fd"] {
+            expect(entry(id, in: metadata).isFound, "Discover the extended " + id + " catalog entry")
+            if case .value = DeveloperCLIService.inspectVersion(of: entry(id, in: metadata), snapshot: metadata) {} else { fatalError("No fixture version for " + id) }
+        }
+        try "999\\nUNTRUSTED".write(to: userJDK.deletingLastPathComponent().appendingPathComponent("release"), atomically: true, encoding: .utf8)
+        try #"{"frameworkVersion":"$(touch unexpected)"}"#.write(to: flutterBin.appendingPathComponent("cache/flutter.version.json"), atomically: true, encoding: .utf8)
+        expect(DeveloperCLIService.inspectVersion(of: entry("java", in: metadata), snapshot: metadata) == .deferred, "Malformed JDK metadata stays deferred")
+        expect(DeveloperCLIService.inspectVersion(of: entry("flutter", in: metadata), snapshot: metadata) == .deferred, "Malformed Flutter metadata does not launch a fallback bootstrap")
+        expect(!FileManager.default.fileExists(atPath: marker.path), "SDK metadata version reads never execute the fake launchers")
         print("Developer CLI tests passed")
     }
 

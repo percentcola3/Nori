@@ -79,6 +79,12 @@ The dedicated agent cleanup button applies selected actions immediately, without
 
 Nori also inventories supported global **Skills, MCP registrations/local installations, and CLI installations**, shows known consumers of shared resources, and separates unlinking a resource from removing its files. Recognition follows known installation layouts; it does not imply complete coverage of every plugin or custom data directory. See the [agent coverage and evidence matrix](docs/agent-cleanup-research/README.md).
 
+## Reach folders and files faster
+
+The Directory page keeps clickable breadcrumbs and path copying visible at all times. Hidden files are shown by default, with visibility remembered per folder. Files and folders display allocated disk usage. Create, copy, cut/paste, rename, move to Trash, and drag files between apps; copies preserve colliding names as separate files. Contents open in the default app, and advanced operations go to Finder.
+
+Filter the current folder or search Spotlight's global filename index. Build a persistent local index to include dotfiles and add other folders; update this snapshot after external changes. See [directory search notes and Everything research](docs/directory-search.md) for coverage and freshness.
+
 ## Keep folders tidy automatically
 
 Create rules for folders you choose: **keep the last X days** or **stay below a size limit**. Preview a rule before enabling it, or run it manually when you want to check the result.

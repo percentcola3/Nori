@@ -7,8 +7,143 @@ struct ScreenshotEditorWindowTests {
         _ = NSApplication.shared
         testWindowBounds()
         testPreviewFitsControls()
+        testCanvasCursor()
+        testShapeEditing()
+        testAnnotationIndices()
         testRepeatedEditorSessions()
-        print("Screenshot editor: repeated sessions, retained geometry, minimum size and screen bounds passed")
+        print("Screenshot editor: annotation indices, shape resizing/moving, cursor tracking, event passthrough, repeated sessions and window bounds passed")
+    }
+
+    static func testAnnotationIndices() {
+        let rect = Stroke(kind: .rect, colorIndex: 0, points: [.zero, CGPoint(x: 0.2, y: 0.3)])
+        let ellipse = Stroke(kind: .ellipse, colorIndex: 1,
+                             points: [CGPoint(x: 0.9, y: 0.8), CGPoint(x: 0.6, y: 0.4)])
+        let arrow = Stroke(kind: .arrow, colorIndex: 2, points: rect.points)
+        let draft = Stroke(kind: .rect, colorIndex: 0, points: [.zero])
+        let shapes = AnnotationIndexing.numberedShapes(in: [arrow, rect, draft, arrow, ellipse])
+        precondition(shapes.map(\.number) == [1, 2], "Only completed shape outlines consume indices")
+        precondition(shapes.map { $0.stroke.id } == [rect.id, ellipse.id])
+        let undone = AnnotationIndexing.numberedShapes(in: [arrow, rect, arrow])
+        precondition(undone.map(\.number) == [1])
+        var moved = rect
+        moved.points = ellipse.points
+        precondition(AnnotationIndexing.numberedShapes(in: [moved, ellipse]).map(\.number) == [1, 2],
+                     "Changing shape geometry must preserve reference numbers")
+
+        let size = CGSize(width: 400, height: 300)
+        for number in [1, 12, 123] {
+            for point in [CGPoint.zero, CGPoint(x: 399, y: 299), CGPoint(x: 100, y: 100)] {
+                let bounds = CGRect(origin: point, size: CGSize(width: 1, height: 1))
+                let badge = AnnotationIndexing.badgeRect(for: bounds, number: number,
+                                                        canvasSize: size, drawingScale: 1)
+                precondition(CGRect(origin: .zero, size: size).contains(badge),
+                             "Corner indices must stay inside the exported image, even at its edges")
+                precondition(badge.height == 16, "Indices must stay small in the editor")
+                let exported = AnnotationIndexing.badgeRect(
+                    for: CGRect(x: point.x * 2, y: point.y * 2, width: 2, height: 2), number: number,
+                    canvasSize: CGSize(width: 800, height: 600), drawingScale: 2)
+                precondition(exported == CGRect(x: badge.minX * 2, y: badge.minY * 2,
+                                                width: badge.width * 2, height: badge.height * 2),
+                             "Export must preserve the preview's index size and placement relative to the image")
+            }
+        }
+    }
+
+    static func testShapeEditing() {
+        let size = CGSize(width: 1000, height: 500)
+        for kind in [Stroke.Kind.rect, .ellipse] {
+            // Include intermediate drag points and a drag drawn from bottom-right to top-left.
+            let original = Stroke(kind: kind, colorIndex: 2,
+                                  points: [CGPoint(x: 0.8, y: 0.8), CGPoint(x: 0.6, y: 0.6),
+                                           CGPoint(x: 0.2, y: 0.2)])
+            let bounds = CGRect(x: 200, y: 100, width: 600, height: 300)
+            for handle in AnnotationShapeEditing.Handle.allCases {
+                let start = handle.point(in: CGRect(points: original.points))
+                let screenPoint = handle.point(in: bounds)
+                let target = AnnotationShapeEditing.hit(at: screenPoint, size: size,
+                                                        strokes: [original], selected: original.id)!
+                precondition(target.id == original.id && target.handle == handle)
+                let session = AnnotationShapeEditing.Session(target: target, original: original, start: start)
+                let end = CGPoint(x: start.x - CGFloat(handle.horizontal) * 0.1,
+                                  y: start.y - CGFloat(handle.vertical) * 0.1)
+                let smaller = AnnotationShapeEditing.updated(session, to: end, size: size)
+                let rect = CGRect(points: smaller.points)
+                precondition(abs(rect.width - (handle.horizontal == 0 ? 0.6 : 0.5)) < 0.000001)
+                precondition(abs(rect.height - (handle.vertical == 0 ? 0.6 : 0.5)) < 0.000001)
+                if handle.horizontal <= 0 { precondition(abs(rect.maxX - 0.8) < 0.000001) }
+                if handle.horizontal >= 0 { precondition(abs(rect.minX - 0.2) < 0.000001) }
+                if handle.vertical <= 0 { precondition(abs(rect.maxY - 0.8) < 0.000001) }
+                if handle.vertical >= 0 { precondition(abs(rect.minY - 0.2) < 0.000001) }
+                precondition(smaller.id == original.id && smaller.kind == original.kind)
+                precondition(smaller.colorIndex == original.colorIndex && smaller.points.count == 2)
+                precondition(AnnotationShapeEditing.updated(session, to: end, size: size).points == smaller.points,
+                             "Drag updates must always use the starting snapshot")
+                let crossed = AnnotationShapeEditing.updated(session,
+                    to: CGPoint(x: start.x - CGFloat(handle.horizontal) * 2,
+                                y: start.y - CGFloat(handle.vertical) * 2), size: size)
+                let crossedBounds = CGRect(points: crossed.points)
+                precondition(crossedBounds.width >= 0.004 - 0.000001 && crossedBounds.height >= 0.008 - 0.000001,
+                             "Dragging past the opposite edge must retain visible dimensions")
+                precondition(CGRect(x: 0, y: 0, width: 1, height: 1).contains(crossedBounds))
+            }
+            let move = AnnotationShapeEditing.Session(target: .init(id: original.id, handle: nil),
+                                                       original: original, start: CGPoint(x: 0.5, y: 0.5))
+            let moved = CGRect(points: AnnotationShapeEditing.updated(move, to: CGPoint(x: 2, y: -2), size: size).points)
+            precondition(abs(moved.maxX - 1) < 0.000001 && abs(moved.minY) < 0.000001)
+            precondition(abs(moved.width - 0.6) < 0.000001 && abs(moved.height - 0.6) < 0.000001)
+            let edge = CGPoint(x: 500, y: 100)
+            precondition(AnnotationShapeEditing.hit(at: edge, size: size, strokes: [original], selected: nil)?.id == original.id)
+            precondition(AnnotationShapeEditing.hit(at: CGPoint(x: 500, y: 250), size: size,
+                                                    strokes: [original], selected: nil) == nil)
+            precondition(AnnotationShapeEditing.hit(at: CGPoint(x: 500, y: 250), size: size,
+                                                    strokes: [original], selected: original.id)?.handle == nil)
+        }
+        let pen = Stroke(kind: .pen, colorIndex: 0, points: [.zero, CGPoint(x: 1, y: 1)])
+        precondition(AnnotationShapeEditing.hit(at: .zero, size: size, strokes: [pen], selected: pen.id) == nil)
+    }
+
+    @MainActor static func testCanvasCursor() {
+        for tool in EditorTool.allCases {
+            precondition(tool.cursor === (tool == .text ? NSCursor.iBeam : NSCursor.crosshair))
+        }
+        let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 400, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close(); NSCursor.arrow.set() }
+        let view = EditorCursorRegion.CursorView(cursor: .crosshair)
+        view.frame = CGRect(x: 20, y: 20, width: 200, height: 100)
+        window.contentView!.addSubview(view)
+        view.updateTrackingAreas()
+        view.updateTrackingAreas()
+        precondition(view.trackingAreas.count == 1, "Layout must not accumulate tracking areas")
+        let options = view.trackingAreas[0].options
+        precondition(options.contains([.inVisibleRect, .activeInKeyWindow, .cursorUpdate,
+                                       .mouseMoved, .mouseEnteredAndExited, .enabledDuringMouseDrag]))
+        precondition(view.hitTest(NSPoint(x: 40, y: 40)) == nil,
+                     "Cursor tracking must not intercept annotation or text input")
+        let enter = NSEvent.enterExitEvent(with: .mouseEntered, location: NSPoint(x: 40, y: 40),
+            modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+            context: nil, eventNumber: 0, trackingNumber: 0, userData: nil)!
+        view.mouseEntered(with: enter)
+        precondition(NSCursor.current === NSCursor.crosshair, "Entering the image must show a crosshair")
+        NSCursor.arrow.set() // Simulate the hosting view overriding the cursor.
+        view.cursorUpdate(with: enter)
+        precondition(NSCursor.current === NSCursor.crosshair)
+        NSCursor.arrow.set()
+        view.mouseMoved(with: enter)
+        precondition(NSCursor.current === NSCursor.crosshair, "Moving must retain the drawing cursor")
+        view.cursor = .iBeam
+        view.cursorUpdate(with: enter)
+        precondition(NSCursor.current === NSCursor.iBeam, "Text placement must show an I-beam")
+        view.mouseExited(with: enter)
+        precondition(NSCursor.current === NSCursor.arrow, "Leaving the image must restore the arrow")
+        view.frame.size = CGSize(width: 100, height: 50)
+        view.updateTrackingAreas()
+        precondition(view.trackingAreas.count == 1)
+        view.cursor = .crosshair
+        view.mouseEntered(with: enter)
+        view.removeFromSuperview()
+        precondition(NSCursor.current === NSCursor.arrow, "Closing the canvas must restore the arrow")
     }
 
     static func testWindowBounds() {

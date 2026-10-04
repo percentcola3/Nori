@@ -14,6 +14,8 @@ swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/AnalysisFileDeletionPlan.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AnalysisInventoryCache.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentProjectStorage.swift" \

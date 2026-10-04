@@ -17,6 +17,7 @@ enum AdministratorCleanupPlan {
     struct Record: Codable {
         let path: String
         let identity: String
+        var metadata: DeletionPlan.Metadata? = nil
     }
 
     struct Request: Codable {
@@ -89,15 +90,17 @@ enum AdministratorCleanupPlan {
     static func execute(_ records: [Record], homeDirectory: String,
                         core: NativeCore,
                         onProgress: ((Int, Int, String) -> Void)? = nil) -> NativeCore.ApplySummary {
-        let home = URL(fileURLWithPath: homeDirectory).standardizedFileURL.path
+        let home = CleanupRiskPolicy.normalizedPathLiteral(homeDirectory)
         var candidates: [CleanupCategory] = []
         var refused: [String] = []
         var seen = Set<String>()
         for record in records {
             let path = record.path
             guard DeletionPlan.isLexicallySafePath(path),
-                  URL(fileURLWithPath: path).standardizedFileURL.path == path,
-                  path.hasPrefix(home + "/"), seen.insert(path).inserted,
+                  CleanupRiskPolicy.normalizedPathLiteral(path) == path,
+                  (path.hasPrefix(home + "/")
+                    || CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) != nil),
+                  seen.insert(path).inserted,
                   !record.identity.isEmpty else {
                 refused.append("Skipped changed or unavailable path: " + path)
                 continue
@@ -109,6 +112,7 @@ enum AdministratorCleanupPlan {
             // files and other targets still require the full planned identity.
             var metadata = stat()
             guard lstat(path, &metadata) == 0,
+                  record.metadata?.matches(metadata, allowingDirectoryContentChanges: true) != false,
                   NativeCore.matchesCleanupIdentity(metadata, expected: record.identity,
                     allowingDirectoryContentChanges: policy.risk == .safe
                         && policy.disposal == .permanentDelete) else {
@@ -147,7 +151,7 @@ enum AdministratorCleanupPlan {
                 refused.append("Skipped because final content validation failed: " + path)
                 return nil
             }
-            return .init(record: path, identity: record.identity)
+            return .init(record: path, identity: record.identity, metadata: record.metadata)
         }
         var completed = 0
         let applied = items.isEmpty
@@ -200,7 +204,7 @@ enum AdministratorCleanupPlan {
             guard line.first == "n" else { return nil }
             let path = String(line.dropFirst())
             guard path.hasPrefix("/") else { return nil }
-            return URL(fileURLWithPath: path).standardizedFileURL.path
+            return CleanupRiskPolicy.canonicalOpenFilePath(path)
         })
     }
 }

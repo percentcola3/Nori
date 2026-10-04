@@ -1,117 +1,189 @@
 import SwiftUI
+import AppKit
 
-enum DevWorkspaceText {
-    static func choose(_ chinese: String, _ english: String) -> String {
-        switch L10n.shared.resolved {
-        case .zhHans, .zhHant: return chinese
-        default: return english
-        }
-    }
-}
-
-enum DeveloperWorkspaceSearchSource: CaseIterable, Hashable, Sendable {
-    case shell, network, cli
-}
-
-struct DeveloperWorkspaceSearchState: Equatable, Sendable {
-    let refreshToken: Int
-    let isSearching: Bool
-}
-
-/// Panel owners report even while their visible content is collapsed.
-struct DeveloperWorkspaceSearchKey: PreferenceKey {
-    static let defaultValue: [DeveloperWorkspaceSearchSource: DeveloperWorkspaceSearchState] = [:]
-
-    static func reduce(value: inout [DeveloperWorkspaceSearchSource: DeveloperWorkspaceSearchState],
-                       nextValue: () -> [DeveloperWorkspaceSearchSource: DeveloperWorkspaceSearchState]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
-    }
-}
-
-/// Uses the same layout-first surface as cleanup rows.
-struct DeveloperWorkspaceSurface: ViewModifier {
+/// One glass layer per card. The header, rows and footer all sit on the same surface,
+/// separated by hairlines instead of nested cards.
+struct DevCard<Header: View, Content: View>: View {
     let id: String
-    var selected = false
-    var interactive = false
-
-    func body(content: Content) -> some View {
-        content
-            .clipped()
-            .modifier(ListRowGlass(selected: selected, interactive: interactive))
-            .accessibilityIdentifier(id)
-    }
-}
-
-/// The panel owning this content stays mounted, so its model and drafts survive collapse.
-struct DeveloperWorkspaceContent<Content: View>: View {
-    let isExpanded: Bool
-    @ViewBuilder let content: Content
+    @ViewBuilder var header: Header
+    @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if isExpanded {
-                content.transition(.molePanelReveal)
-            }
+            HStack(spacing: 10) { header }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 46)
+            content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
+        .modifier(ListRowGlass(interactive: false))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(id)
     }
 }
 
-struct DeveloperWorkspaceSection<Content: View>: View {
+/// Selected rows inside a card become a glass lens; unselected rows add no layer.
+struct DevSelectionLens: ViewModifier {
     let id: String
+    let selected: Bool
+    var groupNamespace: Namespace.ID? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.controlActiveState) private var controlActiveState
+    @Namespace private var localNamespace
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if !selected {
+            content
+        } else if #available(macOS 26.0, *), !reduceTransparency, controlActiveState == .key {
+            content
+                .glassEffect(.regular.tint(Color.moleAccent.opacity(0.20)).interactive(!reduceMotion), in: RoundedRectangle(cornerRadius: 8))
+                .glassEffectID(id, in: groupNamespace ?? localNamespace)
+                .glassEffectTransition(reduceMotion ? .identity : .matchedGeometry)
+        } else {
+            content.background(GlassSurface(cornerRadius: 8, usesSystemGlass: false, highlighted: true))
+        }
+    }
+}
+
+struct DevCardTitle: View {
     let symbol: String
     let title: String
-    @ViewBuilder var content: (Bool) -> Content
-    @State private var isExpanded = true
-    @ObservedObject private var l10n = L10n.shared
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var subtitle: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(reduceMotion ? nil : MoleMotion.panel) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: symbol)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.moleAccentText)
-                        .frame(width: 22, height: 22)
-                        .background(Circle().fill(Color.accent.opacity(0.14)))
-                        .accessibilityHidden(true)
-                    Text(title)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.primary)
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
-                        .frame(width: 18, height: 18)
-                        .background(Circle().fill(Color.surface2))
-                        .accessibilityHidden(true)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .contentShape(Rectangle())
-                .modifier(ListRowGlass())
+        HStack(spacing: 8) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.accentText)
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            Text(title).font(.system(size: 13, weight: .semibold))
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
-            .accessibilityIdentifier("dev-section-" + id)
-            .accessibilityLabel(title)
-            .accessibilityValue(DevWorkspaceText.choose(isExpanded ? "已展开" : "已收起",
-                                                       isExpanded ? "Expanded" : "Collapsed"))
-            .accessibilityHint(DevWorkspaceText.choose(isExpanded ? "收起区域" : "展开区域",
-                                                      isExpanded ? "Collapse section" : "Expand section"))
-
-            content(isExpanded)
-                .padding(.leading, 30)
-                .padding(.trailing, 10)
-                .padding(.top, isExpanded ? 12 : 0)
-                .padding(.bottom, isExpanded ? 6 : 0)
         }
-        .clipped()
+    }
+}
+
+struct DevDivider: View {
+    var inset: CGFloat = 0
+    var body: some View {
+        Rectangle().fill(Color.hairline).frame(height: 1).padding(.leading, inset)
+    }
+}
+
+/// Group label inside a card, with an optional trailing action.
+struct DevSubheader<Trailing: View>: View {
+    let title: String
+    var detail: String?
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+            if let detail {
+                Text(detail).font(.system(size: 11)).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 8)
+            trailing
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 6)
+    }
+}
+
+extension DevSubheader where Trailing == EmptyView {
+    init(title: String, detail: String? = nil) {
+        self.init(title: title, detail: detail) { EmptyView() }
+    }
+}
+
+/// A single-line status inside a card: success, warning or neutral guidance.
+struct DevNotice: View {
+    let symbol: String
+    let text: String
+    var color: Color = .secondary
+
+    var body: some View {
+        Label {
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(color)
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(color == .secondary ? Color.secondary : color)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Text-only action used in card headers and subheaders; the card already provides the surface.
+struct DevLinkButton: View {
+    let title: String
+    let symbol: String
+    var tint: Color = .accentText
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol).font(.system(size: 12, weight: .medium))
+        }
+        .buttonStyle(MolePlainButtonStyle())
+        .foregroundStyle(tint)
+    }
+}
+
+/// Small rounded tag for hostnames, sources and states.
+struct DevTag: View {
+    let text: String
+    var color: Color?
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(color ?? .secondary)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.surface2))
+    }
+}
+
+enum DevFiles {
+    /// Shell profiles have no extension; fall back to TextEdit when nothing claims them.
+    static func openInEditor(_ path: String) {
+        let url = URL(fileURLWithPath: path)
+        if NSWorkspace.shared.urlForApplication(toOpen: url) != nil, NSWorkspace.shared.open(url) { return }
+        NSWorkspace.shared.open([url], withApplicationAt: URL(fileURLWithPath: "/System/Applications/TextEdit.app"),
+                                configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            if error != nil {
+                Task { @MainActor in TaskFeedbackNotice.reportFailure(messageKey: "task.reason.terminal") }
+            }
+        }
+    }
+
+    static func chooseDirectory(startingAt path: String? = nil) -> String? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        if let path { panel.directoryURL = URL(fileURLWithPath: path) }
+        return panel.runModal() == .OK ? panel.url?.path : nil
+    }
+
+    static func abbreviate(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        return path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 }

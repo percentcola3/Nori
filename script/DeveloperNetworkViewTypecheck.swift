@@ -15,50 +15,20 @@ import SwiftUI
     func runAdminNetworkTask(_ task: String) {}
     func log(_ message: String) {}
 }
-enum AppLanguage { case zhHans, zhHant, en }
-final class L10n: ObservableObject {
-    static let shared = L10n()
-    @Published var resolved = AppLanguage.en
-    func t(_ key: String) -> String { key }
+
+enum DeveloperPrivilegedBridge { case xcode, proxy }
+struct DeveloperCommand {
+    let titleKey: String
+    let executable: String
+    let arguments: [String]
+    let environment: [String: String]
+    let timeout: TimeInterval
+    let privilegedArguments: [String]?
+    var privilegedBridge: DeveloperPrivilegedBridge = .xcode
+    var display: String { ([executable] + arguments).joined(separator: " ") }
 }
-extension Color {
-    static let accentText = Color.blue
-    static let warning = Color.orange
-    static let danger = Color.red
-    static let success = Color.green
-}
-struct LiquidGlassGroup<Content: View>: View {
-    @ViewBuilder var content: () -> Content
-    var body: some View { content() }
-}
-struct GlassSurface: View {
-    let cornerRadius: CGFloat
-    var body: some View { Color.clear }
-}
-struct MolePlainButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View { configuration.label }
-}
-enum DeveloperWorkspaceSearchSource: Hashable { case shell, network, cli }
-struct DeveloperWorkspaceSearchState: Equatable {
-    let refreshToken: Int
-    let isSearching: Bool
-}
-struct DeveloperWorkspaceSearchKey: PreferenceKey {
-    static let defaultValue: [DeveloperWorkspaceSearchSource: DeveloperWorkspaceSearchState] = [:]
-    static func reduce(value: inout [DeveloperWorkspaceSearchSource: DeveloperWorkspaceSearchState],
-                       nextValue: () -> [DeveloperWorkspaceSearchSource: DeveloperWorkspaceSearchState]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, latest in latest })
-    }
-}
-// Layout/material rendering is verified by the complete production app build.
-// This fixture exposes only the shared APIs used by the independent panel check.
-struct DeveloperWorkspaceContent<Content: View>: View {
-    let isExpanded: Bool
-    @ViewBuilder let content: Content
-    var body: some View {
-        if isExpanded { content }
-    }
-}
-struct ListRowGlass: ViewModifier {
-    func body(content: Content) -> some View { content }
+@MainActor final class DeveloperWorkspaceModel: ObservableObject {
+    @Published var refreshRevision = 0
+    @Published var commandRunning = false
+    func enqueue(_ command: DeveloperCommand) {}
 }

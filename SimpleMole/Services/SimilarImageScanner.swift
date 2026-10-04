@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 
-struct SimilarImageFile: Identifiable, Hashable, Sendable {
+struct SimilarImageFile: Identifiable, Hashable, Codable, Sendable {
     let file: DuplicateFile
     let pixelWidth: Int
     let pixelHeight: Int
@@ -20,12 +20,78 @@ struct SimilarImageScanResult: Sendable {
     var roots: [String] = []
     var groups: [SimilarImageGroup] = []
     var scannedFiles = 0
+    var scannedPaths: Set<String> = []
     var processedImages = 0
+    var reusedImages = 0
     var skippedFiles = 0
     var exactCopiesSkipped = 0
     var isPartial = false
     var cancelled = false
     var error: String?
+}
+
+/// Fingerprints are reusable only for the complete identity captured during
+/// verified decoding. The bounded store avoids retaining every image thumbnail forever.
+final class SimilarImageFeatureCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var entries: [String: SimilarImageScanner.Feature] = [:]
+    private let maximumEntries = 12_000
+
+    func encodedData() throws -> Data {
+        lock.lock()
+        let snapshot = entries
+        lock.unlock()
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        return try encoder.encode(snapshot)
+    }
+
+    func restore(from data: Data) {
+        guard let saved = try? PropertyListDecoder().decode([String: SimilarImageScanner.Feature].self,
+                                                           from: data) else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        for (path, feature) in saved where entries[path] == nil && entries.count < maximumEntries {
+            // Corrupt cache data can never reach the matcher as an oversized vector.
+            guard feature.image.file.path == path, feature.luminance.count == 1_024,
+                  feature.meanColor.count == 3, feature.image.file.sha256.count == 64,
+                  feature.aspectRatio.isFinite, feature.aspectRatio > 0 else { continue }
+            entries[path] = feature
+        }
+    }
+
+    func feature(for file: DuplicateFile) -> SimilarImageScanner.Feature? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[file.path], entry.image.file.identity == file.identity else { return nil }
+        return entry
+    }
+
+    func remember(_ feature: SimilarImageScanner.Feature) {
+        lock.lock()
+        defer { lock.unlock() }
+        let path = feature.image.file.path
+        guard entries[path] != nil || entries.count < maximumEntries else { return }
+        entries[path] = feature
+    }
+
+    func invalidate(paths: Set<String>) {
+        guard !paths.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        entries = entries.filter { path, _ in
+            !DuplicatePathMutation.contains(path, in: paths)
+        }
+    }
+
+    func retainCurrentFiles(_ files: [DuplicateFile], roots: [String]) {
+        let identities = Dictionary(uniqueKeysWithValues: files.map { ($0.path, $0.identity) })
+        lock.lock()
+        defer { lock.unlock() }
+        entries = entries.filter { path, feature in
+            !roots.contains { path.hasPrefix($0 + "/") } || identities[path] == feature.image.file.identity
+        }
+    }
 }
 
 /// Suggests visually similar still images. It never chooses files for deletion.
@@ -40,7 +106,7 @@ enum SimilarImageScanner {
     static let maximumComparisonsPerImage = 512
     static let maximumHashDistance = 6
 
-    struct Feature {
+    struct Feature: Codable, Sendable {
         let image: SimilarImageFile
         let hash: UInt64
         let luminance: [UInt8]
@@ -50,12 +116,19 @@ enum SimilarImageScanner {
 
     static func scan(roots: [String], control: DuplicateScanControl,
                      home: String = NSHomeDirectory(),
+                     contentCache: DuplicateContentCache? = nil,
+                     featureCache: SimilarImageFeatureCache? = nil,
                      progress: ((DuplicateScanProgress) -> Void)? = nil) -> SimilarImageScanResult {
         let discovery = DuplicateScanner.enumerate(roots: roots, control: control, home: home, progress: progress)
         var result = SimilarImageScanResult(roots: discovery.roots, scannedFiles: discovery.files.count,
+                                           scannedPaths: Set(discovery.files.map(\.path)),
                                            skippedFiles: discovery.skippedFiles, isPartial: discovery.isPartial,
                                            cancelled: discovery.cancelled, error: discovery.error)
         guard !discovery.cancelled, discovery.error == nil else { return result }
+        if !discovery.isPartial {
+            contentCache?.retainCurrentFiles(discovery.files, roots: discovery.roots)
+            featureCache?.retainCurrentFiles(discovery.files, roots: discovery.roots)
+        }
         let candidates = discovery.files.filter { imageExtensions.contains(($0.path as NSString).pathExtension.lowercased()) }
             .sorted { $0.path < $1.path }
         var grouping = MatchingIndex()
@@ -73,6 +146,17 @@ enum SimilarImageScanner {
             }
             do {
                 try DuplicateScanner.validateUnchanged(file, allowedRoots: discovery.roots, control: control, home: home)
+                if let cached = featureCache?.feature(for: file) {
+                    guard !control.isCancelled else { break }
+                    result.processedImages += 1
+                    result.reusedImages += 1
+                    guard seenDigests.insert(cached.image.file.sha256).inserted else {
+                        result.exactCopiesSkipped += 1
+                        continue
+                    }
+                    grouping.insert(cached)
+                    continue
+                }
                 // Decode only a bounded thumbnail. Hashing afterwards also proves the decoded
                 // file still has its enumerated identity, including nanosecond ctime/mtime.
                 guard let decoded = autoreleasepool(invoking: { fingerprint(file) }) else {
@@ -80,18 +164,22 @@ enum SimilarImageScanner {
                     result.isPartial = true
                     continue
                 }
-                let verified = try DuplicateScanner.hash(file, allowedRoots: discovery.roots, control: control, home: home)
-                bytesRead += verified.size
+                let hashWasCached = contentCache?.digest(for: file, sample: false) != nil
+                let verified = try DuplicateScanner.hash(file, allowedRoots: discovery.roots, control: control,
+                                                         home: home, cache: contentCache)
+                if !hashWasCached { bytesRead += verified.size }
                 result.processedImages += 1
+                let image = SimilarImageFile(file: verified, pixelWidth: decoded.width, pixelHeight: decoded.height,
+                                             sharpnessScore: decoded.sharpness)
+                let feature = Feature(image: image, hash: decoded.hash, luminance: decoded.luminance,
+                                      meanColor: decoded.meanColor,
+                                      aspectRatio: Double(decoded.width) / Double(decoded.height))
+                featureCache?.remember(feature)
                 guard seenDigests.insert(verified.sha256).inserted else {
                     result.exactCopiesSkipped += 1
                     continue
                 }
-                let image = SimilarImageFile(file: verified, pixelWidth: decoded.width, pixelHeight: decoded.height,
-                                             sharpnessScore: decoded.sharpness)
-                grouping.insert(Feature(image: image, hash: decoded.hash, luminance: decoded.luminance,
-                                        meanColor: decoded.meanColor,
-                                        aspectRatio: Double(decoded.width) / Double(decoded.height)))
+                grouping.insert(feature)
             } catch {
                 result.skippedFiles += 1
                 result.isPartial = true

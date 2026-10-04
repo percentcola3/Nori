@@ -150,12 +150,15 @@ final class MediaSlimmer {
     }
 
     private func identity(of path: String) -> Identity? {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        guard url.resolvingSymlinksInPath().path == url.path else { return nil }
         var info = stat()
         guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
         return Identity(device: info.st_dev, inode: info.st_ino, mtime: info.st_mtimespec, size: info.st_size)
     }
 
     func slim(path: String, options: SlimOptions,
+              validateSource: (() -> Bool)? = nil,
               progress: ((Double) -> Void)? = nil) async -> SlimOutcome {
         func outcome(_ status: SlimOutcome.Status, original: UInt64 = 0, new: UInt64 = 0,
                      output: String? = nil, message: String? = nil) -> SlimOutcome {
@@ -165,6 +168,9 @@ final class MediaSlimmer {
         }
         guard MediaSlimPolicy.isEligible(path, home: home) else {
             return outcome(.failed, message: "slim.reason.location")
+        }
+        guard validateSource?() != false else {
+            return outcome(.failed, message: "slim.reason.changed")
         }
         guard let before = identity(of: path) else {
             return outcome(.failed, message: "slim.reason.notFile")
@@ -217,7 +223,7 @@ final class MediaSlimmer {
             try? fileManager.removeItem(at: temp)
             return outcome(.notSmaller, original: originalBytes, new: newBytes)
         }
-        guard identity(of: path) == before else {
+        guard identity(of: path) == before, validateSource?() != false else {
             try? fileManager.removeItem(at: temp)
             return outcome(.failed, original: originalBytes, message: "slim.reason.changed")
         }

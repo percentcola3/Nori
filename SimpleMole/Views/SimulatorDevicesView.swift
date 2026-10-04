@@ -80,23 +80,25 @@ struct SimulatorDevicesView: View {
             }
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    if case .failed(let message) = store.phase {
-                        errorBanner(message)
-                    }
-                    ForEach(store.groupedDevices, id: \.runtime) { group in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(group.runtime)
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 4)
-                            ForEach(group.devices) { device in
-                                deviceRow(device)
+                LiquidGlassGroup {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        if case .failed(let message) = store.phase {
+                            errorBanner(message)
+                        }
+                        ForEach(store.groupedDevices, id: \.runtime) { group in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(group.runtime)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 4)
+                                ForEach(group.devices) { device in
+                                    deviceRow(device)
+                                }
                             }
                         }
                     }
+                    .padding(16)
                 }
-                .padding(16)
             }
         }
     }
@@ -183,7 +185,7 @@ struct SimulatorDevicesView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.quinary.opacity(0.5)))
+        .modifier(ListRowGlass(interactive: false))
     }
 
     private func localizedState(_ state: String) -> String {
@@ -196,12 +198,8 @@ struct SimulatorDevicesView: View {
 
     private func riskBadge(_ risk: CleanupRisk) -> some View {
         let protected = risk == .protected
-        return Text(l10n.t(protected ? "cleanup.risk.protected" : "cleanup.risk.warning"))
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(protected ? Color.danger : Color.warning)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill((protected ? Color.danger : Color.warning).opacity(0.12)))
+        return DevTag(text: l10n.t(protected ? "cleanup.risk.protected" : "cleanup.risk.warning"),
+                      color: protected ? .danger : .warning)
     }
 
     private func inventoryMessage(symbol: String, key: String, progress: Bool = false) -> some View {
@@ -224,6 +222,7 @@ struct SimulatorDevicesView: View {
             Spacer()
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.warning.opacity(0.10)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.hairline))
     }
 }

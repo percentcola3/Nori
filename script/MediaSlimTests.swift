@@ -17,7 +17,7 @@ struct MediaSlimTests {
     static let fm = FileManager.default
 
     static func main() async throws {
-        let fixture = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
+        let fixture = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL.resolvingSymlinksInPath()
         let home = fixture.appendingPathComponent("home")
         let trashDir = fixture.appendingPathComponent("trash")
         try fm.createDirectory(at: trashDir, withIntermediateDirectories: true)
@@ -292,6 +292,24 @@ struct MediaSlimTests {
         let symlink = await slimmer.slim(path: link.path, options: SlimOptions())
         expect(symlink.status == .failed && symlink.message == "slim.reason.notFile", "symlink accepted")
 
+        let originalFolder = home.appendingPathComponent("Pictures/cached-folder")
+        let movedFolder = home.appendingPathComponent("Pictures/moved-folder")
+        let cachedPhoto = originalFolder.appendingPathComponent("cached.jpg")
+        try makeImage(cachedPhoto, width: 800, height: 600, type: .jpeg)
+        let originalData = try Data(contentsOf: cachedPhoto)
+        try fm.moveItem(at: originalFolder, to: movedFolder)
+        try fm.createSymbolicLink(at: originalFolder, withDestinationURL: movedFolder)
+        let replacedParent = await slimmer.slim(path: cachedPhoto.path, options: SlimOptions())
+        expect(replacedParent.status == .failed && replacedParent.message == "slim.reason.notFile",
+               "a cached path with a replaced parent must not be compressed")
+        let remainingData = try Data(contentsOf: movedFolder.appendingPathComponent("cached.jpg"))
+        expect(remainingData == originalData,
+               "refusing a replaced parent must preserve the original bytes")
+
+        let staleOutcome = await slimmer.slim(path: target.path, options: SlimOptions(), validateSource: { false })
+        expect(staleOutcome.status == .failed && staleOutcome.message == "slim.reason.changed",
+               "a stale scan identity must be rejected before compression")
+
         let failingTrash = MediaSlimmer(home: home.path) { _ in
             throw NSError(domain: "trash", code: 1)
         }
@@ -362,7 +380,7 @@ struct MediaSlimTests {
         try await makeVideo(clip, width: 1920, height: 1080, frames: 60)
         let before = size(clip)
         var progressSeen = false
-        let outcome = await slimmer.slim(path: clip.path, options: SlimOptions()) { _ in progressSeen = true }
+        let outcome = await slimmer.slim(path: clip.path, options: SlimOptions(), progress: { _ in progressSeen = true })
         print("note: video outcome \(outcome.status) \(before) -> \(outcome.newBytes)")
         expect(outcome.status == .slimmed || outcome.status == .notSmaller, "video transcode: \(outcome)")
         if outcome.status == .slimmed {

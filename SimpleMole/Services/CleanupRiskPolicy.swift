@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// 由调用方一次性采集的运行应用快照。风险策略只读这个值，不自行启动进程或访问 UI。
@@ -95,6 +96,139 @@ enum CleanupRiskPolicy {
         "/.docker/contexts", "/.docker/config.json"
     ]
 
+    enum SystemCleanupKind: Sendable {
+        case cache, temporary, archivedLog, archivedPowerlog
+    }
+
+    /// Audited exceptions to system-directory protection. Discovery and the
+    /// privileged worker use this same shape policy; metadata/activity checks
+    /// remain mandatory at the native deletion edge.
+    static func systemCleanupKind(for rawPath: String,
+                                  homeDirectory: String = NSHomeDirectory()) -> SystemCleanupKind? {
+        if rawPath == homeDirectory || rawPath.hasPrefix(homeDirectory + "/") { return nil }
+        guard DeletionPlan.isLexicallySafePath(rawPath) else { return nil }
+        let path = normalize(rawPath), home = normalize(homeDirectory)
+        guard path != home, !isStrictDescendant(path, of: home) else { return nil }
+        if isStrictDescendant(path, of: "/Library/Caches") { return .cache }
+        if isStrictDescendant(path, of: "/private/tmp")
+            || isStrictDescendant(path, of: "/private/var/tmp") { return .temporary }
+        let folders = "/private/var/folders/"
+        if path.hasPrefix(folders) {
+            let parts = String(path.dropFirst(folders.count)).split(separator: "/")
+            // macOS allocates a two-level per-user directory. Only its T/C
+            // children qualify, never the user container or either root.
+            if parts.count >= 4, parts[0].count == 2,
+               parts[2] == "T" || parts[2] == "C" { return .temporary }
+        }
+        let powerRoot = "/private/var/db/powerlog/"
+        if path.hasPrefix(powerRoot), isArchivedPowerlogPath(path) { return .archivedPowerlog }
+        if isStrictDescendant(path, of: "/private/var/log") {
+            let name = (path as NSString).lastPathComponent.lowercased()
+            if name.range(of: #"^.+\.[0-9]+(?:\.(?:gz|bz2|xz))?$"#,
+                          options: .regularExpression) != nil
+                || name.range(of: #"^\d{4}\.\d{2}\.\d{2}.+\.asl$"#,
+                              options: .regularExpression) != nil {
+                return .archivedLog
+            }
+        }
+        return nil
+    }
+
+    static func isArchivedPowerlogPath(_ path: String) -> Bool {
+        let archives = "/private/var/db/powerlog/Library/BatteryLife/Archives"
+        guard path == archives || isStrictDescendant(path, of: archives) else { return false }
+        if path == archives { return true }
+        let name = (path as NSString).lastPathComponent.lowercased()
+        // Current telemetry databases and their companions can be reopened
+        // by KeepAlive services even when lsof happens to report no handle.
+        guard !name.hasPrefix("current"), !name.hasSuffix("-wal"),
+              !name.hasSuffix("-shm"), !name.hasSuffix("-journal") else { return false }
+        return name.range(of: #"^powerlog_\d{4}-\d{2}-\d{2}_[0-9a-f]{8}\.plsql(?:\.gz)?$"#,
+                          options: .regularExpression) != nil
+    }
+
+    static func systemCleanupRetention(for path: String,
+                                       homeDirectory: String = NSHomeDirectory()) -> TimeInterval? {
+        guard systemCleanupKind(for: path, homeDirectory: homeDirectory) != nil else { return nil }
+        return 7 * 24 * 60 * 60
+    }
+
+    /// Mandatory system age/owner gate. Manual selection does not bypass it.
+    /// The caller supplies fstat metadata from the no-follow descriptor.
+    static func systemCleanupMetadataEligible(path: String, ownerUID: UInt32, userUID: UInt32,
+                                             modified: Date, accessed: Date, now: Date = Date(),
+                                             homeDirectory: String = NSHomeDirectory()) -> Bool {
+        guard let retention = systemCleanupRetention(for: path, homeDirectory: homeDirectory) else { return true }
+        guard ownerUID == userUID || ownerUID == 0 else { return false }
+        let latest = max(modified, accessed)
+        return modified.timeIntervalSince1970 > 0 && accessed.timeIntervalSince1970 > 0
+            && latest <= now && now.timeIntervalSince(latest) >= retention
+    }
+
+    /// Explicit cache leaves inside otherwise durable Agent data. Never
+    /// promote the surrounding profile, workspace state or checkpoints.
+    private static let auditedRootLock = NSLock()
+    private static var auditedRootCache: [String: [String]] = [:]
+
+    static func auditedRebuildableRoots(homeDirectory: String = NSHomeDirectory()) -> [String] {
+        let home = normalize(homeDirectory)
+        auditedRootLock.lock()
+        let existing = auditedRootCache[home]
+        auditedRootLock.unlock()
+        if let existing { return existing }
+        var roots = aiCacheRoots(homeDirectory: home) + [
+            home + "/Library/Caches/com.openai.codex",
+            home + "/Library/Caches/com.todesktop.230313mzl4w4u92",
+            home + "/Library/Caches/com.todesktop.230313mzl4w4u92.ShipIt",
+            home + "/Library/Caches/cursor-compile-cache",
+            home + "/Library/Caches/Zed", home + "/Library/Caches/dev.zed.Zed",
+            home + "/Library/Logs/Zed", home + "/Library/Logs/com.openai.codex",
+            home + "/Library/Caches/org.blenderfoundation.blender",
+            home + "/Library/Application Support/Zed/Cache",
+            home + "/Library/Application Support/Zed/hang_traces",
+            home + "/Library/Application Support/Zed/node/cache",
+            home + "/Library/Application Support/Zed/prettier",
+            home + "/Library/Application Support/Zed/languages",
+            home + "/Library/Application Support/Zed/extensions/work"
+        ]
+        for app in ["Codex", "Cursor"] {
+            for leaf in ["Cache", "Code Cache", "GPUCache", "CachedData", "CachedExtensionVSIXs",
+                         "DawnCache", "DawnGraphiteCache", "DawnWebGPUCache", "GrShaderCache",
+                         "GraphiteDawnCache", "ShaderCache", "logs", "Crashpad/completed"] {
+                roots.append(home + "/Library/Application Support/" + app + "/" + leaf)
+            }
+        }
+        roots = Array(Set(roots)).sorted { $0.count > $1.count }
+        auditedRootLock.lock()
+        auditedRootCache[home] = roots
+        auditedRootLock.unlock()
+        return roots
+    }
+
+    static func auditedRebuildableRoot(containing path: String, homeDirectory: String = NSHomeDirectory()) -> String? {
+        let home = normalize(homeDirectory)
+        let zedNode = home + "/Library/Application Support/Zed/node/"
+        if path.hasPrefix(zedNode) {
+            let parts = String(path.dropFirst(zedNode.count)).split(separator: "/").map(String.init)
+            if parts.count >= 2, parts[0].hasPrefix("node-v"), parts[1] == "cache" {
+                return zedNode + parts[0] + "/cache"
+            }
+        }
+        return auditedRebuildableRoots(homeDirectory: home).first {
+            path == $0 || isStrictDescendant(path, of: $0)
+        }
+    }
+
+    static func downloadedRuntimeRoot(containing path: String, homeDirectory: String = NSHomeDirectory()) -> String? {
+        let home = normalize(homeDirectory)
+        return [home + "/Library/Caches/ms-playwright", home + "/Library/Caches/Cypress",
+                home + "/.cache/puppeteer", home + "/Library/Application Support/Zed/node/cache",
+                home + "/Library/Application Support/Zed/prettier",
+                home + "/Library/Application Support/Zed/languages"].first {
+            path == $0 || isStrictDescendant(path, of: $0)
+        }
+    }
+
     private static func hasModelFileSignature(_ component: String) -> Bool {
         // Components already belong to a normalized path. Creating relative
         // file URLs here needlessly resolves each name against the working directory.
@@ -112,6 +246,17 @@ enum CleanupRiskPolicy {
         }
 
         let home = normalize(homeDirectory)
+
+        if systemCleanupKind(for: normalized, homeDirectory: home) != nil {
+            return .init(source: .core, risk: .safe, disposal: .permanentDelete,
+                         applyRoute: .genericTrash, activityGuard: .openFile,
+                         reasonKey: "cleanup.risk.rebuildableCache")
+        }
+        if auditedRebuildableRoot(containing: normalized, homeDirectory: home) != nil {
+            return .init(source: .aiCache, risk: .safe, disposal: .permanentDelete,
+                         applyRoute: .aiTrash, activityGuard: .openFile,
+                         reasonKey: "cleanup.risk.rebuildableCache")
+        }
 
         if let knowledgeDescriptor = appCacheKnowledgeDescriptor(normalized, home: home) {
             return knowledgeDescriptor
@@ -492,6 +637,7 @@ enum CleanupRiskPolicy {
     static func isAgentOwnedPath(_ path: String,
                                  homeDirectory: String = NSHomeDirectory()) -> Bool {
         let normalized = normalize(path)
+        if auditedRebuildableRoot(containing: normalized, homeDirectory: homeDirectory) != nil { return false }
         return agentOwnedRoots(homeDirectory: homeDirectory).contains {
             normalized == $0 || isStrictDescendant(normalized, of: $0)
         }
@@ -875,8 +1021,15 @@ enum CleanupRiskPolicy {
             return descriptor.risk == .safe && descriptor.disposal == .permanentDelete ? root : nil
         }
         let templateSource = verifiedRoot != nil && isDisposablePackageTemplateSourcePath(path, home: home)
+        let downloadedRuntime = verifiedRoot != nil && downloadedRuntimeRoot(containing: path, homeDirectory: home) != nil
+        let runtimeSource = downloadedRuntime && (fullComponents.contains("node_modules")
+            || fullComponents.contains("site-packages")
+            || fullComponents.enumerated().contains { index, name in
+                name.hasSuffix(".app") && index + 1 < fullComponents.count && fullComponents[index + 1] == "contents"
+            })
+        let archivedDatabase = isArchivedPowerlogPath(path)
         let homeRelativePath = isStrictDescendant(path, of: home) ? String(path.dropFirst(home.count)) : path
-        if !templateSource && homeRelativePath.split(separator: "/").contains(where: {
+        if !templateSource && !runtimeSource && homeRelativePath.split(separator: "/").contains(where: {
             $0.lowercased() == "models" || $0.lowercased() == "model"
         }) { return true }
         // Ordinary cached child records must retain durable ancestry. Only a
@@ -891,20 +1044,23 @@ enum CleanupRiskPolicy {
         let structuralPath = templateSource
             ? "/" + contextPath.split(separator: "/").filter { $0.lowercased() != "models" }.joined(separator: "/")
             : contextPath
-        if isSensitiveAutomationPath(structuralPath) { return true }
+        let runtimeStructuralPath = runtimeSource
+            ? "/" + structuralPath.split(separator: "/").filter { !["models", "model"].contains($0.lowercased()) }.joined(separator: "/")
+            : structuralPath
+        if isSensitiveAutomationPath(runtimeStructuralPath) { return true }
 
         let url = URL(fileURLWithPath: path)
         let name = url.lastPathComponent.lowercased()
         let extensionName = url.pathExtension.lowercased()
-        if contextPath.split(separator: "/").contains(where: {
+        if !archivedDatabase && (contextPath.split(separator: "/").contains(where: {
             databaseFileExtensions.contains((String($0) as NSString).pathExtension.lowercased())
         })
-            || databaseSidecarSuffixes.contains(where: name.hasSuffix) { return true }
-        if extensionName == "app" { return !allowApplicationBundle }
-
+            || databaseSidecarSuffixes.contains(where: name.hasSuffix)) { return true }
+        if extensionName == "app" { return !allowApplicationBundle && !downloadedRuntime }
         return contextPath.split(separator: "/").contains { component in
             let component = component.lowercased()
-            return durableCleanupNames.contains(component) && !(templateSource && templateSourceNames.contains(component))
+            return durableCleanupNames.contains(component)
+                && !((templateSource || runtimeSource) && templateSourceNames.contains(component))
         }
     }
 
@@ -1080,6 +1236,8 @@ enum CleanupRiskPolicy {
     }
 
     static func isProtectedContent(_ path: String, homeDirectory: String) -> Bool {
+        if systemCleanupKind(for: path, homeDirectory: homeDirectory) != nil
+            || auditedRebuildableRoot(containing: path, homeDirectory: homeDirectory) != nil { return false }
         if protectedAbsoluteRoots.contains(where: { path == $0 || isStrictDescendant(path, of: $0) }) {
             return true
         }
@@ -1120,6 +1278,9 @@ enum CleanupRiskPolicy {
             home + "/Library/Caches/org.carthage.CarthageKit",
             home + "/.bun/install/cache",
             home + "/Library/Caches/pnpm",
+            home + "/Library/pnpm/store",
+            home + "/.pnpm-store",
+            home + "/.local/share/pnpm/store",
             home + "/.yarn/cache",
             home + "/Library/Caches/Yarn",
             // Gradle: only the build cache, daemon logs, worker scratch and
@@ -1190,7 +1351,7 @@ enum CleanupRiskPolicy {
         // 它们，策略层也必须承认它们（否则出现“扫得到却被保护拦下”）。
         let locations = DeveloperCacheLocations.current(home: home)
         for custom in [locations.npmCache, locations.yarnCache, locations.pipCache,
-                       locations.poetryCache, locations.goModCache, locations.goBuildCache] {
+                       locations.poetryCache, locations.goModCache, locations.goBuildCache, locations.pnpmStore] {
             if let custom { roots.append(custom) }
         }
         if let cargoHome = locations.cargoHome {
@@ -1369,9 +1530,42 @@ enum CleanupRiskPolicy {
         protectedDescriptor(source: source, reasonKey: "cleanup.risk.invalidPath")
     }
 
-    private static func normalize(_ path: String) -> String {
-        URL(fileURLWithPath: path).standardizedFileURL.path
+    /// Lexical normalization must not ask Foundation to shorten existing
+    /// /private paths to symlink aliases. Native fd traversal deliberately
+    /// requires physical /private spelling and rejects symlink components.
+    static func normalizedPathLiteral(_ path: String) -> String {
+        DeletionPlan.normalizedPathLiteral(path)
     }
+
+    static func canonicalOpenFilePath(_ path: String) -> String {
+        if let pointer = realpath(path, nil) {
+            defer { free(pointer) }
+            return normalizedPathLiteral(String(cString: pointer))
+        }
+        // lsof can name a vanished/open file. Keep its absolute literal and
+        // normalize only macOS's known root aliases, never guess other links.
+        if path == "/var" || path.hasPrefix("/var/")
+            || path == "/tmp" || path.hasPrefix("/tmp/")
+            || path == "/etc" || path.hasPrefix("/etc/") {
+            return "/private" + normalizedPathLiteral(path)
+        }
+        return normalizedPathLiteral(path)
+    }
+
+    static func systemCleanupAccountScopeEligible(path: String, homeDirectory: String) -> Bool {
+        let prefix = "/private/var/folders/"
+        guard path.hasPrefix(prefix) else { return true }
+        let parts = String(path.dropFirst(prefix.count)).split(separator: "/").map(String.init)
+        guard parts.count >= 4, parts[0].count == 2, parts[2] == "T" || parts[2] == "C" else { return false }
+        var account = stat(), container = stat(), scratch = stat()
+        let userRoot = prefix + parts[0] + "/" + parts[1]
+        return lstat(homeDirectory, &account) == 0 && lstat(userRoot, &container) == 0
+            && lstat(userRoot + "/" + parts[2], &scratch) == 0
+            && container.st_mode & S_IFMT == S_IFDIR && scratch.st_mode & S_IFMT == S_IFDIR
+            && container.st_uid == account.st_uid && scratch.st_uid == account.st_uid
+    }
+
+    private static func normalize(_ path: String) -> String { normalizedPathLiteral(path) }
 
     /// Keep the same intentionally narrow ASCII grammar as the final shell
     /// guard. A dotted but malformed cache owner is Warning, never Safe.

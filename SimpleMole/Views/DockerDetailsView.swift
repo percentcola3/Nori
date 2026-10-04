@@ -86,13 +86,15 @@ struct DockerDetailsView: View {
                 emptyDetail(for: kind)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 6) {
-                        ForEach(rows) { row in
-                            resourceRow(row)
+                    LiquidGlassGroup {
+                        LazyVStack(spacing: 6) {
+                            ForEach(rows) { row in
+                                resourceRow(row)
+                            }
                         }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
                 }
             }
         }
@@ -151,12 +153,8 @@ struct DockerDetailsView: View {
             }
             Spacer()
             if let active = item.isActive {
-                Text(l10n.t(active ? "docker.item.active" : "docker.item.inactive"))
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(active ? Color.success : Color.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill((active ? Color.success : Color.secondary).opacity(0.10)))
+                DevTag(text: l10n.t(active ? "docker.item.active" : "docker.item.inactive"),
+                       color: active ? .success : nil)
             }
             if let reclaimable = item.reclaimableLabel, !reclaimable.isEmpty {
                 Text(reclaimable)
@@ -170,7 +168,7 @@ struct DockerDetailsView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8).fill(.quinary.opacity(0.5)))
+        .modifier(ListRowGlass(interactive: false))
     }
 
     private func inventoryMessage(symbol: String, key: String, progress: Bool = false) -> some View {
@@ -193,6 +191,7 @@ struct DockerDetailsView: View {
             Spacer()
         }
         .padding(9)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.warning.opacity(0.10)))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface1))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.hairline))
     }
 }

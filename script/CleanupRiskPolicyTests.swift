@@ -33,6 +33,69 @@ struct CleanupRiskPolicyTests {
         try testNetmonParsing()
         try testCacheMapPolicy(home: policyHome)
         try testMoleParity(home: policyHome)
+        try testExpandedAuditedCoverage(home: policyHome)
+    }
+
+    private static func testExpandedAuditedCoverage(home: String) throws {
+        for path in [home + "/Library/pnpm/store/v11/files/00/hash",
+                     home + "/Library/Application Support/Codex/Cache/web.cache",
+                     home + "/Library/Application Support/Cursor/Code Cache/js/cache",
+                     home + "/Library/Application Support/Zed/node/cache/_cacache/content-v2/a",
+                     home + "/Library/Application Support/Zed/node/node-v22.0.0/cache/_cacache/a",
+                     home + "/Library/Application Support/Zed/languages/vtsls/node_modules/package/index.js",
+                     home + "/Library/Application Support/Zed/extensions/work/compile.o"] {
+            try expect(CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home).risk == .safe,
+                       "audited cache not admitted: " + path)
+            try expect(!CleanupRiskPolicy.isAgentOwnedPath(path, homeDirectory: home),
+                       "audited cache still hidden behind Agent parent")
+        }
+        for path in [home + "/Library/Application Support/Cursor/snapshots/state/state.db",
+                     home + "/Library/Application Support/Cursor/User/workspaceStorage/id/state.vscdb",
+                     home + "/Library/Application Support/Codex/Preferences",
+                     home + "/Library/Application Support/Zed/threads/threads.db",
+                     home + "/Library/Application Support/Zed/extensions/installed/plugin",
+                     home + "/Library/Application Support/Blender/4.5/config/userpref.blend",
+                     "/private/var/db/powerlog/Library/PerfPowerTelemetry/BackgroundProcessing/CurrentBackgroundProcessingDB.BGSQL",
+                     "/private/var/db/powerlog/Library/BatteryLife/CurrentPowerlog.PLSQL-wal",
+                     "/System/Volumes/VM/swapfile0", "/private/var/vm/swapfile0"] {
+            try expect(CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home).risk != .safe,
+                       "durable data/system runtime promoted: " + path)
+        }
+        let runtime = home + "/Library/Caches/ms-playwright"
+        for leaf in ["chromium-1234/Chrome.app", "chromium-1234/Chrome.app/Contents/Resources/config.json"] {
+            try expect(!CleanupRiskPolicy.isProtectedCleanupPath(runtime + "/" + leaf, homeDirectory: home,
+                rebuildableRoot: runtime, rootIsVerifiedRebuildable: true), "downloaded runtime source blocked: " + leaf)
+        }
+        for leaf in ["history.jsonl", "auth.json", "sessions/id/log.jsonl", "tokens/cache", "Chrome.app/Contents/Resources/weights.gguf"] {
+            try expect(CleanupRiskPolicy.isProtectedCleanupPath(runtime + "/" + leaf, homeDirectory: home,
+                rebuildableRoot: runtime, rootIsVerifiedRebuildable: true), "runtime exception hid real data: " + leaf)
+        }
+        let archive = "/private/var/db/powerlog/Library/BatteryLife/Archives/powerlog_2026-09-01_0123ABCD.PLSQL.gz"
+        for path in ["/private/tmp/nori-fixture/old.cache", "/private/var/tmp/nori-fixture/old.cache",
+                     "/private/var/folders/aa/user-id/T/old.cache", "/private/var/folders/aa/user-id/C/org.blenderfoundation.blender/old.data",
+                     "/private/var/log/system.log.0.gz", archive] {
+            try expect(CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) != nil,
+                       "audited system path omitted: " + path)
+        }
+        for path in ["/private/tmp", "/private/var/folders/aa/user-id/T", "/private/var/log/system.log",
+                     "/private/var/db/powerlog/Library/BatteryLife/Archives/unknown.db",
+                     "/private/var/db/powerlog/Library/BatteryLife/Archives/CurrentPowerlog.PLSQL"] {
+            try expect(CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) == nil,
+                       "system parent/active log promoted: " + path)
+        }
+        let now = Date(timeIntervalSince1970: 2_000_000_000), old = Date(timeIntervalSince1970: 2_000_000_000 - 8 * 86400)
+        for (owner, modified, accessed, expected) in [(UInt32(501), old, old, true), (0, old, old, true),
+            (502, old, old, false), (501, now, old, false), (501, old, now, false)] {
+            try expect(CleanupRiskPolicy.systemCleanupMetadataEligible(path: archive, ownerUID: owner, userUID: 501,
+                modified: modified, accessed: accessed, now: now, homeDirectory: home) == expected,
+                "mandatory system age/uid boundary failed")
+        }
+        let located = DeveloperCacheLocations.resolve(home: home, environment: ["HOME": "/wrong/home"], readText: {
+            $0 == home + "/.npmrc" ? "store-dir=${HOME}/custom-pnpm-store" : nil
+        })
+        try expect(located.pnpmStore == home + "/custom-pnpm-store", "pnpm store-dir config/HOME resolution failed")
+        try expect(DeveloperCacheLocations.resolve(home: home, environment: [:], readText: { _ in nil }).pnpmStore
+            == home + "/Library/pnpm/store", "macOS pnpm store default missing")
     }
 
     /// Cleanup-policy parity with Mole's clean/dev catalog: dependency stores

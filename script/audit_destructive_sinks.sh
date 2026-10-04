@@ -6,6 +6,7 @@
 #    其余白名单文件只清理应用自建的临时/缓存文件；MediaSlimmer 只删自己的
 #    .nori-slim- 临时输出，被替换的原件一律移入废纸篓。新增的 Shell 编辑器
 #    与 Agent CLI 日志只按具体调用语句豁免自建临时文件，不豁免整个文件。
+#    目录管理只允许原生 Trash 与自建复制暂存路径清理，不允许永久删除用户文件。
 # 2. bridge 脚本：mole_delete 必须显式传入身份参数（第三个参数）；rm -rf
 #    只允许作用于引号包裹的变量（脚本自建目录），字面量路径一律拒绝。
 set -euo pipefail
@@ -34,6 +35,11 @@ SimpleMole/Services/CleanupCache.swift|SimpleMole/Services/MediaSlimmer.swift) r
             [[ "$2" == 'defer { try? handle.close(); try? FileManager.default.removeItem(at: output) }' ]] && return 0 ;;
         SimpleMole/Services/AdministratorCleanupService.swift)
             [[ "$2" == 'defer { try? FileManager.default.removeItem(at: directory) }' ]] && return 0 ;;
+        SimpleMole/Services/DirectoryFileService.swift)
+            case "$2" in
+                'try FileManager.default.trashItem(at: source, resultingItemURL: nil)'|\
+                'defer { try? FileManager.default.removeItem(at: staging) }') return 0 ;;
+            esac ;;
         *) return 1 ;;
     esac
     return 1
@@ -49,6 +55,15 @@ while IFS= read -r match; do
     fi
 done < <(grep -rnE 'removeItem\(|trashItem\(|unlinkat\(|unlink\(|rmdir\(' \
     "$ROOT_DIR/SimpleMole" --include='*.swift' || true)
+
+directory_service="$ROOT_DIR/SimpleMole/Services/DirectoryFileService.swift"
+for contract in \
+    'let staging = directory.appendingPathComponent(".nori-copy-" + UUID().uuidString)' \
+    'try FileManager.default.copyItem(at: source, to: staging)' \
+    'let source = try mutableSource(url)' \
+    'guard source.path != "/" else { throw DirectoryFileError.protectedRoot }'; do
+    grep -Fq "$contract" "$directory_service" || fail 'Directory Trash or owned copy-staging contract changed'
+done
 
 # The exact statement exemptions above remain valid only with owned, exclusive
 # temporary names and the Shell profile's identity/byte comparison in place.

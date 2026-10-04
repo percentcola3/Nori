@@ -4,6 +4,10 @@ import Darwin
 /// Reads shell configuration as text. Inventory never sources a profile or executes its values.
 enum DeveloperShellService {
     static let fileNames = [".zshenv", ".zprofile", ".zshrc", ".zlogin"]
+    static let bashFileNames = [".bash_profile", ".bash_login", ".profile", ".bashrc"]
+    static var supportedFileNames: [String] { fileNames + bashFileNames }
+    enum Kind: String, Equatable, Sendable { case zsh, bash, unsupported }
+    static func kind(for name: String) -> Kind { bashFileNames.contains(name) ? .bash : .zsh }
     private static let maximumBytes = 2 * 1_024 * 1_024
 
     struct Variable: Identifiable, Equatable {
@@ -12,11 +16,21 @@ enum DeveloperShellService {
         let name: String
         /// nil means shell expansion, command substitution, or unsupported syntax.
         let literalValue: String?
+        /// Literal text and plain `$NAME` references; nil when the value needs the shell to evaluate it.
+        let parts: [ValuePart]?
         let originalLine: String
-        fileprivate let assignmentPrefix: String
-        fileprivate let commentSuffix: String
+        let assignmentPrefix: String
+        let commentSuffix: String
         var id: String { "\(fileName):\(lineNumber):\(name)" }
         var isDynamic: Bool { literalValue == nil }
+        var structuredParts: [ValuePart]? { parts ?? literalValue.map { [.literal($0)] } }
+        var isStructured: Bool { structuredParts != nil }
+        var isExported: Bool { assignmentPrefix.contains("export") }
+    }
+
+    enum ValuePart: Equatable, Hashable {
+        case literal(String)
+        case reference(String)
     }
 
     struct Profile: Identifiable, Equatable {
@@ -26,10 +40,14 @@ enum DeveloperShellService {
         let variables: [Variable]
         /// Inventory errors are per-file so one unreadable file does not hide the rest.
         let problem: Failure?
-        fileprivate let originalData: Data
-        fileprivate let identity: Identity?
+        let originalData: Data
+        let identity: Identity?
         var id: String { name }
+        var directoryPath: String? = nil
+        var homePath: String? = nil
         var canEdit: Bool { problem == nil }
+        var path: String { URL(fileURLWithPath: directoryPath ?? NSHomeDirectory()).appendingPathComponent(name).path }
+        var shellKind: Kind { DeveloperShellService.kind(for: name) }
     }
 
     struct SaveResult {
@@ -51,7 +69,7 @@ enum DeveloperShellService {
         case writeFailed
     }
 
-    fileprivate struct Identity: Equatable {
+    struct Identity: Equatable {
         let device: dev_t
         let inode: ino_t
         let modifiedSeconds: Int
@@ -70,10 +88,23 @@ enum DeveloperShellService {
     }
 
     static func readProfile(_ name: String, home: String = NSHomeDirectory()) throws -> Profile {
-        guard fileNames.contains(name) else { throw Failure.unsupportedFile }
+        guard supportedFileNames.contains(name) else { throw Failure.unsupportedFile }
         let directory = try openHome(home)
         defer { close(directory) }
-        return try readProfile(name, directory: directory)
+        var profile = try readProfile(name, directory: directory)
+        profile.directoryPath = home
+        profile.homePath = home
+        return profile
+    }
+
+    static func readSourceProfile(path: String) throws -> Profile {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        let directory = try openHome(url.deletingLastPathComponent().path)
+        defer { close(directory) }
+        var profile = try readProfile(url.lastPathComponent, directory: directory)
+        guard profile.exists else { throw Failure.unreadable }
+        profile.directoryPath = url.deletingLastPathComponent().path
+        return profile
     }
 
     /// A single literal assignment is editable here; complex lines stay in the source editor.
@@ -99,7 +130,7 @@ enum DeveloperShellService {
     }
 
     static func removingVariable(in profile: Profile, variable: Variable) throws -> String {
-        guard profile.canEdit, variable.fileName == profile.name, !variable.isDynamic else {
+        guard profile.canEdit, variable.fileName == profile.name, variable.isStructured else {
             throw Failure.dynamicVariable
         }
         var lines = profile.text.components(separatedBy: "\n")
@@ -115,12 +146,12 @@ enum DeveloperShellService {
     /// the original file's identity and bytes to match the inventory snapshot.
     static func save(_ text: String, replacing profile: Profile,
                      home: String = NSHomeDirectory()) throws -> SaveResult {
-        guard fileNames.contains(profile.name), profile.canEdit else { throw Failure.unsafeFile }
+        guard supportedFileNames.contains(profile.name), profile.canEdit else { throw Failure.unsafeFile }
         let data = Data(text.utf8)
         guard data.count <= maximumBytes else { throw Failure.tooLarge }
         guard !text.contains("\0") else { throw Failure.invalidEncoding }
-        try validateSyntax(text)
-        let directory = try openHome(home)
+        try validateSyntax(text, kind: profile.shellKind)
+        let directory = try openHome(profile.directoryPath ?? home)
         defer { close(directory) }
         try requireUnchanged(profile, directory: directory)
         let temporaryName = ".nori-shell-\(UUID().uuidString)"
@@ -131,22 +162,9 @@ enum DeveloperShellService {
         let permission = profile.identity.map { $0.mode & 0o777 } ?? 0o600
         guard fchmod(descriptor, permission) == 0, fsync(descriptor) == 0 else { throw Failure.writeFailed }
 
-        var backupName: String?
-        if profile.exists {
-            let name = "\(profile.name).nori-backup-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(8))"
-            let backup = openat(directory, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
-            guard backup >= 0 else { throw Failure.writeFailed }
-            do {
-                try writeAll(profile.originalData, descriptor: backup)
-                guard fsync(backup) == 0 else { throw Failure.writeFailed }
-                close(backup)
-                backupName = name
-            } catch {
-                close(backup)
-                unlinkat(directory, name, 0)
-                throw error
-            }
-        }
+        let targetPath = URL(fileURLWithPath: profile.directoryPath ?? home).appendingPathComponent(profile.name).path
+        let ownerHome = profile.homePath ?? home
+        let backupPath = profile.exists ? try DeveloperShellBackupStore.create(profile.originalData, targetPath: targetPath, home: ownerHome) : nil
         // Repeat the comparison after validation and backup work, immediately before replacing.
         try requireUnchanged(profile, directory: directory)
         let renamed: Int32
@@ -160,11 +178,15 @@ enum DeveloperShellService {
             throw errno == EEXIST ? Failure.changedOnDisk : Failure.writeFailed
         }
         _ = fsync(directory)
-        return SaveResult(profile: try readProfile(profile.name, directory: directory),
-                          backupPath: backupName.map { URL(fileURLWithPath: home).appendingPathComponent($0).path })
+        DeveloperShellBackupStore.rotate(targetPath: targetPath, home: ownerHome)
+        var updated = try readProfile(profile.name, directory: directory)
+        updated.directoryPath = profile.directoryPath ?? home
+        updated.homePath = profile.homePath ?? home
+        return SaveResult(profile: updated,
+                          backupPath: backupPath)
     }
 
-    static func validateSyntax(_ text: String) throws {
+    static func validateSyntax(_ text: String, kind: Kind = .zsh) throws {
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("nori-shell-check-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: false,
                                               attributes: [.posixPermissions: 0o700])
@@ -178,9 +200,9 @@ enum DeveloperShellService {
         guard let output = try? FileHandle(forWritingTo: errors) else { throw Failure.validationUnavailable }
         defer { try? output.close() }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.executableURL = URL(fileURLWithPath: kind == .bash ? "/bin/bash" : "/bin/zsh")
         // -f disables user startup files; -n only parses. HOME/ZDOTDIR also point to an empty directory.
-        process.arguments = ["-f", "-n", input.path]
+        process.arguments = kind == .bash ? ["--noprofile", "--norc", "-n", input.path] : ["-f", "-n", input.path]
         process.environment = ["HOME": temporary.path, "ZDOTDIR": temporary.path,
                                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL": "C"]
         process.standardInput = FileHandle.nullDevice
@@ -271,7 +293,7 @@ enum DeveloperShellService {
     }
 
     private static func parseVariables(_ text: String, fileName: String) -> [Variable] {
-        let pattern = #"^(\s*export\s+)([A-Za-z_][A-Za-z0-9_]*)=(.*)$"#
+        let pattern = #"^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)=(.*)$"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         var context = DeclarationContext()
         var variables: [Variable] = []
@@ -286,17 +308,24 @@ enum DeveloperShellService {
                   let prefixRange = Range(match.range(at: 1), in: line),
                   let nameRange = Range(match.range(at: 2), in: line),
                   let valueRange = Range(match.range(at: 3), in: line) else { continue }
-            let parsed = literalValue(String(line[valueRange]))
-            variables.append(Variable(fileName: fileName, lineNumber: index + 1, name: String(line[nameRange]),
-                                      literalValue: parsed.value, originalLine: line,
-                                      assignmentPrefix: String(line[prefixRange]), commentSuffix: parsed.suffix))
+            let prefix = String(line[prefixRange])
+            let name = String(line[nameRange])
+            // PATH is already exported, so a bare assignment still changes the environment.
+            guard prefix.contains("export") || name == "PATH" else { continue }
+            let expression = String(line[valueRange])
+            let parsed = literalValue(expression)
+            let structured = structuredValue(expression)
+            variables.append(Variable(fileName: fileName, lineNumber: index + 1, name: name,
+                                      literalValue: parsed.value, parts: structured?.parts, originalLine: line,
+                                      assignmentPrefix: prefix,
+                                      commentSuffix: structured?.suffix ?? parsed.suffix))
         }
         return variables
     }
 
     /// Tracks only lexical regions that must not become independently editable rows.
     /// It does not interpret shell commands or decide which conditional branches run.
-    private struct DeclarationContext {
+    struct DeclarationContext {
         private struct Heredoc {
             let delimiter: String
             let stripsTabs: Bool

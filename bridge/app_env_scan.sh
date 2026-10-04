@@ -55,6 +55,7 @@ emit_version() {
 # 版本目录 = versions_root 下的一级子目录；可通过 inner 参数下钻。
 emit_runtime_family() {
     local manager="$1" root="$2" cmd="$3" inner="${4:-}" protected_dir="${5:-}"
+    nori_scan_path_allowed "$root" || return 0
     [[ -d "$root" ]] || return 0
     local active_dir=""
     active_dir=$(simplemole_active_bin_dir "$cmd") || active_dir=""

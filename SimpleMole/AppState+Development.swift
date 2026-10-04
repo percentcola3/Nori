@@ -9,8 +9,7 @@ extension AppState {
         developerWorkspaceRefreshTask = nil
         devWorkspaceRefreshPending = false
         permissionCenter.refresh()
-        if permissionCenter.fullDiskAccessGranted {
-            if isBusy {
+        if isBusy {
                 devWorkspaceRefreshPending = true
                 developerWorkspaceRefreshTask = Task { [weak self] in
                     guard let self else { return }
@@ -25,9 +24,8 @@ extension AppState {
                     self.scanDevEnv(announce: false, presentingPermissionCenter: false, notifyingUser: true)
                     self.scanGc(force: true, notifyingUser: true)
                 }
-            } else {
-                scanDevEnv(announce: false, presentingPermissionCenter: false, notifyingUser: true)
-            }
+        } else {
+            scanDevEnv(announce: false, presentingPermissionCenter: false, notifyingUser: true)
         }
         scanGc(force: true, notifyingUser: true)
     }

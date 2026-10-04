@@ -19,6 +19,16 @@ struct CacheFixtureCase {
         .init(name: "go-downloads", root: "go/pkg/mod/cache", aged: true),
         .init(name: "go-build", root: "Library/Caches/go-build", aged: true),
         .init(name: "pnpm-dlx", root: "Library/Caches/pnpm", aged: true),
+        .init(name: "pnpm-store", root: "Library/pnpm/store/v10/files", aged: true),
+        .init(name: "codex-web", root: "Library/Application Support/Codex/Cache", aged: true),
+        .init(name: "cursor-code", root: "Library/Application Support/Cursor/Code Cache", aged: true),
+        .init(name: "cursor-compile", root: "Library/Caches/cursor-compile-cache", aged: true),
+        .init(name: "zed-npm", root: "Library/Application Support/Zed/node/cache/_cacache", aged: true),
+        .init(name: "zed-node-version", root: "Library/Application Support/Zed/node/node-v22.0.0/cache", aged: true),
+        .init(name: "zed-runtime", root: "Library/Application Support/Zed/languages/vtsls", aged: true),
+        .init(name: "zed-work", root: "Library/Application Support/Zed/extensions/work", aged: true),
+        .init(name: "blender", root: "Library/Caches/org.blenderfoundation.blender", aged: true),
+        .init(name: "playwright", root: "Library/Caches/ms-playwright/chromium-1234/Chrome.app/Contents/MacOS", aged: true),
         .init(name: "poetry", root: "Library/Caches/pypoetry", aged: true),
         .init(name: "nuget-downloads", root: "Library/Caches/NuGet", aged: true),
         .init(name: "composer", root: "Library/Caches/composer", aged: true),
@@ -71,6 +81,6 @@ enum CacheCleanupUnitTests {
         }
         try cacheExpect(CleanupAgePolicy.activityEvidence(modified: now.addingTimeInterval(-retention),
             accessed: now) == now, "UNIT recent reads must protect old writes")
-        print("PASS UNIT: 29 cache classifications, 4 dependency stores, 5 sensitive paths, 7 age/evidence checks")
+        print("PASS UNIT: \(CacheFixtureCase.all.count) cache classifications, 4 dependency stores, 5 sensitive paths, 7 age/evidence checks")
     }
 }

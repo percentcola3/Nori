@@ -6,6 +6,49 @@ struct DeletionPlan {
     struct Item {
         let record: String
         let identity: String
+        var metadata: Metadata? = nil
+    }
+
+    /// Preserve the reviewed file object across administrator authentication.
+    /// Directory contents may change during partial cache cleanup, while its
+    /// ownership and permissions must remain bound to the reviewed object.
+    struct Metadata: Codable, Equatable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+        let modifiedSeconds: Int64
+        let modifiedNanoseconds: Int64
+        let changedSeconds: Int64
+        let changedNanoseconds: Int64
+        let size: Int64
+        let owner: UInt32
+        let group: UInt32
+        let mode: UInt16
+        let flags: UInt32
+
+        init(_ value: stat) {
+            device = UInt64(value.st_dev); inode = UInt64(value.st_ino)
+            modifiedSeconds = Int64(value.st_mtimespec.tv_sec)
+            modifiedNanoseconds = Int64(value.st_mtimespec.tv_nsec)
+            changedSeconds = Int64(value.st_ctimespec.tv_sec)
+            changedNanoseconds = Int64(value.st_ctimespec.tv_nsec)
+            size = Int64(value.st_size); owner = value.st_uid; group = value.st_gid
+            mode = value.st_mode; flags = value.st_flags
+        }
+
+        static func read(_ path: String) -> Metadata? {
+            var value = stat()
+            guard DeletionPlan.isLexicallySafePath(path), lstat(path, &value) == 0,
+                  value.st_mode & S_IFMT != S_IFLNK else { return nil }
+            return Metadata(value)
+        }
+
+        func matches(_ value: stat, allowingDirectoryContentChanges: Bool = false) -> Bool {
+            let current = Metadata(value)
+            guard device == current.device, inode == current.inode, owner == current.owner,
+                  group == current.group, mode == current.mode, flags == current.flags else { return false }
+            if allowingDirectoryContentChanges && value.st_mode & S_IFMT == S_IFDIR { return true }
+            return self == current
+        }
     }
 
     let items: [Item]
@@ -16,7 +59,7 @@ struct DeletionPlan {
 
     init(paths: [String]) {
         items = Self.nonOverlappingPaths(paths).map {
-            Item(record: $0, identity: Self.identity(at: $0) ?? "")
+            Item(record: $0, identity: Self.identity(at: $0) ?? "", metadata: Metadata.read($0))
         }
     }
 
@@ -24,7 +67,7 @@ struct DeletionPlan {
     init(records: [String], identityPath: (String) -> String?) {
         items = records.map { record in
             let path = identityPath(record) ?? ""
-            return Item(record: record, identity: Self.identity(at: path) ?? "")
+            return Item(record: record, identity: Self.identity(at: path) ?? "", metadata: Metadata.read(path))
         }
     }
 
@@ -58,6 +101,16 @@ struct DeletionPlan {
         return "\(metadata.st_dev):\(metadata.st_ino):\(metadata.st_mtimespec.tv_sec)"
     }
 
+    static func normalizedPathLiteral(_ path: String) -> String {
+        var parts: [Substring] = []
+        for part in path.split(separator: "/") {
+            if part == "." { continue }
+            if part == ".." { if !parts.isEmpty { parts.removeLast() }; continue }
+            parts.append(part)
+        }
+        return "/" + parts.joined(separator: "/")
+    }
+
     static func nonOverlappingPaths(_ paths: [String]) -> [String] {
         // A selected ancestor covers its descendants regardless of input
         // order. Keeping the first child instead could leave the rest of a
@@ -65,7 +118,7 @@ struct DeletionPlan {
         // Unsafe literals remain independent so normalization cannot let a
         // rejected `..` path swallow an otherwise valid deletion target.
         let normalized = paths.map { path in
-            isLexicallySafePath(path) ? URL(fileURLWithPath: path).standardizedFileURL.path : nil
+            isLexicallySafePath(path) ? normalizedPathLiteral(path) : nil
         }
         let allPaths = Set(normalized.compactMap { $0 })
         var seen = Set<String>()

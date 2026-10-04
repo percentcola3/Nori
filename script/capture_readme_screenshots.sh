@@ -5,7 +5,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_DIR="${1:-$ROOT_DIR/docs/screenshots}"
 CAPTURE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/nori-readme.XXXXXX")"
-trap 'rm -rf "$CAPTURE_TMP"' EXIT
+if [[ "${NORI_CAPTURE_KEEP_TEMP:-0}" == 1 ]]; then
+    trap 'echo "Reusable renderer: $CAPTURE_APP/Contents/MacOS/NoriReadme"; echo "Fixture compile inputs: $CAPTURE_SOURCE"' EXIT
+else
+    trap 'rm -rf "$CAPTURE_TMP"' EXIT
+fi
 export DEVELOPER_DIR="${DEVELOPER_DIR:-/Library/Developer/CommandLineTools}"
 CAPTURE_SDK="${SDKROOT:-}"
 if [[ -z "$CAPTURE_SDK" ]]; then
@@ -17,6 +21,7 @@ fi
 [[ -d "$CAPTURE_SDK" ]] || { echo "error: no compatible macOS SDK was found" >&2; exit 1; }
 CAPTURE_APP="$CAPTURE_TMP/NoriReadme.app"
 CAPTURE_SOURCE="$CAPTURE_TMP/source"
+CAPTURE_PYTHON="${NORI_CAPTURE_PYTHON:-$(command -v python3)}"
 mkdir -p "$CAPTURE_APP/Contents/MacOS" "$CAPTURE_APP/Contents/Resources/Nori" "$OUTPUT_DIR"
 mkdir -p "$CAPTURE_SOURCE"
 cp -R "$ROOT_DIR/SimpleMole" "$CAPTURE_SOURCE/SimpleMole"
@@ -25,7 +30,7 @@ cp -R "$ROOT_DIR/SimpleMole" "$CAPTURE_SOURCE/SimpleMole"
 # AppState's real initializer starts live inventories and file-system watchers;
 # this renderer replaces it with a fixture-only initializer. Permission state
 # is also a fixture, and clipboard/traffic stores live only in CAPTURE_TMP.
-python3 - "$CAPTURE_SOURCE" "$CAPTURE_TMP" <<'PY'
+"$CAPTURE_PYTHON" - "$CAPTURE_SOURCE" "$CAPTURE_TMP" <<'PY'
 from pathlib import Path
 import sys
 
@@ -61,7 +66,7 @@ state = state.replace("let clipboardManager = ClipboardHistoryManager()",
 assert "let trafficMonitor = TrafficMonitorStore()" in state
 state = state.replace("let trafficMonitor = TrafficMonitorStore()",
                       "let trafficMonitor = TrafficMonitorStore(defaults: ReadmeFixture.defaults, historyURL: ReadmeFixture.root.appendingPathComponent(\"traffic.json\"))")
-(temporary / "AppState.swift").write_text(state)
+(root / "SimpleMole/AppState.swift").write_text(state)
 
 permission = (root / "SimpleMole/Services/PermissionCenter.swift").read_text()
 permission = replace_body(permission, "    private init() {", '''        signing = SigningIdentityInspector.current()
@@ -78,6 +83,8 @@ island = island.replace("@State private var selectedResource: IslandResource?",
                         "@State private var selectedResource: IslandResource? = .memory")
 (temporary / "FloatingIslandView.swift").write_text(island)
 PY
+"$CAPTURE_PYTHON" "$ROOT_DIR/script/ReadmeDeveloperFixtures.py" "$CAPTURE_SOURCE"
+cp "$CAPTURE_SOURCE/SimpleMole/AppState.swift" "$CAPTURE_TMP/AppState.swift"
 
 cat > "$CAPTURE_APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -118,8 +125,8 @@ SDKROOT="$CAPTURE_SDK" swiftc -Onone -whole-module-optimization \
     -o "$CAPTURE_APP/Contents/MacOS/NoriReadme"
 /usr/bin/codesign --force --sign - "$CAPTURE_APP" >/dev/null
 
-echo "Rendering English and Simplified Chinese screenshots…"
-for locale in en zh-CN; do
+echo "Rendering English, Simplified and Traditional Chinese screenshots…"
+for locale in ${NORI_CAPTURE_LOCALES:-en zh-CN zh-TW}; do
     NORI_README_FIXTURE_ROOT="$CAPTURE_TMP/fixtures/$locale" \
         "$CAPTURE_APP/Contents/MacOS/NoriReadme" "$OUTPUT_DIR" "$locale"
 done

@@ -3,6 +3,11 @@ import Foundation
 /// 自动目录清理独立语言表。功能表覆盖基础表中的同名键。
 enum L10nAutoCleanupTables {
     static let en: [String: String] = [
+        "auto.policy.task": "All folders use this policy together. The size limit applies to their combined cache size.",
+        "auto.task.scope": "Cleanup scope · %d folders",
+        "auto.task.confirm": "I confirm the cleanup scope contains only regenerable content",
+        "auto.groups.summary": "%d task(s) · %d folders",
+        "auto.entry.sourceStatus": "%@ task set up · %d folders · %d skipped",
         "auto.title": "Scheduled Cleanup",
         "auto.safety": "Only top-level items in the selected folder are handled and moved to Trash. The size-limit policy protects items active in the last hour.",
         "auto.addDirectory": "Add Folder",
@@ -67,6 +72,11 @@ enum L10nAutoCleanupTables {
     ]
 
     static let zhHans: [String: String] = [
+        "auto.policy.task": "所有目录统一执行此策略，容量上限按整个任务的缓存总量计算。",
+        "auto.task.scope": "清理范围 · %d 个目录",
+        "auto.task.confirm": "我确认清理范围仅包含可再生内容",
+        "auto.groups.summary": "%d 个任务 · %d 个目录",
+        "auto.entry.sourceStatus": "已设置 %@ 任务 · %d 个目录 · 跳过 %d 个",
         "auto.title": "定时清理任务",
         "auto.safety": "仅处理所选目录的第一层内容并移入废纸篓；容量策略会保护最近一小时内仍有写入的项目。",
         "auto.addDirectory": "添加目录",
@@ -131,6 +141,11 @@ enum L10nAutoCleanupTables {
     ]
 
     static let zhHant: [String: String] = [
+        "auto.policy.task": "所有目錄統一執行此策略，容量上限按整個任務的快取總量計算。",
+        "auto.task.scope": "清理範圍 · %d 個目錄",
+        "auto.task.confirm": "我確認清理範圍僅包含可再生內容",
+        "auto.groups.summary": "%d 個任務 · %d 個目錄",
+        "auto.entry.sourceStatus": "已設定 %@ 任務 · %d 個目錄 · 略過 %d 個",
         "auto.title": "定時清理任務",
         "auto.safety": "只處理所選目錄第一層的內容並移到垃圾桶；容量策略會保護最近一小時內仍有寫入的項目。",
         "auto.addDirectory": "加入目錄",

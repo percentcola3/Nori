@@ -2,20 +2,20 @@ import SwiftUI
 import AppKit
 
 @MainActor
-private final class DeveloperCLIModel: ObservableObject {
+final class DeveloperCLIModel: ObservableObject {
     @Published private(set) var snapshot: DeveloperCLISnapshot?
     @Published private(set) var isChecking = false
     @Published private(set) var completedRefreshToken: Int?
     private var refreshTask: Task<Void, Never>?
     private var lastRefreshToken: Int?
 
-    func refresh(for token: Int) {
+    func refresh(for token: Int, environment: [String: String]? = nil) {
         guard lastRefreshToken != token else { return }
         lastRefreshToken = token
         refreshTask?.cancel()
         isChecking = true
         refreshTask = Task {
-            let discovered = await Task.detached(priority: .utility) { DeveloperCLIService.discover() }.value
+            let discovered = await Task.detached(priority: .utility) { DeveloperCLIService.discover(environment: environment ?? ProcessInfo.processInfo.environment) }.value
             guard !Task.isCancelled else { return }
             snapshot = discovered
             let inspected = await DeveloperCLIService.inspectVersions(in: discovered)
@@ -53,12 +53,10 @@ private final class DeveloperCLIModel: ObservableObject {
     }
 }
 
-/// Independent from the cleanup inventory. A navigation refresh token invalidates
-/// this panel's own inexpensive discovery, and version probes stay off the UI thread.
+/// Independent from the cleanup inventory. The workspace's refresh token invalidates
+/// the model's inexpensive discovery, and version probes stay off the UI thread.
 struct DeveloperCLIPanel: View {
-    let refreshToken: Int
-    var isExpanded = true
-    @StateObject private var model = DeveloperCLIModel()
+    @ObservedObject var model: DeveloperCLIModel
     @ObservedObject private var l10n = L10n.shared
     @State private var onlyIssues = false
     @State private var expandedSources: Set<String> = []
@@ -71,113 +69,95 @@ struct DeveloperCLIPanel: View {
     }
 
     var body: some View {
-        DeveloperWorkspaceContent(isExpanded: isExpanded) {
-            visibleContent
-        }
-        .preference(key: DeveloperWorkspaceSearchKey.self,
-                    value: [.cli: DeveloperWorkspaceSearchState(
-                        refreshToken: refreshToken,
-                        isSearching: model.completedRefreshToken != refreshToken || model.isChecking)])
-        .task(id: refreshToken) { model.refresh(for: refreshToken) }
-    }
-
-    private var visibleContent: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        DevCard(id: "dev-cli") {
+            DevCardTitle(symbol: "terminal", title: L10n.shared.t("dev.cli.title"),
+                         subtitle: model.snapshot.map {
+                             L10n.shared.tf("dev.cli.found", $0.entries.filter(\.isFound).count)
+                         })
+            Spacer(minLength: 8)
+            if model.isChecking {
+                ProgressView().controlSize(.small).help(L10n.shared.t("dev.cli.checking"))
+            }
+            Toggle(L10n.shared.t("dev.cli.issuesOnly"), isOn: $onlyIssues)
+                .toggleStyle(.checkbox).font(.system(size: 11)).fixedSize()
             if let snapshot = model.snapshot {
-                DeveloperCLIContextView(snapshot: snapshot, onlyIssues: $onlyIssues, isChecking: model.isChecking)
+                DevLinkButton(title: L10n.shared.t("dev.cli.copyPath"), symbol: "doc.on.doc") {
+                    DeveloperCLIText.copy(snapshot.pathDirectories.joined(separator: ":"))
+                }
+                .help(L10n.shared.t("dev.cli.copyPath.help"))
+            }
+        } content: {
+            DevDivider()
+            if let snapshot = model.snapshot {
+                DeveloperCLIContextView(snapshot: snapshot)
                 if filteredEntries.isEmpty {
-                    Text(DeveloperCLIText.choose("没有符合条件的工具。", "No matching tools."))
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+                    DevDivider()
+                    DevNotice(symbol: "checkmark.circle", text: L10n.shared.t("dev.cli.empty"))
                 } else {
-                    VStack(alignment: .leading, spacing: 14) {
-                        ForEach(DeveloperCLICategory.allCases) { category in
-                            let entries = filteredEntries.filter { $0.tool.category == category }
-                            if !entries.isEmpty {
-                                DeveloperCLICategoryView(category: category, entries: entries,
-                                                         expandedSources: $expandedSources,
-                                                         openDiagnostic: model.openDiagnostic)
-                            }
+                    ForEach(DeveloperCLICategory.allCases) { category in
+                        let entries = filteredEntries.filter { $0.tool.category == category }
+                        if !entries.isEmpty {
+                            DevDivider()
+                            DeveloperCLICategoryView(category: category, entries: entries,
+                                                     expandedSources: $expandedSources,
+                                                     openDiagnostic: model.openDiagnostic)
                         }
                     }
                 }
             } else {
-                ProgressView(DeveloperCLIText.choose("读取常见工具来源…", "Discovering common tool sources…"))
-                    .font(.system(size: 11)).padding(.vertical, 8)
+                ProgressView(L10n.shared.t("dev.cli.discovering"))
+                    .controlSize(.small).font(.system(size: 11))
+                    .frame(maxWidth: .infinity, minHeight: 64)
             }
         }
     }
 }
 
 private struct DeveloperCLIContextView: View {
-    let snapshot: DeveloperCLISnapshot
-    @Binding var onlyIssues: Bool
-    let isChecking: Bool
     @ObservedObject private var l10n = L10n.shared
+    let snapshot: DeveloperCLISnapshot
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 7) {
-                Image(systemName: "info.circle").foregroundStyle(Color.accentText)
-                Text(DeveloperCLIText.choose("已发现 \(snapshot.entries.filter(\.isFound).count) 个工具", "\(snapshot.entries.filter(\.isFound).count) tools found"))
-                    .font(.system(size: 12, weight: .medium))
-                Spacer()
-                if isChecking {
-                    ProgressView().controlSize(.small)
-                        .help(DeveloperCLIText.choose("检查中", "Checking"))
-                }
-                Toggle(DeveloperCLIText.choose("仅看问题", "Issues only"), isOn: $onlyIssues)
-                    .toggleStyle(.checkbox).font(.system(size: 11)).fixedSize()
-                Button {
-                    DeveloperCLIText.copy(snapshot.pathDirectories.joined(separator: ":"))
-                } label: {
-                    Label(DeveloperCLIText.choose("复制 Nori PATH", "Copy Nori PATH"), systemImage: "doc.on.doc")
-                }
-                .font(.system(size: 11)).buttonStyle(.plain)
-                .help(DeveloperCLIText.choose("复制当前应用继承的 PATH", "Copy the PATH inherited by this application"))
-            }
-            Text(DeveloperCLIText.choose("Nori PATH 与终端可能不同；未发现不等于未安装。", "Nori and Terminal PATHs may differ; undetected does not mean uninstalled."))
-                .font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 0) {
+            DevNotice(symbol: "info.circle",
+                      text: L10n.shared.t("dev.cli.environment.help"))
             if !snapshot.duplicatePATHDirectories.isEmpty {
-                Label(DeveloperCLIText.choose("PATH 重复目录：\(snapshot.duplicatePATHDirectories.count)", "Duplicate PATH directories: \(snapshot.duplicatePATHDirectories.count)"), systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 11)).foregroundStyle(Color.warning)
+                DevNotice(symbol: "exclamationmark.triangle",
+                          text: L10n.shared.tf("dev.cli.duplicatePath", snapshot.duplicatePATHDirectories.count),
+                          color: .warning)
             }
             if snapshot.hasRelativePATHEntry {
-                Text(DeveloperCLIText.choose("已跳过 PATH 的空值与相对路径。", "Empty and relative PATH entries were skipped."))
-                    .font(.system(size: 11)).foregroundStyle(Color.warning)
+                DevNotice(symbol: "exclamationmark.triangle",
+                          text: L10n.shared.t("dev.cli.relativePath"),
+                          color: .warning)
             }
         }
     }
 }
 
 private struct DeveloperCLICategoryView: View {
+    @ObservedObject private var l10n = L10n.shared
     let category: DeveloperCLICategory
     let entries: [DeveloperCLIEntry]
     @Binding var expandedSources: Set<String>
     let openDiagnostic: (DeveloperCLITool) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 7) {
-                Image(systemName: DeveloperCLIText.symbol(category)).foregroundStyle(Color.accentText)
-                Text(DeveloperCLIText.category(category)).font(.system(size: 12, weight: .semibold))
-                Spacer()
-                Text("\(entries.filter(\.isFound).count) / \(entries.count)")
-                    .font(.system(size: 11).monospacedDigit()).foregroundStyle(.secondary)
-            }.padding(.top, 4)
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(entries) { entry in
-                    DeveloperCLIRow(entry: entry,
-                                    showsLocations: Binding(
-                                        get: { expandedSources.contains(entry.id) },
-                                        set: { visible in
-                                            if visible { expandedSources.insert(entry.id) }
-                                            else { expandedSources.remove(entry.id) }
-                                        }),
-                                    openDiagnostic: openDiagnostic)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            DevSubheader(title: DeveloperCLIText.category(category),
+                         detail: "\(entries.filter(\.isFound).count) / \(entries.count)")
+            ForEach(Array(entries.enumerated()), id: \.element.id) { offset, entry in
+                if offset > 0 { DevDivider(inset: 14) }
+                DeveloperCLIRow(entry: entry,
+                                showsLocations: Binding(
+                                    get: { expandedSources.contains(entry.id) },
+                                    set: { visible in
+                                        if visible { expandedSources.insert(entry.id) }
+                                        else { expandedSources.remove(entry.id) }
+                                    }),
+                                openDiagnostic: openDiagnostic)
             }
-            .padding(.leading, 16)
+            Color.clear.frame(height: 4)
         }
     }
 }
@@ -201,12 +181,12 @@ private struct DeveloperCLIRow: View {
                 Text(statusLabel).font(.system(size: 10, weight: .medium)).foregroundStyle(statusColor)
                 Menu {
                     if let location = entry.preferredLocation {
-                        Button(DeveloperCLIText.choose("复制路径", "Copy path")) { copy(location.path) }
+                        Button(L10n.shared.t("dev.cli.copyLocation")) { copy(location.path) }
                     }
-                    Button(DeveloperCLIText.choose("复制诊断命令", "Copy diagnostic command")) {
+                    Button(L10n.shared.t("dev.cli.copyDiagnostic")) {
                         copy(DeveloperCLIService.diagnosticCommand(for: entry.tool))
                     }
-                    Button(DeveloperCLIText.choose("在 Terminal 检查来源", "Check sources in Terminal")) {
+                    Button(L10n.shared.t("dev.cli.openDiagnostic")) {
                         openDiagnostic(entry.tool)
                     }
                 } label: {
@@ -214,11 +194,11 @@ private struct DeveloperCLIRow: View {
                         .font(.system(size: 14))
                 }
                 .menuStyle(.borderlessButton).fixedSize()
-                .accessibilityLabel(DeveloperCLIText.choose("\(entry.tool.name) 工具操作", "Actions for \(entry.tool.name)"))
+                .accessibilityLabel(L10n.shared.tf("dev.cli.actions", entry.tool.name))
             }
             if let preferred = entry.preferredLocation {
                 HStack(spacing: 6) {
-                    Text(preferred.source).font(.system(size: 10, weight: .medium)).foregroundStyle(Color.accentText)
+                    Text(DeveloperCLIText.sourceLabel(preferred.source)).font(.system(size: 10, weight: .medium)).foregroundStyle(Color.accentText)
                     Text(DeveloperCLIText.abbreviate(preferred.path))
                         .font(.system(size: 10).monospaced()).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
@@ -229,15 +209,15 @@ private struct DeveloperCLIRow: View {
                                 showsLocations.toggle()
                             }
                         } label: {
-                            Label(DeveloperCLIText.choose("\(entry.locations.count) 个来源", "\(entry.locations.count) sources"), systemImage: showsLocations ? "chevron.up" : "chevron.down")
+                            Label(L10n.shared.tf("dev.cli.sources", entry.locations.count), systemImage: showsLocations ? "chevron.up" : "chevron.down")
                         }
                         .font(.system(size: 10)).buttonStyle(.plain)
                     }
                 }
                 if entry.hasPATHShadowing {
-                    explanation(DeveloperCLIText.choose("PATH 首个来源优先，可展开比较。", "The first PATH source wins. Expand to compare."))
+                    explanation(L10n.shared.t("dev.cli.shadowing.help"))
                 } else if !entry.isInPATH {
-                    explanation(DeveloperCLIText.choose("未在 Nori PATH 中，可在终端检查来源。", "Outside Nori PATH. Check sources in Terminal."))
+                    explanation(L10n.shared.t("dev.cli.outsidePath.help"))
                 }
                 if showsLocations {
                     VStack(alignment: .leading, spacing: 7) {
@@ -250,32 +230,31 @@ private struct DeveloperCLIRow: View {
                 }
             }
         }
-        .padding(10)
+        .padding(.horizontal, 14).padding(.vertical, 8)
         .clipped()
-        .modifier(ListRowGlass())
     }
 
     private var versionLabel: String {
         switch entry.version {
-        case .pending: return DeveloperCLIText.choose("读取版本…", "Reading version…")
+        case .pending: return L10n.shared.t("dev.cli.version.reading")
         case .value(let value): return value
-        case .deferred: return DeveloperCLIText.choose("仅查来源", "Source only")
-        case .timedOut: return DeveloperCLIText.choose("版本读取超时", "Version lookup timed out")
-        case .unavailable: return entry.isFound ? DeveloperCLIText.choose("版本不可用", "Version unavailable") : ""
+        case .deferred: return L10n.shared.t("dev.cli.version.deferred")
+        case .timedOut: return L10n.shared.t("dev.cli.version.timeout")
+        case .unavailable: return entry.isFound ? L10n.shared.t("dev.cli.version.unavailable") : ""
         }
     }
     private var versionHelp: String {
         switch entry.version {
-        case .deferred: return DeveloperCLIText.choose("为避免 SDK 下载、安装或初始化，未运行版本命令。", "Version commands were skipped to avoid SDK downloads, installation, or initialization.")
-        case .timedOut: return DeveloperCLIText.choose("已停止检查，可复制诊断命令检查来源。", "Lookup stopped. Copy the diagnostic command to check sources.")
-        case .unavailable: return DeveloperCLIText.choose("版本不可读，请检查链接、权限或工具依赖。", "Version unavailable. Check links, permissions, or dependencies.")
+        case .deferred: return L10n.shared.t("dev.cli.version.deferred.help")
+        case .timedOut: return L10n.shared.t("dev.cli.version.timeout.help")
+        case .unavailable: return L10n.shared.t("dev.cli.version.unavailable.help")
         default: return versionLabel
         }
     }
     private var statusLabel: String {
-        if entry.hasPATHShadowing { return DeveloperCLIText.choose("PATH 多来源", "Multiple PATH sources") }
-        if entry.isInPATH { return "Nori PATH" }
-        return entry.isFound ? DeveloperCLIText.choose("额外安装", "Extra installation") : DeveloperCLIText.choose("未发现", "Not found")
+        if entry.hasPATHShadowing { return L10n.shared.t("dev.cli.shadowing") }
+        if entry.isInPATH { return "PATH" }
+        return entry.isFound ? L10n.shared.t("dev.cli.extra") : L10n.shared.t("dev.cli.notFound")
     }
     private var statusColor: Color { entry.hasPATHShadowing ? .warning : (entry.isInPATH ? .success : .secondary) }
     private func explanation(_ text: String) -> some View {
@@ -292,6 +271,7 @@ private struct DeveloperCLIRow: View {
 }
 
 private struct DeveloperCLILocationRow: View {
+    @ObservedObject private var l10n = L10n.shared
     let location: DeveloperCLILocation
     let isPreferred: Bool
     var body: some View {
@@ -300,21 +280,18 @@ private struct DeveloperCLILocationRow: View {
                 .font(.system(size: 10)).foregroundStyle(isPreferred ? Color.accentText : .secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(DeveloperCLIText.abbreviate(location.path)).font(.system(size: 10).monospaced()).textSelection(.enabled)
-                Text(location.source + " · " + (location.isInPATH ? "Nori PATH" : DeveloperCLIText.choose("不在 Nori PATH", "Outside Nori PATH")))
+                Text(DeveloperCLIText.sourceLabel(location.source) + " · " + (location.isInPATH ? "PATH" : L10n.shared.t("dev.cli.outsidePath")))
                     .font(.system(size: 9)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
             Button { DeveloperCLIText.copy(location.path) } label: { Image(systemName: "doc.on.doc") }
                 .buttonStyle(.plain).font(.system(size: 10))
-                .accessibilityLabel(DeveloperCLIText.choose("复制 \(location.path)", "Copy \(location.path)"))
+                .accessibilityLabel(L10n.shared.tf("dev.cli.copyLocation.accessibility", location.path))
         }
     }
 }
 
 private enum DeveloperCLIText {
-    static func choose(_ chinese: String, _ english: String) -> String {
-        [.zhHans, .zhHant].contains(L10n.shared.resolved) ? chinese : english
-    }
     static func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -323,14 +300,17 @@ private enum DeveloperCLIText {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
+    static func sourceLabel(_ source: String) -> String {
+        source == "PATH / local" ? L10n.shared.t("dev.cli.source.local") : source
+    }
     static func category(_ category: DeveloperCLICategory) -> String {
         switch category {
-        case .web: return choose("Web 与 JavaScript", "Web & JavaScript")
+        case .web: return L10n.shared.t("dev.cli.category.web")
         case .python: return "Python"
         case .jvm: return "Java / JVM"
-        case .mobile: return choose("Apple 与移动开发", "Apple & mobile development")
+        case .mobile: return L10n.shared.t("dev.cli.category.mobile")
         case .systems: return "Rust / Go"
-        case .utilities: return choose("开发基础工具", "Developer utilities")
+        case .utilities: return L10n.shared.t("dev.cli.category.utilities")
         }
     }
     static func symbol(_ category: DeveloperCLICategory) -> String {

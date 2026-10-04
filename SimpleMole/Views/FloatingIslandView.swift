@@ -748,7 +748,7 @@ struct FloatingIslandView: View {
         switch item {
         case .cpu: return String(format: "%.0f%%", state.metrics.cpuPercent)
         case .memory: return String(format: "%.0f%%", state.metrics.memoryPercent)
-        case .disk: return ByteFormat.memoryShort(state.metrics.diskFreeBytes)
+        case .disk: return ByteFormat.short(state.metrics.diskFreeBytes)
         case .network: return ""
         }
     }
@@ -770,7 +770,7 @@ struct FloatingIslandView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text(resource == .cpu ? "% CPU" : l10n.t("island.item.memory"))
+                Text(resource == .cpu ? l10n.t("audit.island.cpuPercent") : l10n.t("island.item.memory"))
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.tertiary)
                     .padding(.trailing, 34)

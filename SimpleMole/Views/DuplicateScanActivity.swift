@@ -37,7 +37,8 @@ struct DuplicateScanActivity: View {
             Button(action: onCancel) {
                 Label(l10n.t("common.cancel"), systemImage: "xmark.circle")
             }
-            .buttonStyle(SecondaryButtonStyle()).controlSize(.small)
+            .buttonStyle(PrimaryButtonStyle()).controlSize(.small)
+            .accessibilityIdentifier("analysis-full-scan-cancel")
         }
     }
 }

@@ -13,6 +13,11 @@ struct DeveloperCacheLocations: Equatable {
     var goBuildCache: String?
     var xdgCacheHome: String?
     var poetryCache: String?
+    var uvCache: String? = nil
+    var bunCache: String? = nil
+    var denoCache: String? = nil
+    var homebrewCache: String? = nil
+    var pnpmStore: String? = nil
 
     static func resolve(home: String,
                         environment: [String: String],
@@ -21,6 +26,12 @@ struct DeveloperCacheLocations: Equatable {
         func expand(_ raw: String?) -> String? {
             guard let raw, !raw.isEmpty else { return nil }
             var value = raw
+            // Tool configs commonly use ${HOME}/${XDG_CACHE_HOME}. Expand
+            // declared environment values without invoking a shell.
+            for (name, replacement) in environment.merging(["HOME": home], uniquingKeysWith: { _, supplied in supplied }) {
+                value = value.replacingOccurrences(of: "${" + name + "}", with: replacement)
+            }
+            guard !value.contains("${"), !value.contains("\n"), !value.contains("\r") else { return nil }
             if value == "~" || value.hasPrefix("~/") { value = home + String(value.dropFirst()) }
             guard value.hasPrefix("/") else {
                 // 相对路径相对当前用户 home 解释（npm/pip 配置的常见写法）。
@@ -33,7 +44,7 @@ struct DeveloperCacheLocations: Equatable {
             candidates.compactMap { $0 }.first
         }
 
-        // npm：npmrc 的 cache= 优先，其次 NPM_CONFIG_CACHE / npm_config_cache。
+        // npm：环境变量优先，其次用户配置和系统配置。
         var npmCache = expand(environment["NPM_CONFIG_CACHE"] ?? environment["npm_config_cache"])
         if npmCache == nil {
             for configPath in [home + "/.npmrc", "/etc/npmrc"] {
@@ -71,6 +82,23 @@ struct DeveloperCacheLocations: Equatable {
             }
         }
 
+        // pnpm's content-addressed store is separate from its dlx cache.
+        // Honor its npmrc/rc store-dir before falling back to macOS's store.
+        var pnpmStore = expand(environment["PNPM_STORE_DIR"]
+            ?? environment["npm_config_store_dir"] ?? environment["NPM_CONFIG_STORE_DIR"])
+        if pnpmStore == nil {
+            for configPath in [home + "/.npmrc", home + "/.config/pnpm/rc",
+                               home + "/Library/Preferences/pnpm/rc"] {
+                guard let text = readText(configPath),
+                      let value = Self.configValue(in: text, key: "store-dir") else { continue }
+                pnpmStore = expand(value)
+                break
+            }
+        }
+        if pnpmStore == nil {
+            pnpmStore = home + "/Library/pnpm/store"
+        }
+
         return DeveloperCacheLocations(
             npmCache: firstExisting([npmCache]),
             yarnCache: firstExisting([yarnCache]),
@@ -80,13 +108,20 @@ struct DeveloperCacheLocations: Equatable {
             goModCache: expand(environment["GOMODCACHE"]),
             goBuildCache: expand(environment["GOCACHE"]),
             xdgCacheHome: expand(environment["XDG_CACHE_HOME"]),
-            poetryCache: expand(environment["POETRY_CACHE_DIR"]))
+            poetryCache: expand(environment["POETRY_CACHE_DIR"]),
+            uvCache: expand(environment["UV_CACHE_DIR"]),
+            bunCache: expand(environment["BUN_INSTALL_CACHE_DIR"]),
+            denoCache: expand(environment["DENO_DIR"]),
+            homebrewCache: expand(environment["HOMEBREW_CACHE"]),
+            pnpmStore: pnpmStore)
     }
 
     /// 进程级缓存。环境变量与用户配置在进程生命周期内视为稳定；测试用
     /// `override` 注入受控值。
     private static let lock = NSLock()
     private static var cachedValue: DeveloperCacheLocations?
+    private static var cachedEnvironment: [String: String]?
+    private static var cachedHome: String?
     private static var overrideValue: DeveloperCacheLocations?
 
     static var override: DeveloperCacheLocations? {
@@ -94,16 +129,25 @@ struct DeveloperCacheLocations: Equatable {
         set { lock.lock(); overrideValue = newValue; lock.unlock() }
     }
 
-    static func current(home: String = NSHomeDirectory()) -> DeveloperCacheLocations {
+    static func invalidate() {
+        lock.lock(); defer { lock.unlock() }
+        cachedValue = nil
+        cachedEnvironment = nil
+        cachedHome = nil
+    }
+
+    static func current(home: String = NSHomeDirectory(), environment: [String: String]? = nil) -> DeveloperCacheLocations {
+        let environment = environment ?? ProcessInfo.processInfo.environment
         lock.lock()
         if let overrideValue { lock.unlock(); return overrideValue }
-        if let cachedValue { lock.unlock(); return cachedValue }
+        if cachedEnvironment == environment, cachedHome == home, let cachedValue { lock.unlock(); return cachedValue }
         lock.unlock()
-        let resolved = resolve(home: home,
-                               environment: ProcessInfo.processInfo.environment)
+        let resolved = resolve(home: home, environment: environment)
         lock.lock()
-        if cachedValue == nil { cachedValue = resolved }
-        let value = cachedValue ?? resolved
+        cachedValue = resolved
+        cachedEnvironment = environment
+        cachedHome = home
+        let value = resolved
         lock.unlock()
         return value
     }

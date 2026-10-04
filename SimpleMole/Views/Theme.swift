@@ -149,6 +149,13 @@ struct GlassSurface: View {
             if reduceTransparency {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(Color.glassOpaque)
+                    .overlay {
+                        if cornerRadius > 0 {
+                            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                                .strokeBorder(highlighted ? Color.accentText : Color.hairline,
+                                              lineWidth: highlighted ? 1.5 : 1 / max(displayScale, 1))
+                        }
+                    }
             } else if usesSystemGlass {
                 // Put the native rim outside the visible surface instead of leaving
                 // a transparent gap around the window or adding a covering stroke.

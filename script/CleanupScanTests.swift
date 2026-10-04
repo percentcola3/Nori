@@ -109,7 +109,7 @@ struct CleanupScanTests {
         expect(!quickPaths.contains(where: {
             CleanupRiskPolicy.isAgentOwnedPath($0, homeDirectory: home.path)
         }), "agent-owned paths leaked into the default disk cleanup")
-        expect(!quick.categories.contains { $0.name == "Cursor" }, "Cursor caches must move to the Agent tab")
+        expect(quickPaths.contains(home.path + "/Library/Application Support/Cursor/Cache"), "audited Cursor cache missing")
         expect(!quick.categories.contains { $0.name == "User Caches" }, "generic cache labels hide ownership")
         expect(quick.succeeded && quick.deferredPaths.isEmpty, "quick fixture did not complete")
         expect(quickPaths.contains(home.path + "/Library/Caches/com.example.ordinary"), "ordinary cache group lost")
@@ -117,15 +117,16 @@ struct CleanupScanTests {
         expect(!quickPaths.contains { $0 == home.path + "/Library/Caches/shared-agent-storage"
                 || $0.hasPrefix(home.path + "/Library/Caches/shared-agent-storage/") },
                "custom Agent storage leaked through ordinary cache parent cleanup")
-        expect(!quickPaths.contains(where: { $0.hasPrefix(home.path + "/Library/Caches/Codex") }),
-               "Codex caches must move to the Agent tab")
+        expect(quickPaths.contains(home.path + "/Library/Caches/Codex/Default/Cache")
+            && !quickPaths.contains(home.path + "/Library/Caches/Codex/Default/Cookies"),
+               "Codex exact cache leaf missing or durable profile state included")
         expect(CleanupRiskPolicy.core(section: "Caches", path: home.path + "/Library/Caches/Codex",
             homeDirectory: home.path).risk == .protected, "empty-cache profile parent was not protected")
         expect(CleanupRiskPolicy.core(section: "Caches", path: home.path + "/Library/Caches/Codex/Default/Cookies",
             homeDirectory: home.path).risk == .protected, "profile cookies were not protected")
         expect(quickPaths.contains(home.path + "/.npm/_cacache"), "developer cache missing")
         expect(!quickPaths.contains(home.path + "/.npm"), "whole npm root must not be offered")
-        expect(!quickPaths.contains(where: { $0.contains("/.pnpm-store") || $0.contains("/Library/pnpm/store") }), "pnpm store must not be deleted directly")
+        expect(quickPaths.contains(where: { $0.contains("/.pnpm-store") || $0.contains("/Library/pnpm/store") }), "pnpm content-addressed store missing")
         expect(quickPaths.contains(home.path + "/.Trash/old.log"), "Trash missing")
         expect(!quickPaths.contains(where: { $0.contains("huggingface") || $0.contains("sessions")
             || $0.contains("linked") || $0.contains("whitelisted") }), "protected path admitted")
@@ -164,7 +165,7 @@ struct CleanupScanTests {
         expect(defaultPaths.contains(defaultsHome.path + "/Library/Caches/com.example.ok"),
                "ordinary cache lost when defaults apply")
         expect(!defaultPaths.contains(where: { $0.contains("JetBrains") || $0.contains("FontRegistry")
-            || $0.contains("build-cache-1") || $0.contains("ms-playwright") }),
+            || $0.contains("build-cache-1") }),
                "Mole default whitelist was not applied without a user whitelist file")
         for a in quickPaths {
             expect(!quickPaths.contains { $0 != a && $0.hasPrefix(a + "/") }, "overlapping scan work")
@@ -203,10 +204,14 @@ struct CleanupScanTests {
                                                               agentPresence: orphanPresence)
         expect(residualScan.succeeded && residualScan.deferredPaths.isEmpty,
                "isolated Agent residual scan did not complete")
-        expect(residualScan.categories.isEmpty, "uninstalled Agent data entered the junk scan")
+        expect(residualScan.categories.flatMap(\.paths).allSatisfy {
+            $0 == orphanHome.path + "/Library/Application Support/Cursor/Cache"
+        } && !residualScan.categories.isEmpty, "uninstalled Agent data entered junk scan outside audited cache")
         let residualDeep = await NativeCore.shared.scanCleanup(homeDirectory: orphanHome.path,
             mode: .deep, agentPresence: orphanPresence)
-        expect(residualDeep.categories.isEmpty, "deep scan admitted Agent-owned data")
+        expect(residualDeep.categories.flatMap(\.paths).allSatisfy {
+            $0 == orphanHome.path + "/Library/Application Support/Cursor/Cache"
+        }, "deep scan admitted Agent data outside audited cache")
         let cancelled = CleanupScanControl(mode: .quick)
         cancelled.cancel()
         let stopped = await NativeCore.shared.scanCleanup(homeDirectory: home.path, control: cancelled)

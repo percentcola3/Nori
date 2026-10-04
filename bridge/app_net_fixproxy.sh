@@ -1,18 +1,27 @@
 #!/bin/bash
-# App bridge: disable one proxy kind on one network service (owner command:
-# networksetup). Runs privileged via the GUI's osascript wrapper.
-# Usage: app_net_fixproxy.sh <service> <http|https|socks>
+# Disable a single registered proxy kind on one existing network service.
+# The GUI invokes this from its verified privileged bundle staging area.
 set -euo pipefail
-
-svc="${1:?missing service}"
-kind="${2:?missing kind}"
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin LC_ALL=C
+unset ENV BASH_ENV CDPATH
+[[ $# -eq 2 ]] || exit 64
+svc="$1"; kind="$2"
+[[ -n "$svc" && "$svc" != -* && ${#svc} -le 256 && ! "$svc" =~ [[:cntrl:]] ]] || exit 64
 case "$kind" in
-    http)  networksetup -setwebproxystate "$svc" off ;;
-    https) networksetup -setsecurewebproxystate "$svc" off ;;
-    socks) networksetup -setsocksfirewallproxystate "$svc" off ;;
-    *)
-        echo "unknown proxy kind: $kind" >&2
-        exit 2
-        ;;
+    http) flag=-setwebproxystate ;;
+    https) flag=-setsecurewebproxystate ;;
+    socks) flag=-setsocksfirewallproxystate ;;
+    pac) flag=-setautoproxystate ;;
+    *) exit 64 ;;
 esac
-printf 'disabled %s proxy on %s\n' "$kind" "$svc"
+if [[ "${MOLE_TEST_MODE:-0}" == 1 || "${MOLE_TEST_NO_AUTH:-0}" == 1 ]]; then
+    printf 'proxy\tskipped\n'; exit 0
+fi
+[[ "$(/usr/bin/id -u)" -eq 0 ]] || exit 77
+found=0
+while IFS= read -r listed; do
+    [[ "$listed" == "$svc" || "$listed" == "*$svc" ]] && found=1
+done < <(/usr/sbin/networksetup -listallnetworkservices)
+[[ "$found" -eq 1 ]] || exit 64
+/usr/sbin/networksetup "$flag" "$svc" off
+printf 'proxy\tdisabled\t%s\n' "$kind"

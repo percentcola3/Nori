@@ -1,8 +1,9 @@
 #!/bin/bash
 # Fixed-target hosts writer. The GUI runs this only from its verified, root-only
 # bundle staging area. Draft bytes travel as base64, never shell source or a path.
-# Usage: <non-root uid> <apply|validate> <original sha256> <draft base64>
+# Usage: <non-root uid> <apply|apply-flush|validate> <original sha256> <draft base64>
 # validate is read-only and exists for regression tests; it never reads hosts.
+# apply-flush also flushes the resolver cache in the same authorization.
 set -euo pipefail
 export LC_ALL=C
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
@@ -14,7 +15,12 @@ mode="${2:-}"
 expected_sha="${3:-}"
 payload="${4:-}"
 [[ $# -eq 4 && "$target_uid" =~ ^[0-9]+$ && "$target_uid" -gt 0 ]] || fail invalid
-[[ "$mode" == apply || "$mode" == validate ]] || fail invalid
+[[ "$mode" == apply || "$mode" == apply-flush || "$mode" == validate ]] || fail invalid
+flush=0
+if [[ "$mode" == apply-flush ]]; then
+    flush=1
+    mode=apply
+fi
 [[ "$expected_sha" =~ ^[a-f0-9]{64}$ ]] || fail invalid
 [[ ${#payload} -le 87384 && "$payload" =~ ^[A-Za-z0-9+/=]*$ ]] || fail invalid
 
@@ -107,4 +113,14 @@ replacement=$(/usr/bin/mktemp /private/etc/.nori-hosts.XXXXXXXX)
 [[ "$(current_sha)" == "$expected_sha" ]] || fail conflict 73
 /bin/mv -f "$replacement" "$target" || fail failed 74
 replacement=''
+# Keep this successful save and the four newest strictly identified backups.
+source "$(dirname "${BASH_SOURCE[0]}")/app_dev_backup_guard.sh"
+nori_rotate_hosts_backups /private/etc "$backup" 0 || true
 printf 'hosts\tapplied\t%s\n' "$backup"
+if [[ "$flush" -eq 1 ]]; then
+    if /usr/bin/dscacheutil -flushcache && /usr/bin/killall -HUP mDNSResponder; then
+        printf 'hosts\tflushed\n'
+    else
+        printf 'hosts\tflush-failed\n'
+    fi
+fi

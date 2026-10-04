@@ -166,7 +166,7 @@ test_control_motion_contract() {
     /usr/bin/grep -Fq '.buttonStyle(MoleSelectableRowButtonStyle' "$analyze_media" || \
         fail "disk analysis slim rows bypass the selectable-row interaction"
     /usr/bin/grep -Fq '.toggleStyle(.checkbox)' "$dev_env" && \
-        /usr/bin/grep -Fq 'DeveloperWorkspaceSurface(id: "dev-runtime-" + entry.id, selected: selected' "$dev_env" || \
+        /usr/bin/grep -Fq '.modifier(DevSelectionLens(id: "dev-runtime-" + entry.id, selected: selected))' "$dev_env" || \
         fail "development environment rows lack checkbox semantics or glass selection"
     /usr/bin/grep -Fq '.buttonStyle(MolePlainButtonStyle' "$cleanup" || \
         fail "cleanup detail titles still bypass Button semantics"
@@ -396,17 +396,14 @@ test_productivity_feature_contract() {
         fail "memory has no hardware-capacity formatter"
     /usr/bin/grep -Fq 'static func megabytesPerSecond' "$models" || \
         fail "network throughput has no rate formatter"
-    /usr/bin/grep -Fq 'struct AnalyzeScanSplitButton' "$analyze_view" || \
-        fail "disk analysis scan control is not a split button"
+    /usr/bin/grep -Fq 'struct AnalyzeSidebar' "$analyze_view" || \
+        fail "disk analysis does not expose independent sidebar sections"
     /usr/bin/grep -Fq 'ForEach(AnalyzeMode.menuOrder)' "$analyze_view" || \
-        fail "scan menu does not list large files, duplicates, videos and images"
-    awk '/private func chooseAnalyzeMode/,/^    }/' "$analyze_view" \
-        | /usr/bin/grep -Fq 'runSelectedScan()' || \
-        fail "choosing a scan option does not start the selected scan"
-    /usr/bin/grep -Fq 'state.scanDiskOverview(force: true)' "$analyze_view" || \
-        fail "the scan button does not start a disk analysis"
-    /usr/bin/grep -Fq 'state.scanDuplicateFiles()' "$analyze_view" || \
-        fail "the scan button does not start a duplicate comparison"
+        fail "analysis sidebar does not list disk browsing and file categories"
+    /usr/bin/grep -Fq 'Button { selection = item }' "$analyze_view" || \
+        fail "analysis navigation does not preserve the cached result"
+    /usr/bin/grep -Fq 'state.scanAnalysisMode(mode, forceFull: true)' "$analyze_view" || \
+        fail "the scan button does not start the selected independent analysis"
     /usr/bin/grep -Fq 'internalPages: UInt64(info.internal_page_count)' "$system_metrics" || \
         fail "memory usage still counts inactive file cache as occupied memory"
     /usr/bin/grep -Fq 'min(rawBytes, totalBytes)' "$system_metrics" || \
@@ -2229,7 +2226,9 @@ test_nvm_delete_time_guard() {
     local identity output rc
     mkdir -p "$current/bin" "$old/bin" "$home/.nvm/alias" "$trash"
     printf '#!/bin/sh\nexit 0\n' > "$old/bin/node"
+    printf '#!/bin/sh\nexit 0\n' > "$current/bin/node"
     chmod +x "$old/bin/node"
+    chmod +x "$current/bin/node"
     identity=$(/usr/bin/stat -f '%d:%i:%m' "$old")
     printf '%s\0%s\0' "$old" "$identity" > "$plan"
 
@@ -2261,7 +2260,7 @@ test_nvm_delete_time_guard() {
         fail "delete-time guard accepted the fresh active nvm version: $output"
 
     # An identity-bound version that is neither fresh default nor active remains deletable.
-    output=$(run_nvm_apply_fixture) || fail "delete-time guard rejected an inactive nvm version"
+    output=$(NVM_TEST_PATH="$current/bin:/usr/bin:/bin:/usr/sbin:/sbin" run_nvm_apply_fixture) || fail "delete-time guard rejected an inactive nvm version"
     [[ ! -e "$old" && "$output" == *"removed=1"* && "$output" == *"failed=0"* ]] || \
         fail "delete-time guard returned unexpected counters for an inactive version: $output"
     pass "nvm delete-time default and active version guard"
@@ -2489,12 +2488,17 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_duplicate_responsiveness.sh" || fail "duplicate background responsiveness tests"
     bash "$ROOT_DIR/script/test_duplicate_deletion.sh" || fail "duplicate deletion safety tests"
     bash "$ROOT_DIR/script/test_similar_images.sh" || fail "similar image grouping tests"
+    bash "$ROOT_DIR/script/test_duplicate_workspaces.sh" || fail "duplicate result reuse and persistence tests"
     bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
     bash "$ROOT_DIR/script/test_cache_cleanup.sh" --all || fail "cache cleanup unit and filesystem E2E tests"
     bash "$ROOT_DIR/script/test_cleanup_page_state.sh" || fail "cleanup inline results and pending retry tests"
     bash "$ROOT_DIR/script/test_auto_cleanup_workflow.sh" || fail "automatic cleanup scheduler lifecycle tests"
     bash "$ROOT_DIR/script/test_administrator_cleanup.sh" || fail "administrator cleanup safety tests"
     bash "$ROOT_DIR/script/test_analysis_deletion.sh" || fail "analysis selection identity-bound Trash tests"
+    bash "$ROOT_DIR/script/test_analysis_inventory.sh" || fail "independent incremental analysis cache tests"
+    bash "$ROOT_DIR/script/test_analysis_selection.sh" || fail "per-category cleanup and compression selection tests"
+    bash "$ROOT_DIR/script/test_analysis_automation.sh" || fail "automatic incremental analysis scheduling tests"
+    bash "$ROOT_DIR/script/test_system_disk_metrics.sh" || fail "macOS available disk capacity tests"
     bash "$ROOT_DIR/script/test_agents.sh" || fail "agent cleanup catalog, skills and MCP tests"
     bash "$ROOT_DIR/script/test_agent_cli.sh" || fail "agent CLI uninstall execution tests"
     bash "$ROOT_DIR/script/test_agent_workflow.sh" || fail "agent cleanup lifecycle tests"
@@ -2510,6 +2514,9 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_optimize.sh" || fail "optimize admin bridge safety tests"
     bash "$ROOT_DIR/script/test_cleanup_refresh.sh" || fail "post-cleanup inventory refresh tests"
     bash "$ROOT_DIR/script/test_disk_analysis.sh" || fail "directory analysis tests"
+    bash "$ROOT_DIR/script/test_directory_files.sh" || fail "directory file operation safety tests"
+    bash "$ROOT_DIR/script/test_directory_search.sh" || fail "directory persistent index and search tests"
+    bash "$ROOT_DIR/script/test_directory_browser.sh" || fail "directory navigation and clipboard workflow tests"
     bash "$ROOT_DIR/script/test_media.sh" || fail "file slimming tests"
     # 瘦身只删除自己的临时输出；原件只能经注入的 Trash 离开原位。
     media_slimmer="$ROOT_DIR/SimpleMole/Services/MediaSlimmer.swift"

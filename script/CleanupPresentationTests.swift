@@ -30,7 +30,8 @@ struct CleanupPresentationTests {
         let visible = (NSScreen.main?.visibleFrame
             ?? CGRect(x: 0, y: 0, width: 1280, height: 800)).insetBy(dx: 24, dy: 24)
         let size = CGSize(width: min(940, visible.width), height: min(720, visible.height))
-        let frame = CGRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2,
+        let frame = CGRect(x: (visible.midX - size.width / 2).rounded(.down),
+                           y: (visible.midY - size.height / 2).rounded(.down),
                            width: size.width, height: size.height)
         let window = NSWindow(contentRect: frame,
                               styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
@@ -49,7 +50,7 @@ struct CleanupPresentationTests {
             RunLoop.main.run(until: Date().addingTimeInterval(delay))
             host.layoutSubtreeIfNeeded()
             precondition(window.frame == frame && host.bounds.size == size,
-                         "Cleanup \(phase) resized the retained window or its content area")
+                         "Cleanup \(phase) resized the retained window or its content area: window=\(window.frame), expected=\(frame), host=\(host.bounds), size=\(size)")
             precondition(visible.contains(window.frame),
                          "Cleanup \(phase) must remain inside its owning screen")
             guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
@@ -110,6 +111,8 @@ struct CleanupPresentationTests {
         state.cleanupCelebrating = false
         state.cleanupOutcomeMood = .attention
         state.statusText = "清理失败"
+        state.cleanupOutcomeDetails = ["暂无更多详情，请重试。"]
+        render("failure-short-reasons")
         state.cleanupFailureApplications = []
         state.cleanupOutcomeDetails = (1...12).map { index in
             "缓存项目 \(index)：无法清理 /Users/fixture/Library/Caches/a-long-directory-name/another-directory/cache-\(index).log。系统拒绝访问，请确认文件访问权限后重试。"

@@ -216,6 +216,11 @@ if ! swiftui_sdk_usable "$SWIFT_SDKROOT"; then
     done
 fi
 
+# Compile and stage one frozen source/resource set. Parallel workspace edits
+# must not change compiler inputs halfway through a local update.
+SWIFT_SOURCE_DIR="$BUILD_TMP/SimpleMole"
+/usr/bin/ditto "$ROOT_DIR/SimpleMole" "$SWIFT_SOURCE_DIR"
+
 sign_one() {
     local target="$1" entitlements="${2:-}" preserve_entitlements="${3:-0}"
     local extra_args=()
@@ -253,11 +258,11 @@ for arch in $BUILD_ARCHS; do
         -module-cache-path "$BUILD_TMP/module-cache-$arch" \
         -F "$SPARKLE_DIR" -framework Sparkle \
         -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' \
-        -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement \
-        "$ROOT_DIR"/SimpleMole/*.swift \
-        "$ROOT_DIR"/SimpleMole/L10n/*.swift \
-        "$ROOT_DIR"/SimpleMole/Services/*.swift \
-        "$ROOT_DIR"/SimpleMole/Views/*.swift \
+        -framework Cocoa -framework SwiftUI -framework CoreServices -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement -lsqlite3 \
+        "$SWIFT_SOURCE_DIR"/*.swift \
+        "$SWIFT_SOURCE_DIR"/L10n/*.swift \
+        "$SWIFT_SOURCE_DIR"/Services/*.swift \
+        "$SWIFT_SOURCE_DIR"/Views/*.swift \
         -o "$CONTENTS/MacOS/Nori"
 
     [[ "$(/usr/bin/lipo -archs "$CONTENTS/MacOS/Nori")" == "$arch" ]] || {
@@ -268,7 +273,7 @@ for arch in $BUILD_ARCHS; do
     # Remove local symbols before signing this architecture's executable.
     /usr/bin/strip -x "$CONTENTS/MacOS/Nori"
 
-    cp "$ROOT_DIR/SimpleMole/Support/Info.plist" "$CONTENTS/Info.plist"
+    cp "$SWIFT_SOURCE_DIR/Support/Info.plist" "$CONTENTS/Info.plist"
     /usr/libexec/PlistBuddy -c \
         "Set :SUFeedURL https://github.com/percentcola3/sweep/releases/latest/download/appcast-$arch.xml" \
         "$CONTENTS/Info.plist"
@@ -276,22 +281,22 @@ for arch in $BUILD_ARCHS; do
     echo "==> Bundling bridge support libraries from $MOLE_SRC"
     bash "$ROOT_DIR/script/stage_bridge_resources.sh" "$MOLE_SRC" "$RESOURCES"
 
-    if [[ -f "$ROOT_DIR/SimpleMole/Support/AppIcon.icns" ]]; then
-        cp "$ROOT_DIR/SimpleMole/Support/AppIcon.icns" "$RESOURCES/AppIcon.icns"
+    if [[ -f "$SWIFT_SOURCE_DIR/Support/AppIcon.icns" ]]; then
+        cp "$SWIFT_SOURCE_DIR/Support/AppIcon.icns" "$RESOURCES/AppIcon.icns"
     fi
-    if [[ -f "$ROOT_DIR/SimpleMole/Support/HeaderBrandIcon.png" ]]; then
-        cp "$ROOT_DIR/SimpleMole/Support/HeaderBrandIcon.png" "$RESOURCES/HeaderBrandIcon.png"
+    if [[ -f "$SWIFT_SOURCE_DIR/Support/HeaderBrandIcon.png" ]]; then
+        cp "$SWIFT_SOURCE_DIR/Support/HeaderBrandIcon.png" "$RESOURCES/HeaderBrandIcon.png"
     fi
-    if [[ -f "$ROOT_DIR/SimpleMole/Support/MenuBarIconTemplate.png" ]]; then
-        cp "$ROOT_DIR/SimpleMole/Support/MenuBarIconTemplate.png" "$RESOURCES/MenuBarIconTemplate.png"
+    if [[ -f "$SWIFT_SOURCE_DIR/Support/MenuBarIconTemplate.png" ]]; then
+        cp "$SWIFT_SOURCE_DIR/Support/MenuBarIconTemplate.png" "$RESOURCES/MenuBarIconTemplate.png"
     fi
 
-    cp "$ROOT_DIR/SimpleMole/Support/MenuBarIconTemplate@2x.png" "$RESOURCES/MenuBarIconTemplate@2x.png"
+    cp "$SWIFT_SOURCE_DIR/Support/MenuBarIconTemplate@2x.png" "$RESOURCES/MenuBarIconTemplate@2x.png"
     mkdir -p "$RESOURCES/Licenses"
     cp "$ROOT_DIR/vendor/sparkle/LICENSE" "$RESOURCES/Licenses/Sparkle.txt"
     mkdir -p "$RESOURCES/Nori"
-    cp "$ROOT_DIR/SimpleMole/Support/Nori/Animations/"*.svg "$RESOURCES/Nori/"
-    cp -R "$ROOT_DIR/SimpleMole/Support/AgentIcons" "$RESOURCES/AgentIcons"
+    cp "$SWIFT_SOURCE_DIR/Support/Nori/Animations/"*.svg "$RESOURCES/Nori/"
+    cp -R "$SWIFT_SOURCE_DIR/Support/AgentIcons" "$RESOURCES/AgentIcons"
 
     # Preserve the complete versioned framework and its symlinks. Re-sign
     # nested code inside-out with the host's resolved identity; --deep is used

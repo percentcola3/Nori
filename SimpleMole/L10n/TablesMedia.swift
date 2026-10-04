@@ -4,13 +4,21 @@ import Foundation
 /// 主要动作，细项回退英文。
 enum L10nMediaTables {
     static let en: [String: String] = [
+        "analyze.scan.partial": "Scan complete with skipped folders · results are usable; totals may be smaller",
+        "analyze.scan.details": "Show skipped folders and reasons",
+        "analyze.scan.accessHint": "Full Disk Access does not grant administrator rights or bypass system and service folder permissions.",
+        "analyze.scan.failed": "The selected folder could not be read. Check its access permissions and try again.",
+        "analyze.scan.scope": "Scan complete",
+        "analyze.temporaryProjects.title": "Temporary Git projects",
+        "analyze.temporaryProjects.hint": "Largest 100 checkouts in temporary folders. Review in Finder; projects may still be in use.",
         "analyze.section.largeFiles": "Large files",
         "analyze.scan.simple": "Scan",
 		"analyze.delete.selected": "Delete %1$ld selected",
 		"analyze.delete.one": "Delete",
 		"analyze.delete.ok": "Delete",
-		"analyze.delete.confirm.title": "Delete %1$ld files?",
-		"analyze.delete.confirm.msg": "The selected files move to the Trash and can be restored from there.",
+		"analyze.delete.confirm.title": "Delete %1$ld items?",
+		"analyze.delete.confirm.msg": "Selected files and folders move to the Trash and can be restored from there.",
+		"analyze.delete.confirm.cache": "Selected caches are permanently deleted; other items move to the Trash. System cleanup may require your Mac password.",
 		"analyze.delete.done": "Deleted %1$ld · failed %2$ld",
 		"analyze.reveal": "Reveal in Finder",
         "analyze.scan.menu": "Scan options",
@@ -20,8 +28,8 @@ enum L10nMediaTables {
         "analyze.scan.action.images": "Scan images",
         "analyze.scan.detail.largeFiles": "Find the files that take the most space.",
         "analyze.scan.detail.duplicates": "Compare file contents and group copies.",
-        "analyze.scan.detail.videos": "List videos that can be slimmed.",
-        "analyze.scan.detail.images": "List images that can be slimmed.",
+        "analyze.scan.detail.videos": "Review video files and select items to clean.",
+        "analyze.scan.detail.images": "Review images and select items to clean or compress.",
         "analyze.section.images": "Images",
         "analyze.section.videos": "Videos",
         "analyze.section.duplicates": "Duplicates",
@@ -62,7 +70,7 @@ enum L10nMediaTables {
         "slim.video": "Output",
         "slim.video.p1080": "HEVC up to 1080p",
         "slim.video.original": "HEVC, original resolution",
-        "slim.video.hint": "Uses the Mac's hardware encoder. MKV, AVI, WMV and other formats macOS cannot read are skipped; zip them from Large files instead.",
+        "slim.video.hint": "Uses the Mac's hardware encoder. MKV, AVI, WMV and other formats macOS cannot read are skipped; zip them from Disk analysis instead.",
         "slim.archive.hint": "Packed into a .zip next to the file. Already-compressed files (video, photos, archives) rarely shrink and are then left alone.",
         "slim.result": "Afterwards",
         "slim.result.replace": "Replace the original (original goes to the Trash)",
@@ -99,13 +107,21 @@ enum L10nMediaTables {
     ]
 
     static let zhHans: [String: String] = [
+        "analyze.scan.partial": "扫描完成，部分目录已跳过 · 结果可用，容量统计可能偏小",
+        "analyze.scan.details": "查看跳过的目录与原因",
+        "analyze.scan.accessHint": "完全磁盘访问不等于管理员权限，系统或服务目录仍可能因权限限制无法读取。",
+        "analyze.scan.failed": "无法读取扫描目录，请检查访问权限后重试。",
+        "analyze.scan.scope": "扫描完成",
+        "analyze.temporaryProjects.title": "临时 Git 项目",
+        "analyze.temporaryProjects.hint": "展示临时目录中占用最大的 100 个 Git 项目。可在 Finder 中检查，项目可能仍在使用。",
         "analyze.section.largeFiles": "大文件",
         "analyze.scan.simple": "扫描",
 		"analyze.delete.selected": "删除选中 %1$ld 项",
 		"analyze.delete.one": "删除",
 		"analyze.delete.ok": "删除",
-		"analyze.delete.confirm.title": "删除 %1$ld 个文件？",
-		"analyze.delete.confirm.msg": "选中文件将移入废纸篓，可随时从废纸篓恢复。",
+		"analyze.delete.confirm.title": "删除 %1$ld 个项目？",
+		"analyze.delete.confirm.msg": "选中的文件和文件夹将移入废纸篓，可随时从废纸篓恢复。",
+		"analyze.delete.confirm.cache": "缓存将永久删除，其他项目移入废纸篓。系统清理可能需要 Mac 密码。",
 		"analyze.delete.done": "已删除 %1$ld 个 · 失败 %2$ld 个",
 		"analyze.reveal": "在 Finder 中显示",
         "analyze.scan.menu": "扫描选项",
@@ -115,8 +131,8 @@ enum L10nMediaTables {
         "analyze.scan.action.images": "扫描图片",
         "analyze.scan.detail.largeFiles": "找出占用空间最多的文件。",
         "analyze.scan.detail.duplicates": "按文件内容比对，并归成重复组。",
-        "analyze.scan.detail.videos": "列出可以瘦身的视频。",
-        "analyze.scan.detail.images": "列出可以瘦身的图片。",
+        "analyze.scan.detail.videos": "查看视频文件，勾选后清理。",
+        "analyze.scan.detail.images": "查看图片，勾选后清理或压缩。",
         "analyze.section.images": "图片",
         "analyze.section.videos": "视频",
         "analyze.section.duplicates": "重复文件",
@@ -157,7 +173,7 @@ enum L10nMediaTables {
         "slim.video": "输出",
         "slim.video.p1080": "HEVC，最高 1080p",
         "slim.video.original": "HEVC，保持原分辨率",
-        "slim.video.hint": "使用 Mac 的硬件编码器。MKV、AVI、WMV 等 macOS 读不了的格式会跳过，可以在“大文件”里打包。",
+        "slim.video.hint": "使用 Mac 的硬件编码器。MKV、AVI、WMV 等 macOS 读不了的格式会跳过，可以在“磁盘分析”里打包。",
         "slim.archive.hint": "在原文件旁打包成 .zip。视频、照片、压缩包这类已压缩的文件通常压不小，这时会保留原文件。",
         "slim.result": "处理后",
         "slim.result.replace": "替换原文件（原文件移入废纸篓）",
@@ -194,13 +210,21 @@ enum L10nMediaTables {
     ]
 
     static let zhHant: [String: String] = [
+        "analyze.scan.partial": "掃描完成，部分目錄已略過 · 結果可用，容量統計可能偏小",
+        "analyze.scan.details": "查看略過的目錄與原因",
+        "analyze.scan.accessHint": "完整磁碟取用不等於管理員權限，系統或服務目錄仍可能因權限限制無法讀取。",
+        "analyze.scan.failed": "無法讀取掃描目錄，請檢查存取權限後重試。",
+        "analyze.scan.scope": "掃描完成",
+        "analyze.temporaryProjects.title": "暫存 Git 專案",
+        "analyze.temporaryProjects.hint": "顯示暫存目錄中最大的 100 個 Git 專案。可在 Finder 檢查，專案可能仍在使用。",
         "analyze.section.largeFiles": "大檔案",
         "analyze.scan.simple": "掃描",
 		"analyze.delete.selected": "刪除選中 %1$ld 項",
 		"analyze.delete.one": "刪除",
 		"analyze.delete.ok": "刪除",
-		"analyze.delete.confirm.title": "刪除 %1$ld 個檔案？",
-		"analyze.delete.confirm.msg": "選中檔案將移入垃圾桶，可隨時從垃圾桶恢復。",
+		"analyze.delete.confirm.title": "刪除 %1$ld 個項目？",
+		"analyze.delete.confirm.msg": "選中的檔案和資料夾將移入垃圾桶，可隨時從垃圾桶恢復。",
+		"analyze.delete.confirm.cache": "快取將永久刪除，其他項目移入垃圾桶。系統清理可能需要 Mac 密碼。",
 		"analyze.delete.done": "已刪除 %1$ld 個 · 失敗 %2$ld 個",
 		"analyze.reveal": "在 Finder 中顯示",
         "analyze.scan.menu": "掃描選項",
@@ -210,8 +234,8 @@ enum L10nMediaTables {
         "analyze.scan.action.images": "掃描圖片",
         "analyze.scan.detail.largeFiles": "找出占用空間最多的檔案。",
         "analyze.scan.detail.duplicates": "依檔案內容比對，並分成重複組。",
-        "analyze.scan.detail.videos": "列出可以瘦身的影片。",
-        "analyze.scan.detail.images": "列出可以瘦身的圖片。",
+        "analyze.scan.detail.videos": "查看影片檔案，勾選後清理。",
+        "analyze.scan.detail.images": "查看圖片，勾選後清理或壓縮。",
         "analyze.section.images": "圖片",
         "analyze.section.videos": "影片",
         "analyze.section.duplicates": "重複檔案",
@@ -252,7 +276,7 @@ enum L10nMediaTables {
         "slim.video": "輸出",
         "slim.video.p1080": "HEVC，最高 1080p",
         "slim.video.original": "HEVC，保持原解析度",
-        "slim.video.hint": "使用 Mac 的硬體編碼器。MKV、AVI、WMV 等 macOS 讀不了的格式會略過，可以在「大檔案」裡打包。",
+        "slim.video.hint": "使用 Mac 的硬體編碼器。MKV、AVI、WMV 等 macOS 讀不了的格式會略過，可以在「磁碟分析」裡打包。",
         "slim.archive.hint": "在原檔旁打包成 .zip。影片、照片、壓縮檔這類已壓縮的檔案通常壓不小，這時會保留原檔。",
         "slim.result": "處理後",
         "slim.result.replace": "取代原檔（原檔移到垃圾桶）",
@@ -288,12 +312,13 @@ enum L10nMediaTables {
         "slim.reason.verify": "zip 驗證失敗"
     ]
 
-    private static func short(_ empty: String, _ large: String,
+    private static func short(_ empty: String, _ largeFiles: String, _ scanLargeFiles: String,
                               _ images: String, _ videos: String, _ duplicates: String,
                               _ slim: String, _ start: String) -> [String: String] {
         [
             "analyze.mode.empty": empty,
-            "analyze.section.largeFiles": large,
+            "analyze.section.largeFiles": largeFiles,
+            "analyze.scan.action.largeFiles": scanLargeFiles,
             "analyze.section.images": images,
             "analyze.section.videos": videos,
             "analyze.section.duplicates": duplicates,
@@ -306,15 +331,15 @@ enum L10nMediaTables {
         switch language {
         case .zhHans: return zhHans
         case .zhHant: return zhHant
-        case .ja: return short("この分類の結果はまだありません", "大きなファイル", "画像", "動画", "重複ファイル", "スリム化", "開始")
-        case .ko: return short("이 범주에는 아직 결과가 없습니다", "큰 파일", "이미지", "동영상", "중복 파일", "용량 줄이기", "시작")
-        case .de: return short("Noch keine Ergebnisse in dieser Kategorie", "Große Dateien", "Bilder", "Videos", "Duplikate", "Verkleinern", "Starten")
-        case .fr: return short("Pas encore de résultats dans cette catégorie", "Gros fichiers", "Images", "Vidéos", "Doublons", "Alléger", "Démarrer")
-        case .es: return short("Aún no hay resultados en esta categoría", "Archivos grandes", "Imágenes", "Vídeos", "Duplicados", "Reducir", "Iniciar")
-        case .pt: return short("Ainda sem resultados nesta categoria", "Arquivos grandes", "Imagens", "Vídeos", "Duplicados", "Reduzir", "Iniciar")
-        case .it: return short("Ancora nessun risultato in questa categoria", "File grandi", "Immagini", "Video", "Duplicati", "Alleggerisci", "Avvia")
-        case .ru: return short("В этой категории пока нет результатов", "Большие файлы", "Изображения", "Видео", "Дубликаты", "Сжать", "Начать")
-        case .tr: return short("Bu kategoride henüz sonuç yok", "Büyük dosyalar", "Görseller", "Videolar", "Yinelenenler", "Küçült", "Başlat")
+        case .ja: return short("この分類の結果はまだありません", "大きなファイル", "大きなファイルをスキャン", "画像", "動画", "重複ファイル", "スリム化", "開始")
+        case .ko: return short("이 범주에는 아직 결과가 없습니다", "대용량 파일", "대용량 파일 스캔", "이미지", "동영상", "중복 파일", "용량 줄이기", "시작")
+        case .de: return short("Noch keine Ergebnisse in dieser Kategorie", "Große Dateien", "Große Dateien scannen", "Bilder", "Videos", "Duplikate", "Verkleinern", "Starten")
+        case .fr: return short("Pas encore de résultats dans cette catégorie", "Fichiers volumineux", "Analyser les fichiers volumineux", "Images", "Vidéos", "Doublons", "Alléger", "Démarrer")
+        case .es: return short("Aún no hay resultados en esta categoría", "Archivos grandes", "Analizar archivos grandes", "Imágenes", "Vídeos", "Duplicados", "Reducir", "Iniciar")
+        case .pt: return short("Ainda sem resultados nesta categoria", "Arquivos grandes", "Analisar arquivos grandes", "Imagens", "Vídeos", "Duplicados", "Reduzir", "Iniciar")
+        case .it: return short("Ancora nessun risultato in questa categoria", "File di grandi dimensioni", "Analizza file grandi", "Immagini", "Video", "Duplicati", "Alleggerisci", "Avvia")
+        case .ru: return short("В этой категории пока нет результатов", "Большие файлы", "Сканировать большие файлы", "Изображения", "Видео", "Дубликаты", "Сжать", "Начать")
+        case .tr: return short("Bu kategoride henüz sonuç yok", "Büyük dosyalar", "Büyük dosyaları tara", "Görseller", "Videolar", "Yinelenenler", "Küçült", "Başlat")
         case .en, .auto: return en
         }
     }

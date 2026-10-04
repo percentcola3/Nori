@@ -7,6 +7,7 @@ swiftc -O -target "$(uname -m)-apple-macos13.0" \
     -module-cache-path "$TEST_DIR/module-cache" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/DuplicateScanner.swift" \
+    "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
     "$ROOT_DIR/SimpleMole/Services/DuplicateDeletionPlan.swift" \
     "$ROOT_DIR/script/DuplicateDeletionTests.swift" \
     -o "$TEST_DIR/tests"

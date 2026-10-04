@@ -6,7 +6,7 @@ enum AdministratorCleanupService {
                       onProgress: ((Int, Int, String) -> Void)? = nil) async -> CleanupExecutionResult {
         guard !items.isEmpty else { return .init() }
         let request = AdministratorCleanupPlan.Request(records: items.map {
-            .init(path: $0.record, identity: $0.identity)
+            .init(path: $0.record, identity: $0.identity, metadata: $0.metadata ?? DeletionPlan.Metadata.read($0.record))
         })
         guard let data = try? JSONEncoder().encode(request),
               data.count <= AdministratorCleanupPlan.maximumPlanBytes else {
@@ -59,7 +59,7 @@ enum AdministratorCleanupService {
         guard (report.removed > 0 || report.skipped > 0 || report.failed > 0),
               confirmedPaths.allSatisfy({ path in
                   DeletionPlan.isLexicallySafePath(path)
-                      && URL(fileURLWithPath: path).standardizedFileURL.path == path
+                      && CleanupRiskPolicy.normalizedPathLiteral(path) == path
                       && roots.contains { path == $0 || path.hasPrefix($0 + "/") }
               }), confirmedPaths.count <= report.removed,
               report.removed == 0 || !confirmedPaths.isEmpty else {

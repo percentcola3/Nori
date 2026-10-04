@@ -87,6 +87,20 @@ struct AdministratorCleanupTests {
         try expect(changed.removed == 0 && changed.skipped == 1 && manager.fileExists(atPath: file.path),
                    "Elevation bypassed planned identity")
 
+        // Administrator authentication must retain the complete reviewed
+        // metadata, including changes that keep the coarse mtime second.
+        let metadataBound = caches.appendingPathComponent("metadata-bound.cache")
+        try write(metadataBound)
+        let fullRecord = AdministratorCleanupPlan.Record(path: metadataBound.path,
+            identity: DeletionPlan.identity(at: metadataBound.path)!, metadata: DeletionPlan.Metadata.read(metadataBound.path))
+        let modified = fullRecord.metadata!.modifiedSeconds
+        try Data(repeating: 0x62, count: 8192).write(to: metadataBound)
+        var preservedSecond = [timeval(tv_sec: Int(modified), tv_usec: 0), timeval(tv_sec: Int(modified), tv_usec: 0)]
+        try expect(utimes(metadataBound.path, &preservedSecond) == 0, "cannot restore coarse timestamp")
+        let metadataChanged = AdministratorCleanupPlan.execute([fullRecord], homeDirectory: home.path, core: core)
+        try expect(metadataChanged.removed == 0 && metadataChanged.skipped == 1
+            && manager.fileExists(atPath: metadataBound.path), "administrator lost full metadata across authentication")
+
         // A protected child appearing after preview changes the plan. Refuse
         // the original directory rather than silently broadening root deletion.
         let rootRecord = record(caches)

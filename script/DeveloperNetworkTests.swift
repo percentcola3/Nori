@@ -28,6 +28,68 @@ final class MoleEngine {
         catch { expect(error as? DeveloperNetworkService.HostsError == expected, "unexpected validation failure: \(error)") }
     }
 
+    static func structureTests() throws {
+        typealias Network = DeveloperNetworkService
+        let text = """
+        ##
+        # Host Database
+        #
+        # localhost is used to configure the loopback interface
+        # when the system is booting.  Do not change this entry.
+        ##
+        127.0.0.1\tlocalhost
+        255.255.255.255\tbroadcasthost
+        ::1             localhost
+        127.0.0.1 loose.test
+
+        # --- 本地开发 ---
+        127.0.0.1 api.local dashboard.test # keep me
+        #127.0.0.1 off.local
+        # just a note
+
+        # Staging
+        10.0.0.5 staging.test
+
+        """
+        let groups = Network.hostsGroups(text)
+        expect(groups.map(\.kind) == [.system, .ungrouped, .named("本地开发"), .named("Staging")], "hosts grouping")
+        expect(groups[0].entries.count == 3, "system defaults grouped")
+        let dev = groups[2]
+        expect(dev.entries.map(\.enabled) == [true, false] && dev.entries[0].comment == "keep me", "entries, comments and disabled lines")
+        let disabled = Network.settingHostsEntries(text, entries: dev.entries, enabled: false)
+        expect(disabled.contains("\n# 127.0.0.1 api.local dashboard.test # keep me\n#127.0.0.1 off.local\n"), "disabling comments only enabled lines")
+        let enabled = Network.settingHostsEntries(text, entries: dev.entries, enabled: true)
+        expect(enabled.contains("\n127.0.0.1 off.local\n"), "enabling strips the comment marker")
+        expect(Network.settingHostsEntries(text, entries: groups[0].entries, enabled: false) == text, "system entries never toggle")
+        try Network.validateHosts(disabled)
+        try Network.validateHosts(enabled)
+        let edited = try Network.settingHostsEntry(text, entry: dev.entries[0], address: "127.0.0.2",
+                                                   hostnames: ["api.local"], comment: "moved")
+        expect(edited.contains("\n127.0.0.2\tapi.local\t# moved\n#127.0.0.1 off.local\n"), "editing replaces one line")
+        let removed = Network.removingHostsEntry(text, entry: dev.entries[1])
+        expect(!removed.contains("off.local") && removed.contains("# just a note"), "removing keeps neighbors")
+        let toGroup = try Network.addingHostsEntry(text, address: "127.0.0.1", hostnames: ["new.local"], comment: "", to: dev)
+        expect(Network.hostsGroups(toGroup)[2].entries.map(\.hostnames) == [["api.local", "dashboard.test"], ["off.local"], ["new.local"]],
+               "new entry joins its group")
+        let ungrouped = try Network.addingHostsEntry(text, address: "::1", hostnames: ["six.test"], comment: "",
+                                                     to: Network.HostsGroup(kind: .ungrouped, headerLineIndex: nil, entries: []))
+        expect(Network.hostsGroups(ungrouped)[1].entries.count == 2, "ungrouped entry stays outside named groups")
+        let newGroup = try Network.addingHostsEntry(text, address: "192.168.1.2", hostnames: ["nas.home"], comment: "",
+                                                    to: nil, newGroupTitle: "Home")
+        expect(newGroup.hasSuffix("10.0.0.5 staging.test\n\n# Home\n192.168.1.2\tnas.home\n"), "new group appended")
+        expect(Network.hostsGroups(newGroup).last?.kind == .named("Home"), "new group parses back")
+        try Network.validateHosts(newGroup)
+        do {
+            _ = try Network.addingHostsEntry(text, address: "127.0.0.1", hostnames: ["localhost"], comment: "", to: dev)
+            expect(false, "protected hostname accepted")
+        } catch { expect(error as? Network.HostsEntryProblem == .protectedHostname, "protected hostname error") }
+        do {
+            _ = try Network.addingHostsEntry(text, address: "1.2.3", hostnames: ["a.test"], comment: "", to: dev)
+            expect(false, "invalid address accepted")
+        } catch { expect(error as? Network.HostsEntryProblem == .invalidAddress, "invalid address error") }
+        expect(Network.hostnameList("a.test, b.test  c.test") == ["a.test", "b.test", "c.test"], "hostname list parsing")
+    }
+
     static func main() throws {
         let base = "# System entries\n127.0.0.1 localhost\n255.255.255.255 broadcasthost\n::1 localhost\n"
         let valid = base + "\n# 本地开发\n127.0.0.1 api.local dashboard.test # preserved comment\n2001:db8::1 ipv6.test\n"
@@ -58,6 +120,11 @@ final class MoleEngine {
         expect(DeveloperNetworkService.parseProxy("Enabled: No\nServer: localhost\nPort: 7890", kind: "HTTP") == nil, "disabled proxy shown as enabled")
         expect(DeveloperNetworkService.parseProxy("Enabled: Yes\nServer: 127.0.0.1\nPort: 7890", kind: "SOCKS")?.endpoint == "127.0.0.1:7890", "SOCKS proxy parsing failed")
         expect(DeveloperNetworkService.parseProxy("URL: https://example.test/proxy.pac\nEnabled: Yes", kind: "PAC")?.endpoint == "https://example.test/proxy.pac", "PAC parsing failed")
-        print("Developer network: hosts validation, preservation, fingerprints, services, DNS and proxies passed")
+        let effective = DeveloperNetworkService.parseEffectiveProxies("<dictionary> {\n HTTPEnable : 1\n HTTPProxy : 127.0.0.1\n HTTPPort : 7897\n HTTPSEnable : 0\n ProxyAutoConfigEnable : 1\n ProxyAutoConfigURLString : https://example.test/proxy.pac?token=secret\n}")
+        expect(effective.map(\.kind) == ["HTTP", "PAC"], "effective proxy distinguishes enabled schemes")
+        expect(DeveloperNetworkService.redactedEndpoint("https://user:secret@proxy.test:7890/path?token=secret#private") == "https://proxy.test:7890/path", "proxy display leaked credentials or query")
+        expect(DeveloperNetworkService.redactedEndpoint("user:secret@proxy.test:7890") == "proxy.test:7890", "schemeless proxy display leaked credentials")
+        try structureTests()
+        print("Developer network: hosts structure, validation, preservation, fingerprints, services, DNS and proxies passed")
     }
 }

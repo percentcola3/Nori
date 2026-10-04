@@ -92,7 +92,7 @@ final class MoleEngine {
                    extraEnvironment: [String: String] = [:],
                    timeout: TimeInterval = 120, onLine: ((String) -> Void)? = nil) async -> RunResult {
         guard let script = resourceURL(relativePath) else {
-            return RunResult(output: "App 资源缺失（\(relativePath)），请重新构建。", exitCode: 127, timedOut: false)
+            return RunResult(output: L10n.shared.tf("engine.resourceMissing", relativePath), exitCode: 127, timedOut: false)
         }
         return await run(executable: URL(fileURLWithPath: "/bin/bash"),
                          arguments: [script.path] + arguments,
@@ -107,7 +107,7 @@ final class MoleEngine {
                             extraEnvironment: [String: String] = [:],
                             timeout: TimeInterval = 600) async -> RunResult {
         guard let script = resourceURL(relativePath) else {
-            return RunResult(output: "App 资源缺失（\(relativePath)），请重新构建。", exitCode: 127, timedOut: false)
+            return RunResult(output: L10n.shared.tf("engine.resourceMissing", relativePath), exitCode: 127, timedOut: false)
         }
         return await run(executable: URL(fileURLWithPath: "/bin/bash"),
                          arguments: [script.path],
@@ -125,17 +125,17 @@ final class MoleEngine {
     func runPrivilegedBridge(_ relativePath: String, arguments: [String],
                              timeout: TimeInterval = 600) async -> RunResult {
         guard let expectedHash = runningCodeDirectoryHash else {
-            return RunResult(output: "App 签名无法验证，已拒绝管理员操作。",
+            return RunResult(output: L10n.shared.t("engine.signatureInvalid"),
                              exitCode: 78, timedOut: false)
         }
         guard Self.isSafeRelativeResourcePath(relativePath),
               let script = resourceURL(relativePath),
               Self.isRegularResource(script, inside: resourcesURL) else {
-            return RunResult(output: "提权脚本路径无效，已拒绝管理员操作。",
+            return RunResult(output: L10n.shared.t("engine.privilegedPathInvalid"),
                              exitCode: 78, timedOut: false)
         }
         guard let cancellationToken = PrivilegedCancellationToken() else {
-            return RunResult(output: "无法创建安全的提权取消标记。",
+            return RunResult(output: L10n.shared.t("engine.cancellationUnavailable"),
                              exitCode: 78, timedOut: false)
         }
         defer { cancellationToken.cancel() }
@@ -198,7 +198,7 @@ final class MoleEngine {
     func runRuntime(_ mode: String, _ pid: String? = nil,
                     timeout: TimeInterval = 15) async -> RunResult {
         guard let script = resourceURL("bin/app_runtime.sh") else {
-            return RunResult(output: "App 资源缺失（app_runtime.sh），请重新构建。", exitCode: 127, timedOut: false)
+            return RunResult(output: L10n.shared.tf("engine.resourceMissing", "app_runtime.sh"), exitCode: 127, timedOut: false)
         }
         var arguments = [script.path, mode]
         if let pid { arguments.append(pid) }
@@ -222,7 +222,7 @@ final class MoleEngine {
         guard pipe(&stdoutFDs) == 0, pipe(&stderrFDs) == 0,
               stdinData == nil || pipe(&stdinFDs) == 0 else {
             Self.closeDescriptors(stdoutFDs + stderrFDs + stdinFDs)
-            return RunResult(output: "无法创建子进程通道。", exitCode: 127, timedOut: false)
+            return RunResult(output: L10n.shared.t("engine.pipeUnavailable"), exitCode: 127, timedOut: false)
         }
         Self.markCloseOnExec(stdoutFDs + stderrFDs + stdinFDs)
 
@@ -239,7 +239,7 @@ final class MoleEngine {
             stdoutReader.cancel()
             stderrReader.cancel()
             Self.closeDescriptors([stdoutFDs[1], stderrFDs[1]] + stdinFDs)
-            return RunResult(output: "无法初始化子进程。", exitCode: 127, timedOut: false)
+            return RunResult(output: L10n.shared.t("engine.spawnUnavailable"), exitCode: 127, timedOut: false)
         }
         defer {
             posix_spawn_file_actions_destroy(&actions)
@@ -279,7 +279,7 @@ final class MoleEngine {
             stdoutReader.cancel()
             stderrReader.cancel()
             Self.closeDescriptors([stdoutFDs[1], stderrFDs[1]] + stdinFDs)
-            return RunResult(output: "无法配置子进程：\(String(cString: strerror(setupError)))",
+            return RunResult(output: L10n.shared.tf("engine.setupFailed", String(cString: strerror(setupError))),
                              exitCode: 127, timedOut: false)
         }
 
@@ -303,7 +303,7 @@ final class MoleEngine {
             if stdinData != nil { Self.closeDescriptor(stdinFDs[1]) }
             stdoutReader.cancel()
             stderrReader.cancel()
-            return RunResult(output: "无法启动 \(executable.lastPathComponent)：\(String(cString: strerror(spawnError)))",
+            return RunResult(output: L10n.shared.tf("engine.launchFailed", executable.lastPathComponent, String(cString: strerror(spawnError))),
                              exitCode: 127, timedOut: false)
         }
 

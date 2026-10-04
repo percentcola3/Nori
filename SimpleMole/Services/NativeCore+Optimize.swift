@@ -57,41 +57,41 @@ extension NativeCore {
         case "saved-state":
             let targets = oldSavedStates(homeDirectory: home)
             return targets.isEmpty
-                ? .init(need: .clean, summary: "No saved states older than 30 days.")
-                : .init(need: .needed, summary: "\(targets.count) saved state(s) older than 30 days.",
+                ? .init(need: .clean, summaryKey: "audit.maintenance.savedStates.empty")
+                : .init(need: .needed, summaryKey: "audit.maintenance.savedStates.found", summaryArguments: [.integer(targets.count)],
                         items: targets.map { URL(fileURLWithPath: $0.path).lastPathComponent },
                         plan: targets.map(Self.planEntry))
         case "quarantine":
             let database = home + "/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
             guard fileManager.fileExists(atPath: database) else {
-                return .init(need: .clean, summary: "No quarantine database found.")
+                return .init(need: .clean, summaryKey: "audit.maintenance.quarantine.missing")
             }
             guard let raw = sqlite(database, "SELECT COUNT(*) FROM LSQuarantineEvent;", readOnly: true),
                   let count = Int(raw) else {
-                return .init(need: .unavailable, summary: "Could not read the quarantine database.")
+                return .init(need: .unavailable, summaryKey: "audit.maintenance.quarantine.unreadable")
             }
             return count == 0
-                ? .init(need: .clean, summary: "Quarantine history is empty.")
-                : .init(need: .needed, summary: "\(count) download record(s).")
+                ? .init(need: .clean, summaryKey: "audit.maintenance.quarantine.empty")
+                : .init(need: .needed, summaryKey: "audit.maintenance.downloads", summaryArguments: [.integer(count)])
         case "notifications":
             guard let database = notificationDatabase(homeDirectory: home) else {
-                return .init(need: .unavailable, summary: "Notification Center database is unavailable.")
+                return .init(need: .unavailable, summaryKey: "audit.maintenance.notifications.unavailable")
             }
             let bytes = sqliteFamilyBytes(database)
             return bytes < Self.notificationThresholdBytes
-                ? .init(need: .clean, summary: "Database is \(Self.byteText(bytes)); below 50 MB.")
-                : .init(need: .needed, summary: "Database is \(Self.byteText(bytes)).", plan: [database])
+                ? .init(need: .clean, summaryKey: "audit.maintenance.database.below50", summaryArguments: [.text(Self.byteText(bytes))])
+                : .init(need: .needed, summaryKey: "audit.maintenance.database.size", summaryArguments: [.text(Self.byteText(bytes))], plan: [database])
         case "coreduet":
             let database = home + "/Library/Application Support/Knowledge/knowledgeC.db"
             guard fileManager.fileExists(atPath: database) else {
-                return .init(need: .clean, summary: "Usage database not found.")
+                return .init(need: .clean, summaryKey: "audit.maintenance.usage.missing")
             }
             let bytes = sqliteFamilyBytes(database)
             return bytes < Self.knowledgeThresholdBytes
-                ? .init(need: .clean, summary: "Database is \(Self.byteText(bytes)); below 100 MB.")
-                : .init(need: .needed, summary: "Database is \(Self.byteText(bytes)).", plan: [database])
+                ? .init(need: .clean, summaryKey: "audit.maintenance.database.below100", summaryArguments: [.text(Self.byteText(bytes))])
+                : .init(need: .needed, summaryKey: "audit.maintenance.database.size", summaryArguments: [.text(Self.byteText(bytes))], plan: [database])
         default:
-            return .init(need: .unavailable, summary: "Unknown maintenance item.")
+            return .init(need: .unavailable, summaryKey: "audit.maintenance.unknown")
         }
     }
 
@@ -105,7 +105,7 @@ extension NativeCore {
         await Task.detached(priority: .utility) { [self] in
             let probe = OptimizeTask(id: id, title: id, detail: "")
             if isOptimizeWhitelisted(probe, homeDirectory: home) {
-                return (.unchanged, "Skipped by whitelist.")
+                return (.unchanged, L10n.shared.t("audit.maintenance.whitelisted"))
             }
             return applyMaintenanceTask(id, preview: preview, homeDirectory: home)
         }.value
@@ -116,11 +116,11 @@ extension NativeCore {
         switch id {
         case "quicklook":
             let ok = runCommand("/usr/bin/qlmanage", ["-r", "cache"])
-            return ok ? (.applied, "Quick Look cache refreshed.") : (.failed, "Quick Look refresh failed.")
+            return ok ? (.applied, L10n.shared.t("audit.maintenance.quicklook.success")) : (.failed, L10n.shared.t("audit.maintenance.quicklook.failed"))
         case "iconservices":
             let ok = runCommand("/usr/bin/killall", ["-u", NSUserName(), "iconservicesagent"])
-            return ok ? (.applied, "Finder icon service restarted.")
-                : (.unchanged, "Icon service was not running; no change was needed.")
+            return ok ? (.applied, L10n.shared.t("audit.maintenance.icons.success"))
+                : (.unchanged, L10n.shared.t("audit.maintenance.icons.unchanged"))
         case "launchservices":
             // `-kill` 会丢掉用户手动注册的应用，只做 gc + 重注册。
             _ = runCommand(Self.lsregister, ["-gc"])
@@ -128,13 +128,13 @@ extension NativeCore {
                                   ["-r", "-f", "-domain", "local", "-domain", "user", "-domain", "system"])
             let partial = full || runCommand(Self.lsregister,
                                              ["-r", "-f", "-domain", "local", "-domain", "user"])
-            if full { return (.applied, "LaunchServices database rebuilt.") }
-            return partial ? (.applied, "LaunchServices rebuilt for user and local domains.")
-                : (.failed, "LaunchServices rebuild failed.")
+            if full { return (.applied, L10n.shared.t("audit.maintenance.launchservices.success")) }
+            return partial ? (.applied, L10n.shared.t("audit.maintenance.launchservices.partial"))
+                : (.failed, L10n.shared.t("audit.maintenance.launchservices.failed"))
         case "saved-state":
             let root = home + "/Library/Saved Application State"
             let fresh = Set(oldSavedStates(homeDirectory: home).map(Self.planEntry))
-            return trashPlanned(preview.plan.filter(fresh.contains), parent: root, noun: "saved state(s)")
+            return trashPlanned(preview.plan.filter(fresh.contains), parent: root)
         case "sqlite-vacuum":
             return vacuumDatabases(preview.plan, homeDirectory: home)
         case "quarantine":
@@ -145,7 +145,7 @@ extension NativeCore {
         case "coreduet":
             return trimKnowledge(preview.plan, homeDirectory: home)
         default:
-            return (.unavailable, "This item is not executed here.")
+            return (.unavailable, L10n.shared.t("audit.maintenance.unsupported"))
         }
     }
 
@@ -166,19 +166,18 @@ extension NativeCore {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
-    private func trashPlanned(_ plan: [String], parent: String,
-                              noun: String) -> (state: OptimizeTask.State, message: String) {
+    private func trashPlanned(_ plan: [String], parent: String) -> (state: OptimizeTask.State, message: String) {
         let targets = plan.compactMap { entry -> (path: String, identity: String)? in
             let parts = entry.split(separator: "\t", maxSplits: 1).map(String.init)
             return parts.count == 2 ? (path: parts[1], identity: parts[0]) : nil
         }
-        guard !targets.isEmpty else { return (.unchanged, "Nothing left to change since the preview.") }
+        guard !targets.isEmpty else { return (.unchanged, L10n.shared.t("audit.maintenance.unchanged")) }
         let result = trashOptimizeTargets(targets, parent: parent)
         if result.failed > 0 {
             return (result.removed > 0 ? .applied : .failed,
-                    "Moved \(result.removed) \(noun) to Trash; \(result.failed) changed or could not be moved.")
+                    L10n.shared.tf("audit.maintenance.trash.partial", result.removed, result.failed))
         }
-        return (.applied, "Moved \(result.removed) \(noun) to Trash.")
+        return (.applied, L10n.shared.tf("audit.maintenance.trash.success", result.removed))
     }
 
     func oldSavedStates(homeDirectory home: String) -> [(path: String, identity: String)] {
@@ -231,7 +230,7 @@ extension NativeCore {
 
     private func inspectSQLiteVacuum(homeDirectory home: String) -> OptimizePreview {
         guard fileManager.isExecutableFile(atPath: "/usr/bin/sqlite3") else {
-            return .init(need: .unavailable, summary: "sqlite3 is unavailable.")
+            return .init(need: .unavailable, summaryKey: "audit.maintenance.sqlite.unavailable")
         }
         var items: [String] = []
         var plan: [String] = []
@@ -239,34 +238,34 @@ extension NativeCore {
             let name = path.replacingOccurrences(of: home, with: "~")
             let bytes = fileSize(URL(fileURLWithPath: path))
             if bytes > Self.sqliteMaxBytes {
-                items.append("\(name) · \(Self.byteText(bytes)) · over the 100 MB limit, skipped")
+                items.append(L10n.shared.tf("audit.maintenance.sqlite.tooLarge", name, Self.byteText(bytes)))
                 continue
             }
             guard let raw = sqlite(path, "PRAGMA page_count; PRAGMA freelist_count;", readOnly: true) else {
-                items.append("\(name) · could not be read")
+                items.append(L10n.shared.tf("audit.maintenance.sqlite.unreadable", name))
                 continue
             }
             let numbers = raw.split(whereSeparator: \.isNewline).compactMap { Int($0) }
             guard numbers.count == 2, numbers[0] > 0 else { continue }
             let percent = numbers[1] * 100 / numbers[0]
             guard percent >= 5 else { continue }
-            items.append("\(name) · \(Self.byteText(bytes)) · \(percent)% free pages")
+            items.append(L10n.shared.tf("audit.maintenance.sqlite.freePages", name, Self.byteText(bytes), percent))
             plan.append(path)
         }
         guard !plan.isEmpty else {
-            return .init(need: .clean, summary: "Databases are already compact.", items: items)
+            return .init(need: .clean, summaryKey: "audit.maintenance.sqlite.compact", items: items)
         }
         let busy = runningVacuumOwners()
         if !busy.isEmpty {
-            return .init(need: .blocked, summary: "Quit \(busy.joined(separator: ", ")) first.", items: items)
+            return .init(need: .blocked, summaryKey: "audit.maintenance.quitFirst", summaryArguments: [.text(busy.joined(separator: ", "))], items: items)
         }
-        return .init(need: .needed, summary: "\(plan.count) database(s) can be compacted.", items: items, plan: plan)
+        return .init(need: .needed, summaryKey: "audit.maintenance.sqlite.found", summaryArguments: [.integer(plan.count)], items: items, plan: plan)
     }
 
     private func vacuumDatabases(_ plan: [String],
                                  homeDirectory home: String) -> (state: OptimizeTask.State, message: String) {
         let busy = runningVacuumOwners()
-        guard busy.isEmpty else { return (.unchanged, "Skipped: \(busy.joined(separator: ", ")) is running.") }
+        guard busy.isEmpty else { return (.unchanged, L10n.shared.tf("audit.maintenance.running", busy.joined(separator: ", "))) }
         let allowed = Set(vacuumCandidates(homeDirectory: home))
         var vacuumed = 0
         var failed = 0
@@ -280,10 +279,10 @@ extension NativeCore {
         }
         if failed > 0 {
             return (vacuumed > 0 ? .applied : .failed,
-                    "Compacted \(vacuumed) database(s); \(failed) failed the integrity check or were busy.")
+                    L10n.shared.tf("audit.maintenance.sqlite.partial", vacuumed, failed))
         }
-        return vacuumed > 0 ? (.applied, "Compacted \(vacuumed) database(s).")
-            : (.unchanged, "Nothing left to compact.")
+        return vacuumed > 0 ? (.applied, L10n.shared.tf("audit.maintenance.sqlite.success", vacuumed))
+            : (.unchanged, L10n.shared.t("audit.maintenance.sqlite.unchanged"))
     }
 
     /// 只执行固定语句；语句常量在调用点写死，永不拼接外部输入。
@@ -319,32 +318,32 @@ extension NativeCore {
     private func trimNotifications(_ plan: [String],
                                    homeDirectory home: String) -> (state: OptimizeTask.State, message: String) {
         guard let database = notificationDatabase(homeDirectory: home), plan == [database] else {
-            return (.unchanged, "Notification database changed since the preview.")
+            return (.unchanged, L10n.shared.t("audit.maintenance.notifications.changed"))
         }
         guard let raw = sqlite(database, "SELECT MAX(delivered_date) FROM record;", readOnly: true),
               let latest = Double(raw) else {
-            return (.failed, "Could not read the notification database.")
+            return (.failed, L10n.shared.t("audit.maintenance.notifications.unreadable"))
         }
         let cutoff = Self.notificationCutoff(maxDelivered: latest)
         guard sqlite(database, "DELETE FROM record WHERE delivered_date < \(Int(cutoff)); VACUUM;",
                      timeout: 60) != nil else {
-            return (.failed, "Notification database is busy or locked.")
+            return (.failed, L10n.shared.t("audit.maintenance.notifications.busy"))
         }
         _ = runCommand("/usr/bin/killall", ["NotificationCenter"])
-        return (.applied, "Removed notifications older than 30 days (now \(Self.byteText(sqliteFamilyBytes(database)))).")
+        return (.applied, L10n.shared.tf("audit.maintenance.notifications.success", Self.byteText(sqliteFamilyBytes(database))))
     }
 
     private func trimKnowledge(_ plan: [String],
                                homeDirectory home: String) -> (state: OptimizeTask.State, message: String) {
         let database = home + "/Library/Application Support/Knowledge/knowledgeC.db"
         guard plan == [database], fileManager.fileExists(atPath: database) else {
-            return (.unchanged, "Usage database changed since the preview.")
+            return (.unchanged, L10n.shared.t("audit.maintenance.usage.changed"))
         }
         let cutoff = Int(Date().addingTimeInterval(-90 * 86_400).timeIntervalSince1970 - Self.cocoaEpochOffset)
         guard sqlite(database, "DELETE FROM ZOBJECT WHERE ZCREATIONDATE < \(cutoff); VACUUM;",
                      timeout: 120) != nil else {
-            return (.failed, "Usage database is busy or locked.")
+            return (.failed, L10n.shared.t("audit.maintenance.usage.busy"))
         }
-        return (.applied, "Removed usage records older than 90 days (now \(Self.byteText(sqliteFamilyBytes(database)))).")
+        return (.applied, L10n.shared.tf("audit.maintenance.usage.success", Self.byteText(sqliteFamilyBytes(database))))
     }
 }

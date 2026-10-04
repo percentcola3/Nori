@@ -2,7 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 
-struct DuplicateFileIdentity: Hashable, Sendable {
+struct DuplicateFileIdentity: Hashable, Codable, Sendable {
     let device: UInt64
     let inode: UInt64
     let size: UInt64
@@ -22,7 +22,7 @@ struct DuplicateFileIdentity: Hashable, Sendable {
     }
 }
 
-struct DuplicateFile: Identifiable, Hashable, Sendable {
+struct DuplicateFile: Identifiable, Hashable, Codable, Sendable {
     let path: String
     let name: String
     let size: UInt64
@@ -30,6 +30,81 @@ struct DuplicateFile: Identifiable, Hashable, Sendable {
     /// Empty until the complete data fork has been hashed successfully.
     let sha256: String
     var id: String { path }
+}
+
+/// Repeated scans still discover current files, but unchanged identities reuse
+/// their sampled and complete content hashes. Deletion validation never uses this cache.
+enum DuplicatePathMutation {
+    static func contains(_ path: String, in paths: Set<String>) -> Bool {
+        guard !paths.isEmpty else { return false }
+        var candidate = path
+        while !candidate.isEmpty {
+            if paths.contains(candidate) { return true }
+            if candidate == "/" { return false }
+            candidate = (candidate as NSString).deletingLastPathComponent
+        }
+        return false
+    }
+}
+
+final class DuplicateContentCache: @unchecked Sendable {
+    private struct Entry: Codable {
+        let identity: DuplicateFileIdentity
+        var sample: String?
+        var complete: String?
+    }
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
+
+    func encodedData() throws -> Data {
+        lock.lock()
+        let snapshot = entries
+        lock.unlock()
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        return try encoder.encode(snapshot)
+    }
+
+    func restore(from data: Data) {
+        guard let saved = try? PropertyListDecoder().decode([String: Entry].self, from: data) else { return }
+        lock.lock()
+        entries.merge(saved) { existing, _ in existing }
+        lock.unlock()
+    }
+
+    func digest(for file: DuplicateFile, sample: Bool) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[file.path], entry.identity == file.identity else { return nil }
+        return sample ? entry.sample : entry.complete
+    }
+
+    func remember(_ digest: String, for file: DuplicateFile, sample: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        var entry = entries[file.path].flatMap { $0.identity == file.identity ? $0 : nil }
+            ?? Entry(identity: file.identity)
+        if sample { entry.sample = digest } else { entry.complete = digest }
+        entries[file.path] = entry
+    }
+
+    func invalidate(paths: Set<String>) {
+        guard !paths.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        entries = entries.filter { path, _ in
+            !DuplicatePathMutation.contains(path, in: paths)
+        }
+    }
+
+    func retainCurrentFiles(_ files: [DuplicateFile], roots: [String]) {
+        let identities = Dictionary(uniqueKeysWithValues: files.map { ($0.path, $0.identity) })
+        lock.lock()
+        defer { lock.unlock() }
+        entries = entries.filter { path, entry in
+            !roots.contains { path.hasPrefix($0 + "/") } || identities[path] == entry.identity
+        }
+    }
 }
 
 struct DuplicateGroup: Identifiable, Sendable {
@@ -77,12 +152,12 @@ enum DuplicateScanError: Error, LocalizedError {
     case cancelled, unsafePath, unavailable, changed, unhashed, differentContent
     var errorDescription: String? {
         switch self {
-        case .cancelled: return "扫描已取消"
-        case .unsafePath: return "文件路径不在允许扫描的普通目录内"
-        case .unavailable: return "文件不可读取、尚未下载或包含资源分叉"
-        case .changed: return "文件在扫描后发生变化，请重新扫描"
-        case .unhashed: return "文件尚未完成完整内容校验"
-        case .differentContent: return "文件内容与扫描结果不一致，请重新扫描"
+        case .cancelled: return L10n.shared.t("audit.duplicates.error.cancelled")
+        case .unsafePath: return L10n.shared.t("audit.duplicates.error.unsafePath")
+        case .unavailable: return L10n.shared.t("audit.duplicates.error.unavailable")
+        case .changed: return L10n.shared.t("audit.duplicates.error.changed")
+        case .unhashed: return L10n.shared.t("audit.duplicates.error.unhashed")
+        case .differentContent: return L10n.shared.t("audit.duplicates.error.differentContent")
         }
     }
 }
@@ -139,10 +214,14 @@ enum DuplicateScanner {
 
     static func scan(roots: [String], control: DuplicateScanControl,
                      home: String = NSHomeDirectory(),
+                     cache: DuplicateContentCache? = nil,
                      progress: ((DuplicateScanProgress) -> Void)? = nil) -> DuplicateScanResult {
         let state = Progress(progress)
         var result = enumerate(roots: roots, control: control, home: home, state: state)
         guard !result.cancelled else { return result }
+        if !result.isPartial, result.error == nil {
+            cache?.retainCurrentFiles(result.files, roots: result.roots)
+        }
         let sameSizes = Dictionary(grouping: result.files.indices, by: { result.files[$0].size })
             .values.filter { $0.count > 1 }
         state.phase = "sampling"
@@ -157,7 +236,7 @@ enum DuplicateScanner {
                 state.currentPath = file.path
                 do {
                     let digest = try digest(file, allowedRoots: result.roots, control: control,
-                                            home: home, sample: true) { count in
+                                            home: home, sample: true, cache: cache) { count in
                         state.bytesRead += UInt64(count)
                         state.emit()
                     }
@@ -182,7 +261,7 @@ enum DuplicateScanner {
             state.currentPath = file.path
             do {
                 let value = try digest(file, allowedRoots: result.roots, control: control,
-                                       home: home, sample: false) { count in
+                                       home: home, sample: false, cache: cache) { count in
                     state.bytesRead += UInt64(count)
                     state.emit()
                 }
@@ -212,8 +291,9 @@ enum DuplicateScanner {
 
     /// Hash only when the current file still has the enumerated identity.
     static func hash(_ file: DuplicateFile, allowedRoots: [String], control: DuplicateScanControl,
-                     home: String = NSHomeDirectory()) throws -> DuplicateFile {
-        let value = try digest(file, allowedRoots: allowedRoots, control: control, home: home, sample: false)
+                     home: String = NSHomeDirectory(), cache: DuplicateContentCache? = nil) throws -> DuplicateFile {
+        let value = try digest(file, allowedRoots: allowedRoots, control: control,
+                               home: home, sample: false, cache: cache)
         return DuplicateFile(path: file.path, name: file.name, size: file.size,
                              identity: file.identity, sha256: value)
     }
@@ -250,21 +330,32 @@ enum DuplicateScanner {
             guard isAllowedRoot(root, home: home), let metadata = metadata(root) else {
                 result.skippedFiles += 1
                 result.isPartial = true
-                result.error = "部分目录不是可扫描的普通目录，或无法读取"
+                result.error = L10n.shared.t("audit.duplicates.error.partial")
                 continue
             }
             result.roots.append(root)
-            guard let name = strdup(root) else { result.isPartial = true; continue }
+            guard let name = strdup(root) else {
+                result.isPartial = true
+                result.error = L10n.shared.t("audit.duplicates.error.partial") + "\n" + root
+                continue
+            }
             defer { free(name) }
             var paths: [UnsafeMutablePointer<CChar>?] = [name, nil]
             guard let tree = paths.withUnsafeMutableBufferPointer({
                 fts_open($0.baseAddress!, FTS_PHYSICAL | FTS_NOCHDIR | FTS_XDEV, nil)
-            }) else { result.isPartial = true; continue }
+            }) else {
+                result.isPartial = true
+                result.error = L10n.shared.t("audit.duplicates.error.partial") + "\n" + root
+                continue
+            }
             defer { fts_close(tree) }
             while !control.isCancelled {
                 errno = 0
                 guard let entry = fts_read(tree) else {
-                    if errno != 0 { result.isPartial = true }
+                    if errno != 0 {
+                        result.isPartial = true
+                        result.error = L10n.shared.t("audit.duplicates.error.partial") + "\n" + root
+                    }
                     break
                 }
                 let item = entry.pointee
@@ -293,7 +384,14 @@ enum DuplicateScanner {
                                                       size: identity.size, identity: identity, sha256: ""))
                 case FTS_ERR, FTS_DNR, FTS_NS:
                     result.skippedFiles += 1
-                    result.isPartial = true
+                    if path == root {
+                        // A selected root must be readable. Expected access
+                        // refusals apply only to descendants within that root.
+                        result.isPartial = true
+                        result.error = L10n.shared.t("audit.duplicates.error.partial") + "\n" + root
+                    } else if item.fts_errno != EACCES && item.fts_errno != EPERM {
+                        result.isPartial = true
+                    }
                 case FTS_SL, FTS_SLNONE:
                     result.skippedFiles += 1
                 default: break
@@ -417,9 +515,17 @@ enum DuplicateScanner {
     }
 
     private static func digest(_ file: DuplicateFile, allowedRoots: [String], control: DuplicateScanControl,
-                               home: String, sample: Bool, didRead: ((Int) -> Void)? = nil) throws -> String {
+                               home: String, sample: Bool, cache: DuplicateContentCache? = nil,
+                               didRead: ((Int) -> Void)? = nil) throws -> String {
         let descriptor = try openVerified(file, allowedRoots: allowedRoots, control: control, home: home)
         defer { close(descriptor) }
+        if let cached = cache?.digest(for: file, sample: sample) {
+            try verifyDescriptor(descriptor, file: file)
+            guard !control.isCancelled else { throw DuplicateScanError.cancelled }
+            guard noSymlinkComponents(file.path), let current = metadata(file.path),
+                  DuplicateFileIdentity(current) == file.identity else { throw DuplicateScanError.changed }
+            return cached
+        }
         var hasher = SHA256()
         var buffer = [UInt8](repeating: 0, count: sample ? sampleSize : chunkSize)
         let ranges: [(UInt64, UInt64)] = sample && file.size > UInt64(sampleSize * 2)
@@ -446,6 +552,8 @@ enum DuplicateScanner {
         // the original path still names the same file before publishing a hash.
         guard noSymlinkComponents(file.path), let current = metadata(file.path),
               DuplicateFileIdentity(current) == file.identity else { throw DuplicateScanError.changed }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        let value = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        cache?.remember(value, for: file, sample: sample)
+        return value
     }
 }

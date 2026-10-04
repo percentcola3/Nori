@@ -9,6 +9,7 @@ enum DeveloperNetworkService {
         let kind: String
         let endpoint: String
         var id: String { kind }
+        var displayEndpoint: String { DeveloperNetworkService.redactedEndpoint(endpoint) }
     }
 
     struct NetworkService: Identifiable, Equatable {
@@ -34,6 +35,7 @@ enum DeveloperNetworkService {
         let resolverServers: [String]
         let hosts: HostsDocument?
         let warnings: [String]
+        var effectiveProxies: [Proxy] = []
     }
 
     enum HostsError: LocalizedError, Equatable {
@@ -47,19 +49,21 @@ enum DeveloperNetworkService {
 
         var errorDescription: String? {
             switch self {
-            case .unavailable: return "The hosts file is unavailable or is not a regular system file."
-            case .tooLarge: return "The hosts file exceeds the 64 KB editor limit."
-            case .invalidLine(let line): return "Invalid IP address or hostname on line \(line)."
-            case .protectedMapping: return "Keep 127.0.0.1 localhost, ::1 localhost and 255.255.255.255 broadcasthost."
-            case .changedExternally: return "The hosts file changed outside Nori. Reload it before saving."
-            case .saveFailed: return "Could not confirm the hosts save. Your draft is kept."
-            case .skippedInTestMode: return "System changes are disabled in test mode."
+            case .unavailable: return L10n.shared.t("task.reason.hostsUnavailable")
+            case .tooLarge: return L10n.shared.t("task.reason.hostsTooLarge")
+            case .invalidLine: return L10n.shared.t("task.reason.hostsInvalidLine")
+            case .protectedMapping: return L10n.shared.t("task.reason.hostsProtected")
+            case .changedExternally: return L10n.shared.t("task.reason.configChanged")
+            case .saveFailed: return L10n.shared.t("task.reason.hostsSave")
+            case .skippedInTestMode: return L10n.shared.t("task.reason.testMode")
             }
         }
     }
 
     struct HostsSave: Equatable {
         let backupPath: String
+        /// nil when flushing was not requested.
+        var flushedDNS: Bool? = nil
     }
 
     static let hostsPath = "/private/etc/hosts"
@@ -71,9 +75,11 @@ enum DeveloperNetworkService {
     static func scan() async -> Snapshot {
         async let listed = command("/usr/sbin/networksetup", ["-listallnetworkservices"])
         async let resolver = command("/usr/sbin/scutil", ["--dns"])
+        async let effective = command("/usr/sbin/scutil", ["--proxy"])
         let hosts = try? readHosts()
         let namesResult = await listed
         let resolverResult = await resolver
+        let effectiveResult = await effective
         let names = parseServiceNames(namesResult.output)
         let services = await withTaskGroup(of: (Int, NetworkService).self) { group in
             var entries = Array(names.prefix(32).enumerated()).makeIterator()
@@ -94,9 +100,10 @@ enum DeveloperNetworkService {
         if !namesResult.succeeded { warnings.append("services") }
         if !resolverResult.succeeded { warnings.append("resolver") }
         if hosts == nil { warnings.append("hosts") }
+        if !effectiveResult.succeeded { warnings.append("effectiveProxy") }
         if names.count > 32 { warnings.append("serviceLimit") }
         return Snapshot(services: services, resolverServers: parseResolverServers(resolverResult.output),
-                        hosts: hosts, warnings: warnings)
+                        hosts: hosts, warnings: warnings, effectiveProxies: parseEffectiveProxies(effectiveResult.output))
     }
 
     static func readHosts() throws -> HostsDocument {
@@ -146,7 +153,7 @@ enum DeveloperNetworkService {
         guard protectedMappings.isSubset(of: found) else { throw HostsError.protectedMapping }
     }
 
-    static func saveHosts(_ text: String, original: HostsDocument) async throws -> HostsSave {
+    static func saveHosts(_ text: String, original: HostsDocument, flushDNS: Bool = false) async throws -> HostsSave {
         try validateHosts(text)
         let environment = ProcessInfo.processInfo.environment
         guard environment["MOLE_TEST_MODE"] != "1", environment["MOLE_TEST_NO_AUTH"] != "1" else {
@@ -155,14 +162,16 @@ enum DeveloperNetworkService {
         guard try readHosts().fingerprint == original.fingerprint else { throw HostsError.changedExternally }
         let result = await MoleEngine.shared.runPrivilegedBridge(
             "bin/app_dev_hosts.sh",
-            arguments: [String(getuid()), "apply", original.fingerprint, Data(text.utf8).base64EncodedString()], timeout: 90)
+            arguments: [String(getuid()), flushDNS ? "apply-flush" : "apply", original.fingerprint,
+                        Data(text.utf8).base64EncodedString()], timeout: 90)
         let lines = result.output.components(separatedBy: .newlines)
         if lines.contains("hosts\tconflict") { throw HostsError.changedExternally }
         guard result.succeeded,
               let line = lines.last(where: { $0.hasPrefix("hosts\tapplied\t/private/etc/hosts.nori-backup.") }) else {
             throw HostsError.saveFailed
         }
-        return HostsSave(backupPath: String(line.dropFirst("hosts\tapplied\t".count)))
+        return HostsSave(backupPath: String(line.dropFirst("hosts\tapplied\t".count)),
+                         flushedDNS: flushDNS ? lines.contains("hosts\tflushed") : nil)
     }
 
     static func parseServiceNames(_ output: String) -> [(name: String, enabled: Bool)] {
@@ -197,7 +206,52 @@ enum DeveloperNetworkService {
         guard fields["Enabled"] == "Yes" else { return nil }
         if kind == "PAC", let url = fields["URL"], !url.isEmpty { return Proxy(kind: kind, endpoint: url) }
         guard let server = fields["Server"], !server.isEmpty, let port = fields["Port"] else { return nil }
-        return Proxy(kind: kind, endpoint: "\(server):\(port)")
+        return Proxy(kind: kind, endpoint: proxyEndpoint(host: server, port: port))
+    }
+
+    /// Effective system settings differ from the settings saved on an inactive service.
+    static func parseEffectiveProxies(_ output: String) -> [Proxy] {
+        let fields = parseFields(output)
+        var result: [Proxy] = []
+        for (prefix, kind) in [("HTTP", "HTTP"), ("HTTPS", "HTTPS"), ("SOCKS", "SOCKS")] {
+            guard fields[prefix + "Enable"] == "1", let host = fields[prefix + "Proxy"],
+                  !host.isEmpty, let port = fields[prefix + "Port"], Int(port) != nil else { continue }
+            result.append(Proxy(kind: kind, endpoint: proxyEndpoint(host: host, port: port)))
+        }
+        if fields["ProxyAutoConfigEnable"] == "1", let url = fields["ProxyAutoConfigURLString"], !url.isEmpty {
+            result.append(Proxy(kind: "PAC", endpoint: url))
+        }
+        if fields["ProxyAutoDiscoveryEnable"] == "1" {
+            result.append(Proxy(kind: "WPAD", endpoint: "auto"))
+        }
+        return result
+    }
+
+    static func proxyEndpoint(host: String, port: String) -> String {
+        (host.contains(":") && !host.hasPrefix("[") ? "[" + host + "]" : host) + ":" + port
+    }
+
+    static func redactedEndpoint(_ raw: String) -> String {
+        let hasScheme = raw.contains("://")
+        guard var url = URLComponents(string: hasScheme ? raw : "http://" + raw), url.host != nil else {
+            return raw.contains("@") ? String(raw.split(separator: "@").last ?? "") : raw
+        }
+        url.user = nil
+        url.password = nil
+        url.query = nil
+        url.fragment = nil
+        let rendered = url.string ?? ""
+        return hasScheme ? rendered : String(rendered.dropFirst("http://".count))
+    }
+
+    static func disableProxy(service: String, kind: String) async -> RunResult {
+        let ids = ["HTTP": "http", "HTTPS": "https", "SOCKS": "socks", "PAC": "pac"]
+        guard let id = ids[kind], !service.isEmpty, !service.hasPrefix("-"),
+              service.utf8.count <= 256, !service.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 }) else {
+            return RunResult(output: "", exitCode: 64, timedOut: false)
+        }
+        return await MoleEngine.shared.runPrivilegedBridge("bin/app_net_fixproxy.sh",
+                                                           arguments: [service, id], timeout: 120)
     }
 
     private static func inspect(_ name: String, enabled: Bool) async -> NetworkService {
@@ -233,12 +287,12 @@ enum DeveloperNetworkService {
         return result
     }
 
-    private static func hostFields(_ line: String) -> [String] {
+    static func hostFields(_ line: String) -> [String] {
         let data = line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
         return data.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\r" }).map(String.init)
     }
 
-    private static func validAddress(_ text: String) -> Bool {
+    static func validAddress(_ text: String) -> Bool {
         guard !text.contains("%"), !text.utf8.contains(0) else { return false }
         var v4 = in_addr()
         var v6 = in6_addr()
@@ -260,7 +314,7 @@ enum DeveloperNetworkService {
         return String(parts[0]).withCString { inet_pton(AF_INET6, $0, &address) == 1 }
     }
 
-    private static func validHostname(_ text: String) -> Bool {
+    static func validHostname(_ text: String) -> Bool {
         let name = text.hasSuffix(".") ? String(text.dropLast()) : text
         guard !name.isEmpty, name.utf8.count <= 253 else { return false }
         return name.split(separator: ".", omittingEmptySubsequences: false).allSatisfy { label in

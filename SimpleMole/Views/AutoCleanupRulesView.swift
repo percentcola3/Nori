@@ -69,8 +69,13 @@ struct AutoCleanupRulesView: View {
 
     @ViewBuilder
     private var statusBar: some View {
-        if state.isAutoCleanupScanning || !state.autoCleanupStatus.isEmpty {
+        if !state.autoCleanupRules.isEmpty || state.isAutoCleanupScanning || !state.autoCleanupStatus.isEmpty {
             HStack(spacing: 7) {
+                if !state.autoCleanupRules.isEmpty {
+                    Text(l10n.tf("auto.groups.summary", state.autoCleanupRules.count,
+                                 state.autoCleanupRules.reduce(0) { $0 + $1.directories.count }))
+                        .font(.system(size: 10, weight: .medium))
+                }
                 if state.isAutoCleanupScanning {
                     ProgressView()
                         .controlSize(.small)
@@ -125,12 +130,14 @@ struct AutoCleanupRulesView: View {
             .padding(24)
         } else {
             ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(state.autoCleanupRules) { rule in
-                        AutoCleanupRuleRow(state: state, rule: rule)
+                LiquidGlassGroup {
+                    LazyVStack(spacing: 10) {
+                        ForEach(state.autoCleanupRules) { rule in
+                            AutoCleanupRuleRow(state: state, rule: rule)
+                        }
                     }
+                    .padding(16)
                 }
-                .padding(16)
             }
         }
     }
@@ -149,6 +156,26 @@ private struct AutoCleanupRuleRow: View {
             Divider()
                 .padding(.vertical, 10)
             configuration
+            if rule.directories.count > 1 {
+                Text(l10n.t("auto.policy.task"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
+                DisclosureGroup(l10n.tf("auto.task.scope", rule.directories.count)) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(rule.directories, id: \.self) { path in
+                            Text(path)
+                                .font(.system(size: 9, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+                .font(.system(size: 10))
+                .padding(.top, 10)
+            }
 
             if let issue = state.autoCleanupRuleIssues[rule.id] {
                 Divider()
@@ -172,7 +199,7 @@ private struct AutoCleanupRuleRow: View {
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 10).fill(.quinary))
+        .modifier(ListRowGlass())
     }
 
     private var summary: some View {
@@ -190,10 +217,11 @@ private struct AutoCleanupRuleRow: View {
                 .foregroundStyle(Color.moleAccentText)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(URL(fileURLWithPath: rule.directory).lastPathComponent)
+                Text(rule.sourceName ?? URL(fileURLWithPath: rule.directory).lastPathComponent)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
-                Text(rule.directory)
+                Text(rule.directories.count > 1
+                     ? l10n.tf("auto.entry.paths", rule.directories.count) : rule.directory)
                     .font(.system(size: 9, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -267,7 +295,8 @@ private struct AutoCleanupRuleRow: View {
 
             Toggle(isOn: regenerableBinding) {
                 Label {
-                    Text(l10n.t("auto.regenerable.confirm"))
+                    Text(l10n.t(rule.directories.count > 1
+                                ? "auto.task.confirm" : "auto.regenerable.confirm"))
                         .font(.system(size: 10,
                                       weight: currentRule.isSafetyAuthorized ? .medium : .semibold))
                         .foregroundStyle(currentRule.isSafetyAuthorized
@@ -459,11 +488,13 @@ private struct AutoCleanupPreviewView: View {
                     .padding(.vertical, 12)
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(visibleCandidates.enumerated()), id: \.offset) { index, candidate in
-                        if index > 0 {
-                            Divider()
+                    ForEach(visibleCandidates) { candidate in
+                        VStack(spacing: 0) {
+                            if candidate.id != visibleCandidates.first?.id {
+                                Divider()
+                            }
+                            AutoCleanupCandidateRow(candidate: candidate)
                         }
-                        AutoCleanupCandidateRow(candidate: candidate)
                     }
                 }
                 .background(RoundedRectangle(cornerRadius: 7).fill(.quaternary))

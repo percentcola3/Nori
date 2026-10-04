@@ -33,7 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenu()
+        NSApp.servicesProvider = self
+        NSUpdateDynamicServices()
         updateStatusItem()
+        appState.directoryBrowser.startSizeBackgroundWork()
 
         AppUpdateController.shared.start { [weak self] in
             guard let self else { return false }
@@ -70,10 +73,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appState.registerScreenshotHotKey()
         // 自动目录规则由应用常驻进程调度；AppState 内部按六小时最小间隔限频。
         autoCleanupTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.appState.runScheduledAutoCleanup() }
+            Task { @MainActor in
+                self?.appState.runScheduledAutoCleanup()
+                self?.appState.runScheduledAnalysisScans()
+            }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
             self?.appState.runScheduledAutoCleanup()
+            self?.appState.runScheduledAnalysisScans()
         }
         // auto 模式下，回到前台时重新解析系统语言。
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
@@ -94,6 +101,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateIslandPanel()
     }
 
+    /// Finder → Services → Reveal in Nori, accepting both modern file URLs
+    /// and the legacy filename pasteboard supplied by some macOS applications.
+    @objc func revealInNori(_ pasteboard: NSPasteboard, userData: String?,
+                            error: AutoreleasingUnsafeMutablePointer<NSString?>) {
+        var urls = (pasteboard.readObjects(forClasses: [NSURL.self],
+                    options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+        if urls.isEmpty, let paths = pasteboard.propertyList(forType: NSPasteboard.PasteboardType("NSFilenamesPboardType")) as? [String] {
+            urls = paths.map { URL(fileURLWithPath: $0) }
+        }
+        if urls.isEmpty, let text = pasteboard.string(forType: .string),
+           let path = DirectoryPathQuery(text), path.isAbsolute {
+            urls = [URL(fileURLWithPath: path.text)]
+        }
+        guard let first = urls.first, first.isFileURL, FileManager.default.fileExists(atPath: first.path) else {
+            error.pointee = L10n.shared.t("dir.error.folder") as NSString
+            return
+        }
+        revealDirectoryItems(urls)
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let files = urls.compactMap { DirectoryRevealRequest.fileURL(from: $0) }
+        if !files.isEmpty { revealDirectoryItems(files) }
+    }
+
+    private func revealDirectoryItems(_ urls: [URL]) {
+        if !appState.visiblePages.contains(.directory) { appState.setPageVisible(.directory, true) }
+        appState.directoryBrowser.reveal(urls)
+        appState.jump(to: .directory)
+        showMainWindow()
+    }
+
     /// 退出必须无条件放行。系统设置的"退出并重新打开"（屏幕录制授权后的
     /// 提示按钮）就是一条普通 quit 事件；若在 sheet 呈现期间被 AppKit 否决
     /// （表现为事件返回 -128"用户已取消"），用户看到的就是"点了没反应"。
@@ -105,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         cancelIslandSideDragTracking()
+        appState.directoryBrowser.stopSizeBackgroundWork()
         AppUpdateController.shared.stop()
         autoCleanupTimer?.invalidate()
         runtimeTimer?.invalidate()

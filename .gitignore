@@ -17,6 +17,8 @@ identity-password
 keychain-password
 
 # Local tool/session caches (never commit)
+.artifacts/
+.artifacts-*/
 .codex/
 .zcode/
 .mimosa/

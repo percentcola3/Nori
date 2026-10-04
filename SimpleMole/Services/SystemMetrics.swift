@@ -15,6 +15,7 @@ enum SystemMetrics {
     private static var previousDiskRead: UInt64 = 0
     private static var previousDiskWrite: UInt64 = 0
     private static var previousDiskSample: Double = 0
+    private static let diskAvailableCapacityCache = DiskAvailableCapacityCache()
 
     static func sample() -> MetricsSnapshot {
         var snapshot = MetricsSnapshot()
@@ -277,8 +278,23 @@ enum SystemMetrics {
         guard statfs(home.fileSystemRepresentation, &volume) == 0, volume.f_blocks > 0 else {
             return (0, 0)
         }
-        let freeBytes = UInt64(volume.f_bavail) * UInt64(volume.f_bsize)
-        let usedPercent = 100.0 * Double(volume.f_blocks - volume.f_bavail) / Double(volume.f_blocks)
+        let totalBytes = UInt64(volume.f_blocks) * UInt64(volume.f_bsize)
+        let physicalFreeBytes = UInt64(volume.f_bavail) * UInt64(volume.f_bsize)
+        let reclaimableBytes = diskAvailableCapacityCache.reclaimableBytes(
+            for: URL(fileURLWithPath: home as String))
+        return normalizedDiskUsage(totalBytes: totalBytes, physicalFreeBytes: physicalFreeBytes,
+                                   reclaimableBytes: reclaimableBytes)
+    }
+
+    /// macOS 的“可用”容量包含系统能按需回收的空间。statfs 只报告当前
+    /// 空闲空间；在此加上后台采集的可回收余量，同时即时反映写入/清理。
+    static func normalizedDiskUsage(totalBytes: UInt64, physicalFreeBytes: UInt64,
+                                    reclaimableBytes: UInt64)
+        -> (freeBytes: UInt64, usedPercent: Double) {
+        guard totalBytes > 0 else { return (0, 0) }
+        let (available, overflow) = physicalFreeBytes.addingReportingOverflow(reclaimableBytes)
+        let freeBytes = overflow ? totalBytes : min(available, totalBytes)
+        let usedPercent = 100.0 * Double(totalBytes - freeBytes) / Double(totalBytes)
         return (freeBytes, usedPercent)
     }
 
@@ -410,5 +426,71 @@ enum SystemMetrics {
         if batteryHealth > 0 && batteryHealth < 60 { score -= 20 }
         else if batteryHealth > 0 && batteryHealth < 80 { score -= 10 }
         return max(0, min(100, score))
+    }
+}
+
+/// Foundation 的 ImportantUsage 查询可能耗时数十毫秒。仅在后台读取它，
+/// 主线程的指标刷新始终只读取缓存；首次或查询失败时使用 statfs 空闲量。
+/// 缓存的是可回收余量，不是总可用量，因此文件写入和清理能即时更新。
+final class DiskAvailableCapacityCache: @unchecked Sendable {
+    typealias Reader = @Sendable (URL) -> UInt64?
+
+    private let lock = NSLock()
+    private let queue: DispatchQueue
+    private let reader: Reader
+    private let refreshInterval: TimeInterval
+    private var cachedPath: String?
+    private var cachedReclaimableBytes: UInt64 = 0
+    private var lastSample: TimeInterval?
+    private var isRefreshing = false
+    private var generation: UInt64 = 0
+
+    init(refreshInterval: TimeInterval = 15,
+         queue: DispatchQueue = DispatchQueue(label: "nori.disk-available-capacity", qos: .utility),
+         reader: @escaping Reader = { DiskAvailableCapacityCache.readReclaimableBytes($0) }) {
+        self.refreshInterval = max(0, refreshInterval)
+        self.queue = queue
+        self.reader = reader
+    }
+
+    func reclaimableBytes(for url: URL, timestamp: TimeInterval = ProcessInfo.processInfo.systemUptime) -> UInt64 {
+        let path = url.standardizedFileURL.path
+        lock.lock()
+        if cachedPath != path {
+            cachedPath = path
+            cachedReclaimableBytes = 0
+            lastSample = nil
+            isRefreshing = false
+            generation &+= 1
+        }
+        let cached = cachedReclaimableBytes
+        let needsRefresh = lastSample.map { timestamp - $0 >= refreshInterval } ?? true
+        guard !isRefreshing, needsRefresh else {
+            lock.unlock()
+            return cached
+        }
+        isRefreshing = true
+        let sampleGeneration = generation
+        lock.unlock()
+
+        queue.async { [self] in
+            let reclaimable = reader(URL(fileURLWithPath: path))
+            lock.lock()
+            defer { lock.unlock() }
+            // A previous volume's pending sample cannot fill a new volume's cache.
+            guard generation == sampleGeneration else { return }
+            cachedReclaimableBytes = reclaimable ?? 0
+            lastSample = timestamp
+            isRefreshing = false
+        }
+        return cached
+    }
+
+    private static func readReclaimableBytes(_ url: URL) -> UInt64? {
+        guard let values = try? url.resourceValues(forKeys: [
+            .volumeAvailableCapacityKey, .volumeAvailableCapacityForImportantUsageKey
+        ]), let physical = values.volumeAvailableCapacity, physical >= 0,
+            let important = values.volumeAvailableCapacityForImportantUsage, important >= 0 else { return nil }
+        return important > Int64(physical) ? UInt64(important - Int64(physical)) : 0
     }
 }

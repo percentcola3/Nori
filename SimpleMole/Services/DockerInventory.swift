@@ -95,7 +95,7 @@ enum DockerInventory {
             guard result.succeeded else {
                 let diagnostic = result.diagnostic.trimmingCharacters(in: .whitespacesAndNewlines)
                 let message = diagnostic.isEmpty
-                    ? "Docker \(result.kind.rawValue) inventory failed without diagnostics."
+                    ? L10n.shared.tf("audit.docker.silentFailure", result.kind.rawValue)
                     : diagnostic
                 diagnostics.append(message)
                 kindDiagnostics[result.kind, default: []].append(message)
@@ -105,7 +105,7 @@ enum DockerInventory {
             let decoded = decode(result.output, expectedKind: result.kind)
             collected += decoded.items
             if decoded.invalidRowCount > 0 {
-                let message = "Docker \(result.kind.rawValue) inventory returned \(decoded.invalidRowCount) unparseable row(s)."
+                let message = L10n.shared.tf("audit.docker.invalidRows", result.kind.rawValue, decoded.invalidRowCount)
                 diagnostics.append(message)
                 kindDiagnostics[result.kind, default: []].append(message)
             } else {
@@ -121,7 +121,7 @@ enum DockerInventory {
             phase = .ready
         } else {
             let diagnostic = diagnostics.isEmpty
-                ? "Docker inventory completed only \(completedKinds.count) of \(DockerResourceKind.allCases.count) categories."
+                ? L10n.shared.tf("audit.docker.partial", completedKinds.count, DockerResourceKind.allCases.count)
                 : diagnostics.joined(separator: "\n")
             phase = .partial(diagnostic)
         }

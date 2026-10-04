@@ -21,6 +21,7 @@ struct SimilarImageScannerTests {
         try testOrientation(home: home)
         try testUnsupported(home: home)
         try testCancellationAndChange(home: home)
+        try testIncrementalReuse(home: home)
         testGrouping(representative)
         print("Similar images: recompression/resizing, orientation, exact-copy exclusion, format guards, cancellation, stale files and bounded representative grouping passed")
     }
@@ -139,6 +140,44 @@ struct SimilarImageScannerTests {
             }
         }
         expect(replaced && changed.isPartial && changed.groups.isEmpty, "changed image must fail scan identity verification")
+    }
+
+    static func testIncrementalReuse(home: URL) throws {
+        let root = home.appendingPathComponent("Pictures/Cache")
+        let first = root.appendingPathComponent("a.png")
+        let second = root.appendingPathComponent("b.jpg")
+        let copy = root.appendingPathComponent("c.png")
+        try write(image(), to: first)
+        try write(image(), to: second, type: .jpeg, quality: 0.7)
+        try fm.copyItem(at: first, to: copy)
+        let contentCache = DuplicateContentCache(), featureCache = SimilarImageFeatureCache()
+        var reads: UInt64 = 0
+        func scan() -> SimilarImageScanResult {
+            SimilarImageScanner.scan(roots: [root.path], control: DuplicateScanControl(), home: home.path,
+                contentCache: contentCache, featureCache: featureCache) { reads = $0.bytesRead }
+        }
+        let initial = scan()
+        expect(initial.groups.count == 1 && initial.exactCopiesSkipped == 1 && initial.reusedImages == 0 && reads > 0,
+               "first image scan must decode and hash every candidate, including excluded exact copies")
+        let repeated = scan()
+        expect(repeated.groups.count == 1 && repeated.exactCopiesSkipped == 1
+               && repeated.reusedImages == 3 && reads == 0,
+               "repeated image scan must reuse every verified fingerprint and complete hash")
+        let restoredContent = DuplicateContentCache(), restoredFeatures = SimilarImageFeatureCache()
+        restoredContent.restore(from: try contentCache.encodedData())
+        restoredFeatures.restore(from: try featureCache.encodedData())
+        let restored = SimilarImageScanner.scan(roots: [root.path], control: DuplicateScanControl(), home: home.path,
+            contentCache: restoredContent, featureCache: restoredFeatures)
+        expect(restored.reusedImages == 3 && restored.groups.count == 1 && restored.exactCopiesSkipped == 1,
+               "persisted image fingerprints must remain reusable after reloading their complete identity")
+        try write(image(variant: 1), to: first)
+        let changed = scan()
+        expect(changed.groups.count == 1 && changed.reusedImages == 2 && changed.exactCopiesSkipped == 0 && reads > 0,
+               "a changed image must be decoded again while unchanged image fingerprints remain reusable")
+        featureCache.invalidate(paths: [root.path])
+        let invalidated = scan()
+        expect(invalidated.reusedImages == 0 && reads == 0,
+               "invalidating fingerprints must re-decode images while independent verified content hashes remain reusable")
     }
 
     static func testGrouping(_ sample: SimilarImageFile) {

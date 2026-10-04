@@ -6,8 +6,11 @@ import SwiftUI
 struct AutoCleanupIntent: Identifiable {
     let paths: [String]
     let cacheVerified: Bool
+    var sourceName: String? = nil
 
-    var id: String { (cacheVerified ? "1" : "0") + "|" + paths.joined(separator: "\n") }
+    var id: String {
+        (cacheVerified ? "1" : "0") + "|" + (sourceName ?? "") + "|" + paths.joined(separator: "\n")
+    }
 }
 
 /// 从清理页（可再生缓存）或磁盘分析（目录）发起的规则创建面板：选择
@@ -29,6 +32,10 @@ struct AutoCleanupIntentSheet: View {
             header
 
             VStack(alignment: .leading, spacing: 3) {
+                if let sourceName = intent.sourceName {
+                    Text(sourceName)
+                        .font(.system(size: 12, weight: .semibold))
+                }
                 Text(l10n.tf("auto.entry.paths", intent.paths.count))
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.secondary)
@@ -66,6 +73,12 @@ struct AutoCleanupIntentSheet: View {
                 }
                 policyValueEditor
                     .fixedSize()
+                if intent.paths.count > 1 {
+                    Text(l10n.t("auto.policy.task"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Label {
@@ -157,8 +170,16 @@ struct AutoCleanupIntentSheet: View {
             policy: policy,
             sizeLimitBytes: UInt64((min(max(sizeLimitGB, 0.1), 1024) * gigabyte).rounded()),
             retentionDays: min(max(retentionDays, 1), 365),
-            cacheVerifiedRegenerable: intent.cacheVerified)
-        let status = l10n.tf("auto.entry.status", result.added, result.skipped)
+            cacheVerifiedRegenerable: intent.cacheVerified,
+            sourceName: intent.sourceName)
+        let status: String
+        if let sourceName = intent.sourceName, result.added > 0 {
+            let count = state.autoCleanupRules.first(where: { $0.sourceName == sourceName })?.directories.count
+                ?? result.added
+            status = l10n.tf("auto.entry.sourceStatus", sourceName, count, result.skipped)
+        } else {
+            status = l10n.tf("auto.entry.status", result.added, result.skipped)
+        }
         state.autoCleanupStatus = status
         state.log(status)
         onDone()

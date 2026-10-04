@@ -7,16 +7,15 @@ enum AnalyzeSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-/// 磁盘分析页顶部分段按钮组选择的类型：每次只聚焦一个子分类，
-/// 内容不重复出现。重复文件的内容级比对只在选中“重复文件”时自动跟进。
+/// 分析侧边栏的独立分类。切换只展示已保存的结果，扫描由显式操作触发。
 enum AnalyzeMode: String, CaseIterable, Identifiable {
-    case largeFiles, images, videos, duplicates
+    case disk, largeFiles, images, videos, duplicates
     var id: String { rawValue }
 
     /// 聚焦模式对应的子分类；重复文件没有单一对应。
     var section: AnalyzeSection? {
         switch self {
-        case .duplicates: return nil
+        case .disk, .duplicates: return nil
         case .largeFiles: return .largeFiles
         case .images: return .images
         case .videos: return .videos
@@ -29,6 +28,7 @@ enum AnalyzeMode: String, CaseIterable, Identifiable {
 
     var titleKey: String {
         switch self {
+        case .disk: return "analyze.section.disk"
         case .largeFiles: return "analyze.section.largeFiles"
         case .images: return "analyze.section.images"
         case .videos: return "analyze.section.videos"
@@ -40,8 +40,8 @@ enum AnalyzeMode: String, CaseIterable, Identifiable {
     var actionKey: String { "analyze.scan.action.\(rawValue)" }
     var detailKey: String { "analyze.scan.detail.\(rawValue)" }
 
-    /// 面板顺序：大文件、重复文件、视频、图片。
-    static let menuOrder: [AnalyzeMode] = [.largeFiles, .duplicates, .videos, .images]
+    /// 面板顺序：磁盘浏览、大文件、重复文件、视频、图片。
+    static let menuOrder: [AnalyzeMode] = [.disk, .largeFiles, .duplicates, .videos, .images]
 }
 
 struct SlimProgress: Equatable {
@@ -61,7 +61,7 @@ struct SlimCandidate: Identifiable, Equatable {
     var operation: SlimOperation { SlimOperation.operation(for: path) }
 }
 
-/// 大文件/视频删除清单里的一行：只有删除路线，不参与瘦身。
+/// 分析清理清单中的文件或目录，不参与图片瘦身。
 struct AnalysisFileItem: Identifiable, Equatable {
     let name: String
     let path: String
@@ -104,26 +104,61 @@ extension AppState {
         }
     }
 
-    // MARK: 大文件/视频的删除清单
+    // MARK: 各分类共用勾选、删除；图片额外支持压缩
 
-    /// 大文件/视频模式的平铺清单。
+    /// 当前分类可清理的项目；磁盘浏览只选择最右侧目录内的项目。
     func analysisFileItems(for mode: AnalyzeMode) -> [AnalysisFileItem] {
         switch mode {
+        case .disk:
+            return diskBrowserEntries(at: diskBrowserNavigation.last ?? diskBrowserRootPath)
+                .filter(diskBrowserCanSelect).map {
+                    AnalysisFileItem(name: $0.name, path: $0.path, size: $0.size)
+                }
         case .largeFiles:
             return analyzeLargeFiles.map {
                 AnalysisFileItem(name: $0.name, path: $0.path, size: $0.size)
             }
-        case .videos:
-            return analyzeMedia.filter { $0.kind == .video }.map {
+        case .videos, .images:
+            let kind: MediaKind = mode == .videos ? .video : .image
+            return analyzeMedia.filter { $0.kind == kind }.map {
                 AnalysisFileItem(name: $0.name, path: $0.path, size: $0.size)
             }
-        case .images, .duplicates:
+        case .duplicates:
             return []
         }
     }
 
+    /// Navigation never touches the filesystem or recomputes tree capacities.
+    func diskBrowserEntries(at path: String) -> [AnalyzeEntry] {
+        diskBrowserEntriesByPath[path] ?? []
+    }
+
+    func diskBrowserCanSelect(_ entry: AnalyzeEntry) -> Bool {
+        entry.isPartial != true &&
+            AnalysisFileDeletionPlan.isEligible(path: entry.path, homeDirectory: diskBrowserHomePath,
+                                                allowsDirectories: true)
+    }
+
+    func openDiskBrowserDirectory(_ entry: AnalyzeEntry, in parentPath: String) {
+        guard entry.isDir, let index = diskBrowserNavigation.firstIndex(of: parentPath),
+              diskBrowserEntries(at: parentPath).contains(where: { $0.path == entry.path && $0.isDir }),
+              diskBrowserEntriesByPath[entry.path] != nil else { return }
+        let navigation = Array(diskBrowserNavigation.prefix(index + 1)) + [entry.path]
+        guard navigation != diskBrowserNavigation else { return }
+        diskBrowserNavigation = navigation
+        setAnalysisSelection([], for: .disk)
+    }
+
+    func navigateDiskBrowser(to path: String) {
+        guard let index = diskBrowserNavigation.firstIndex(of: path) else { return }
+        let navigation = Array(diskBrowserNavigation.prefix(index + 1))
+        guard navigation != diskBrowserNavigation else { return }
+        diskBrowserNavigation = navigation
+        setAnalysisSelection([], for: .disk)
+    }
+
     var analysisFileSelectedItems: [AnalysisFileItem] {
-        analysisFileItems(for: analyzeMode).filter { analysisFileSelection.contains($0.path) }
+        analysisFileItems(for: analyzeMode).filter { analysisSelection(for: analyzeMode).contains($0.path) }
     }
 
     var analysisFileSelectedBytes: UInt64 {
@@ -131,47 +166,83 @@ extension AppState {
     }
 
     func toggleAnalysisFileSelection(_ item: AnalysisFileItem) {
-        guard !isBusy else { return }
-        if analysisFileSelection.contains(item.path) {
-            analysisFileSelection.remove(item.path)
+        guard !isBusy, analysisFileItems(for: analyzeMode).contains(where: { $0.path == item.path }) else { return }
+        var selection = analysisSelection(for: analyzeMode)
+        if selection.contains(item.path) {
+            selection.remove(item.path)
         } else {
-            analysisFileSelection.insert(item.path)
+            selection.insert(item.path)
         }
+        setAnalysisSelection(selection, for: analyzeMode)
     }
+
+    func analysisSelection(for mode: AnalyzeMode) -> Set<String> {
+        analysisFileSelectionsByMode[mode] ?? []
+    }
+
+    private func setAnalysisSelection(_ paths: Set<String>, for mode: AnalyzeMode) {
+        analysisFileSelectionsByMode[mode] = paths
+        if mode == analyzeMode { analysisFileSelection = paths }
+        if mode == .images { slimSelection = paths }
+    }
+
+    func selectAllAnalysisFiles() {
+        guard !isBusy else { return }
+        setAnalysisSelection(Set(analysisFileItems(for: analyzeMode).map(\.path)), for: analyzeMode)
+    }
+
+    func deselectAllAnalysisFiles() {
+        guard !isBusy else { return }
+        setAnalysisSelection([], for: analyzeMode)
+    }
+
+    /// 个人文件没有可安全默认删除的候选，默认保留；重复文件使用自己的保留策略。
+    func selectDefaultAnalysisFiles() { deselectAllAnalysisFiles() }
 
     func toggleSelectAllAnalysisFiles() {
         guard !isBusy else { return }
         let paths = analysisFileItems(for: analyzeMode).map(\.path)
-        if paths.allSatisfy(analysisFileSelection.contains) {
-            analysisFileSelection.subtract(paths)
+        var selection = analysisSelection(for: analyzeMode)
+        if paths.allSatisfy(selection.contains) {
+            selection.subtract(paths)
         } else {
-            analysisFileSelection.formUnion(paths)
+            selection.formUnion(paths)
         }
+        setAnalysisSelection(selection, for: analyzeMode)
     }
 
-    /// 删除清单执行：移入废纸篓（可恢复），并同步清单与缓存。
-    func deleteAnalysisFiles(_ paths: [String]) {
+    /// 普通文件移入废纸篓；已确认可重建的缓存按策略清理，并局部同步结果。
+    func deleteAnalysisFiles(_ paths: [String], mode: AnalyzeMode? = nil) {
         guard !isBusy, !isDeletingAnalysisFiles, !paths.isEmpty else { return }
+        let sourceMode = mode ?? analyzeMode
+        let inventoryKind: AnalysisInventoryKind = sourceMode == .disk ? .disk
+            : sourceMode == .images ? .images : sourceMode == .videos ? .videos : .largeFiles
+        let snapshot = analysisInventoryCache.restore()[inventoryKind]
+        let scanFingerprints = snapshot.map { inventory in
+            Set(paths).reduce(into: [String: AnalysisFileFingerprint]()) { fingerprints, path in
+                fingerprints[path] = inventory.files[path] ?? inventory.directories[path]?.fingerprint
+            }
+        }
+        let homeDirectory = sourceMode == .disk ? diskBrowserHomePath : NSHomeDirectory()
         // Capture the confirmed current inventory and identities before yielding.
         let plan = AnalysisFileDeletionPlan(
             requestedPaths: paths,
-            inventoryPaths: Set(analysisFileItems(for: analyzeMode).map(\.path)))
+            inventoryPaths: Set(analysisFileItems(for: sourceMode).map(\.path)),
+            scanFingerprints: scanFingerprints,
+            allowsDirectories: sourceMode == .disk)
         isDeletingAnalysisFiles = true
         Task {
-            let applied = await Task.detached(priority: .utility) { plan.execute() }.value
+            let applied = await plan.executeWithAdministrator(homeDirectory: homeDirectory) {
+                await AdministratorCleanupService.apply(items: $0)
+            }
             let removed = applied.removedPaths
             let failed = applied.failed + applied.skipped
-            analyzeLargeFiles.removeAll { removed.contains($0.path) }
-            analyzeMedia.removeAll { removed.contains($0.path) }
-            analyzeEntries.removeAll { removed.contains($0.path) }
-            analysisFileSelection.subtract(removed)
-            for path in removed {
-                analyzeCache.invalidate((path as NSString).deletingLastPathComponent)
-            }
+            refreshAnalysisAfterMutation(removedPaths: removed)
             isDeletingAnalysisFiles = false
             let summary = L10n.shared.tf("analyze.delete.done", removed.count, failed)
             statusText = summary
             analyzeStatus = summary
+            analysisStatuses[sourceMode] = summary
             log(summary)
             if failed == 0, !removed.isEmpty { noteHeaderReaction(.success) }
             else if failed > 0 { noteHeaderReaction(.attention) }
@@ -208,6 +279,7 @@ extension AppState {
         let targets = slimSelectedCandidates
         guard !isBusy, !targets.isEmpty else { return }
         let options = slimOptions
+        let scanFingerprints = analysisInventoryCache.restore()[.images]?.files
         isSlimming = true
         log(L10n.shared.tf("slim.log.start", targets.count))
         slimTask = Task { [weak self] in
@@ -217,7 +289,9 @@ extension AppState {
                 if Task.isCancelled { break }
                 self?.slimProgress = SlimProgress(index: index + 1, total: targets.count,
                                                   name: target.name, fraction: nil)
-                let outcome = await slimmer.slim(path: target.path, options: options) { fraction in
+                let outcome = await slimmer.slim(path: target.path, options: options, validateSource: {
+                    scanFingerprints == nil || scanFingerprints?[target.path] == AnalysisFileFingerprint.read(target.path)
+                }) { fraction in
                     Task { @MainActor [weak self] in self?.slimProgress?.fraction = fraction }
                 }
                 outcomes.append(outcome)
@@ -268,6 +342,7 @@ extension AppState {
         if cancelled > 0 { parts.append(L10n.shared.tf("slim.summary.cancelled", cancelled)) }
         statusText = parts.joined(separator: " · ")
         analyzeStatus = statusText
+        analysisStatuses[.images] = statusText
         if cancelled == requested {
             noteHeaderReaction(nil)
         } else {
@@ -281,31 +356,25 @@ extension AppState {
                 return outcome.path + (reason.isEmpty ? "" : "\n" + reason)
             }, detailsAreLocalized: true)
         }
-        applySlimOutcomes(slimmed)
+        applySlimOutcomes(outcomes)
         resampleAfterMutation()
     }
 
     /// 就地更新清单，并让涉及目录的缓存失效，下次进入时重新统计。
     private func applySlimOutcomes(_ outcomes: [SlimOutcome]) {
         guard !outcomes.isEmpty else { return }
-        let home = NSHomeDirectory()
-        var removed = Set<String>()
-        var added: [MediaFile] = []
+        var changed = Set<String>()
         for outcome in outcomes {
-            if outcome.replaced { removed.insert(outcome.path) }
-            if let output = outcome.outputPath,
-               let kind = MediaSlimPolicy.kind(forPath: output),
-               MediaSlimPolicy.isEligible(output, home: home) {
-                added.append(MediaFile(name: (output as NSString).lastPathComponent,
-                                       path: output, size: outcome.newBytes, kind: kind))
-            }
-            analyzeCache.invalidate((outcome.path as NSString).deletingLastPathComponent)
+            // Even a failed placement may have moved the original to Trash.
+            // Re-read attempted paths to reflect their actual final state.
+            if outcome.status == .slimmed || outcome.status == .failed { changed.insert(outcome.path) }
+            if let output = outcome.outputPath { changed.insert(output) }
         }
-        analyzeMedia = (analyzeMedia.filter { !removed.contains($0.path) } + added)
-            .sorted { $0.size > $1.size }
-        analyzeLargeFiles.removeAll { removed.contains($0.path) }
-        analyzeEntries.removeAll { removed.contains($0.path) }
-        slimSelection.subtract(removed)
-        slimSelection.subtract(outcomes.map(\.path))
+        refreshAnalysisAfterMutation(removedPaths: [], changedPaths: changed)
+        let completedPaths = outcomes.filter { $0.status == .slimmed }.map(\.path)
+        slimSelection.subtract(completedPaths)
+        var selected = analysisSelection(for: .images)
+        selected.subtract(completedPaths)
+        setAnalysisSelection(selected, for: .images)
     }
 }

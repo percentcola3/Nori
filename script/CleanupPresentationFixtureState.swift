@@ -121,6 +121,7 @@ struct SystemMaintenanceRow: Identifiable {
 struct AutoCleanupIntent: Identifiable {
     let paths: [String]
     let cacheVerified: Bool
+    var sourceName: String? = nil
     var id: String { paths.joined(separator: "\n") }
 }
 struct AutoCleanupIntentSheet: View {

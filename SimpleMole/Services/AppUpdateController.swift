@@ -32,10 +32,29 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate,
         set { controller.updater.automaticallyDownloadsUpdates = newValue }
     }
 
+    var automaticallyUpdates: Bool {
+        get { automaticallyChecksForUpdates && automaticallyDownloadsUpdates }
+        set {
+            if newValue {
+                // Sparkle allows changing downloads only while checks are enabled.
+                // Its scheduler resets after a delay, so both settings change together.
+                automaticallyChecksForUpdates = true
+                automaticallyDownloadsUpdates = true
+            } else {
+                automaticallyDownloadsUpdates = false
+                automaticallyChecksForUpdates = false
+            }
+        }
+    }
+
     func start(isSafeToRelaunch: @escaping () -> Bool) {
         guard !started else { return }
         self.isSafeToRelaunch = isSafeToRelaunch
         let updater = controller.updater
+        // Preserve an old opt-out of either feature when merging the preferences.
+        if automaticallyChecksForUpdates != automaticallyDownloadsUpdates {
+            automaticallyUpdates = false
+        }
         updater.publisher(for: \.canCheckForUpdates)
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.canCheckForUpdates = $0 }

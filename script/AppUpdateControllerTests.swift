@@ -9,18 +9,29 @@ struct AppUpdateControllerTests {
         let domain = Bundle.main.bundleIdentifier!
         defer { UserDefaults.standard.removePersistentDomain(forName: domain) }
         let service = AppUpdateController()
+        service.automaticallyChecksForUpdates = true
+        service.automaticallyDownloadsUpdates = false
         var safe = false
         service.start { safe }
         pump(0.1)
         precondition(service.status == .idle, "A configured updater must start without error")
         precondition(service.canCheckForUpdates, "KVO must enable the manual check after startup")
-        precondition(!service.automaticallyChecksForUpdates, "Fixture automatic checks must stay off")
-        service.automaticallyChecksForUpdates = true
-        service.automaticallyDownloadsUpdates = true
-        precondition(service.automaticallyDownloadsUpdates)
-        precondition(AppUpdateController().automaticallyDownloadsUpdates,
-                     "Sparkle must persist download preferences across controller lifetimes")
-        service.automaticallyChecksForUpdates = false
+        precondition(!service.automaticallyUpdates && !service.automaticallyChecksForUpdates
+                     && !service.automaticallyDownloadsUpdates,
+                     "Merging old preferences must preserve an opt-out of automatic installation")
+        service.automaticallyUpdates = true
+        precondition(service.automaticallyChecksForUpdates && service.automaticallyDownloadsUpdates,
+                     "Automatic updates must enable both checking and downloading")
+        precondition(AppUpdateController().automaticallyUpdates,
+                     "Sparkle must persist the combined preference across controller lifetimes")
+        service.automaticallyUpdates = false
+        precondition(!service.automaticallyChecksForUpdates && !service.automaticallyDownloadsUpdates,
+                     "Disabling automatic updates must stop both checking and downloading")
+        precondition(!UserDefaults.standard.bool(forKey: "SUEnableAutomaticChecks")
+                     && !UserDefaults.standard.bool(forKey: "SUAutomaticallyUpdate"),
+                     "Disabling must persist both preferences, including the hidden download setting")
+        precondition(!AppUpdateController().automaticallyUpdates,
+                     "Disabled automatic updates must remain disabled across controller lifetimes")
         pump(0.1)
 
         let controller = SPUStandardUpdaterController(startingUpdater: false,

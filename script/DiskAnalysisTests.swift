@@ -50,6 +50,7 @@ struct DiskAnalysisTests {
         expect(report.entries.allSatisfy { URL(fileURLWithPath: $0.path).deletingLastPathComponent().path == root.path },
                "unexpected parent: root=\(root.path), report=\(report.path), parents=\(Set(report.entries.map { URL(fileURLWithPath: $0.path).deletingLastPathComponent().path }))")
         expect(report.isPartial == false, "readable fixture must be complete")
+        expect(DiskAnalysisWorker.completion(for: report) == .complete, "readable tree must complete normally")
         let a = report.entries.first { $0.name == "A" }!
         let expectedA = blocks(root.appendingPathComponent("A"))
             + blocks(root.appendingPathComponent("A/nested")) + blocks(large)
@@ -60,6 +61,23 @@ struct DiskAnalysisTests {
                "use allocated size instead of sparse logical size")
         expect(report.totalSize == blocks(root) + report.entries.reduce(0) { $0 + $1.size },
                "current folder total must agree with child usage")
+        let split = DiskAnalysisWorker.scan(root.path, control: CleanupScanControl(mode: .deep),
+            overviewSplits: [root.appendingPathComponent("A").path,
+                             root.appendingPathComponent("A/nested").path])
+        expect(split.totalSize == report.totalSize && split.totalFiles == report.totalFiles,
+               "partitioned overview must preserve allocated bytes and global hardlink deduplication")
+        expect(split.entries == report.entries,
+               "partitioned jobs must aggregate into the original immediate children")
+        expect(split.directoryReports?.isEmpty == true,
+               "overview partitions must not retain a filesystem-wide directory index")
+        let symlinkPlan = DiskAnalysisWorker.partition(root.appendingPathComponent("link"),
+            expanding: [root.appendingPathComponent("link").path], control: CleanupScanControl(mode: .deep))
+        expect(symlinkPlan.paths.count == 1 && symlinkPlan.directoryBytes == 0,
+               "partition planning must never follow a symlink")
+        let devices = DiskAnalysisWorker.scan("/dev", control: CleanupScanControl(mode: .deep))
+        expect(devices.isPartial == false && devices.scanIssues == nil && devices.totalSize == 0,
+               "volatile device descriptors must be excluded without generating failures")
+
         let nested = DiskAnalysisWorker.scan(a.path, control: CleanupScanControl(mode: .deep))
         expect(nested.entries.count == 1 && nested.entries[0].name == "nested", "drill-down must show the next level")
         expect(nested.totalSize == a.size, "parent row and drilled-in total must agree")
@@ -127,17 +145,62 @@ struct DiskAnalysisTests {
             }
         }
         expect(parentReport.isPartial == true, "unreadable child must mark ancestors partial")
-        expect(permissions.scanIssues?.contains { $0.path == denied.path && $0.kind == .readFailure } == true,
-               "partial scans must retain the inaccessible path and reason")
-        let reasons = DiskAnalysisWorker.failureDetails(for: permissions, using: { $0 })
-        expect(reasons.contains { $0.contains(denied.path) && $0.contains("scan.reason.access") },
-               "permission refusals must explain both the action and affected directory")
+        expect(DiskAnalysisWorker.completion(for: permissions) == .complete,
+               "inaccessible descendants must be skipped silently without a warning or failure")
+        expect(permissions.scanIssueCount == 0 && permissions.scanIssues?.isEmpty == true,
+               "expected access refusals must not occupy visible diagnostics")
+        var noMatches = AnalyzeReport(path: root.path, overview: false, entries: [], largeFiles: [],
+                                      totalSize: 0, totalFiles: 0, isPartial: true)
+        noMatches.scanIssues = [.init(path: denied.path, kind: .readFailure, errorCode: EACCES)]
+        noMatches.scanIssueCount = 1
+        expect(DiskAnalysisWorker.completion(for: noMatches) == .complete,
+               "legacy permission-only reports must remain silent even without matching large files")
+        expect(DiskAnalysisWorker.failureDetails(for: permissions, using: { $0 }).isEmpty,
+               "permission skips must not produce a user-facing explanation")
+        noMatches.scanIssues = [.init(path: denied.path, kind: .readFailure, errorCode: EPERM)]
+        expect(DiskAnalysisWorker.completion(for: noMatches) == .complete,
+               "system protection refusals must also remain silent")
+        noMatches.scanIssues = [.init(path: denied.path, kind: .readFailure, errorCode: EIO)]
+        expect(DiskAnalysisWorker.completion(for: noMatches) == .partial,
+               "genuine I/O failures must remain visible")
+        expect(DiskAnalysisWorker.failureDetails(for: noMatches, using: { $0 }).contains {
+            $0.contains(denied.path) && $0.contains("scan.reason.read")
+        }, "I/O failures must retain the affected path and reason")
+        expect(chmod(denied.path, 0) == 0, "restrict explicitly selected root")
+        let deniedRoot = DiskAnalysisWorker.scan(denied.path, control: CleanupScanControl(mode: .deep))
+        expect(DiskAnalysisWorker.completion(for: deniedRoot) == .failed && deniedRoot.error != nil,
+               "an inaccessible selected root must retain a real error instead of a successful empty result")
         expect(chmod(denied.path, 0o700) == 0, "restore fixture permissions")
 
         let cancel = CleanupScanControl(mode: .deep)
         let partial = DiskAnalysisWorker.scan(root.path, control: cancel) { _ in cancel.cancel() }
         expect(partial.isPartial == true && partial.entries.count < report.entries.count,
                "cancel must stop traversal and mark the total as a lower bound")
+
+        // Silently skipped restrictions must not interfere with cancellation.
+        let restrictedRoot = fixture.appendingPathComponent("restricted-cancel").standardizedFileURL
+        var blockedPaths: [String] = []
+        defer { for path in blockedPaths { chmod(path, 0o700) } }
+        for index in 0..<40 {
+            let blocked = restrictedRoot.appendingPathComponent("only-child/blocked-\(index)")
+            try fm.createDirectory(at: blocked, withIntermediateDirectories: true)
+            blockedPaths.append(blocked.path)
+            expect(chmod(blocked.path, 0) == 0, "restrict saturated diagnostic fixture")
+        }
+        let restrictedCancel = CleanupScanControl(mode: .deep)
+        var visitedRestricted = Set<String>()
+        let restrictedResult = DiskAnalysisWorker.scan(restrictedRoot.path, control: restrictedCancel,
+            progressInterval: 0) { update in
+                if let path = update.currentPath, path.contains("/blocked-") {
+                    visitedRestricted.insert(path)
+                }
+                if visitedRestricted.count >= 32 { restrictedCancel.cancel() }
+            }
+        expect(restrictedCancel.isCancelled && restrictedResult.scanIssues?.count == 1,
+               "only cancellation should be reported after many silent permission skips")
+        expect(DiskAnalysisWorker.completion(for: restrictedResult) == .cancelled,
+               "silent restrictions must not mislabel a cancelled scan as complete")
+        for path in blockedPaths { chmod(path, 0o700) }
 
         // One large top-level child must publish measured progress before it
         // finishes, and cancellation from that progress must stop inside it.
@@ -165,6 +228,8 @@ struct DiskAnalysisTests {
                 midScanCancel.cancel()
             }
         }
+        expect(DiskAnalysisWorker.completion(for: interrupted) == .cancelled,
+               "user cancellation must remain distinct from restrictions and failures")
         expect(interrupted.totalFiles == 32 && interrupted.isPartial == true,
                "cancel must take effect before the first large top-level child completes")
         expect(currentPath?.hasPrefix(onlyChild.path + "/") == true,
@@ -182,6 +247,30 @@ struct DiskAnalysisTests {
         expect(completeProgress.currentPath == nil,
                "a finished report must not retain a currently scanning path")
 
+        let tempRoot = fm.temporaryDirectory.appendingPathComponent("nori-temp-projects-\(UUID().uuidString)")
+        try fm.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tempRoot) }
+        let checkout = tempRoot.appendingPathComponent("agent-checkout")
+        try fm.createDirectory(at: checkout.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 65536).write(to: checkout.appendingPathComponent("source"))
+        let worktree = tempRoot.appendingPathComponent("agent-worktree")
+        try fm.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try Data("gitdir: /outside/repository".utf8).write(to: worktree.appendingPathComponent(".git"))
+        try fm.createSymbolicLink(at: tempRoot.appendingPathComponent("linked-project"), withDestinationURL: checkout)
+        let tempScan = DiskAnalysisWorker.scan(tempRoot.path, control: CleanupScanControl(mode: .deep))
+        expect(Set(tempScan.temporaryProjects?.map(\.name) ?? []) == ["agent-checkout", "agent-worktree"],
+               "temporary checkouts and worktrees must be discovered without following symlinks")
+        for project in tempScan.temporaryProjects ?? [] {
+            expect(project.size == tempScan.entries.first { $0.path == project.path }?.size,
+                   "project usage must include source, dependencies, and Git metadata from the same traversal")
+            expect(project.cleanable == false && !project.canCleanDirectly,
+                   "temporary projects must remain inspection-only")
+        }
+        expect(!DiskAnalysisWorker.isTemporaryProjectPath("/private/tmp-other/repository"),
+               "temporary root matching must respect component boundaries")
+        let tempRestored = try JSONDecoder().decode(AnalyzeReport.self, from: JSONEncoder().encode(tempScan))
+        expect(tempRestored.temporaryProjects?.count == 2, "temporary project inventory must survive caching")
+
         let ties = [
             AnalyzeEntry(name: "file10", path: "/tmp/file10", size: 4096, isDir: false),
             AnalyzeEntry(name: "file2", path: "/System/file2", size: 4096, isDir: false),
@@ -194,6 +283,8 @@ struct DiskAnalysisTests {
         let missing = DiskAnalysisWorker.scan(fixture.appendingPathComponent("missing").path,
                                               control: CleanupScanControl(mode: .deep))
         expect(missing.isPartial == true && missing.error != nil, "unreadable root must not report a complete zero")
+        expect(DiskAnalysisWorker.completion(for: missing) == .failed,
+               "an unreadable selected root must retain the failure dialog")
         expect(missing.scanIssues?.first?.path == missing.path,
                "root errors must name the requested directory")
         let encoded = try JSONEncoder().encode(permissions)
@@ -204,6 +295,6 @@ struct DiskAnalysisTests {
         let decoded = try JSONDecoder().decode(AnalyzeEntry.self, from: legacy)
         expect(decoded.isPartial == nil,
                "old analysis records must remain decodable")
-        print("PASS: directory hierarchy, allocated size, hardlinks, symlinks, sparse files, in-subtree progress/cancellation, deterministic sorting, cleanup protection, errors and cached navigation")
+        print("PASS: partitioned overview totals, temporary Git checkouts/worktrees, device exclusion, directory hierarchy, allocated size, hardlinks, symlinks, sparse files, progress/cancellation, cleanup protection, errors and cached navigation")
     }
 }

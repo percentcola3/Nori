@@ -59,7 +59,7 @@ final class AppState: ObservableObject {
     /// 功能页标识：设置中可按需隐藏。系统优化页已下架（DR-11），其有
     /// 价值的能力分流到硬盘清理（系统数据库维护）与开发环境（网络/服务修复）。
     enum PageKey: String, CaseIterable, Identifiable {
-        case cleanup, agents, analyze, uninstall, devenv, processes, ports, traffic, clipboard, settings
+        case cleanup, agents, analyze, directory, uninstall, devenv, processes, ports, traffic, clipboard, settings
         var id: String { rawValue }
         var titleKey: String { self == .settings ? "settings.title" : "tab.\(rawValue)" }
 
@@ -86,6 +86,8 @@ final class AppState: ObservableObject {
     /// 用户隐藏的页面（UserDefaults 持久化）。
     @Published var hiddenPages: Set<String> = []
     @Published var mainWindowVisible = false
+    /// Keep directory navigation and selection when another page is displayed.
+    let directoryBrowser = DirectoryBrowserModel()
 
     // MARK: 灵动岛 / 菜单栏入口
     // 边缘灵动岛：悬停展开指标与资源排行，箭头直接打开主窗口。
@@ -312,6 +314,9 @@ final class AppState: ObservableObject {
     private var highUsageTracker = HighUsageTracker()
     private var processSampleInFlight = false
     @Published var portRows: [PortRow] = []
+    @Published var isDeveloperCommandRunning = false
+    @Published var isDeveloperConfigurationWriting = false
+    lazy var developerWorkspaceSession = DeveloperWorkspaceSession(state: self)
     @Published var portStatus: String
     @Published var runtimeInFlight = false
     private var automaticProcessTracker = RuntimeStore.AutomaticCandidateTracker()
@@ -453,30 +458,66 @@ final class AppState: ObservableObject {
 
     // MARK: 磁盘分析
 
-    /// 固定从根目录全盘扫描；该路径仅用于内部记录，不再对外展示层级。
+    /// Independent directory browser and user-managed file category inventories.
     @Published var analyzePath: String = "/"
     @Published var analyzeEntries: [AnalyzeEntry] = []
     @Published var analyzeTotalSize: UInt64 = 0
     @Published var analyzeLargeFiles: [AnalyzeReport.LargeFile] = []
+    @Published var analyzeTemporaryProjects: [AnalyzeEntry] = []
+    /// Non-blocking explanations for a completed traversal with skipped directories.
+    @Published var analyzeScanDetails: [String] = []
     @Published var analyzeMedia: [MediaFile] = []
-    /// 磁盘分析页当前聚焦的类型；默认整个磁盘（全部子分类一起展示）。
-    @Published var analyzeMode: AnalyzeMode = .largeFiles
+    /// Sidebar selection changes only the displayed section, never its inventory.
+    @Published var analyzeMode: AnalyzeMode = .disk {
+        didSet {
+            analyzeStatus = analysisStatus(for: analyzeMode)
+            analyzeScanDetails = analysisDetailsByMode[analyzeMode] ?? []
+            analyzeTotalSize = analysisReportsByMode[analyzeMode]?.totalSize ?? 0
+            analyzeEntries = analysisReportsByMode[analyzeMode]?.entries ?? []
+            analysisFileSelection = analysisSelection(for: analyzeMode)
+            if inventoryScanMode != analyzeMode { analyzeCurrentPath = "" }
+        }
+    }
     @Published var analyzeMediaSummary = MediaSummary()
     @Published var slimSelection: Set<String> = []
     /// 大文件/视频删除清单的勾选（移入废纸篓路线）。
     @Published var analysisFileSelection: Set<String> = []
+    @Published var analysisFileSelectionsByMode: [AnalyzeMode: Set<String>] = [:]
     @Published var isDeletingAnalysisFiles = false
+    @Published var isRefreshingAnalysisCache = false
     @Published var slimOptions = SlimOptions()
     @Published var showSlimSheet = false
     @Published var isSlimming = false
     @Published var slimProgress: SlimProgress?
     var slimTask: Task<Void, Never>?
     @Published var isAnalyzing = false
+    @Published var analysisScanIsFull = false
     @Published var analyzeStatus: String
     @Published var analyzeCurrentPath = ""
     var analyzeCache = DiskAnalysisCache()
-    var analyzeHasScanned = false
+    var analyzeHasScanned: Bool { analysisHasScanned(analyzeMode) }
+    @Published var diskBrowserRootPath = AnalysisDiskScopes.overviewPath
+    @Published var diskBrowserHomePath = NSHomeDirectory()
+    @Published var diskBrowserNavigation = [AnalysisDiskScopes.overviewPath]
+    @Published var diskBrowserEntriesByPath: [String: [AnalyzeEntry]] = [:]
+    @Published var analysisReportsByMode: [AnalyzeMode: AnalyzeReport] = [:]
+    @Published var analysisScanDates: [AnalyzeMode: Date] = [:]
+    @Published var analysisStatuses: [AnalyzeMode: String] = [:]
+    @Published var analysisDetailsByMode: [AnalyzeMode: [String]] = [:]
+    private var analysisCacheRefreshCount = 0
+    @Published var analysisAutoScanPreferences = AnalysisAutoScanPreferences.load()
+    @Published private var inventoryScanMode: AnalyzeMode?
+    let analysisInventoryCache = AnalysisInventoryCache()
+    private var pendingAnalysisScan: (mode: AnalyzeMode, forceFull: Bool)?
     private var analyzeScanControl: CleanupScanControl?
+
+    var analyzingMode: AnalyzeMode? {
+        isScanningDuplicates ? .duplicates : inventoryScanMode
+    }
+
+    var isIncrementalAnalysisScanning: Bool {
+        (isAnalyzing || isScanningDuplicates) && !analysisScanIsFull
+    }
 
     // APFS 快照（本地 Time Machine 快照与可清除空间）
     @Published var purgeableBytes: UInt64 = 0
@@ -497,6 +538,11 @@ final class AppState: ObservableObject {
     var duplicateScannedRoots: [String] = []
     let duplicateScanProgress = DuplicateScanProgressStore()
     var duplicateScanReclaimableBytes: UInt64 = 0
+    var duplicateResultCache: [DuplicateMode: DuplicateCachedResult] = [:]
+    let duplicateContentCache = DuplicateContentCache()
+    let duplicateWorkspaceStore = DuplicateWorkspaceStore()
+    let similarImageFeatureCache = SimilarImageFeatureCache()
+    @Published var duplicateLastScanDate: Date? = nil
 
     // MARK: 白名单
 
@@ -799,15 +845,17 @@ final class AppState: ObservableObject {
 
     var isBusyExcludingUninstall: Bool {
         isScanning || isApplying || isSlimming
+            || isDeveloperCommandRunning
+            || isDeveloperConfigurationWriting
             || isScanningEnv
-            || isThinning || isDeletingDuplicates
+            || isThinning || isDeletingDuplicates || isDeletingAnalysisFiles || isRefreshingAnalysisCache
             || gcRunningId != nil || netFixRunning || isAutoCleanupScanning
             || agentScanning || agentApplying
             || simulatorInventory.isDeleting
     }
 
     /// 磁盘分析与重复文件比对是只读遍历，在后台持续执行，不阻塞其他操作
-    /// （各自入口有独立的重入保护：`analyzeHasScanned`/`scanDuplicateFiles`）。
+    /// （各自入口有独立的重入保护：`isAnalyzing`/`isScanningDuplicates`）。
 
     var selectedCount: Int {
         categories.reduce(0) { $0 + $1.selectedPathCount }
@@ -870,7 +918,27 @@ final class AppState: ObservableObject {
         devEnvStatus = L10n.shared.t("devenv.status.empty")
         // 未扫描时不需要任何状态文案：空态由吉祥物动图与入口按钮表达。
         analyzeStatus = ""
+        Task { [weak self] in
+            guard let self else { return }
+            let cache = self.analysisInventoryCache
+            let restored = await Task.detached(priority: .utility) { cache.restoreState() }.value
+            guard restored.revision == cache.currentRevision else { return }
+            for (kind, snapshot) in restored.snapshots {
+                let mode = self.analysisMode(for: kind)
+                guard self.analysisScanDates[mode] == nil, self.inventoryScanMode != mode else { continue }
+                self.analysisReportsByMode[mode] = restored.reports[kind]
+                if kind == .disk { self.publishDiskBrowser(restored.diskBrowser) }
+                self.analysisScanDates[mode] = snapshot.scannedAt
+                self.analysisStatuses[mode] = self.l10n.t(snapshot.issueCount > 0 ? "analyze.scan.partial" : "analyze.scan.scope")
+                if snapshot.issueCount > 0, let report = restored.reports[kind] {
+                    self.analysisDetailsByMode[mode] = DiskAnalysisWorker.failureDetails(for: report, using: self.l10n.t)
+                }
+            }
+            self.publishAnalysisReports()
+            self.runScheduledAnalysisScans()
+        }
         autoCleanupStatus = L10n.shared.t("auto.status.ready")
+        restorePersistedDuplicateResults()
         if !islandEnabled && !menuBarIconVisible { setMenuBarIconVisible(true) }
 
         Publishers.CombineLatest3($installedApps, $uninstallPlans, $uninstallSearch)
@@ -1976,7 +2044,8 @@ final class AppState: ObservableObject {
                 }.flatMap { category in
                     category.paths.compactMap { path -> DeletionPlan.Item? in
                         guard NativeCore.shared.requiresAdministratorDeletion(path) else { return nil }
-                        return .init(record: path, identity: category.pathIdentities[path] ?? "")
+                        return .init(record: path, identity: category.pathIdentities[path] ?? "",
+                                     metadata: DeletionPlan.Metadata.read(path))
                     }
                 }
             }.value
@@ -3134,15 +3203,14 @@ final class AppState: ObservableObject {
 
     func scanDevEnv(announce: Bool = true, presentingPermissionCenter: Bool = true,
                     notifyingUser: Bool? = nil) {
-        guard authorize(.developmentEnvironmentScan,
-                        presentingPermissionCenter: presentingPermissionCenter) else { return }
         guard !isBusy else { return }
         var scanEnvironment = fullDiskScanEnvironment
         scanEnvironment["NORI_DEV_SCAN_FAST"] = "1"
-        guard scanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
         isScanningEnv = true
         devEnvStatus = l10n.t("devenv.status.scanning")
         Task {
+            let terminal = await DeveloperTerminalEnvironmentService.shared.snapshot()
+            scanEnvironment.merge(terminal.environment) { _, sampled in sampled }
             let result = await MoleEngine.shared.runBridge(
                 "bin/app_env_scan.sh", extraEnvironment: scanEnvironment,
                 timeout: 180)
@@ -3220,13 +3288,14 @@ final class AppState: ObservableObject {
         gcScanned = true
         isRefreshingGc = true
         Task {
-            let result = await MoleEngine.shared.runBridge("bin/app_gc_scan.sh", timeout: 60)
+            let environment = await DeveloperTerminalEnvironmentService.shared.snapshot().environment
+            let result = await MoleEngine.shared.runBridge("bin/app_gc_scan.sh", extraEnvironment: environment, timeout: 60)
             isRefreshingGc = false
             gcActions = result.output.components(separatedBy: "\n").compactMap { line in
                 let parts = line.components(separatedBy: "\t")
                 guard parts.count >= 2, !parts[0].isEmpty else { return nil }
                 return GcAction(id: parts[0], command: parts[1],
-                                bytes: parts.count > 2 ? UInt64(parts[2]) ?? 0 : 0)
+                                bytes: parts.count > 2 ? UInt64(parts[2]) : nil)
             }
             logFailure(result, notifyingUser: notifyingUser)
         }
@@ -3265,87 +3334,242 @@ final class AppState: ObservableObject {
 
     // MARK: - 磁盘分析
 
-    /// 全盘分析固定从根目录开始，结果按 大文件/图片/视频/重复文件 子分类展示。
+    /// Compatibility entry point: a requested re-scan now updates only the
+    /// current section through its incremental directory/file index.
     func scanDiskOverview(force: Bool = false) {
-        guard authorize(.diskOverview(force: force),
-                        presentingPermissionCenter: true), !isBusy else { return }
-        if !force, analyzeHasScanned { return }
-        if force { analyzeCache.invalidate("/") }
-        startAnalyze()
+        let requested = pendingAnalysisScan ?? (mode: analyzeMode, forceFull: false)
+        if !force, pendingAnalysisScan == nil, analysisHasScanned(requested.mode) { return }
+        scanAnalysisMode(requested.mode, forceFull: requested.forceFull)
+    }
+
+    func analysisHasScanned(_ mode: AnalyzeMode) -> Bool {
+        mode == .duplicates ? duplicateScanFinished : analysisScanDates[mode] != nil
+    }
+
+    func analysisStatus(for mode: AnalyzeMode) -> String {
+        mode == .duplicates ? duplicateStatus : analysisStatuses[mode] ?? ""
+    }
+
+    func analysisScanDate(for mode: AnalyzeMode) -> Date? {
+        mode == .duplicates ? duplicateLastScanDate : analysisScanDates[mode]
+    }
+
+    func scanAnalysisMode(_ mode: AnalyzeMode, forceFull: Bool = false) {
+        guard !isBusy, !isAnalyzing, !isScanningDuplicates, !isDeletingAnalysisFiles else { return }
+        if mode == .duplicates {
+            scanDuplicateFiles(forceFull: forceFull)
+            return
+        }
+        pendingAnalysisScan = (mode, forceFull)
+        guard authorize(.diskOverview(force: true), presentingPermissionCenter: true),
+              fullDiskScanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1",
+              let kind = analysisInventoryKind(for: mode) else { return }
+        pendingAnalysisScan = nil
+        noteAnalysisScanAttempt(for: mode)
+        let control = CleanupScanControl(mode: .deep)
+        analyzeScanControl = control
+        inventoryScanMode = mode
+        analysisScanIsFull = forceFull || !analysisHasScanned(mode)
+        isAnalyzing = true
+        analysisStatuses[mode] = l10n.t("analyze.scanning")
+        if analyzeMode == mode {
+            analyzeCurrentPath = ""
+            analyzeStatus = analysisStatuses[mode] ?? ""
+        }
+        let cache = analysisInventoryCache
+        let progress: (String, UInt64) -> Void = { [weak self] path, bytes in
+            Task { @MainActor [weak self] in
+                guard let self, self.analyzeScanControl === control, !control.isCancelled else { return }
+                let status = "\(self.l10n.t("common.scanning")) · ≥ \(ByteFormat.format(bytes))"
+                self.analysisStatuses[mode] = status
+                if self.analyzeMode == mode {
+                    self.analyzeCurrentPath = path
+                    self.analyzeStatus = status
+                }
+            }
+        }
+        Task {
+            let result = await Task.detached(priority: .utility) {
+                cache.scan(kind, forceFull: forceFull, control: control, progress: progress)
+            }.value
+            guard analyzeScanControl === control else { return }
+            analyzeScanControl = nil
+            inventoryScanMode = nil
+            isAnalyzing = false
+            analysisScanIsFull = false
+            let completion: DiskAnalysisWorker.Completion
+            if control.isCancelled { completion = .cancelled }
+            else if result.report.error != nil { completion = .failed }
+            else if result.snapshot.issueCount > 0 { completion = .partial }
+            else { completion = .complete }
+            if result.cacheRevision == cache.currentRevision {
+                if result.canReuse, !control.isCancelled {
+                    // Include prior mutation repairs for other sections. An
+                    // earlier repair publication may have been superseded by
+                    // this scan's newer cache revision.
+                    for (cachedKind, cachedSnapshot) in result.cachedSnapshots {
+                        let cachedMode = analysisMode(for: cachedKind)
+                        analysisReportsByMode[cachedMode] = result.cachedReports[cachedKind]
+                        if cachedKind == .disk { publishDiskBrowser(result.diskBrowser) }
+                        analysisScanDates[cachedMode] = cachedSnapshot.scannedAt
+                    }
+                } else if completion == .partial, analysisScanDates[mode] == nil {
+                    // First-scan partial data is useful to review, while the
+                    // absent completion date keeps it out of result reuse.
+                    analysisReportsByMode[mode] = result.report
+                }
+            }
+            // A re-scan keeps the previous usable report until its replacement
+            // succeeds. Empty successful inventories still carry a scan date.
+            switch completion {
+            case .complete: analysisStatuses[mode] = l10n.t("analyze.scan.scope")
+            case .partial: analysisStatuses[mode] = l10n.t("analyze.scan.partial")
+            case .cancelled: analysisStatuses[mode] = l10n.t("scan.reason.cancelled")
+            case .failed: analysisStatuses[mode] = l10n.t("analyze.scan.failed")
+            }
+            analysisDetailsByMode[mode] = completion == .partial || completion == .failed
+                ? DiskAnalysisWorker.failureDetails(for: result.report, using: l10n.t) : []
+            if analyzeMode == mode { analyzeScanDetails = analysisDetailsByMode[mode] ?? [] }
+            publishAnalysisReports()
+            noteHeaderReaction(NoriHeaderReaction.mood(
+                succeeded: completion == .complete, cancelled: completion == .cancelled))
+            if completion == .failed {
+                presentTaskFailure(message: l10n.t("analyze.scan.failed"),
+                    details: DiskAnalysisWorker.failureDetails(for: result.report, using: l10n.t),
+                    detailsAreLocalized: true)
+            }
+            runScheduledAnalysisScans()
+        }
     }
 
     func cancelAnalyze() { analyzeScanControl?.cancel() }
 
-    private func startAnalyze() {
-        guard !isAnalyzing,
-              fullDiskScanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
-        analyzeHasScanned = true
-        analyzePath = "/"
-        if let cached = analyzeCache.report(for: "/") {
-            showAnalyzeReport(cached)
-            return
+    /// Delete/compression callers pass the exact changed paths after the native
+    /// executor confirms them. All cached sections are repaired without walking
+    /// the rest of the filesystem.
+    func refreshAnalysisAfterMutation(removedPaths: Set<String>, changedPaths: Set<String> = []) {
+        guard !removedPaths.isEmpty || !changedPaths.isEmpty else { return }
+        // Do not publish a traversal that raced with these filesystem mutations.
+        analyzeScanControl?.cancel()
+        duplicateScanControl?.cancel()
+        func removed(_ path: String) -> Bool {
+            if removedPaths.contains(path) || removedPaths.contains("/") { return true }
+            var ancestor = (path as NSString).deletingLastPathComponent
+            while ancestor != "/" && !ancestor.isEmpty {
+                if removedPaths.contains(ancestor) { return true }
+                let next = (ancestor as NSString).deletingLastPathComponent
+                if next == ancestor { break }
+                ancestor = next
+            }
+            return false
         }
-        isAnalyzing = true
-        analyzeCurrentPath = ""
-        analyzeEntries = []
-        analyzeTotalSize = 0
-        analyzeLargeFiles = []
-        analyzeMedia = []
-        analyzeMediaSummary = MediaSummary()
-        slimSelection.removeAll()
-        analyzeStatus = l10n.t("analyze.scanning")
-        let control = CleanupScanControl(mode: .deep)
-        analyzeScanControl = control
+        analyzeLargeFiles.removeAll { removed($0.path) }
+        analyzeMedia.removeAll { removed($0.path) }
+        analyzeEntries.removeAll { removed($0.path) }
+        slimSelection = slimSelection.filter { !removed($0) }
+        analysisFileSelection = analysisFileSelection.filter { !removed($0) }
+        for mode in Array(analysisFileSelectionsByMode.keys) {
+            analysisFileSelectionsByMode[mode] = analysisFileSelectionsByMode[mode]?.filter { !removed($0) }
+        }
+        refreshDuplicateResultsAfterMutation(removedPaths: removedPaths, changedPaths: changedPaths)
+        let cache = analysisInventoryCache
+        analysisCacheRefreshCount += 1
+        isRefreshingAnalysisCache = true
         Task {
-            let report = await NativeCore.shared.scanAnalyze(
-                path: "/", overview: true, control: control,
-                progress: { [weak self] report in
-                    Task { @MainActor in
-                        guard let self, self.analyzeScanControl === control else { return }
-                        self.analyzeEntries = report.entries
-                        self.analyzeTotalSize = report.totalSize
-                        self.analyzeCurrentPath = report.currentPath ?? ""
-                        self.analyzeStatus = "\(self.l10n.t("common.scanning")) · ≥ \(ByteFormat.format(report.totalSize))"
-                    }
-                })
-            guard analyzeScanControl === control else { return }
-            analyzeScanControl = nil
-            isAnalyzing = false
-            // Keep the partial result visible, but do not reuse an interrupted
-            // traversal as the cached inventory for later navigation.
-            if !control.isCancelled { analyzeCache.store(report) }
-            showAnalyzeReport(report)
-            noteHeaderReaction(NoriHeaderReaction.mood(
-                succeeded: report.error == nil && report.isPartial != true,
-                cancelled: control.isCancelled))
-            if !control.isCancelled && (report.error != nil || report.isPartial == true) {
-                presentTaskFailure(message: l10n.t("scan.partial.message"),
-                    details: DiskAnalysisWorker.failureDetails(for: report, using: l10n.t),
-                    detailsAreLocalized: true)
+            let refreshed = await Task.detached(priority: .utility) {
+                cache.refreshState(removedPaths: removedPaths, changedPaths: changedPaths)
+            }.value
+            defer {
+                analysisCacheRefreshCount -= 1
+                isRefreshingAnalysisCache = analysisCacheRefreshCount > 0
+                if !isRefreshingAnalysisCache { runScheduledAnalysisScans() }
             }
-            // 重复文件是扫描结果的子分类：磁盘走查完成后自动开始内容级比对。
-            // 聚焦在大文件/图片/视频时跳过，避免为不看的结果付出比对开销。
-            if !control.isCancelled, analyzeMode.runsDuplicateComparison {
-                scanDuplicateFiles()
+            guard refreshed.revision == cache.currentRevision else { return }
+            for (kind, snapshot) in refreshed.snapshots {
+                let mode = analysisMode(for: kind)
+                analysisReportsByMode[mode] = refreshed.reports[kind]
+                if kind == .disk { publishDiskBrowser(refreshed.diskBrowser) }
+                analysisScanDates[mode] = snapshot.scannedAt
             }
+            publishAnalysisReports()
         }
     }
 
-    private func showAnalyzeReport(_ report: AnalyzeReport) {
-        analyzeCurrentPath = ""
-        slimSelection.removeAll()
-        analyzePath = report.path
-        // 0 字节且统计完整的条目没有信息量：隐藏它们让列表聚焦真实占用；
-        // 标注为部分统计（未知大小）的条目保留展示。
-        analyzeEntries = report.entries
-            .filter { $0.size > 0 || $0.isPartial == true }
-            .sorted(by: AnalyzeEntry.analysisOrder)
-        analyzeTotalSize = report.totalSize
-        analyzeLargeFiles = report.largeFiles ?? []
-        analyzeMedia = report.media ?? []
-        analyzeMediaSummary = report.mediaSummary ?? MediaSummary()
-        // 汇总数据由各子分类自行展示；这里只保留错误信息。
-        analyzeStatus = report.error ?? ""
+    private func analysisInventoryKind(for mode: AnalyzeMode) -> AnalysisInventoryKind? {
+        switch mode {
+        case .disk: return .disk
+        case .largeFiles: return .largeFiles
+        case .images: return .images
+        case .videos: return .videos
+        case .duplicates: return nil
+        }
+    }
+
+    private func analysisMode(for kind: AnalysisInventoryKind) -> AnalyzeMode {
+        switch kind {
+        case .disk: return .disk
+        case .largeFiles: return .largeFiles
+        case .images: return .images
+        case .videos: return .videos
+        }
+    }
+
+    private func publishDiskBrowser(_ inventory: AnalysisDiskBrowserInventory?) {
+        guard let inventory else { return }
+        let previous = diskBrowserNavigation
+        diskBrowserRootPath = inventory.rootPath
+        diskBrowserHomePath = inventory.homePath
+        diskBrowserEntriesByPath = inventory.entriesByPath
+        var navigation = [inventory.rootPath]
+        // A legacy home-only browser becomes overview → home without dropping
+        // its existing deeper navigation or rescanning the saved inventory.
+        let previousColumns = previous.first == inventory.homePath ? previous : Array(previous.dropFirst())
+        if previous.first == inventory.rootPath || previous.first == inventory.homePath {
+            for path in previousColumns {
+                guard let parent = navigation.last,
+                      inventory.entriesByPath[parent]?.contains(where: { $0.path == path && $0.isDir }) == true,
+                      inventory.entriesByPath[path] != nil else { break }
+                navigation.append(path)
+            }
+        }
+        diskBrowserNavigation = navigation
+        if navigation != previous {
+            analysisFileSelectionsByMode[.disk] = []
+            if analyzeMode == .disk { analysisFileSelection = [] }
+        }
+    }
+
+    private func publishAnalysisReports() {
+        analyzePath = "/"
+        analyzeLargeFiles = analysisReportsByMode[.largeFiles]?.largeFiles ?? []
+        analyzeTemporaryProjects = []
+        let imageMedia = analysisReportsByMode[AnalyzeMode.images]?.media ?? []
+        let videoMedia = analysisReportsByMode[AnalyzeMode.videos]?.media ?? []
+        analyzeMedia = (imageMedia + videoMedia).sorted {
+            $0.size == $1.size ? $0.path < $1.path : $0.size > $1.size
+        }
+        var summary = MediaSummary()
+        for media in analyzeMedia { summary.add(media.kind, bytes: media.size) }
+        analyzeMediaSummary = summary
+        analyzeEntries = analysisReportsByMode[analyzeMode]?.entries ?? []
+        analyzeTotalSize = analysisReportsByMode[analyzeMode]?.totalSize ?? 0
+        if inventoryScanMode != analyzeMode { analyzeCurrentPath = "" }
+        analyzeStatus = analysisStatus(for: analyzeMode)
+        analyzeScanDetails = analysisDetailsByMode[analyzeMode] ?? []
+        let imagePaths = Set(analyzeMedia.filter { $0.kind == .image }.map(\.path))
+        slimSelection.formIntersection(imagePaths)
+        for mode in Array(analysisFileSelectionsByMode.keys) where mode != .duplicates {
+            let available: Set<String>
+            switch mode {
+            case .disk: available = Set(analysisFileItems(for: .disk).map(\.path))
+            case .largeFiles: available = Set(analyzeLargeFiles.map(\.path))
+            case .images: available = imagePaths
+            case .videos: available = Set(analyzeMedia.filter { $0.kind == .video }.map(\.path))
+            case .duplicates: continue
+            }
+            analysisFileSelectionsByMode[mode]?.formIntersection(available)
+        }
+        analysisFileSelection = analysisSelection(for: analyzeMode)
     }
 
     // MARK: APFS 快照
@@ -3421,7 +3645,7 @@ final class AppState: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let directory = try AutoCleanupPlanner.validatedRoot(url)
-            guard !autoCleanupRules.contains(where: { $0.directory == directory }) else {
+            guard !autoCleanupRules.contains(where: { $0.directories.contains(directory) }) else {
                 autoCleanupStatus = l10n.t("auto.status.duplicate")
                 return
             }
@@ -3446,8 +3670,8 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 从清理扫描（可再生缓存）或磁盘分析（目录）入口批量创建自动清理
-    /// 规则。清理页的路径已由风险策略判定为可再生缓存，创建时直接记录
+    /// 清理类目的多个缓存目录归入一个任务，共用策略、开关和执行统计。
+    /// 清理页的路径已由风险策略判定为可再生缓存，创建时直接记录
     /// 安全授权；磁盘分析的目录由用户在规则面板里自行确认“仅可再生
     /// 内容”。规则一律默认关闭，创建后打开面板供审阅与启用。
     @discardableResult
@@ -3455,7 +3679,8 @@ final class AppState: ObservableObject {
                              policy: AutoCleanupPolicy,
                              sizeLimitBytes: UInt64,
                              retentionDays: Int,
-                             cacheVerifiedRegenerable: Bool) -> (added: Int, skipped: Int) {
+                             cacheVerifiedRegenerable: Bool,
+                             sourceName: String? = nil) -> (added: Int, skipped: Int) {
         var added = 0
         var skipped = 0
         var failures: [String] = []
@@ -3463,12 +3688,13 @@ final class AppState: ObservableObject {
             do {
                 let validated = try AutoCleanupPlanner.validatedRoot(
                     URL(fileURLWithPath: directory))
-                guard !autoCleanupRules.contains(where: { $0.directory == validated }) else {
+                guard !autoCleanupRules.contains(where: { $0.directories.contains(validated) }) else {
                     skipped += 1
                     continue
                 }
                 autoCleanupRules.append(AutoCleanupRule(
                     directory: validated,
+                    sourceName: sourceName,
                     policy: policy,
                     sizeLimitBytes: sizeLimitBytes,
                     retentionDays: retentionDays,
@@ -3483,7 +3709,17 @@ final class AppState: ObservableObject {
                 failures.append(directory + "\n" + error.localizedDescription)
             }
         }
-        if added > 0 { persistAutoCleanupRules() }
+        if added > 0 {
+            autoCleanupRules = AutoCleanupRuleStore.consolidatedTasks(from: autoCleanupRules)
+            if let sourceName,
+               let index = autoCleanupRules.firstIndex(where: { $0.sourceName == sourceName }) {
+                autoCleanupRules[index].policy = policy
+                autoCleanupRules[index].sizeLimitBytes = sizeLimitBytes
+                autoCleanupRules[index].retentionDays = retentionDays
+                autoCleanupRules[index].isEnabled = false
+            }
+            persistAutoCleanupRules()
+        }
         if !failures.isEmpty { presentTaskFailure(details: failures) }
         return (added, skipped)
     }
@@ -3498,24 +3734,37 @@ final class AppState: ObservableObject {
             max(AutoCleanupRule.minimumSizeLimitBytes, normalized.sizeLimitBytes))
         normalized.retentionDays = min(3650, max(1, normalized.retentionDays))
         if normalized.isRegenerable {
-            if !previous.isRegenerable || previous.directory != normalized.directory {
+            if !previous.isRegenerable || previous.directories != normalized.directories {
                 normalized.authorizedRootIdentity = AutoCleanupRule.rootIdentity(
                     at: normalized.directory)
+                for index in normalized.additionalRoots.indices {
+                    normalized.additionalRoots[index].authorizedIdentity = AutoCleanupRule.rootIdentity(
+                        at: normalized.additionalRoots[index].directory)
+                }
             } else {
                 normalized.authorizedRootIdentity = previous.authorizedRootIdentity
+                normalized.additionalRoots = previous.additionalRoots
             }
-            if let authorized = normalized.authorizedRootIdentity,
-               AutoCleanupRule.rootIdentity(at: normalized.directory) == authorized {
+            if normalized.roots.allSatisfy({ root in
+                guard let authorized = root.authorizedIdentity else { return false }
+                return AutoCleanupRule.rootIdentity(at: root.directory) == authorized
+            }) {
                 normalized.safetyVersion = AutoCleanupRule.currentSafetyVersion
             } else {
                 normalized.isRegenerable = false
                 normalized.isEnabled = false
                 normalized.authorizedRootIdentity = nil
+                for index in normalized.additionalRoots.indices {
+                    normalized.additionalRoots[index].authorizedIdentity = nil
+                }
                 autoCleanupStatus = l10n.t("auto.status.authorizationRequired")
             }
         } else {
             normalized.isEnabled = false
             normalized.authorizedRootIdentity = nil
+            for index in normalized.additionalRoots.indices {
+                normalized.additionalRoots[index].authorizedIdentity = nil
+            }
         }
         if normalized.isEnabled && !normalized.isSafetyAuthorized {
             normalized.isEnabled = false
@@ -3748,7 +3997,6 @@ final class AppState: ObservableObject {
         -> (removed: Int, failed: Int, reclaimedBytes: UInt64, messages: [String]) {
         guard autoCleanupRules.first(where: { $0.id == rule.id }) == rule,
               rule.isSafetyAuthorized,
-              let authorizedRootIdentity = rule.authorizedRootIdentity,
               plan.candidates.allSatisfy(\.automaticEligible) else {
             return (0, max(1, plan.candidates.count), 0, [l10n.t("auto.status.authorizationRequired")])
         }
@@ -3756,13 +4004,21 @@ final class AppState: ObservableObject {
         var planned: [AutoCleanupCandidate] = []
         var preparationFailures = 0
         for candidate in plan.candidates {
-            guard !candidate.identity.isEmpty else {
+            // Every candidate is a direct child of its own authorized cache root.
+            // The bridge checks each root identity even though execution is one task.
+            let candidateRoot = URL(fileURLWithPath: candidate.path).deletingLastPathComponent().path
+            guard !candidate.identity.isEmpty,
+                  let root = rule.roots.first(where: { $0.directory == candidateRoot }),
+                  let authorizedRootIdentity = root.authorizedIdentity,
+                  !protectedAutoCleanupDirectories(excluding: rule.id).contains(where: {
+                      $0 == candidate.path || $0.hasPrefix(candidate.path + "/")
+                  }) else {
                 preparationFailures += 1
                 continue
             }
             let plannedLatestMtime = String(
                 Int64(candidate.modifiedAt.timeIntervalSince1970.rounded(.down)))
-            for field in [plan.root, authorizedRootIdentity,
+            for field in [candidateRoot, authorizedRootIdentity,
                           candidate.path, candidate.identity,
                           plannedLatestMtime,
                           AutoCleanupRule.safetyToken] {
@@ -3808,7 +4064,7 @@ final class AppState: ObservableObject {
     }
 
     private func protectedAutoCleanupDirectories(excluding id: UUID) -> [String] {
-        Array(autoCleanupRules.lazy.filter { $0.id != id }.map(\.directory))
+        Array(autoCleanupRules.lazy.filter { $0.id != id }.flatMap(\.directories))
     }
 
     /// 目录是否已被自动清理规则管理：规则目录为该目录自身或其祖先。
@@ -3816,10 +4072,12 @@ final class AppState: ObservableObject {
     func autoCleanupRuleCovering(directory: String) -> AutoCleanupRule? {
         let path = URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL.path
         for rule in autoCleanupRules {
-            let root = URL(fileURLWithPath: rule.directory, isDirectory: true)
-                .standardizedFileURL.path
-            if path == root || path.hasPrefix(root + "/") {
-                return rule
+            for directory in rule.directories {
+                let root = URL(fileURLWithPath: directory, isDirectory: true)
+                    .standardizedFileURL.path
+                if path == root || path.hasPrefix(root + "/") {
+                    return rule
+                }
             }
         }
         return nil

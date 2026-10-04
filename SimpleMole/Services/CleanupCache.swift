@@ -6,7 +6,7 @@ enum CleanupCache {
     // Only current, fully inspected deletion units may be displayed. Older
     // snapshots can contain broad parents covering occupied/protected files.
     // Every restored snapshot still receives a fresh native preflight.
-    private static let version = 24
+    private static let version = 25
     private static let maximumAge: TimeInterval = 5 * 60
 
     private static var cacheURL: URL {
@@ -149,6 +149,12 @@ enum CleanupCache {
             home + "/.config/mole/whitelist"
         ]
         sourceRoots.forEach(appendUnique)
+        CleanupRiskPolicy.auditedRebuildableRoots(homeDirectory: home).forEach(appendUnique)
+        if home == URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL.path {
+            ["/Library/Caches", "/private/tmp", "/private/var/tmp", "/private/var/log",
+             "/private/var/db/powerlog/Library/BatteryLife/Archives"].forEach(appendUnique)
+        }
+        if let store = DeveloperCacheLocations.current(home: home).pnpmStore { appendUnique(store) }
         // App-leftover results depend on both the trashed bundle evidence and
         // the absence of a live installation. Any install/restore/Trash change
         // must invalidate the whole cleanup snapshot before it can be applied.

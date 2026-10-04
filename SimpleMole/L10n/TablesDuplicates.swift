@@ -22,8 +22,9 @@ enum L10nDuplicatesTables {
         "duplicates.reveal": "Show in Finder",
         "duplicates.row.selected": "Selected for Trash",
         "duplicates.row.kept": "Keep file",
-        "duplicates.selection.hint": "Select files individually; keep at least one per group.",
+        "duplicates.selection.hint": "Exact duplicates keep the newest copy by default. You can adjust the selection; keep at least one per group.",
         "duplicates.selection.count": "%ld selected · %@ in file sizes",
+        "duplicates.clean.selected": "Clean selected (%ld)",
         "duplicates.trash": "Move to Trash",
         "duplicates.trash.title": "Move %ld selected files to the Trash?",
         "duplicates.trash.message": "Each group must retain a verified copy. Files are checked again before removal; changed or unverified files are skipped. Moving to the Trash does not immediately free disk space. Shared storage and snapshots can affect the space eventually reclaimed.",
@@ -40,7 +41,7 @@ enum L10nDuplicatesTables {
         "duplicates.status.deleted": "Moved %d files to the Trash; skipped %d; failed %d. Scan again to refresh the results.",
         "duplicates.status.invalidSelection": "Keep at least one unchanged file in every group. Scan again to refresh the results.",
         "duplicates.coverage": "%d files scanned · %d skipped",
-        "duplicates.coverage.partial": "Only completed results are shown. Some files were inaccessible or exceeded processing limits.",
+        "duplicates.coverage.partial": "Showing completed comparisons only.",
         "duplicates.coverage.exactSkipped": "%d additional identical images can be reviewed in Exact duplicates."
     ]
 
@@ -64,8 +65,9 @@ enum L10nDuplicatesTables {
         "duplicates.reveal": "在 Finder 中显示",
         "duplicates.row.selected": "已选择移入废纸篓",
         "duplicates.row.kept": "保留文件",
-        "duplicates.selection.hint": "逐项勾选需要删除的文件，每组至少保留一份。",
+        "duplicates.selection.hint": "完全重复文件默认保留最新的一份，可调整勾选，每组至少保留一份。",
         "duplicates.selection.count": "已选 %ld 项 · 文件大小合计 %@",
+        "duplicates.clean.selected": "清理所选（%ld）",
         "duplicates.trash": "移入废纸篓",
         "duplicates.trash.title": "将所选 %ld 个文件移入废纸篓？",
         "duplicates.trash.message": "每组必须保留一份经过验证的副本。删除前会重新检查；已变化或无法确认的文件会跳过。移入废纸篓不会立即释放磁盘空间，共享数据与快照也可能影响最终释放量。",
@@ -82,13 +84,57 @@ enum L10nDuplicatesTables {
         "duplicates.status.deleted": "已移入废纸篓 %d 个，跳过 %d 个，失败 %d 个；请重新扫描。",
         "duplicates.status.invalidSelection": "每组至少保留一个未变化的文件，请重新扫描。",
         "duplicates.coverage": "扫描 %d 个文件，跳过 %d 个",
-        "duplicates.coverage.partial": "仅显示已完成部分，部分文件无法访问或超过处理限制。",
+        "duplicates.coverage.partial": "仅显示已完成的比对结果。",
         "duplicates.coverage.exactSkipped": "另有 %d 份完全相同的图片，请在“完全重复”模式处理。"
+    ]
+
+    static let zhHant: [String: String] = [
+        "duplicates.mode.label": "掃描模式",
+        "duplicates.mode.exact": "完全重複",
+        "duplicates.mode.similar": "相似圖片",
+        "duplicates.scan": "重新比對",
+        "duplicates.empty.none": "沒有發現重複檔案",
+        "duplicates.empty.noneHint": "已比較你個人目錄中的檔案，系統檔案與應用程式私有位置自動排除。",
+        "duplicates.empty.scanning": "正在比較檔案…",
+        "duplicates.empty.scanningHint": "檔案較多時需要一些時間，可隨時取消掃描。",
+        "duplicates.group.exact": "第 %ld 組 · %ld 個完全重複檔案",
+        "duplicates.group.similar": "第 %ld 組 · %ld 張相似圖片",
+        "duplicates.keepOne": "每組至少保留一份",
+        "duplicates.similar.hint": "相似圖片可能包含不同細節。請逐張預覽原圖，再決定是否刪除。",
+        "duplicates.sharpness.hint": "清晰度僅供組內比較，分數高不一定代表照片更好。",
+        "duplicates.dimensions": "%ld × %ld 像素",
+        "duplicates.quality": "參考清晰度 %.1f",
+        "duplicates.preview": "預覽原檔案",
+        "duplicates.reveal": "在 Finder 中顯示",
+        "duplicates.row.selected": "已選擇移到垃圾桶",
+        "duplicates.row.kept": "保留檔案",
+        "duplicates.selection.hint": "完全重複檔案預設保留最新的一份，可調整勾選，每組至少保留一份。",
+        "duplicates.selection.count": "已選 %ld 項 · 檔案大小合計 %@",
+        "duplicates.clean.selected": "清理所選（%ld）",
+        "duplicates.trash": "移到垃圾桶",
+        "duplicates.trash.title": "將所選 %ld 個檔案移到垃圾桶？",
+        "duplicates.trash.message": "每組必須保留一份經過驗證的副本。刪除前會重新檢查；已變更或無法確認的檔案會略過。移到垃圾桶不會立即釋放磁碟空間，共用資料與快照也可能影響最終釋放量。",
+        "duplicates.trash.similarMessage": "這些圖片由你選擇刪除。相似不代表內容相同，請確認保留的圖片包含你需要的內容。已變更或無法確認的檔案會略過。移到垃圾桶不會立即釋放磁碟空間，共用資料與快照也可能影響最終釋放量。",
+        "duplicates.status.enumerating": "已找到 %d 個檔案",
+        "duplicates.status.hashing": "正在驗證 %d / %d 個候選",
+        "duplicates.status.images": "正在比較圖片 %d / %d",
+        "duplicates.status.complete": "找到 %d 組",
+        "duplicates.status.cancelled": "掃描已取消。未完成的結果不能用於刪除，請重新掃描。",
+        "duplicates.status.failed": "掃描失敗，請檢查目錄存取權限後重試。",
+        "duplicates.status.noAccess": "需要完整磁碟存取權限後才能比對檔案。",
+        "duplicates.status.idle": "尚未比對，點擊「重新比對」開始。",
+        "duplicates.status.deleting": "正在複核檔案並將所選項目移到垃圾桶…",
+        "duplicates.status.deleted": "已移到垃圾桶 %d 個，略過 %d 個，失敗 %d 個；請重新掃描。",
+        "duplicates.status.invalidSelection": "每組至少保留一個未變更的檔案，請重新掃描。",
+        "duplicates.coverage": "掃描 %d 個檔案，略過 %d 個",
+        "duplicates.coverage.partial": "僅顯示已完成的比對結果。",
+        "duplicates.coverage.exactSkipped": "另有 %d 份完全相同的圖片，請在「完全重複」模式處理。"
     ]
 
     static func table(for language: AppLanguage) -> [String: String] {
         switch language {
         case .zhHans: return zhHans
+        case .zhHant: return zhHant
         case .auto: return [:]
         default: return en
         }

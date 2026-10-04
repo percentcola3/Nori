@@ -167,7 +167,10 @@ final class L10n: ObservableObject {
         let withMedia = withAgents.merging(L10nMediaTables.table(for: language)) {
             _, featureValue in featureValue
         }
-        let withDuplicates = withMedia.merging(L10nDuplicatesTables.table(for: language)) {
+        let withAnalysis = withMedia.merging(L10nAnalysisTables.table(for: language)) {
+            _, featureValue in featureValue
+        }
+        let withDuplicates = withAnalysis.merging(L10nDuplicatesTables.table(for: language)) {
             _, featureValue in featureValue
         }
         let withMaintenance = withDuplicates.merging(L10nMaintenanceTables.table(for: language)) {
@@ -175,7 +178,14 @@ final class L10n: ObservableObject {
         }
         let withUpdates = withMaintenance.merging(L10nUpdateTables.table(for: language)) { _, value in value }
         let withTaskFeedback = withUpdates.merging(L10nTaskFeedbackTables.table(for: language)) { _, value in value }
-        return withTaskFeedback.merging(L10nCleanupTaskTables.table(for: language)) { _, value in value }
+        var result = withTaskFeedback.merging(L10nCleanupTaskTables.table(for: language)) { _, value in value }
+        for feature in [L10nDeveloperShellTables.table(for: language), L10nDeveloperNetworkTables.table(for: language),
+                        L10nDeveloperExistingTables.table(for: language), L10nDeveloperWorkspaceTables.table(for: language),
+                        L10nDeveloperSSHGitTables.table(for: language), L10nLocalizationAuditTables.table(for: language),
+                        L10nDirectoryTables.table(for: language)] {
+            result.merge(feature) { _, value in value }
+        }
+        return result
     }
 }
 
@@ -184,17 +194,6 @@ final class L10n: ObservableObject {
 extension String {
     /// L10n 表加载前的极少数启动文案（如语言菜单自身）。
     static func localizedDefault(_ key: String) -> String {
-        let language = L10n.shared.resolved
-        if language == .zhHans || language == .zhHant { return "自动（跟随系统）" }
-        if language == .ja { return "自動（システムに従う）" }
-        if language == .ko { return "자동 (시스템 따르기)" }
-        if language == .de { return "Automatisch (System)" }
-        if language == .fr { return "Automatique (système)" }
-        if language == .es { return "Automático (sistema)" }
-        if language == .pt { return "Automático (sistema)" }
-        if language == .it { return "Automatico (sistema)" }
-        if language == .ru { return "Автоматически (как в системе)" }
-        if language == .tr { return "Otomatik (sisteme göre)" }
-        return "Auto (follow system)"
+        L10n.shared.t(key)
     }
 }

@@ -80,6 +80,13 @@ enum DeveloperCLIService {
         .init(id: "brew", name: "Homebrew", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
         .init(id: "docker", name: "Docker CLI", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
         .init(id: "kubectl", name: "kubectl", category: .utilities, versionArguments: ["version", "--client=true"], allowsVersionProbe: true),
+        .init(id: "helm", name: "Helm", category: .utilities, versionArguments: ["version", "--short"], allowsVersionProbe: true),
+        .init(id: "terraform", name: "Terraform", category: .utilities, versionArguments: ["version"], allowsVersionProbe: true),
+        .init(id: "gh", name: "GitHub CLI", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
+        .init(id: "mise", name: "mise", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
+        .init(id: "jq", name: "jq", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
+        .init(id: "rg", name: "ripgrep", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
+        .init(id: "fd", name: "fd", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
     ]
 
     static func discover(environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -169,6 +176,7 @@ enum DeveloperCLIService {
     static func inspectVersion(of entry: DeveloperCLIEntry, snapshot: DeveloperCLISnapshot,
                                timeout: TimeInterval = 0.7) -> DeveloperCLIVersion {
         guard let location = entry.preferredLocation else { return .unavailable }
+        if let version = metadataVersion(tool: entry.tool.id, location: location) { return .value(version) }
         guard canProbe(entry.tool, at: location) else { return .deferred }
         let result = runVersion(executablePath: location.path, arguments: entry.tool.versionArguments,
                                 environment: probeEnvironment(snapshot), timeout: timeout)
@@ -197,6 +205,51 @@ enum DeveloperCLIService {
 
     private static func standardize(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.path }
 
+    /// Read installed SDK metadata before considering a process launch. A JDK
+    /// launcher or Flutter script can install components even for --version.
+    private static func metadataVersion(tool: String, location: DeveloperCLILocation) -> String? {
+        guard ["java", "javac", "flutter", "dart"].contains(tool) else { return nil }
+        for path in [location.resolvedPath, location.path] {
+            let bin = URL(fileURLWithPath: path).deletingLastPathComponent()
+            guard bin.lastPathComponent == "bin" else { continue }
+            let sdk = bin.deletingLastPathComponent()
+            if tool == "java" || tool == "javac" {
+                guard let data = metadata(at: sdk.appendingPathComponent("release")),
+                      let release = String(data: data, encoding: .utf8),
+                      let expression = try? NSRegularExpression(pattern: #"(?m)^JAVA_VERSION="([^"\r\n]{1,128})"\s*$"#),
+                      let match = expression.firstMatch(in: release, range: NSRange(release.startIndex..., in: release)),
+                      let range = Range(match.range(at: 1), in: release) else { continue }
+                if let version = cleanMetadataVersion(String(release[range])) { return version }
+            } else if tool == "flutter" {
+                if let data = metadata(at: bin.appendingPathComponent("cache/flutter.version.json")),
+                   let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                   let value = object["frameworkVersion"] as? String,
+                   let version = cleanMetadataVersion(value) { return version }
+                if let data = metadata(at: sdk.appendingPathComponent("version")),
+                   let value = String(data: data, encoding: .utf8),
+                   let version = cleanMetadataVersion(value.trimmingCharacters(in: .whitespacesAndNewlines)) { return version }
+            } else if let data = metadata(at: sdk.appendingPathComponent("version")),
+                      let value = String(data: data, encoding: .utf8),
+                      let version = cleanMetadataVersion(value.trimmingCharacters(in: .whitespacesAndNewlines)) { return version }
+        }
+        return nil
+    }
+
+    private static func metadata(at url: URL) -> Data? {
+        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+              values.isRegularFile == true, (values.fileSize ?? Int.max) <= 65_536,
+              let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: 65_537), data.count <= 65_536 else { return nil }
+        return data
+    }
+
+    private static func cleanMetadataVersion(_ value: String) -> String? {
+        guard value.utf8.count <= 128,
+              value.range(of: #"^[0-9][A-Za-z0-9._+-]*$"#, options: .regularExpression) != nil else { return nil }
+        return value
+    }
+
     private static func source(for path: String) -> String {
         let names = [("/.nvm/", "nvm"), ("/fnm/", "fnm"), ("/.nodenv/", "nodenv"), ("/.pyenv/", "pyenv"), ("/.volta/", "Volta"), ("/.asdf/", "asdf"), ("/.sdkman/", "SDKMAN"), ("/Java/JavaVirtualMachines/", "JDK"), ("/mise/", "mise"), ("/.cargo/", "rustup / Cargo"), ("/.bun/", "Bun"), ("/.deno/", "Deno"), ("/Android/sdk/", "Android SDK"), ("/opt/homebrew/", "Homebrew (Apple Silicon)"), ("/usr/local/", "/usr/local"), ("/usr/bin/", "macOS"), ("/bin/", "macOS")]
         return names.first(where: { path.contains($0.0) })?.1 ?? "PATH / local"
@@ -223,6 +276,7 @@ enum DeveloperCLIService {
         return ["PATH": directories.joined(separator: ":"), "HOME": snapshot.homePath,
                 "LANG": "C", "LC_ALL": "C", "HOMEBREW_NO_AUTO_UPDATE": "1",
                 "COREPACK_ENABLE_NETWORK": "0", "PYTHONNOUSERSITE": "1",
+                "CHECKPOINT_DISABLE": "1", "GH_NO_UPDATE_NOTIFIER": "1",
                 "NO_COLOR": "1", "TERM": "dumb"]
     }
 

@@ -21,6 +21,7 @@ enum L10nProductivityTables {
     }
 
     private static let en = values(
+        cleanup: "Cleanup Settings",
         title: "Settings", pages: "Visible pages",
         islandPosition: "Position", islandTop: "Top", islandLeft: "Left", islandRight: "Right",
         pagesHint: "Keep at least one page visible. Changes apply immediately.",
@@ -203,6 +204,7 @@ enum L10nProductivityTables {
         ]) { _, new in new }
 
     private static let zhHans = values(
+        cleanup: "清理设置",
         title: "设置", pages: "显示的功能页",
         islandPosition: "浮动位置", islandTop: "顶部", islandLeft: "左侧", islandRight: "右侧",
         pagesHint: "至少保留一个功能页，修改会立即生效。",
@@ -385,6 +387,7 @@ enum L10nProductivityTables {
         ]) { _, new in new }
 
     private static let zhHant = values(
+        cleanup: "清理設定",
         title: "設定", pages: "顯示的功能頁",
         islandPosition: "浮動位置", islandTop: "頂部", islandLeft: "左側", islandRight: "右側",
         pagesHint: "至少保留一個功能頁，修改會立即生效。",
@@ -407,6 +410,7 @@ enum L10nProductivityTables {
         ]) { _, new in new }
 
     private static let ja = values(
+        cleanup: "クリーンアップ設定",
         title: "設定", pages: "表示するページ",
         islandPosition: "表示位置", islandTop: "上部", islandLeft: "左側", islandRight: "右側",
         pagesHint: "少なくとも1ページを表示してください。変更はすぐ反映されます。",
@@ -418,6 +422,7 @@ enum L10nProductivityTables {
         copied: "コピー済み ✓", failed: "操作に失敗しました")
 
     private static let ko = values(
+        cleanup: "정리 설정",
         title: "설정", pages: "표시할 페이지",
         islandPosition: "표시 위치", islandTop: "상단", islandLeft: "왼쪽", islandRight: "오른쪽",
         pagesHint: "페이지를 하나 이상 유지해야 합니다. 변경 사항은 즉시 적용됩니다.",
@@ -429,6 +434,7 @@ enum L10nProductivityTables {
         copied: "복사됨 ✓", failed: "작업 실패")
 
     private static let de = values(
+        cleanup: "Bereinigungseinstellungen",
         title: "Einstellungen", pages: "Sichtbare Seiten",
         islandPosition: "Position", islandTop: "Oben", islandLeft: "Links", islandRight: "Rechts",
         pagesHint: "Mindestens eine Seite muss sichtbar bleiben. Änderungen gelten sofort.",
@@ -440,6 +446,7 @@ enum L10nProductivityTables {
         copied: "Kopiert ✓", failed: "Vorgang fehlgeschlagen")
 
     private static let fr = values(
+        cleanup: "Paramètres de nettoyage",
         title: "Réglages", pages: "Pages visibles",
         islandPosition: "Position", islandTop: "En haut", islandLeft: "À gauche", islandRight: "À droite",
         pagesHint: "Gardez au moins une page visible. Les changements sont immédiats.",
@@ -451,6 +458,7 @@ enum L10nProductivityTables {
         copied: "Copié ✓", failed: "Échec de l’opération")
 
     private static let es = values(
+        cleanup: "Ajustes de limpieza",
         title: "Ajustes", pages: "Páginas visibles",
         islandPosition: "Posición", islandTop: "Arriba", islandLeft: "Izquierda", islandRight: "Derecha",
         pagesHint: "Mantén al menos una página visible. Los cambios se aplican al instante.",
@@ -462,6 +470,7 @@ enum L10nProductivityTables {
         copied: "Copiado ✓", failed: "La operación falló")
 
     private static let pt = values(
+        cleanup: "Configurações de limpeza",
         title: "Ajustes", pages: "Páginas visíveis",
         islandPosition: "Posição", islandTop: "Topo", islandLeft: "Esquerda", islandRight: "Direita",
         pagesHint: "Mantenha pelo menos uma página visível. As alterações são imediatas.",
@@ -473,6 +482,7 @@ enum L10nProductivityTables {
         copied: "Copiado ✓", failed: "Falha na operação")
 
     private static let it = values(
+        cleanup: "Impostazioni di pulizia",
         title: "Impostazioni", pages: "Pagine visibili",
         islandPosition: "Posizione", islandTop: "In alto", islandLeft: "A sinistra", islandRight: "A destra",
         pagesHint: "Mantieni visibile almeno una pagina. Le modifiche sono immediate.",
@@ -484,6 +494,7 @@ enum L10nProductivityTables {
         copied: "Copiato ✓", failed: "Operazione non riuscita")
 
     private static let ru = values(
+        cleanup: "Настройки очистки",
         title: "Настройки", pages: "Видимые разделы",
         islandPosition: "Положение", islandTop: "Сверху", islandLeft: "Слева", islandRight: "Справа",
         pagesHint: "Оставьте видимым хотя бы один раздел. Изменения применяются сразу.",
@@ -495,6 +506,7 @@ enum L10nProductivityTables {
         copied: "Скопировано ✓", failed: "Операция не выполнена")
 
     private static let tr = values(
+        cleanup: "Temizleme ayarları",
         title: "Ayarlar", pages: "Görünür sayfalar",
         islandPosition: "Konum", islandTop: "Üst", islandLeft: "Sol", islandRight: "Sağ",
         pagesHint: "En az bir sayfa görünür kalmalıdır. Değişiklikler hemen uygulanır.",
@@ -505,7 +517,7 @@ enum L10nProductivityTables {
         conflict: "Kısayol başka bir uygulama tarafından kullanılıyor.",
         copied: "Kopyalandı ✓", failed: "İşlem başarısız")
 
-    private static func values(title: String, pages: String,
+    private static func values(cleanup: String, title: String, pages: String,
                                islandPosition: String, islandTop: String, islandLeft: String, islandRight: String,
                                pagesHint: String, islandHint: String, islandDragHint: String,
                                count: String, clear: String, capture: String,
@@ -514,6 +526,7 @@ enum L10nProductivityTables {
         [
             "settings.title": title,
             "settings.pages": pages,
+            "settings.cleanup": cleanup,
             "settings.island.edge": islandPosition,
             "settings.island.edge.top": islandTop,
             "settings.island.edge.left": islandLeft,

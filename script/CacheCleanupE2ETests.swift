@@ -132,6 +132,86 @@ import Foundation
         try cacheExpect(fm.fileExists(atPath: recentPayload.path), "scan mutated recent cache")
         print("PASS E2E recent cache: visible, unselected, retained")
     }
+    static func systemTemporaryGuards(fixture: URL) throws {
+        let home = fixture.appendingPathComponent("system-guard/home")
+        try fm.createDirectory(at: home, withIntermediateDirectories: true)
+        // Only this exclusively created physical /private/tmp directory can
+        // mutate. No fixture discovery scans the real machine's temp roots.
+        let root = URL(fileURLWithPath: "/private/tmp/nori-system-cache-fixture-" + UUID().uuidString)
+        try fm.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? fm.removeItem(at: root) }
+        let old = root.appendingPathComponent("old.cache")
+        let recent = root.appendingPathComponent("recent.cache")
+        let occupied = root.appendingPathComponent("busy.cache")
+        let database = root.appendingPathComponent("state.sqlite")
+        try write(old); try write(occupied); try write(database, Data("SQLite format 3\0".utf8))
+        try ageTree(root)
+        try write(recent)
+        let core = NativeCore(cleanupOpenFileProbe: { [occupied.path] })
+        let category = CleanupCategory(name: "System Temporary", paths: [root.path], bytes: 1,
+            selected: true, source: .core, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .openFile, reasonKey: "cleanup.risk.rebuildableCache")
+        let before = core.preflightCleanupCategories([category], homeDirectory: home.path)
+        try cacheExpect(before.succeeded && before.categories.flatMap(\.paths).contains(old.path),
+                        "aged current-user system temp was omitted")
+        try cacheExpect(!before.categories.flatMap(\.paths).contains(where: { $0 == root.path || $0 == recent.path || $0 == occupied.path || $0 == database.path }),
+                        "system inventory admitted recent/open/database content")
+        let result = core.applyCleanup(items: [.init(record: root.path, identity: DeletionPlan.identity(at: root.path)!)],
+            permanent: true, homeDirectory: home.path)
+        try cacheExpect(result.removedPaths.contains(old.path) && !fm.fileExists(atPath: old.path),
+                        "aged system temp was not cleaned using its physical path")
+        try cacheExpect(fm.fileExists(atPath: recent.path) && fm.fileExists(atPath: occupied.path)
+            && fm.fileExists(atPath: database.path), "system cleanup changed a retained sibling")
+        let alias = "/tmp/" + root.lastPathComponent + "/busy.cache"
+        try cacheExpect(CleanupRiskPolicy.canonicalOpenFilePath(alias) == occupied.path,
+                        "lsof alias did not map to physical /private path")
+        let reopened = root.appendingPathComponent("reopened.cache")
+        try write(reopened); try ageTree(reopened)
+        let changed = core.applyCleanup(items: [.init(record: reopened.path, identity: DeletionPlan.identity(at: reopened.path)!)],
+            permanent: true, homeDirectory: home.path, onCurrentFile: { path in
+                if path == reopened.path { try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: path) }
+            })
+        try cacheExpect(changed.removed == 0 && fm.fileExists(atPath: reopened.path),
+                        "recent same-inode system replacement was deleted")
+        print("PASS E2E system temporary: physical aliases, age gate, busy/database preservation and same-inode update")
+    }
+
+    static func liveHardlinkAndUpdateGuards(fixture: URL) throws {
+        let home = fixture.appendingPathComponent("hardlink-edge/home")
+        let root = home.appendingPathComponent("Library/Caches/hardlink-edge")
+        let first = root.appendingPathComponent("a-first.link")
+        let nested = root.appendingPathComponent("b-child/alias.link")
+        let last = root.appendingPathComponent("z-last.link")
+        try write(first)
+        try fm.createDirectory(at: nested.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.linkItem(at: first, to: nested); try fm.linkItem(at: first, to: last)
+        var metadata = stat()
+        try cacheExpect(lstat(first.path, &metadata) == 0, "missing hardlink fixture")
+        let expectedBytes = UInt64(metadata.st_blocks) * 512
+        let core = NativeCore(cleanupOpenFileProbe: { [] })
+        let linked = core.applyCleanup(items: DeletionPlan(paths: [root.path]).items, permanent: true, homeDirectory: home.path)
+        try cacheExpect([first, nested, last].allSatisfy { !fm.fileExists(atPath: $0.path) }
+            && linked.reclaimedBytes == expectedBytes && linked.failed == 0,
+            "authorized unlink ctime invalidated another cached hardlink or miscounted reclamation")
+        let updated = root.appendingPathComponent("updated.cache")
+        try write(updated)
+        let seconds = Int(Date().addingTimeInterval(-9 * 86400).timeIntervalSince1970)
+        var times = [timeval(tv_sec: seconds, tv_usec: 0), timeval(tv_sec: seconds, tv_usec: 0)]
+        try cacheExpect(utimes(updated.path, &times) == 0, "cannot age same-inode fixture")
+        let changed = core.applyCleanup(items: DeletionPlan(paths: [root.path]).items, permanent: true,
+            homeDirectory: home.path, onCurrentFile: { path in
+                guard path == updated.path else { return }
+                if let handle = try? FileHandle(forWritingTo: updated) {
+                    try? handle.write(contentsOf: Data(repeating: 0x54, count: 8192)); try? handle.close()
+                }
+                var restored = [timeval(tv_sec: seconds, tv_usec: 0), timeval(tv_sec: seconds, tv_usec: 0)]
+                _ = utimes(path, &restored)
+            })
+        try cacheExpect(changed.removed == 0 && fm.fileExists(atPath: updated.path),
+                        "post-enumeration same-size restore-mtime file was deleted")
+        print("PASS E2E fd edge: same/cross-directory hardlink reclamation and live same-inode restore-mtime update")
+    }
+
     static func main() async {
         do { try await run() }
         catch {
@@ -156,6 +236,10 @@ import Foundation
                 do { try await roundTrip(item, fixture: fixture) }
                 catch { failures.append(error.localizedDescription); print("FAIL " + error.localizedDescription) }
             }
+            do { try liveHardlinkAndUpdateGuards(fixture: fixture) }
+            catch { failures.append(error.localizedDescription); print("FAIL " + error.localizedDescription) }
+            do { try systemTemporaryGuards(fixture: fixture) }
+            catch { failures.append(error.localizedDescription); print("FAIL " + error.localizedDescription) }
             do { try await guards(fixture: fixture) }
             catch { failures.append(error.localizedDescription); print("FAIL " + error.localizedDescription) }
             try cacheExpect(failures.isEmpty, failures.joined(separator: "\n"))

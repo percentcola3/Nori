@@ -1,5 +1,9 @@
 import Foundation
 
+struct AutoCleanupRoot {
+    var directory: String
+    var authorizedIdentity: String?
+}
 struct AutoCleanupRule: Equatable {
     static let safetyToken = "safe-trash-v4"
     var id = UUID()
@@ -12,6 +16,12 @@ struct AutoCleanupRule: Equatable {
     var lastReclaimedBytes: UInt64 = 0
     var executionCount = 0
     var totalReclaimedBytes: UInt64 = 0
+    var extraDirectory: String?
+    var roots: [AutoCleanupRoot] {
+        [AutoCleanupRoot(directory: directory, authorizedIdentity: authorizedRootIdentity)]
+            + (extraDirectory.map { [AutoCleanupRoot(directory: $0, authorizedIdentity: "2:3:4")] } ?? [])
+    }
+    var directories: [String] { roots.map(\.directory) }
 }
 struct AutoCleanupCandidate {
     var path = "/fixture/cache/old.cache"
@@ -37,7 +47,8 @@ struct FixtureBridgeResult {
     func runBridgeWithStdin(_ script: String, stdinData: Data, timeout: Int) async -> FixtureBridgeResult {
         precondition(script == "bin/app_auto_apply.sh" && timeout == 900)
         calls += 1; input = stdinData
-        return .init(output: fail ? "removed=0\nskipped=0\nfailed=1" : "removed=1\nskipped=0\nfailed=0", succeeded: !fail)
+        let count = stdinData.split(separator: 0).count / 6
+        return .init(output: fail ? "removed=0\nskipped=0\nfailed=1" : "removed=\(count)\nskipped=0\nfailed=0", succeeded: !fail)
     }
 }
 enum CleanupCache { static func invalidate() {} }
@@ -91,7 +102,7 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
     func log(_ value: String) { logs += 1 }
     func presentTaskFailure(message: String, details: [String]) { notifications += 1 }
     func protectedAutoCleanupDirectories(excluding id: UUID) -> [String] {
-        autoCleanupRules.filter { $0.id != id }.map(\.directory)
+        autoCleanupRules.filter { $0.id != id }.flatMap(\.directories)
     }
     func logFailure(_ result: FixtureBridgeResult, stdoutAlreadyLogged: Bool, notifyingUser: Bool) {}
     func persistAutoCleanupRules() {}
@@ -143,6 +154,28 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
         expect(String(data: MoleEngine.shared.input, encoding: .utf8)?.split(separator: "\0").map(String.init)
                == ["/fixture/cache", "1:2:3", "/fixture/cache/old.cache", "1:3:4", "4", "safe-trash-v4"],
                "bridge plan must bind root/candidate identities and safety token")
+        s = fixture()
+        s.autoCleanupRules[0].extraDirectory = "/fixture/other-cache"
+        var combinedPlan = AutoCleanupPlan()
+        var secondCandidate = AutoCleanupCandidate()
+        secondCandidate.path = "/fixture/other-cache/second.cache"
+        combinedPlan.candidates.append(secondCandidate)
+        _ = await s.applyAutoCleanup(rule: s.autoCleanupRules[0], plan: combinedPlan)
+        let combinedFields = String(data: MoleEngine.shared.input, encoding: .utf8)?
+            .split(separator: "\0").map(String.init) ?? []
+        expect(s.applied == 1 && s.autoCleanupRules[0].executionCount == 1,
+               "multi-root task executed or recorded multiple times")
+        expect(combinedFields.count == 12 && combinedFields[0] == "/fixture/cache"
+               && combinedFields[6] == "/fixture/other-cache" && combinedFields[7] == "2:3:4",
+               "multi-root bridge batch lost a root authorization")
+        s = fixture()
+        var outsidePlan = AutoCleanupPlan()
+        outsidePlan.candidates[0].path = "/fixture/unapproved/old.cache"
+        let rejected = await s.applyAutoCleanup(rule: s.autoCleanupRules[0], plan: outsidePlan)
+        expect(rejected.failed > 0 && s.applied == 0,
+               "candidate outside the task scope crossed the apply boundary")
+        s = fixture()
+        s.runScheduledAutoCleanup(force: true); await settle(s)
         s.runScheduledAutoCleanup(); expect(!s.isAutoCleanupScanning, "successful schedule not throttled")
         s = fixture(); AutoCleanupPlanner.empty = true
         s.runScheduledAutoCleanup(force: true); await settle(s)
@@ -168,7 +201,7 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
         s.autoCleanupPreview = AutoCleanupPlan()
         _ = await s.applyAutoCleanup(rule: s.autoCleanupRules[0], plan: AutoCleanupPlan())
         expect(s.autoCleanupPreview == nil && s.autoCleanupPreviewRuleID == nil, "obsolete preview retained after cleanup")
-        for mutation in ["disable", "revoke", "remove", "policy", "nested"] {
+        for mutation in ["disable", "revoke", "remove", "policy", "scope", "nested"] {
             s = fixture(); AutoCleanupPlanner.paused = true
             s.runScheduledAutoCleanup(force: true)
             for _ in 0..<1000 {
@@ -184,6 +217,7 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
             case "revoke": s.autoCleanupRules[0].isSafetyAuthorized = false
             case "remove": s.autoCleanupRules.removeAll()
             case "policy": s.autoCleanupRules[0].retentionDays = 30
+            case "scope": s.autoCleanupRules[0].extraDirectory = "/fixture/other-cache"
             default: s.autoCleanupRules.append(AutoCleanupRule(directory: "/fixture/cache/nested"))
             }
             AutoCleanupPlanner.continuation?.resume(); AutoCleanupPlanner.continuation = nil

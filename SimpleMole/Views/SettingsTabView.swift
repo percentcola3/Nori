@@ -2,10 +2,10 @@ import SwiftUI
 import Carbon.HIToolbox
 import os
 
-// MARK: - 设置面板（通用 + 灵动岛 + 工具 + 功能页显隐）
+// MARK: - 设置面板（功能页 + 灵动岛 + 清理 + 通用 + 更新 + 权限）
 
 /// 设置分区卡：小节标题浮在卡片上方，卡内各行之间用细分隔线呼吸。
-private struct SettingsSection<Content: View>: View {
+struct SettingsSection<Content: View>: View {
     let title: String
     @ViewBuilder let content: () -> Content
 
@@ -32,7 +32,7 @@ private struct SettingsSection<Content: View>: View {
 }
 
 /// 卡片内的设置行：统一左右留白与行高；`divider` 在行下补一条细分隔线。
-private struct SettingsRow<Content: View>: View {
+struct SettingsRow<Content: View>: View {
     var divider = false
     var vertical: CGFloat = 9
     @ViewBuilder let content: () -> Content
@@ -61,22 +61,26 @@ struct SettingsTabView: View {
     @StateObject private var loginItem = LoginItemController()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                pagesSection
-                generalSection
-                UpdateSettingsView(updater: .shared)
-                islandSection
-                maintenanceSection
-                SettingsSection(title: l10n.t("permissions.title")) {
-                    PermissionCenterView(state: state, embedded: true)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
+        // Clip the local glass compositor at the viewport. Clipping only the
+        // ScrollView lets glass descendants escape into MainWindowView's container.
+        LiquidGlassGroup {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    pagesSection
+                    islandSection
+                    maintenanceSection
+                    generalSection
+                    UpdateSettingsView(updater: .shared)
+                    SettingsSection(title: l10n.t("permissions.title")) {
+                        PermissionCenterView(state: state, embedded: true)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                    }
                 }
+                .frame(maxWidth: 740, alignment: .leading)
+                .padding(20)
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: 740, alignment: .leading)
-            .padding(20)
-            .frame(maxWidth: .infinity)
         }
         .clipped()
         .contentShape(Rectangle())
@@ -215,13 +219,13 @@ struct SettingsTabView: View {
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                     PillPicker(items: AppState.IslandEdge.allCases.map { l10n.t($0.labelKey) },
-                               selection: islandEdgeBinding)
+                               selection: islandEdgeBinding, alignment: .leading)
                         .accessibilityLabel(l10n.t("settings.island.edge"))
                         .accessibilityValue(l10n.t(state.islandEdge.labelKey))
                 }
             }
 
-            SettingsRow(divider: true, vertical: 10) {
+            SettingsRow(vertical: 10) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(l10n.t("island.items"))
                         .font(.system(size: 10.5))
@@ -232,16 +236,6 @@ struct SettingsTabView: View {
                         }
                     }
                 }
-            }
-
-            SettingsRow(vertical: 6) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(l10n.t("settings.island.hint"))
-                    Text(l10n.t("settings.background.keepEntry"))
-                }
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -330,19 +324,19 @@ struct SettingsTabView: View {
     // MARK: 目录清理与定时清理
 
     private var maintenanceSection: some View {
-        SettingsSection(title: "") {
+        SettingsSection(title: l10n.t("settings.cleanup")) {
             SettingsRow(divider: true) {
-                actionRow(title: l10n.t("auto.header"),
-                          detail: l10n.t("auto.empty.subtitle"),
-                          symbol: "calendar.badge.clock") {
-                    state.showAutoCleanupSheet = true
-                }
-            }
-            SettingsRow {
                 actionRow(title: l10n.t("header.whitelist"),
                           detail: l10n.t("wl.subtitle"),
                           symbol: "shield.lefthalf.filled") {
                     state.showWhitelistSheet = true
+                }
+            }
+            SettingsRow {
+                actionRow(title: l10n.t("auto.header"),
+                          detail: l10n.t("auto.empty.subtitle"),
+                          symbol: "calendar.badge.clock") {
+                    state.showAutoCleanupSheet = true
                 }
             }
         }
