@@ -257,6 +257,9 @@ struct CleanupTabView: View {
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
+                if row.preview.bytes > 0 {
+                    SizeBadge(text: ByteFormat.format(row.preview.bytes), prominent: isSelected)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)

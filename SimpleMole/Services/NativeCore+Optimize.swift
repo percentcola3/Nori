@@ -60,7 +60,8 @@ extension NativeCore {
                 ? .init(need: .clean, summaryKey: "audit.maintenance.savedStates.empty")
                 : .init(need: .needed, summaryKey: "audit.maintenance.savedStates.found", summaryArguments: [.integer(targets.count)],
                         items: targets.map { URL(fileURLWithPath: $0.path).lastPathComponent },
-                        plan: targets.map(Self.planEntry))
+                        plan: targets.map(Self.planEntry),
+                        bytes: targets.reduce(UInt64(0)) { $0 &+ CleanupScanWorker.measure($1.path, control: CleanupScanControl(mode: .deep)).bytes })
         case "quarantine":
             let database = home + "/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
             guard fileManager.fileExists(atPath: database) else {
@@ -72,7 +73,8 @@ extension NativeCore {
             }
             return count == 0
                 ? .init(need: .clean, summaryKey: "audit.maintenance.quarantine.empty")
-                : .init(need: .needed, summaryKey: "audit.maintenance.downloads", summaryArguments: [.integer(count)])
+                : .init(need: .needed, summaryKey: "audit.maintenance.downloads", summaryArguments: [.integer(count)],
+                        bytes: sqliteFamilyBytes(database))
         case "notifications":
             guard let database = notificationDatabase(homeDirectory: home) else {
                 return .init(need: .unavailable, summaryKey: "audit.maintenance.notifications.unavailable")
@@ -80,7 +82,7 @@ extension NativeCore {
             let bytes = sqliteFamilyBytes(database)
             return bytes < Self.notificationThresholdBytes
                 ? .init(need: .clean, summaryKey: "audit.maintenance.database.below50", summaryArguments: [.text(Self.byteText(bytes))])
-                : .init(need: .needed, summaryKey: "audit.maintenance.database.size", summaryArguments: [.text(Self.byteText(bytes))], plan: [database])
+                : .init(need: .needed, summaryKey: "audit.maintenance.database.size", summaryArguments: [.text(Self.byteText(bytes))], plan: [database], bytes: bytes)
         case "coreduet":
             let database = home + "/Library/Application Support/Knowledge/knowledgeC.db"
             guard fileManager.fileExists(atPath: database) else {
@@ -89,7 +91,7 @@ extension NativeCore {
             let bytes = sqliteFamilyBytes(database)
             return bytes < Self.knowledgeThresholdBytes
                 ? .init(need: .clean, summaryKey: "audit.maintenance.database.below100", summaryArguments: [.text(Self.byteText(bytes))])
-                : .init(need: .needed, summaryKey: "audit.maintenance.database.size", summaryArguments: [.text(Self.byteText(bytes))], plan: [database])
+                : .init(need: .needed, summaryKey: "audit.maintenance.database.size", summaryArguments: [.text(Self.byteText(bytes))], plan: [database], bytes: bytes)
         default:
             return .init(need: .unavailable, summaryKey: "audit.maintenance.unknown")
         }
@@ -259,7 +261,8 @@ extension NativeCore {
         if !busy.isEmpty {
             return .init(need: .blocked, summaryKey: "audit.maintenance.quitFirst", summaryArguments: [.text(busy.joined(separator: ", "))], items: items)
         }
-        return .init(need: .needed, summaryKey: "audit.maintenance.sqlite.found", summaryArguments: [.integer(plan.count)], items: items, plan: plan)
+        return .init(need: .needed, summaryKey: "audit.maintenance.sqlite.found", summaryArguments: [.integer(plan.count)], items: items, plan: plan,
+                     bytes: plan.reduce(UInt64(0)) { $0 &+ fileSize(URL(fileURLWithPath: $1)) })
     }
 
     private func vacuumDatabases(_ plan: [String],

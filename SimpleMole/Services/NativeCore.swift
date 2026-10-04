@@ -141,15 +141,19 @@ final class NativeCore: @unchecked Sendable {
             var items: [String] = []
             /// 执行时唯一允许作用的证据（`identity<TAB>path`、bundle ID、偏好键等）。
             var plan: [String] = []
+            /// 涉及的数据库/文件当前占用；0 表示该项与空间无关。
+            var bytes: UInt64 = 0
 
             init(need: Need, summary: String = "", summaryKey: String? = nil,
-                 summaryArguments: [SummaryArgument] = [], items: [String] = [], plan: [String] = []) {
+                 summaryArguments: [SummaryArgument] = [], items: [String] = [], plan: [String] = [],
+                 bytes: UInt64 = 0) {
                 self.need = need
                 originalSummary = summary
                 self.summaryKey = summaryKey
                 self.summaryArguments = summaryArguments
                 self.items = items
                 self.plan = plan
+                self.bytes = bytes
             }
         }
 
