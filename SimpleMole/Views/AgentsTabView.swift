@@ -276,15 +276,18 @@ struct AgentsTabView: View {
     }
 
     private func cliInstallationRow(_ installation: AgentCLIInstallation) -> some View {
-        let selected = state.agentSelectedCLIInstallations.contains(installation.id)
+        let selected = false
         let expanded = expandedCLIInstallations.contains(installation.id)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Toggle("", isOn: Binding(get: { selected }, set: { _ in
-                    state.toggleAgentCLIInstallation(installation)
-                }))
-                .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
-                .disabled(state.isBusy || installation.identities.isEmpty)
+                Button {
+                    state.uninstallSegment = 1
+                    state.jump(to: .uninstall)
+                } label: {
+                    Label(l10n.t("agents.cli.manageInSoftware"), systemImage: "arrow.up.forward.app")
+                }
+                .buttonStyle(SecondaryButtonStyle()).controlSize(.small)
+                .disabled(state.isBusy)
                 .accessibilityLabel(l10n.tf("agents.cli.select", installation.name))
                 Button {
                     withAnimation(reduceMotion ? nil : MoleMotion.panel) {
@@ -298,7 +301,6 @@ struct AgentsTabView: View {
                             .font(.system(size: 12, weight: .medium))
                         Text(installation.manager.rawValue)
                             .font(.system(size: 10)).foregroundStyle(.secondary)
-                        AgentRiskTag(text: l10n.t("agents.cli.uninstallClean"), high: true)
                         Spacer()
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9, weight: .semibold))
@@ -308,12 +310,6 @@ struct AgentsTabView: View {
                 }
                 .buttonStyle(MolePlainButtonStyle())
                 .accessibilityValue(l10n.t(expanded ? "agents.expanded" : "agents.collapsed"))
-            }
-            if selected || expanded {
-                Text(l10n.t("agents.cli.selectionHint"))
-                    .font(.system(size: 10)).foregroundStyle(selected ? Color.warning : Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.leading, 25)
             }
             if expanded {
                 Text(installation.detail)

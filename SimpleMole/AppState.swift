@@ -331,6 +331,12 @@ final class AppState: ObservableObject {
     @Published var installedApps: [UninstallApp] = []
     @Published private(set) var uninstallPlans: [String: UninstallPlan] = [:]
     @Published var uninstallDataSelections: [String: Set<String>] = [:]
+    @Published var uninstallSegment = 0
+    @Published var commandLineTools: [CommandLineTool] = []
+    @Published var isScanningCommandLineTools = false
+    @Published var commandLineToolsScanned = false
+    @Published var commandLineToolStatus = ""
+    @Published var commandLineToolBusyID: String?
     @Published var appListStatus: String
     @Published var isScanningApps = false
     @Published private(set) var isRestoringInstalledApps = true

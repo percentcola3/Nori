@@ -26,12 +26,20 @@ struct UninstallTabView: View {
     }
 
     var body: some View {
-        NoriPageTransition(phase: presentationPhase) {
+        NoriPageTransition(phase: state.uninstallSegment == 1 ? 10 + toolsPhase : presentationPhase) {
         VStack(spacing: 0) {
             toolbar
-            statusRow
-            content
+            if state.uninstallSegment == 1 {
+                CommandLineToolsSection(state: state)
+            } else {
+                statusRow
+                content
+            }
         }
+        }
+        .task(id: "\(isActive)-\(state.uninstallSegment)") {
+            guard isActive, state.uninstallSegment == 1 else { return }
+            state.scanCommandLineTools()
         }
         .animation(reduceMotion ? nil : MoleMotion.panel,
                    value: state.uninstallQueue.jobs)
@@ -54,8 +62,17 @@ struct UninstallTabView: View {
     }
 
     /// 清单由目录监听自动刷新，不再提供手动扫描；搜索框独占一行。
+    private var toolsPhase: Int {
+        if state.isScanningCommandLineTools && state.commandLineTools.isEmpty { return 1 }
+        return state.commandLineTools.isEmpty ? 0 : 2
+    }
+
     private var toolbar: some View {
         HStack(spacing: 8) {
+            PillPicker(items: [l10n.t("uninstall.segment.apps"), l10n.t("uninstall.segment.tools")],
+                       selection: $state.uninstallSegment, alignment: .leading)
+                .frame(width: 220)
+                .accessibilityIdentifier("uninstall-segment")
             searchField
         }
         .padding(.horizontal, 16)
@@ -512,5 +529,121 @@ private struct UninstallFileDrawer: View {
         case "brew": return "shippingbox.fill"
         default: return "doc.badge.gearshape"
         }
+    }
+}
+
+/// 软件页「命令行工具」：包管理器安装的工具清单，卸载走对应的包管理器。
+private struct CommandLineToolsSection: View {
+    @ObservedObject var state: AppState
+    @ObservedObject private var l10n = L10n.shared
+    @State private var pendingUninstall: CommandLineTool?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                if state.isScanningCommandLineTools && !state.commandLineTools.isEmpty {
+                    NoriStatusAnimation(mood: .working, size: 24, assetName: "nori-working")
+                }
+                Text(state.commandLineToolStatus)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Button { state.scanCommandLineTools(force: true) } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(MoleIconButtonStyle(size: 22))
+                .disabled(state.isScanningCommandLineTools || state.commandLineToolBusyID != nil)
+                .help(l10n.t("common.rescan"))
+                .accessibilityLabel(l10n.t("common.rescan"))
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 8)
+            if state.isScanningCommandLineTools && state.commandLineTools.isEmpty {
+                NoriScanActivity(text: l10n.t("cli.status.scanning"), assetName: "nori-apps", quiet: true)
+            } else if state.commandLineTools.isEmpty {
+                EmptyStateView(symbol: "terminal", title: l10n.t("cli.empty.title"),
+                               subtitle: l10n.t("cli.empty.subtitle"))
+            } else if state.filteredCommandLineTools.isEmpty {
+                EmptyStateView(symbol: "magnifyingglass", title: l10n.t("uninstall.noMatch.title"),
+                               subtitle: l10n.t("uninstall.noMatch.subtitle"))
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 7) {
+                        ForEach(state.filteredCommandLineTools) { tool in toolRow(tool) }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .alert(l10n.tf("cli.uninstall.confirm.title", pendingUninstall?.name ?? ""),
+               isPresented: Binding(get: { pendingUninstall != nil }, set: { if !$0 { pendingUninstall = nil } })) {
+            Button(l10n.t("common.cancel"), role: .cancel) { pendingUninstall = nil }
+            Button(l10n.t("uninstall.action"), role: .destructive) {
+                if let tool = pendingUninstall { state.uninstallCommandLineTool(tool) }
+                pendingUninstall = nil
+            }
+        } message: {
+            Text(pendingUninstall.map { tool in
+                l10n.tf(tool.agentID == nil ? "cli.uninstall.confirm.message" : "cli.uninstall.confirm.agentMessage",
+                        tool.manager.displayName, tool.path)
+            } ?? "")
+        }
+    }
+
+    private func toolRow(_ tool: CommandLineTool) -> some View {
+        let busy = state.commandLineToolBusyID == tool.id
+        return HStack(spacing: 10) {
+            Image(systemName: tool.agentID == nil ? "terminal" : "sparkles.rectangle.stack")
+                .font(.system(size: 13))
+                .foregroundStyle(Color.moleAccentText)
+                .frame(width: 26)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(tool.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                    if !tool.version.isEmpty {
+                        Text(tool.version).font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    DevTag(text: tool.manager.displayName)
+                    if !tool.installedOnRequest {
+                        DevTag(text: l10n.t("cli.tag.dependency"))
+                    }
+                    if !tool.dependents.isEmpty {
+                        DevTag(text: l10n.tf("cli.tag.dependents", tool.dependents.count), color: .warning)
+                            .help(tool.dependents.joined(separator: ", "))
+                    }
+                }
+                Text(tool.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            if tool.agentID != nil {
+                Button { state.jump(to: .agents) } label: {
+                    Label(l10n.t("cli.agentData"), systemImage: "arrow.up.forward")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .controlSize(.small)
+                .help(l10n.t("cli.agentData.hint"))
+            }
+            SizeBadge(text: ByteFormat.format(tool.bytes), prominent: false)
+            if busy {
+                ProgressView().controlSize(.small)
+            } else {
+                Button { pendingUninstall = tool } label: {
+                    Label(l10n.t("uninstall.action"), systemImage: "trash")
+                }
+                .buttonStyle(DangerButtonStyle())
+                .controlSize(.small)
+                .disabled(!tool.canUninstall || state.isBusy || state.commandLineToolBusyID != nil)
+                .help(tool.canUninstall ? "" : l10n.tf("cli.tag.dependents", tool.dependents.count))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.surface2))
     }
 }
