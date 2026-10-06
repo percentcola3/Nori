@@ -962,7 +962,14 @@ test_node_cache_inventory() {
     printf 'pnpm-cache' > "$home/Library/pnpm/store/v10/index"
     printf 'yarn-cache' > "$home/.yarn/cache/index"
     for id in npm pnpm yarn; do
-        printf '#!/bin/sh\nexit 0\n' > "$stub_dir/$id"
+        printf '%s\n' \
+            '#!/bin/sh' \
+            'case "${0##*/}:$*" in' \
+            '    "npm:config get cache") printf "%s\n" "$HOME/.npm" ;;' \
+            '    "pnpm:store path") printf "%s\n" "$HOME/Library/pnpm/store" ;;' \
+            '    "yarn:cache dir") printf "%s\n" "$HOME/.yarn/cache" ;;' \
+            '    *) exit 2 ;;' \
+            'esac' > "$stub_dir/$id"
         chmod +x "$stub_dir/$id"
     done
 
@@ -1682,7 +1689,7 @@ test_uninstall_space_breakdown() {
     if /usr/bin/grep -Fq 'NSWorkspace.shared.icon(forFile:' "$ROOT_DIR/SimpleMole/Views/UninstallTabView.swift"; then
         fail "uninstall icon lookup still runs inside the SwiftUI task"
     fi
-    /usr/bin/grep -Fq 'UninstallFileDrawer(files: plan.files)' \
+    /usr/bin/grep -Fq 'UninstallFileDrawer(files: plan.files,' \
         "$ROOT_DIR/SimpleMole/Views/UninstallTabView.swift" || \
         fail "uninstall details are not available as an inline drawer"
     /usr/bin/grep -Fq 'onUninstall: { state.previewUninstall(app) }' \
