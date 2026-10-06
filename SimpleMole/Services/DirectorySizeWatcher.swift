@@ -144,9 +144,13 @@ private struct DirectorySizeWatchRoot: Equatable, Sendable {
 
     static func compactPhysicalPaths(_ roots: [DirectorySizeWatchRoot]) -> [String] {
         var paths: [String] = []
-        for path in Set(roots.map(\.physicalPath)).sorted(by: {
-            $0.count == $1.count ? $0 < $1 : $0.count < $1.count
-        }) {
+        let uniquePaths: Set<String> = Set(roots.map(\.physicalPath))
+        let sortedPaths = uniquePaths.sorted { lhs, rhs in
+            let lhsLength = lhs.count
+            let rhsLength = rhs.count
+            return lhsLength == rhsLength ? lhs < rhs : lhsLength < rhsLength
+        }
+        for path in sortedPaths {
             if !paths.contains(where: { contains(root: $0, path: path) }) { paths.append(path) }
         }
         return paths

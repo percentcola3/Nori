@@ -838,9 +838,13 @@ struct AnalysisDiskBrowserInventory {
     private static func cachedScopes(for snapshot: AnalysisInventorySnapshot) -> [String] {
         var identities = Set<Identity>()
         var result: [String] = []
-        for path in Set(snapshot.roots).sorted(by: {
-            $0.utf8.count == $1.utf8.count ? $0 < $1 : $0.utf8.count < $1.utf8.count
-        }) {
+        let uniqueRoots: Set<String> = Set(snapshot.roots)
+        let sortedRoots = uniqueRoots.sorted { lhs, rhs in
+            let lhsLength = lhs.utf8.count
+            let rhsLength = rhs.utf8.count
+            return lhsLength == rhsLength ? lhs < rhs : lhsLength < rhsLength
+        }
+        for path in sortedRoots {
             if let fingerprint = snapshot.directories[path]?.fingerprint {
                 guard identities.insert(Identity(fingerprint)).inserted else { continue }
                 if result.contains(where: {
