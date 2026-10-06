@@ -96,6 +96,22 @@ struct CleanupScanTests {
         try write(".cache/codex-runtimes/codex-runtime-install-jnYG91/stage")
         // Hard-safety pattern: merged even though a user whitelist exists.
         try write("Library/Caches/CloudKit/entry")
+        // Nori 自身存储：可再生缓存树、过期原子写孤儿，与必须受保护的
+        // 密钥/备份/剪贴板/会话/搜索索引。
+        try write("Library/Application Support/Nori/DirectorySizes/state.json")
+        try write("Library/Application Support/Nori/Analysis/disk.json")
+        try write("Library/Application Support/Nori/Analysis/duplicates.plist")
+        try write("Library/Application Support/Nori/signing/identity.p12")
+        try write("Library/Application Support/Nori/Backups/backup")
+        try write("Library/Application Support/Nori/clipboard-history.plist")
+        try write("Library/Application Support/Nori/DirectoryIndex/files.sqlite")
+        try write("Library/Application Support/Nori/state.json.sb-orphan")
+        let noriOrphan = home.appendingPathComponent(
+            "Library/Application Support/Nori/state.json.sb-orphan").path
+        let agedSeconds = Int(Date().addingTimeInterval(-2 * 3600).timeIntervalSince1970)
+        var agedTimes = [timeval(tv_sec: agedSeconds, tv_usec: 0),
+                         timeval(tv_sec: agedSeconds, tv_usec: 0)]
+        expect(utimes(noriOrphan, &agedTimes) == 0, "could not age the Nori orphan fixture")
         try write(".config/mole/whitelist", bytes: 0)
         // Same grammar Mole accepts: literal, ~, $HOME, glob, comment, and a
         // whitelisted child that must protect its parent from being offered.
@@ -172,6 +188,25 @@ struct CleanupScanTests {
                "agent-owned Codex runtime caches leaked into the junk scan")
         expect(!quickPaths.contains(where: { $0.contains("/CloudKit") }),
                "Mole safety whitelist (CloudKit) was not merged into a user whitelist")
+        // Nori 自身可再生缓存归 "Nori" 类目；密钥、备份、剪贴板、搜索索引
+        // 永不进入原生候选。
+        let noriSupport = home.path + "/Library/Application Support/Nori"
+        let noriCategory = quick.categories.first {
+            $0.name == NoriOwnedStorage.displayName && $0.source == .core
+        }
+        let noriPaths = Set(noriCategory?.paths ?? [])
+        expect(noriPaths.contains(noriSupport + "/DirectorySizes"),
+               "Nori size cache root missing from the Nori category")
+        expect(noriPaths.contains(noriSupport + "/Analysis"),
+               "Nori analysis inventory missing from the Nori category")
+        expect(noriPaths.contains(noriOrphan),
+               "aged .sb- orphan missing from the Nori category")
+        expect(!quickPaths.contains(where: {
+            $0.contains("/Nori/signing") || $0.contains("/Nori/release-signing")
+                || $0.contains("/Nori/update-signing") || $0.contains("/Nori/Backups")
+                || $0.contains("clipboard-history") || $0.contains("/Nori/DirectoryIndex")
+                || $0.contains("traffic-") && $0.contains("/Nori/")
+        }), "durable or managed Nori content was offered to the native scan")
 
         // No whitelist file: Mole's convenience defaults apply (Gradle,
         // JetBrains, Playwright), and the safety patterns still merge.
@@ -355,6 +390,82 @@ struct CleanupScanTests {
             homeDirectory: scanHardlinkHome.path)
         expect(hardlinkRemoval.reclaimedBytes == hardlinkBytes,
                "deleting a hardlink family must count allocated bytes only at its last link")
+
+        // 废纸篓顶层条目是用户已丢弃的整体：.app、框架符号链接与内置 SQLite
+        // 都不再阻止整体计量与删除；同样结构放在 Caches 下仍受内容保护。
+        let trashHome = fixture.appendingPathComponent("trash-home")
+        let trashedApp = trashHome.appendingPathComponent(".Trash/Old.app")
+        let frameworkVersions = trashedApp.appendingPathComponent("Contents/Frameworks/Kit.framework/Versions")
+        try fm.createDirectory(at: frameworkVersions.appendingPathComponent("A"), withIntermediateDirectories: true)
+        try Data(repeating: 3, count: 16384).write(to: frameworkVersions.appendingPathComponent("A/Kit"))
+        try fm.createSymbolicLink(atPath: frameworkVersions.appendingPathComponent("Current").path,
+                                  withDestinationPath: "A")
+        try (Data("SQLite format 3\0".utf8) + Data(repeating: 0, count: 4080))
+            .write(to: trashedApp.appendingPathComponent("Contents/Resources.sqlite"))
+        let cachedApp = trashHome.appendingPathComponent("Library/Caches/com.example.bundled/Inner.app")
+        try fm.createDirectory(at: cachedApp.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try Data(repeating: 4, count: 4096).write(to: cachedApp.appendingPathComponent("Contents/Info.plist"))
+        let trashScan = await NativeCore(cleanupOpenFileProbe: { [] }).scanCleanup(homeDirectory: trashHome.path)
+        let trashPaths = trashScan.categories.flatMap(\.paths)
+        let trashBytes = trashScan.categories.compactMap { $0.pathBytes[trashedApp.path] }.first ?? 0
+        expect(trashPaths.contains(trashedApp.path) && trashBytes >= 16384,
+               "a trashed app bundle with symlinks and SQLite must be offered as one measured entry")
+        expect(!trashPaths.contains { $0.hasPrefix(trashedApp.path + "/") },
+               "a trashed app bundle must not be split into protected fragments")
+        expect(!trashPaths.contains { $0.hasPrefix(cachedApp.path) },
+               "app bundles outside the Trash keep content protection")
+        let trashRemoval = NativeCore(cleanupOpenFileProbe: { [] }).applyCleanup(
+            items: DeletionPlan(paths: [trashedApp.path]).items, permanent: true,
+            homeDirectory: trashHome.path)
+        expect(trashRemoval.removed == 1 && trashRemoval.failed == 0 && !fm.fileExists(atPath: trashedApp.path),
+               "emptying a trashed app bundle failed: \(trashRemoval.messages)")
+        let cachedRemoval = NativeCore(cleanupOpenFileProbe: { [] }).applyCleanup(
+            items: DeletionPlan(paths: [cachedApp.path]).items, permanent: true,
+            homeDirectory: trashHome.path)
+        expect(cachedRemoval.removed == 0 && fm.fileExists(atPath: cachedApp.path),
+               "an app bundle outside the Trash was deleted")
+        // SwiftUI 拖拽临时副本目录同样整体丢弃。
+        let dragRoot = trashHome.appendingPathComponent("Library/Caches/com.apple.SwiftUI.Drag-0000-TEST")
+        let dragApp = dragRoot.appendingPathComponent("Nori.app/Contents")
+        try fm.createDirectory(at: dragApp, withIntermediateDirectories: true)
+        try Data(repeating: 6, count: 8192).write(to: dragApp.appendingPathComponent("Info.plist"))
+        let dragScan = await NativeCore(cleanupOpenFileProbe: { [] }).scanCleanup(homeDirectory: trashHome.path)
+        expect(dragScan.categories.flatMap(\.paths).contains(dragRoot.path),
+               "a SwiftUI drag copy directory must be offered as one entry")
+        let dragRemoval = NativeCore(cleanupOpenFileProbe: { [] }).applyCleanup(
+            items: DeletionPlan(paths: [dragRoot.path]).items, permanent: true, homeDirectory: trashHome.path)
+        expect(dragRemoval.removed == 1 && !fm.fileExists(atPath: dragRoot.path),
+               "removing a SwiftUI drag copy failed: \(dragRemoval.messages)")
+
+        // 微信 4.x：cache/temp 默认勾选，聊天图片/视频默认不勾选，消息库、
+        // 聊天文件与共享目录受保护；三者归入通讯工具分组。
+        let wechatHome = fixture.appendingPathComponent("wechat-home")
+        let account = wechatHome.appendingPathComponent(WeChatStorage.filesRelativeRoot + "/wxid_test_ab12")
+        for relative in ["cache/c1", "temp/t1", "msg/video/v1.mp4", "msg/attach/a/1.dat",
+                         "msg/file/report.pdf", "db_storage/message/message_0.db", "config/conf"] {
+            let url = account.appendingPathComponent(relative)
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: 7, count: 8192).write(to: url)
+        }
+        let shared = wechatHome.appendingPathComponent(WeChatStorage.filesRelativeRoot + "/all_users/login/key")
+        try fm.createDirectory(at: shared.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 8, count: 8192).write(to: shared)
+        let wechatScan = await NativeCore(cleanupOpenFileProbe: { [] }).scanCleanup(homeDirectory: wechatHome.path)
+        let wechat = wechatScan.categories.filter { $0.name.hasPrefix("WeChat") }
+        let wechatPaths = Set(wechat.flatMap(\.paths))
+        expect(wechatPaths == Set(["cache", "temp", "msg/video", "msg/attach"].map { account.appendingPathComponent($0).path }),
+               "WeChat leaves mismatch: \(wechatPaths.sorted())")
+        expect(!wechatScan.categories.flatMap(\.paths).contains { $0.contains("db_storage") || $0.contains("msg/file")
+            || $0.contains("all_users") || $0.contains("/config") }, "protected WeChat data was offered")
+        let media = wechat.filter { $0.reasonKey == WeChatStorage.mediaReasonKey }
+        let caches = wechat.filter { $0.reasonKey == WeChatStorage.cacheReasonKey }
+        expect(media.count == 2 && media.allSatisfy { $0.selectedPaths.isEmpty }
+               && media.compactMap(\.safeCleanupCandidate).allSatisfy { $0.selectedPaths.isEmpty },
+               "WeChat chat media must stay unselected by default")
+        expect(caches.count == 1 && caches.allSatisfy(\.allSelected), "WeChat cache must be selected by default")
+        expect(wechat.allSatisfy { CleanupGroupBucket(category: $0, homeDirectory: wechatHome.path) == .messenger }
+               && CleanupCategory.mergingLongTail(wechat, homeDirectory: wechatHome.path).count == wechat.count,
+               "WeChat categories must form the messaging group and never merge into the long tail")
 
         // Enough output to exceed a pipe buffer; no real process list is read.
         let watchdog = DispatchWorkItem { exit(2) }

@@ -95,6 +95,9 @@ struct DirectorySizeCacheTests {
         expect(initial.result == DirectoryFileService.allocatedSize(of: measured), "full snapshot matches physical blocks, hidden entries, hardlink dedup and symlink safety")
         expect(initial.result.isComplete && !initial.isStale, "successful initial measurement is fresh and complete")
         expect(manager.fileExists(atPath: cacheURL.path), "snapshot persists atomically to the configured storage")
+        let persistedText = String(decoding: try Data(contentsOf: cacheURL), as: UTF8.self)
+        expect(!persistedText.contains(first.path) && !persistedText.contains(second.path),
+               "persistence stores per-root totals only, never per-file membership")
         let observed = await cache.observedDirectories().map(\.path)
         expect(observed == [measured.path], "observed roots are exposed for watcher setup: \(observed) versus \(measured.path)")
         let untouched = await refresh(cache, measured)
@@ -263,6 +266,14 @@ struct DirectorySizeCacheTests {
         expect(await DirectorySizeCache(cacheURL: malformedURL).observedDirectories().isEmpty, "malformed persistence is ignored")
         try Data("{\"version\":999,\"roots\":[]}".utf8).write(to: malformedURL)
         expect(await DirectorySizeCache(cacheURL: malformedURL).observedDirectories().isEmpty, "incompatible persistence versions are ignored")
+        expect(!manager.fileExists(atPath: malformedURL.path), "incompatible persistence is removed rather than kept on disk")
+        // 旧版逐文件快照：超过上限直接删除，不读入内存。
+        manager.createFile(atPath: malformedURL.path, contents: nil)
+        let legacy = try FileHandle(forWritingTo: malformedURL)
+        try legacy.truncate(atOffset: 8 << 20)
+        try legacy.close()
+        expect(await DirectorySizeCache(cacheURL: malformedURL).observedDirectories().isEmpty
+               && !manager.fileExists(atPath: malformedURL.path), "oversized legacy snapshots are discarded without decoding")
 
         let bounded = DirectorySizeCache(cacheURL: fixture.appendingPathComponent("bounded-cache/state.json"))
         for index in 0..<130 {
@@ -271,6 +282,28 @@ struct DirectorySizeCacheTests {
             _ = await bounded.refresh(root)
         }
         expect(await bounded.observedDirectories().count == 128, "observed roots have a bounded persistence footprint")
+
+        // reset()：内存清单与持久化封套一起消失，之后的 persist 只能写出
+        // 新观测到的根，旧根不会复活（清理管道删除自有缓存的前提）。
+        let resetCacheURL = fixture.appendingPathComponent("reset-cache/state.json")
+        let resetCache = DirectorySizeCache(cacheURL: resetCacheURL)
+        _ = await refresh(resetCache, measured)
+        _ = await refresh(resetCache, left)
+        expect(manager.fileExists(atPath: resetCacheURL.path), "reset fixture cache persisted")
+        await resetCache.reset()
+        expect(!manager.fileExists(atPath: resetCacheURL.path), "reset removes the persisted envelope")
+        expect(await resetCache.records(for: [measured, left]).isEmpty,
+               "reset drops every in-memory record")
+        expect(await resetCache.observedDirectories().isEmpty,
+               "reset drops watcher observation of stale roots")
+        _ = await refresh(resetCache, right)
+        expect(manager.fileExists(atPath: resetCacheURL.path),
+               "a later refresh persists again after reset")
+        let resurrected = DirectorySizeCache(cacheURL: resetCacheURL)
+        expect(await resurrected.records(for: [measured, left]).isEmpty,
+               "persisting after reset resurrects deleted roots")
+        expect(await resurrected.observedDirectories().map(\.path) == [right.path],
+               "only the freshly observed root survives across a restart")
         print("Directory size cache tests passed")
     }
 }

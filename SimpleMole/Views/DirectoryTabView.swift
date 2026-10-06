@@ -107,14 +107,6 @@ struct DirectoryTabView: View {
 
     private var pathControls: some View {
         HStack(spacing: 4) {
-            Button(action: model.copyBreadcrumbPath) {
-                Image(systemName: model.isBreadcrumbPathCopied ? "checkmark" : "doc.on.doc")
-                    .foregroundStyle(model.isBreadcrumbPathCopied ? Color.success : Color.secondary)
-            }
-            .buttonStyle(MoleIconButtonStyle(size: 30))
-            .help(l10n.t(model.isBreadcrumbPathCopied ? "dir.path.copied" : "dir.path.copy"))
-            .accessibilityLabel(l10n.t(model.isBreadcrumbPathCopied ? "dir.path.copied" : "dir.path.copy"))
-            .accessibilityIdentifier("directory-copy-path")
             Button(action: model.refresh) {
                 Group {
                     if model.isLoading || model.isWorking {

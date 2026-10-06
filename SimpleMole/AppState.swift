@@ -1401,7 +1401,8 @@ final class AppState: ObservableObject {
                         includingAdministratorRequired: true)
                 }.value
                 let snapshot = await runtime
-                categories = finalizedCleanupCategories(preflight.categories, running: snapshot)
+                categories = finalizedCleanupCategories(
+                    await appendNoriManagedPaths(to: preflight.categories), running: snapshot)
                 cleanupDeferredPaths = preflight.deferredPaths
                 cleanupScanComplete = preflight.succeeded && !control.isCancelled
                 if !cleanupScanComplete {
@@ -1433,7 +1434,9 @@ final class AppState: ObservableObject {
 
         Task {
             let scan = await unifiedCleanupScan(mode: mode, excludingScannedRoots: excludingScannedRoots)
-            let combined = finalizedCleanupCategories(completedCategories + scan.categories, running: scan.runningSnapshot)
+            let combined = finalizedCleanupCategories(
+                await appendNoriManagedPaths(to: completedCategories + scan.categories),
+                running: scan.runningSnapshot)
             categories = combined
             cleanupDeferredPaths = scan.deferredPaths
             cleanupScanComplete = scan.allSucceeded
@@ -2378,6 +2381,14 @@ final class AppState: ObservableObject {
             let agentSnapshot = hasAgentLeftovers ? await captureRunningApplicationSnapshot() : .unavailable
             let directCategories = routeCategories
             let administratorUnits = 0
+            // Nori 自身的受管路径（文件名索引、截图暂存）不进原生 unlink；
+            // 先复位会回写的进程内缓存，再让原生删除开始。
+            let home = NSHomeDirectory()
+            await prepareNoriOwnedDeletion(paths: directCategories.flatMap(\.paths))
+            let managedPaths = directCategories.flatMap(\.paths)
+                .filter { NoriOwnedStorage.isManagedPath($0, home: home) }
+            let managedUnits = DeletionPlan.nonOverlappingPaths(managedPaths).count
+            var managedHandled = 0
             let applied = await Task.detached(priority: .utility) {
                 let home = NSHomeDirectory()
                 let agentLeftovers = directCategories.filter { $0.reasonKey == "cleanup.risk.agentLeftover" }
@@ -2386,9 +2397,11 @@ final class AppState: ObservableObject {
                     $0.reasonKey != "cleanup.risk.agentLeftover" && !$0.isAppDataReview
                 }
                 let agentUnits = DeletionPlan.nonOverlappingPaths(agentLeftovers.flatMap(\.paths)).count
-                let genericUnits = DeletionPlan.nonOverlappingPaths(genericCategories.flatMap(\.paths)).count
+                let nativePaths = genericCategories.flatMap(\.paths)
+                    .filter { !NoriOwnedStorage.isManagedPath($0, home: home) }
+                let genericUnits = DeletionPlan.nonOverlappingPaths(nativePaths).count
                 let appData = NativeCore.shared.applyAppDataReview(appDataCategories, homeDirectory: home)
-                let routeUnits = agentUnits + genericUnits + administratorUnits
+                let routeUnits = agentUnits + genericUnits + administratorUnits + managedUnits
                 let agentOutcome = agentLeftovers.isEmpty
                     ? AgentCleanupExecutor.Outcome(summary: .init(removed: 0, skipped: 0, failed: 0, messages: []), refused: 0)
                     : AgentCleanupExecutor.execute(agentLeftovers, running: agentSnapshot,
@@ -2396,8 +2409,9 @@ final class AppState: ObservableObject {
                                                    onProgress: { done, _, path in
                                                        onProgress?(done, routeUnits, path)
                                                    })
+                let native = Set(nativePaths)
                 let items = genericCategories.flatMap { category in
-                    category.paths.map { path in
+                    category.paths.filter(native.contains).map { path in
                         DeletionPlan.Item(record: path, identity: category.pathIdentities[path] ?? "")
                     }
                 }
@@ -2408,8 +2422,9 @@ final class AppState: ObservableObject {
                         liveCleanupTargets: Set(genericCategories.filter {
                             CleanupRiskPolicy.usesFileActivityGuard($0)
                         }.flatMap(\.paths).filter {
-                            CleanupRiskPolicy.core(section: "Cache", path: $0,
-                                homeDirectory: home).risk == .safe
+                            !NoriOwnedStorage.isManagedPath($0, home: home)
+                                && CleanupRiskPolicy.core(section: "Cache", path: $0,
+                                    homeDirectory: home).risk == .safe
                         }), onProgress: { done, _, path in
                             genericHandled = done
                             onProgress?(agentUnits + done, routeUnits, path)
@@ -2417,15 +2432,27 @@ final class AppState: ObservableObject {
                             onProgress?(agentUnits + genericHandled, routeUnits, path)
                         })
                 let agent = agentOutcome.summary
-                return NativeCore.ApplySummary(
+                return (agentUnits + genericUnits, NativeCore.ApplySummary(
                     removed: generic.removed + agent.removed + appData.removed,
                     skipped: generic.skipped + agent.skipped + agentOutcome.refused + appData.skipped,
                     failed: generic.failed + agent.failed + appData.failed,
                     messages: generic.messages + agent.messages + appData.messages,
                     removedPaths: generic.removedPaths.union(agent.removedPaths).union(appData.removedPaths),
-                    reclaimedBytes: generic.reclaimedBytes &+ agent.reclaimedBytes &+ appData.reclaimedBytes)
+                    reclaimedBytes: generic.reclaimedBytes &+ agent.reclaimedBytes &+ appData.reclaimedBytes))
             }.value
-            let summary = applied
+            let nativeHandled = applied.0
+            let routeUnits = nativeHandled + managedUnits
+            let managed = await applyNoriManagedPaths(managedPaths, onProgress: { path in
+                managedHandled += 1
+                onProgress?(nativeHandled + managedHandled, routeUnits, path)
+            })
+            let summary = NativeCore.ApplySummary(
+                removed: applied.1.removed + managed.removed,
+                skipped: applied.1.skipped + managed.skipped,
+                failed: applied.1.failed + managed.failed,
+                messages: applied.1.messages + managed.messages,
+                removedPaths: applied.1.removedPaths.union(managed.removedPaths),
+                reclaimedBytes: applied.1.reclaimedBytes &+ managed.reclaimedBytes)
             if !summary.messages.isEmpty { log(summary.messages.joined(separator: "\n")) }
             let execution = CleanupExecutionResult(
                 removed: summary.removed,

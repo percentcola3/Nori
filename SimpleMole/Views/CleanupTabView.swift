@@ -441,6 +441,7 @@ extension CleanupGroupBucket {
     var symbol: String {
         switch self {
         case .cache: return "sparkles"
+        case .messenger: return "bubble.left.and.bubble.right.fill"
         case .trash: return "trash.fill"
         case .developer: return "hammer.fill"
         case .system: return "gearshape.2.fill"
@@ -451,11 +452,12 @@ extension CleanupGroupBucket {
     var sortOrder: Int {
         switch self {
         case .cache: return 0
-        case .system: return 1
-        case .leftovers: return 2
-        case .appData: return 3
-        case .trash: return 4
-        case .developer: return 5
+        case .messenger: return 1
+        case .system: return 2
+        case .leftovers: return 3
+        case .appData: return 4
+        case .trash: return 5
+        case .developer: return 6
         }
     }
 }

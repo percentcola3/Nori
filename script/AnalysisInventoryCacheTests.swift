@@ -243,12 +243,20 @@ struct AnalysisInventoryCacheTests {
                directoryRepair.diskBrowser?.entriesByPath[library.path] == nil,
                "known directory removal must prune all descendants and repair ancestor capacity")
         let diskRestored = AnalysisInventoryCache(directory: cacheDirectory, home: home.path).restoreState()
-        expect(diskRestored.snapshots.count == 4 && diskRestored.diskBrowser?.entriesByPath == directoryRepair.diskBrowser?.entriesByPath,
-               "disk and large-file caches must persist and restore independently")
+        expect(diskRestored.snapshots.count == 3 && diskRestored.snapshots[.disk] == nil
+               && diskRestored.reports[.disk] == nil && diskRestored.diskBrowser == nil,
+               "the per-file disk inventory stays in session memory while category caches persist")
+        let persistedNames = (try? fm.contentsOfDirectory(atPath: cacheDirectory.path)) ?? []
+        expect(!persistedNames.contains { $0.hasPrefix("disk.") } && !persistedNames.contains { $0.hasSuffix(".json") },
+               "no disk inventory or uncompressed legacy JSON is written: \(persistedNames)")
+        try Data("{}".utf8).write(to: cacheDirectory.appendingPathComponent("disk.json"))
+        _ = AnalysisInventoryCache(directory: cacheDirectory, home: home.path).restoreState()
+        expect(!fm.fileExists(atPath: cacheDirectory.appendingPathComponent("disk.json").path),
+               "legacy uncompressed inventories are removed on load")
 
         // Exact-key mutation repair uses cached memberships, including roots
         // removed through an ancestor that was never part of this index.
-        let known = diskRestored.snapshots[.disk]!
+        let known = directoryRepair.snapshots[.disk]!
         var emptyRemoval = known
         expect(emptyRemoval.removeKnownPaths([]).isEmpty && emptyRemoval.files == known.files &&
                emptyRemoval.directories.count == known.directories.count,
@@ -311,7 +319,7 @@ struct AnalysisInventoryCacheTests {
             expect(fullPartial.canReuse && fullPartial.snapshot.files[protectedFile.path] != nil &&
                    fullPartial.diskBrowser!.entriesByPath[home.path]!.first(where: { $0.path == protectedRoot.path })?.size == protectedBytes,
                    "an explicit full scan must preserve the known capacity of an unreadable subtree")
-            let persistedPartial = AnalysisInventoryCache(directory: cacheDirectory, home: home.path).restoreState()
+            let persistedPartial = cache.restoreState()
             expect(persistedPartial.reports[.disk]?.isPartial == true &&
                    persistedPartial.diskBrowser?.entriesByPath[home.path]?.first(where: { $0.path == protectedRoot.path })?.isPartial == true,
                    "partial warnings must survive restoring disk results")
@@ -360,6 +368,8 @@ struct AnalysisInventoryCacheTests {
         expect(Set(expandedOverview.map(\.path)) == Set(expanded.snapshot.roots) &&
                expandedOverview.reduce(UInt64(0), { $0 &+ $1.size }) == expanded.report.totalSize,
                "overview must expose exactly the explicit scopes and their prepared capacities")
+        expect(expandedOverview.first?.path == home.path,
+               "user data leads the overview; system scopes follow regardless of size")
         var uniqueFiles = Set<String>()
         let uniqueBytes = expanded.snapshot.files.values.reduce(UInt64(0)) { bytes, fingerprint in
             let identity = "\(fingerprint.device):\(fingerprint.inode)"
@@ -419,7 +429,7 @@ struct AnalysisInventoryCacheTests {
                    unreadableScope.diskBrowser!.entriesByPath[AnalysisDiskScopes.overviewPath]!
                     .first(where: { $0.path == logsRoot.path })?.size == savedLogSize,
                    "unreadable explicit scopes must retain saved subtree capacity and remain partial")
-            let restoredScopes = AnalysisInventoryCache(directory: cacheDirectory, home: home.path).restoreState()
+            let restoredScopes = cache.restoreState()
             expect(restoredScopes.diskBrowser?.entriesByPath[AnalysisDiskScopes.overviewPath]?
                     .first(where: { $0.path == logsRoot.path })?.isPartial == true &&
                    restoredScopes.diskBrowser?.entriesByPath[archivedRoot.path]?.first?.isPartial == true,

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 private struct RiskTestFailure: Error, CustomStringConvertible {
@@ -34,6 +35,114 @@ struct CleanupRiskPolicyTests {
         try testCacheMapPolicy(home: policyHome)
         try testMoleParity(home: policyHome)
         try testExpandedAuditedCoverage(home: policyHome)
+        try testNoriOwnedStorage(home: policyHome, fixture: fixture)
+    }
+
+    /// Nori 自身可再生缓存：四个文件树根与过期 .sb- 孤儿走 .safe 的原生
+    /// 边界；签名、备份、剪贴板、会话与未过期的临时文件永不放行。
+    private static func testNoriOwnedStorage(home: String, fixture: URL) throws {
+        for path in NoriOwnedStorage.fileTreeRoots(home: home)
+            + [home + "/Library/Application Support/Nori/DirectorySizes/state.json",
+               home + "/Library/Application Support/Nori/Analysis/disk.json",
+               home + "/Library/Application Support/Nori/Analysis/duplicates.plist"] {
+            let descriptor = CleanupRiskPolicy.core(section: "Cache", path: path,
+                                                    homeDirectory: home)
+            try expect(descriptor.risk == .safe && descriptor.applyRoute == .genericTrash
+                       && descriptor.reasonKey == NoriOwnedStorage.reasonKey,
+                       "Nori regenerable root was not Safe: " + path)
+        }
+        // 持久化名称检查：三个可再生清单文件不得被内容保护拦截。
+        for path in [home + "/Library/Application Support/Nori/DirectorySizes/state.json",
+                     home + "/Library/Application Support/Nori/Analysis/disk.json",
+                     home + "/Library/Application Support/Nori/Analysis/duplicates.plist"] {
+            try expect(!CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: home),
+                       "Nori regenerable payload still content-protected: " + path)
+        }
+        for path in [home + "/Library/Application Support/Nori/signing/identity.p12",
+                     home + "/Library/Application Support/Nori/release-signing/key",
+                     home + "/Library/Application Support/Nori/update-signing/key",
+                     home + "/Library/Application Support/Nori/Backups/backup",
+                     home + "/Library/Application Support/Nori/clipboard-history.plist",
+                     home + "/Library/Application Support/Nori/traffic-2026-session.json",
+                     home + "/Library/Application Support/Nori/cleanup-cache.json",
+                     home + "/Library/Application Support/Nori/uninstall-inventory.json",
+                     home + "/Library/Application Support/Nori",
+                     home + "/Library/Application Support/Nori/DirectoryIndex",
+                     home + "/Library/Application Support/Nori/DirectoryIndex/files.sqlite",
+                     home + "/Library/Application Support/Nori/DirectoryIndex/files.sqlite-wal"] {
+            try expect(CleanupRiskPolicy.core(section: "Cache", path: path,
+                                              homeDirectory: home).risk != .safe,
+                       "durable or managed Nori content was admitted: " + path)
+        }
+
+        // 孤儿判定依赖真实 mtime；fixture 位于受保护的 /private/var 下，
+        // 改用可写的 /Users/Shared 充当 home。
+        let realHome = URL(fileURLWithPath: "/Users/Shared/nori-risk-" + UUID().uuidString,
+                           isDirectory: true)
+        try FileManager.default.createDirectory(at: realHome, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: realHome) }
+        let support = realHome.appendingPathComponent(
+            "Library/Application Support/Nori", isDirectory: true)
+        let nested = support.appendingPathComponent(
+            "DirectorySizes/state.json.sb-deep", isDirectory: false)
+        try FileManager.default.createDirectory(
+            at: nested.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let aged = support.appendingPathComponent("state.json.sb-abc123")
+        let fresh = support.appendingPathComponent("fresh.sb-zzz999")
+        let plain = support.appendingPathComponent("keep.json")
+        for url in [aged, fresh, nested, plain] {
+            try Data("fixture".utf8).write(to: url)
+        }
+        let old = Date().addingTimeInterval(-2 * 3600)
+        let seconds = Int(old.timeIntervalSince1970)
+        var times = [timeval(tv_sec: seconds, tv_usec: 0), timeval(tv_sec: seconds, tv_usec: 0)]
+        try expect(utimes(aged.path, &times) == 0, "could not age the .sb- fixture")
+        let agedPath = aged.path
+        let freshPath = fresh.path
+        try expect(NoriOwnedStorage.isOrphanTemporaryFile(agedPath, home: realHome.path),
+                   "aged .sb- orphan was not recognised")
+        try expect(!NoriOwnedStorage.isOrphanTemporaryFile(freshPath, home: realHome.path),
+                   "fresh .sb- file was promoted")
+        try expect(!NoriOwnedStorage.isOrphanTemporaryFile(nested.path, home: realHome.path),
+                   "nested .sb- inside a file tree root was claimed as an orphan")
+        try expect(!NoriOwnedStorage.isOrphanTemporaryFile(plain.path, home: realHome.path),
+                   "ordinary file was claimed as an orphan")
+        try expect(NoriOwnedStorage.orphanTemporaryFiles(home: realHome.path)
+                    == [CleanupRiskPolicy.normalizedPathLiteral(agedPath)],
+                   "orphan enumeration missed the aged file")
+        let orphanDescriptor = CleanupRiskPolicy.core(
+            section: "Cache", path: agedPath, homeDirectory: realHome.path)
+        try expect(orphanDescriptor.risk == .safe && orphanDescriptor.disposal == .permanentDelete
+                   && orphanDescriptor.applyRoute == .genericTrash
+                   && orphanDescriptor.reasonKey == NoriOwnedStorage.reasonKey,
+                   "aged .sb- orphan did not receive the Nori safe descriptor")
+        try expect(CleanupRiskPolicy.core(section: "Cache", path: freshPath,
+                                          homeDirectory: realHome.path).risk != .safe,
+                   "fresh .sb- file was offered to cleanup")
+
+        // 受管路径形状：搜索索引及其后代、临时目录下的截图暂存目录。
+        try expect(NoriOwnedStorage.isSearchIndexPath(
+            NoriOwnedStorage.searchIndexDirectory(home: home), home: home),
+            "search index directory was not managed")
+        try expect(NoriOwnedStorage.isSearchIndexPath(
+            NoriOwnedStorage.searchIndexDirectory(home: home) + "/files.sqlite", home: home),
+            "search index descendant was not managed")
+        try expect(!NoriOwnedStorage.isManagedPath(
+            home + "/Library/Application Support/Nori/Analysis/disk.json", home: home),
+            "native file-tree content was claimed as managed")
+        try expect(NoriOwnedStorage.isManagedPath(
+            NoriOwnedStorage.searchIndexDirectory(home: home), home: home),
+            "search index directory did not classify as managed")
+        let temp = fixture.appendingPathComponent("tmp", isDirectory: true).path + "/"
+        try expect(NoriOwnedStorage.isScreenshotTemporaryPath(
+            temp + "com.nori.screenshot.1234", temporaryDirectory: temp),
+            "screenshot temp directory shape was not recognised")
+        try expect(!NoriOwnedStorage.isScreenshotTemporaryPath(
+            temp + "com.nori.screenshot.1234/capture.png", temporaryDirectory: temp),
+            "nested screenshot content was claimed as a managed root")
+        try expect(!NoriOwnedStorage.isScreenshotTemporaryPath(
+            temp + "com.other.screenshot.1234", temporaryDirectory: temp),
+            "unrelated temp directory matched the screenshot prefix")
     }
 
     private static func testExpandedAuditedCoverage(home: String) throws {

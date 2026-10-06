@@ -27,9 +27,18 @@ struct DirectoryPathBar: View {
         // the window's minimum/ideal size during page transitions.
         GeometryReader { geometry in
             let crumbs = self.crumbs
-            let plan = makePlan(for: crumbs, width: geometry.size.width)
+            // 30pt 复制按钮 + 4pt 间距留给面包屑之外的固定控件。
+            let plan = makePlan(for: crumbs, width: geometry.size.width - 34)
             HStack(spacing: 4) {
                 pathContent(crumbs: crumbs, plan: plan)
+                Button(action: onCopy) {
+                    Image(systemName: isPathCopied ? "checkmark" : "doc.on.doc")
+                        .foregroundStyle(isPathCopied ? Color.success : Color.secondary)
+                }
+                .buttonStyle(MoleIconButtonStyle(size: 30))
+                .help(l10n.t(isPathCopied ? "dir.path.copied" : "dir.path.copy"))
+                .accessibilityLabel(l10n.t(isPathCopied ? "dir.path.copied" : "dir.path.copy"))
+                .accessibilityIdentifier("directory-copy-path")
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)

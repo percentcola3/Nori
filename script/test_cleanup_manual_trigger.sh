@@ -89,7 +89,8 @@ fi
     "$APP_STATE" || fail "successful manual scans are no longer cached"
 /usr/bin/grep -Fq 'NativeCore.shared.preflightCleanupCategories(cached.categories, control: control,' \
     "$APP_STATE" || fail "cached cleanup paths are displayed without fresh deletion eligibility"
-/usr/bin/grep -Fq 'categories = finalizedCleanupCategories(preflight.categories, running: snapshot)' \
+/usr/bin/grep -Fq 'categories = finalizedCleanupCategories(' "$APP_STATE" \
+    && /usr/bin/grep -Fq 'appendNoriManagedPaths(to: preflight.categories), running: snapshot' \
     "$APP_STATE" || fail "cached cleanup display bypasses native eligibility or runtime filtering"
 /usr/bin/grep -Fq 'cleanupScanComplete = preflight.succeeded && !control.isCancelled' \
     "$APP_STATE" || fail "unverified cached cleanup enables execution"

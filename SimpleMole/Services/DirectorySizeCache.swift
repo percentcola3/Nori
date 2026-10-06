@@ -75,7 +75,7 @@ actor DirectorySizeCache {
         }
     }
 
-    private struct Node: Codable, Sendable {
+    private struct Node: Sendable {
         let path: String
         let fingerprint: Fingerprint
         let children: [Node]
@@ -83,6 +83,8 @@ actor DirectorySizeCache {
         let normalBytes: Int64
         let hardlinks: [String: LinkedBytes]
         let isComplete: Bool
+        /// 子树节点数，用于内存树预算。
+        let nodeCount: Int
 
         init(path: String, fingerprint: Fingerprint, children: [Node],
              membershipComplete: Bool, ownBytes: Int64, complete: Bool) {
@@ -93,6 +95,7 @@ actor DirectorySizeCache {
             var normal = ownBytes
             var links: [String: LinkedBytes] = [:]
             var complete = complete
+            var count = 1
             if !fingerprint.isDirectory && fingerprint.linkCount > 1 {
                 normal = 0
                 links[fingerprint.identity] = LinkedBytes(bytes: ownBytes,
@@ -100,6 +103,7 @@ actor DirectorySizeCache {
                     changedNanoseconds: fingerprint.changedNanoseconds)
             }
             for child in children {
+                count += child.nodeCount
                 let addition = normal.addingReportingOverflow(child.normalBytes)
                 normal = addition.overflow ? Int64.max : addition.partialValue
                 complete = complete && child.isComplete && !addition.overflow
@@ -111,6 +115,7 @@ actor DirectorySizeCache {
             self.normalBytes = normal
             self.hardlinks = links
             self.isComplete = complete
+            self.nodeCount = count
         }
 
         var result: DirectorySizeResult {
@@ -125,17 +130,30 @@ actor DirectorySizeCache {
         }
     }
 
-    private struct StoredRoot: Codable, Sendable {
+    /// 内存里的根：`node` 是本次会话可增量复用的成员树，只在节点预算内
+    /// 保留；`measured == false` 是不可见的不可读占位。
+    private struct StoredRoot: Sendable {
         let path: String
-        let node: Node?
+        var node: Node?
         let bytes: Int64
         let isComplete: Bool
         let updatedAt: Date
+        let measured: Bool
+    }
+
+    /// 落盘只保留每个根的汇总值：重启后立即展示旧值（标记 stale），首次
+    /// 刷新重新测量。逐文件成员树不落盘，避免状态文件随浏览范围膨胀。
+    private struct PersistedRoot: Codable {
+        let path: String
+        let bytes: Int64
+        let isComplete: Bool
+        let updatedAt: Date
+        let measured: Bool
     }
 
     private struct Envelope: Codable {
         let version: Int
-        let roots: [StoredRoot]
+        let roots: [PersistedRoot]
     }
 
     private enum ScanCancelled: Error { case cancelled }
@@ -230,8 +248,14 @@ actor DirectorySizeCache {
         }
     }
 
-    private static let version = 1
+    private static let version = 2
     private static let maximumRoots = 128
+    /// 汇总封套远小于此值；超过即为旧版逐文件快照，直接丢弃不解码。
+    private static let maximumStateBytes = 4 << 20
+    /// 内存成员树的总节点预算与单根上限；超出的根只保留汇总值，
+    /// 下次刷新时重新完整测量。
+    private static let treeNodeBudget = 400_000
+    private static let treeNodeLimitPerRoot = 250_000
     private let cacheURL: URL
     private let inspectionObserver: (@Sendable (String) async -> Void)?
     private var loaded = false
@@ -314,7 +338,7 @@ actor DirectorySizeCache {
                     // retries can recover later, without presenting zero as
                     // a measured size. The placeholder is never visible.
                     roots[path] = StoredRoot(path: path, node: nil, bytes: 0,
-                                            isComplete: false, updatedAt: Date())
+                                            isComplete: false, updatedAt: Date(), measured: false)
                     evictIfNeeded()
                     persist()
                 }
@@ -331,12 +355,13 @@ actor DirectorySizeCache {
             }
             let result = node?.result ?? DirectorySizeResult(bytes: 0, isComplete: false)
             let stored = StoredRoot(path: path, node: node, bytes: result.bytes,
-                                    isComplete: result.isComplete, updatedAt: Date())
+                                    isComplete: result.isComplete, updatedAt: Date(), measured: true)
             roots[path] = stored
             stale.remove(path)
             needsCalibration.remove(path)
             dirtyPaths.removeValue(forKey: path)
             evictIfNeeded()
+            trimTrees()
             persist()
             return record(stored)
         } catch {
@@ -369,6 +394,22 @@ actor DirectorySizeCache {
         }
     }
 
+    /// The cleanup pipeline deleted this cache's backing file. Clearing
+    /// `revisions` also invalidates every in-flight scan, so a refresh that
+    /// started before the reset can never store stale roots afterwards; a
+    /// later persist() writes an empty envelope rather than the old snapshot.
+    func reset() {
+        inFlight.removeAll()
+        roots.removeAll()
+        stale.removeAll()
+        needsCalibration.removeAll()
+        dirtyPaths.removeAll()
+        revisions.removeAll()
+        accessedAt.removeAll()
+        loaded = true
+        try? FileManager.default.removeItem(at: cacheURL)
+    }
+
     func dueDirectories(now: Date = Date(), interval: TimeInterval = 6 * 3600) -> [URL] {
         loadIfNeeded()
         return roots.values.filter { stale.contains($0.path) || now.timeIntervalSince($0.updatedAt) >= max(0, interval) }
@@ -382,36 +423,53 @@ actor DirectorySizeCache {
     }
 
     private func visibleRecord(_ stored: StoredRoot) -> DirectorySizeRecord? {
-        guard stored.node != nil else { return nil }
+        guard stored.measured else { return nil }
         return record(stored)
     }
 
     private func loadIfNeeded() {
         guard !loaded else { return }
         loaded = true
-        guard let data = try? Data(contentsOf: cacheURL),
+        var metadata = stat()
+        guard lstat(cacheURL.path, &metadata) == 0 else { return }
+        // 旧版逐文件快照可达数 GB：不读入内存，直接移除。
+        guard metadata.st_size <= Self.maximumStateBytes,
+              let data = try? Data(contentsOf: cacheURL),
               let envelope = try? JSONDecoder().decode(Envelope.self, from: data),
-              envelope.version == Self.version, envelope.roots.count <= Self.maximumRoots,
+              envelope.version == Self.version else {
+            try? FileManager.default.removeItem(at: cacheURL)
+            return
+        }
+        guard envelope.roots.count <= Self.maximumRoots,
               Set(envelope.roots.map(\.path)).count == envelope.roots.count,
               envelope.roots.allSatisfy({ Self.valid($0) }) else { return }
-        roots = Dictionary(uniqueKeysWithValues: envelope.roots.map { ($0.path, $0) })
+        roots = Dictionary(uniqueKeysWithValues: envelope.roots.map {
+            ($0.path, StoredRoot(path: $0.path, node: nil, bytes: $0.bytes, isComplete: $0.isComplete,
+                                 updatedAt: $0.updatedAt, measured: $0.measured))
+        })
         stale = Set(roots.keys)
         needsCalibration = stale
     }
 
-    private static func valid(_ root: StoredRoot) -> Bool {
-        guard root.path.hasPrefix("/"), normalizedPath(URL(fileURLWithPath: root.path, isDirectory: false)) == root.path,
-              root.bytes >= 0 else { return false }
-        func validNode(_ node: Node, expectedPath: String, depth: Int) -> Bool {
-            guard depth <= 512, node.path == expectedPath, node.fingerprint.bytes >= 0,
-                  node.normalBytes >= 0, node.hardlinks.values.allSatisfy({ $0.bytes >= 0 }),
-                  Set(node.children.map(\.path)).count == node.children.count else { return false }
-            return node.children.allSatisfy { child in
-                (child.path as NSString).deletingLastPathComponent == node.path
-                    && validNode(child, expectedPath: child.path, depth: depth + 1)
+    private static func valid(_ root: PersistedRoot) -> Bool {
+        root.path.hasPrefix("/") && normalizedPath(URL(fileURLWithPath: root.path, isDirectory: false)) == root.path
+            && root.bytes >= 0 && (root.measured || !root.isComplete)
+    }
+
+    /// 按最近访问保留成员树，直到用完节点预算；其余根降级为只有汇总值。
+    private func trimTrees() {
+        var used = 0
+        let ordered = roots.keys.sorted {
+            (accessedAt[$0] ?? roots[$0]!.updatedAt) > (accessedAt[$1] ?? roots[$1]!.updatedAt)
+        }
+        for path in ordered {
+            guard let count = roots[path]?.node?.nodeCount else { continue }
+            if count <= Self.treeNodeLimitPerRoot && used + count <= Self.treeNodeBudget {
+                used += count
+            } else {
+                roots[path]?.node = nil
             }
         }
-        return root.node.map { validNode($0, expectedPath: root.path, depth: 0) } ?? !root.isComplete
     }
 
     private func evictIfNeeded() {
@@ -428,7 +486,10 @@ actor DirectorySizeCache {
 
     private func persist() {
         guard let data = try? JSONEncoder().encode(Envelope(version: Self.version,
-            roots: roots.values.sorted { $0.path < $1.path })) else { return }
+            roots: roots.values.sorted { $0.path < $1.path }.map {
+                PersistedRoot(path: $0.path, bytes: $0.bytes, isComplete: $0.isComplete,
+                              updatedAt: $0.updatedAt, measured: $0.measured)
+            })) else { return }
         do {
             try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: cacheURL, options: .atomic)

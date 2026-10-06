@@ -706,6 +706,26 @@ final class DirectoryBrowserModel: ObservableObject {
         }
     }
 
+    /// The owning cache file was deleted by cleanup. Forget queued and
+    /// in-flight requests so a finishing scan cannot write old roots back;
+    /// visible rows fall back to the pending state.
+    func resetSizeCache() async {
+        sizeTask?.cancel()
+        sizeTask = nil
+        activeSizeRequest = nil
+        pendingSizeRequests.removeAll()
+        sizeRequestOrder.removeAll()
+        urgentSizeIDs.removeAll()
+        lastSizeAttempt.removeAll()
+        unavailableSizeIDs.removeAll()
+        pendingSizeChanges.removeAll()
+        sizeRecords.removeAll()
+        sizeObservedURLs = []
+        await sizeCache.reset()
+        updateSizeActivity()
+        scheduleSizeWatcherUpdate()
+    }
+
     /// Explicit teardown for model fixtures and owners that release the workspace.
     /// Normal tab switching deliberately calls suspend() instead.
     func stopSizeBackgroundWork() {
@@ -938,6 +958,14 @@ final class DirectoryBrowserModel: ObservableObject {
         }
     }
     func cancelIndexing() { indexTask?.cancel() }
+
+    /// The index database file is protected at the deletion edge; cleanup
+    /// empties it in place through SQL instead of unlinking the open database.
+    func clearSearchIndex() async throws {
+        guard let index else { return }
+        try await index.clear()
+        await readIndexStatus()
+    }
 }
 
 /// Search is global, but the current browsing location supplies result priority.

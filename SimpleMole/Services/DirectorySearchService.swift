@@ -107,6 +107,16 @@ actor DirectorySearchIndex {
 
     deinit { sqlite3_close(database) }
 
+    /// Empty the persisted snapshot in place. The open database file is never
+    /// unlinked: cleanup reaches this index only through the managed route.
+    /// FTS triggers keep filename_search consistent with the emptied table.
+    func clear() throws {
+        guard !isBuilding else { throw DirectorySearchError.alreadyBuilding }
+        try execute("DELETE FROM files; DELETE FROM pending_files; DELETE FROM metadata;")
+        try execute("VACUUM;")
+        try execute("PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
     func status() throws -> DirectoryIndexStatus {
         let countStatement = try prepare("SELECT COUNT(*) FROM files")
         defer { sqlite3_finalize(countStatement) }

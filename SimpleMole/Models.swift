@@ -140,11 +140,15 @@ enum CleanupActivityGuard: String, Codable, CaseIterable, Hashable, Sendable {
 /// 清理页的五个展示分桶。分组头渲染与长尾合并共用这一映射，避免两处
 /// 各自维护一套 source → 分组规则。
 enum CleanupGroupBucket: String, Hashable, CaseIterable {
-    case cache, system, leftovers, appData, trash, developer
+    case cache, messenger, system, leftovers, appData, trash, developer
 
     init(category: CleanupCategory, homeDirectory: String = NSHomeDirectory()) {
         if Self.isTrash(category, homeDirectory: homeDirectory) {
             self = .trash
+            return
+        }
+        if category.isMessengerData, category.source == .core {
+            self = .messenger
             return
         }
         if category.activityGuard == .appData, category.source != .appLeftover,
@@ -362,9 +366,27 @@ struct CleanupCategory: Identifiable, Equatable {
         candidate.pathIdentities = pathIdentities.filter { kept.contains($0.key) }
         candidate.bytes = keptPaths.reduce(0) { $0 &+ (candidate.pathBytes[$1] ?? 0) }
         guard candidate.bytes > 0 else { return nil }
-        candidate.selectedPaths = Set(keptPaths)
+        candidate.selectedPaths = Self.reviewOnlyReasonKeys.contains(reasonKey) ? [] : Set(keptPaths)
         return candidate
     }
+
+    /// 可安全删除、但内容对用户仍有价值（聊天图片/视频过期后无法找回）：
+    /// 照常展示，默认不勾选，由用户确认。
+    static let reviewOnlyReasonKeys: Set<String> = ["cleanup.risk.messengerMedia"]
+    static let messengerReasonKeys: Set<String> = ["cleanup.risk.messengerCache", "cleanup.risk.messengerMedia"]
+
+    /// 通讯工具的缓存与聊天媒体单独成组展示，不并入长尾。
+    var isMessengerData: Bool {
+        activityGuard == .messenger || Self.messengerReasonKeys.contains(reasonKey)
+            || Self.messengerAppNames.contains { name == $0 || name.hasPrefix($0 + " ") }
+    }
+
+    /// 发现层为通讯应用缓存打的标签前缀（见 NativeCore.cleanupRoots）。
+    private static let messengerAppNames = [
+        "WeChat", "QQ", "Tencent Meeting", "DingTalk", "Feishu", "Lark", "WhatsApp", "Telegram",
+        "Signal", "Microsoft Teams", "Skype", "Zoom", "Messenger", "Rocket.Chat", "Mattermost",
+        "Slack", "Discord"
+    ]
 
     static func safeCleanupCandidates(from categories: [CleanupCategory]) -> [CleanupCategory] {
         categories.compactMap(\.safeCleanupCandidate).sorted(by: sizeDescending)
@@ -409,7 +431,7 @@ struct CleanupCategory: Identifiable, Equatable {
                 && category.risk == .safe
                 && category.disposal == .permanentDelete
                 && category.applyRoute == .genericTrash
-                && category.activityGuard != .messenger
+                && !category.isMessengerData
                 && category.activityGuard != .unsupported
             guard mergeable else {
                 kept.append(category)

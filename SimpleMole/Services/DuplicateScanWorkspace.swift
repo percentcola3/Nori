@@ -159,6 +159,20 @@ final class DuplicateWorkspaceStore: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + 0.2, execute: write)
     }
 
+    /// The cleanup pipeline deleted the workspace file. Queued writes are
+    /// cancelled and the removal is queued behind any in-flight write, so a
+    /// debounced persist cannot recreate the archive afterwards.
+    func discardPendingWrites() {
+        lock.lock()
+        let write = pendingWrite
+        pendingWrite = nil
+        pendingOperation = nil
+        write?.cancel()
+        lock.unlock()
+        queue.sync { try? FileManager.default.removeItem(at: fileURL) }
+        noteMutation()
+    }
+
     /// Test and shutdown callers can await durable storage without waiting on the UI actor.
     func flush() {
         lock.lock()

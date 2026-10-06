@@ -51,6 +51,16 @@ SimpleMole/Services/DeveloperShellProfiler.swift)
                 'try FileManager.default.trashItem(at: source, resultingItemURL: nil)'|\
                 'defer { try? FileManager.default.removeItem(at: staging) }') return 0 ;;
             esac ;;
+        # Nori 自清理：只删除应用自己声明的可再生存储——容量缓存文件、
+        # 分析清单 *.json、查重工作区归档与截图暂存目录。
+        SimpleMole/Services/DirectorySizeCache.swift)
+            [[ "$2" == 'try? FileManager.default.removeItem(at: cacheURL)' ]] && return 0 ;;
+        SimpleMole/Services/AnalysisInventoryCache.swift)
+            [[ "$2" == 'try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))' ]] && return 0 ;;
+        SimpleMole/Services/DuplicateScanWorkspace.swift)
+            [[ "$2" == 'queue.sync { try? FileManager.default.removeItem(at: fileURL) }' ]] && return 0 ;;
+        SimpleMole/AppState+NoriSelfCleanup.swift)
+            [[ "$2" == 'try FileManager.default.removeItem(at: URL(fileURLWithPath: path))' ]] && return 0 ;;
         *) return 1 ;;
     esac
     return 1

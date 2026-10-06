@@ -380,6 +380,14 @@ enum CleanupRiskPolicy {
                          reasonKey: "cleanup.risk.rebuildableCache")
         }
 
+        // Nori 自己留下的原子写孤儿临时文件按可再生缓存处理；其余支持目录
+        // 内容仍由下方的精确根清单认领。
+        if NoriOwnedStorage.isOrphanTemporaryFile(normalized, home: home) {
+            return .init(source: .core, risk: .safe, disposal: .permanentDelete,
+                         applyRoute: .genericTrash, activityGuard: .openFile,
+                         reasonKey: NoriOwnedStorage.reasonKey)
+        }
+
         if let reasonKey = userRebuildableReason(normalized, home: home) {
             return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                          applyRoute: .genericTrash, activityGuard: .openFile,
@@ -427,6 +435,32 @@ enum CleanupRiskPolicy {
     static func installer() -> CleanupPolicyDescriptor {
         warningDescriptor(source: .installer, route: .installerTrash,
                           reasonKey: "cleanup.risk.installer")
+    }
+
+    /// `~/.Trash` 的顶层条目是用户已经决定丢弃的整体（等价于 Finder「清空
+    /// 废纸篓」）。其子树不再接受 `.app`、数据库、持久目录名等内容类保护，
+    /// 只保留路径、设备、占用与权限等硬安全检查。返回条目根路径。
+    static func trashEntryRoot(containing path: String, homeDirectory: String) -> String? {
+        let trash = normalizedPathLiteral(homeDirectory) + "/.Trash"
+        let normalized = normalizedPathLiteral(path)
+        guard normalized.hasPrefix(trash + "/"),
+              let first = normalized.dropFirst(trash.count + 1)
+                .split(separator: "/", maxSplits: 1).first else { return nil }
+        return trash + "/" + first
+    }
+
+    /// 整体丢弃、不做内容类保护的根：废纸篓顶层条目，以及 SwiftUI 拖拽在
+    /// `~/Library/Caches/com.apple.SwiftUI.Drag-<UUID>` 留下的临时副本目录
+    /// （常含整份 .app 拷贝）。正在被读取的文件仍由占用检查保留。
+    static func discardedEntryRoot(containing path: String, homeDirectory: String) -> String? {
+        if let trash = trashEntryRoot(containing: path, homeDirectory: homeDirectory) { return trash }
+        let caches = normalizedPathLiteral(homeDirectory) + "/Library/Caches"
+        let normalized = normalizedPathLiteral(path)
+        guard normalized.hasPrefix(caches + "/"),
+              let first = normalized.dropFirst(caches.count + 1)
+                .split(separator: "/", maxSplits: 1).first,
+              first.hasPrefix("com.apple.SwiftUI.Drag-") else { return nil }
+        return caches + "/" + first
     }
 
     static func recommendedTrash() -> CleanupPolicyDescriptor {
@@ -981,6 +1015,27 @@ enum CleanupRiskPolicy {
                 return .init(source: .core, risk: .safe, disposal: .permanentDelete,
                               applyRoute: .genericTrash, activityGuard: .messenger,
                               reasonKey: "cleanup.risk.messengerCache")
+            }
+            return protectedDescriptor(source: .core, reasonKey: "cleanup.risk.durableIMData")
+        }
+
+        // --- 微信 4.x：xwechat_files/<账号>/ 下 cache、temp 是可再生缓存；
+        // msg/video、msg/attach 是聊天视频/图片，可重新下载但过期内容无法找回，
+        // 默认不勾选。db_storage、config、msg/file、all_users、Backup 等一律保护。
+        // 守卫用 openFile：数据库不在可清范围，正在写入的文件由删除边界的
+        // 占用检查保留，微信运行中也能清理闲置媒体。
+        let wechatRoot = home + "/" + WeChatStorage.filesRelativeRoot
+        if path == wechatRoot || path.hasPrefix(wechatRoot + "/") {
+            let components = path == wechatRoot
+                ? [] : splitComponents(String(path.dropFirst(wechatRoot.count + 1)))
+            if components.count >= 2, WeChatStorage.isAccountDirectory(components[0]) {
+                let relative = components.dropFirst().joined(separator: "/")
+                for leaf in WeChatStorage.leaves
+                    where relative == leaf.relative || relative.hasPrefix(leaf.relative + "/") {
+                    return .init(source: .core, risk: .safe, disposal: .permanentDelete,
+                                  applyRoute: .genericTrash, activityGuard: .openFile,
+                                  reasonKey: leaf.reasonKey)
+                }
             }
             return protectedDescriptor(source: .core, reasonKey: "cleanup.risk.durableIMData")
         }
@@ -1644,7 +1699,9 @@ enum CleanupRiskPolicy {
             (home + "/Library/Messages/StickerCache", "cleanup.risk.rebuildableCache"),
             (home + "/Library/Messages/Caches/Previews/Attachments", "cleanup.risk.rebuildableCache"),
             (home + "/Library/Messages/Caches/Previews/StickerCache", "cleanup.risk.rebuildableCache")
-        ]
+        ] + NoriOwnedStorage.fileTreeRoots(home: home).map {
+            ($0, NoriOwnedStorage.reasonKey)
+        }
     }
 
     private static func userRebuildableReason(_ path: String, home: String) -> String? {
@@ -1809,5 +1866,118 @@ enum CleanupRiskPolicy {
 
     private static func pathsOverlap(_ lhs: String, _ rhs: String) -> Bool {
         lhs == rhs || isStrictDescendant(lhs, of: rhs) || isStrictDescendant(rhs, of: lhs)
+    }
+}
+
+/// 微信 4.x 的账号存储布局：`xwechat_files/<账号>/`。只列可再生的叶子；
+/// 其余目录（消息库、配置、聊天文件、登录信息、备份）由策略整体保护。
+enum WeChatStorage {
+    static let filesRelativeRoot = "Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files"
+    static let cacheReasonKey = "cleanup.risk.messengerCache"
+    static let mediaReasonKey = "cleanup.risk.messengerMedia"
+    static let leaves: [(relative: String, label: String, reasonKey: String)] = [
+        ("cache", "WeChat Cache", cacheReasonKey),
+        ("temp", "WeChat Cache", cacheReasonKey),
+        ("msg/video", "WeChat Chat Videos", mediaReasonKey),
+        ("msg/attach", "WeChat Chat Images", mediaReasonKey)
+    ]
+    private static let sharedDirectories: Set<String> = ["all_users", "backup"]
+
+    static func isAccountDirectory(_ name: String) -> Bool {
+        !name.hasPrefix(".") && !sharedDirectories.contains(name.lowercased())
+    }
+}
+
+/// Nori 自身的可再生存储。只列确定可重建的内容；密钥、Shell 备份、剪贴板
+/// 历史与会话文件永远不在这里。
+enum NoriOwnedStorage {
+    static let displayName = "Nori"
+    static let reasonKey = "cleanup.risk.noriCache"
+    static let orphanMinimumAge: TimeInterval = 3600
+    /// `Data.write(atomic:)` 在同目录留下的临时文件片段标识。
+    private static let orphanMarker = ".sb-"
+    private static let screenshotPrefix = "com.nori.screenshot."
+
+    static func supportDirectory(home: String) -> String {
+        CleanupRiskPolicy.normalizedPathLiteral(home) + "/Library/Application Support/Nori"
+    }
+
+    static func legacySupportDirectories(home: String) -> [String] {
+        let base = CleanupRiskPolicy.normalizedPathLiteral(home) + "/Library/Application Support/"
+        return [base + "ForgeSweep", base + "SimpleMole"]
+    }
+
+    /// 走原生删除边界的根：DirectorySizes、Analysis、两个旧品牌目录。
+    static func fileTreeRoots(home: String) -> [String] {
+        let support = supportDirectory(home: home)
+        return [support + "/DirectorySizes", support + "/Analysis"]
+            + legacySupportDirectories(home: home)
+    }
+
+    /// 目录大小缓存与文件名索引目录；搜索索引由进程内 SQL 清空，不走原生 unlink。
+    static func searchIndexDirectory(home: String) -> String {
+        supportDirectory(home: home) + "/DirectoryIndex"
+    }
+
+    static func isSearchIndexPath(_ path: String, home: String) -> Bool {
+        let normalized = CleanupRiskPolicy.normalizedPathLiteral(path)
+        let root = searchIndexDirectory(home: home)
+        return normalized == root || normalized.hasPrefix(root + "/")
+    }
+
+    static func isScreenshotTemporaryPath(_ path: String,
+                                          temporaryDirectory: String = NSTemporaryDirectory()) -> Bool {
+        let normalized = CleanupRiskPolicy.normalizedPathLiteral(path)
+        return (normalized as NSString).deletingLastPathComponent
+                == CleanupRiskPolicy.normalizedPathLiteral(temporaryDirectory)
+            && (normalized as NSString).lastPathComponent.hasPrefix(screenshotPrefix)
+    }
+
+    /// 进程内执行、不进原生 unlink 的路径：DirectoryIndex 目录（连接常开、
+    /// *.sqlite 被拒绝）与临时目录下闲置超过 orphanMinimumAge 的截图暂存目录。
+    static func managedPaths(home: String, temporaryDirectory: String = NSTemporaryDirectory(),
+                             now: Date = Date()) -> [String] {
+        var result: [String] = []
+        let index = searchIndexDirectory(home: home)
+        var metadata = stat()
+        if lstat(index, &metadata) == 0 { result.append(index) }
+        let temporary = CleanupRiskPolicy.normalizedPathLiteral(temporaryDirectory)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: temporary) else {
+            return result
+        }
+        for name in names.sorted() {
+            let path = temporary + "/" + name
+            guard isScreenshotTemporaryPath(path, temporaryDirectory: temporary),
+                  lstat(path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR,
+                  now.timeIntervalSince(Date(timeIntervalSince1970: TimeInterval(metadata.st_mtimespec.tv_sec)))
+                    >= orphanMinimumAge else { continue }
+            result.append(path)
+        }
+        return result
+    }
+
+    static func isManagedPath(_ path: String, home: String) -> Bool {
+        isSearchIndexPath(path, home: home) || isScreenshotTemporaryPath(path)
+    }
+
+    /// 父目录 == Nori 支持目录、文件名含 ".sb-"、mtime 早于 minimumAge 的普通
+    /// 文件：原子写留下的孤儿临时文件。密钥、备份、剪贴板与会话文件不以此
+    /// 命名，且不在支持目录直属位置，天然排除在外。
+    static func isOrphanTemporaryFile(_ path: String, home: String, now: Date = Date(),
+                                      minimumAge: TimeInterval = 3600) -> Bool {
+        let normalized = CleanupRiskPolicy.normalizedPathLiteral(path)
+        guard (normalized as NSString).deletingLastPathComponent == supportDirectory(home: home),
+              (normalized as NSString).lastPathComponent.contains(orphanMarker) else { return false }
+        var metadata = stat()
+        guard lstat(normalized, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG else { return false }
+        let modified = Date(timeIntervalSince1970: TimeInterval(metadata.st_mtimespec.tv_sec))
+        return modified <= now && now.timeIntervalSince(modified) >= minimumAge
+    }
+
+    static func orphanTemporaryFiles(home: String, now: Date = Date()) -> [String] {
+        let support = supportDirectory(home: home)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: support) else { return [] }
+        return names.sorted().map { support + "/" + $0 }
+            .filter { isOrphanTemporaryFile($0, home: home, now: now) }
     }
 }

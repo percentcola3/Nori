@@ -106,6 +106,24 @@ struct DirectorySearchTests {
             _ = try await index.rebuild(roots: [URL(string: "https://example.com/files")!])
             fatalError("A non-file URL cannot become an index root")
         } catch DirectorySearchError.invalidRoot { }
+
+        // clear()：清理管道在进程内清空打开的索引；清空后可再次重建。
+        let clearedIndex = try DirectorySearchIndex(
+            databaseURL: temporary.appendingPathComponent("clear/files.sqlite"))
+        _ = try await clearedIndex.rebuild(roots: [root])
+        expect(try await clearedIndex.status().indexedItemCount > 0,
+               "clear fixture index was not built")
+        try await clearedIndex.clear()
+        let cleared = try await clearedIndex.status()
+        expect(cleared.indexedItemCount == 0 && cleared.roots.isEmpty && cleared.lastUpdated == nil,
+               "clear must empty files, pending_files and metadata")
+        expect(try await clearedIndex.search(query: "renamed").isEmpty,
+               "cleared index still served old rows")
+        let rebuilt = try await clearedIndex.rebuild(roots: [root])
+        expect(rebuilt.indexedItemCount > 0 && !rebuilt.isBuilding && rebuilt.lastUpdated != nil,
+               "rebuild after clear did not produce a fresh snapshot")
+        expect(try await clearedIndex.search(query: "renamed").map(\.url) == [renamed],
+               "rebuilt index is not searchable")
         print("PASS: persistent filename index, Unicode/literal queries, hidden ancestors, bounded results, symlink/package handling, incremental mutations, cancellation and atomic snapshots")
     }
 

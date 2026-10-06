@@ -442,7 +442,7 @@ final class AnalysisInventoryCache: @unchecked Sendable {
     private var snapshots: [AnalysisInventoryKind: AnalysisInventorySnapshot] = [:]
     private var reports: [AnalysisInventoryKind: AnalyzeReport] = [:]
     private var diskBrowser: AnalysisDiskBrowserInventory?
-    private static let version = 1
+    private static let version = 2
 
     private struct Payload: Codable {
         let version: Int
@@ -457,6 +457,27 @@ final class AnalysisInventoryCache: @unchecked Sendable {
 
     func restore() -> [AnalysisInventoryKind: AnalysisInventorySnapshot] {
         restoreState().snapshots
+    }
+
+    /// The cleanup pipeline deleted the Analysis inventory. The revision bump
+    /// rejects results from scans already in flight, so they cannot persist
+    /// stale snapshots again; only this cache's own *.json files are removed.
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        snapshots = [:]
+        reports = [:]
+        diskBrowser = nil
+        revision &+= 1
+        loaded = true
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+            where name.hasSuffix(".json") || name.hasSuffix(".cache") {
+            discard(name)
+        }
+    }
+
+    private func discard(_ name: String) {
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))
     }
 
     var currentRevision: UInt64 {
@@ -568,27 +589,33 @@ final class AnalysisInventoryCache: @unchecked Sendable {
         guard !loaded else { return }
         loaded = true
         for kind in AnalysisInventoryKind.allCases {
-            guard let data = try? Data(contentsOf: fileURL(kind)),
+            // 旧版明文 JSON（含全盘逐文件的 disk.json）不再解码，直接移除。
+            discard(kind.rawValue + ".json")
+            guard Self.persists(kind),
+                  let compressed = try? Data(contentsOf: fileURL(kind)),
+                  let data = try? (compressed as NSData).decompressed(using: .lzfse) as Data,
                   let payload = try? JSONDecoder().decode(Payload.self, from: data),
                   payload.version == Self.version, payload.snapshot.kind == kind,
                   payload.snapshot.home == home else { continue }
             snapshots[kind] = payload.snapshot
-            if kind == .disk {
-                let projection = AnalysisDiskBrowserInventory(snapshot: payload.snapshot)
-                diskBrowser = projection
-                reports[kind] = projection.report(for: payload.snapshot)
-            } else { reports[kind] = payload.snapshot.report }
+            reports[kind] = payload.snapshot.report
         }
     }
 
+    /// 全盘清单逐文件记录整个家目录，体积与文件数成正比：只保留在会话
+    /// 内存里，重启后重新扫描。分类清单体积有界，压缩后落盘。
+    private static func persists(_ kind: AnalysisInventoryKind) -> Bool { kind != .disk }
+
     private func fileURL(_ kind: AnalysisInventoryKind) -> URL {
-        directory.appendingPathComponent(kind.rawValue + ".json")
+        directory.appendingPathComponent(kind.rawValue + ".cache")
     }
 
     private func persist(_ snapshot: AnalysisInventorySnapshot) {
-        guard let data = try? JSONEncoder().encode(Payload(version: Self.version, snapshot: snapshot)) else { return }
+        guard Self.persists(snapshot.kind),
+              let data = try? JSONEncoder().encode(Payload(version: Self.version, snapshot: snapshot)),
+              let compressed = try? (data as NSData).compressed(using: .lzfse) else { return }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? data.write(to: fileURL(snapshot.kind), options: .atomic)
+        try? (compressed as Data).write(to: fileURL(snapshot.kind), options: .atomic)
     }
 }
 
@@ -752,10 +779,19 @@ struct AnalysisDiskBrowserInventory {
             AnalyzeEntry(name: path == homePath ? (path as NSString).lastPathComponent : path,
                          path: path, size: sizesByPath[path] ?? 0, isDir: true,
                          isPartial: partialPaths.contains(path) || snapshot.directories[path] == nil)
-        }.sorted { $0.size == $1.size ? $0.name < $1.name : $0.size > $1.size }
+        }.sorted { lhs, rhs in
+            // 用户数据在前，系统日志/临时/交换/缓存排在后面；组内按容量。
+            let lhsSystem = !isUserScope(lhs.path), rhsSystem = !isUserScope(rhs.path)
+            if lhsSystem != rhsSystem { return rhsSystem }
+            return lhs.size == rhs.size ? lhs.name < rhs.name : lhs.size > rhs.size
+        }
         for path in scopePaths where snapshot.directories[path] == nil {
             entriesByPath[path] = []
         }
+    }
+
+    private func isUserScope(_ path: String) -> Bool {
+        path == homePath || path.hasPrefix(homePath + "/")
     }
 
     private func entry(_ path: String, isDirectory: Bool) -> AnalyzeEntry {

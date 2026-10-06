@@ -398,7 +398,9 @@ final class NativeCore: @unchecked Sendable {
                         openFiles: openFiles, whitelist: whitelist,
                         excludingScannedRoots: excludingScannedRoots, control: control,
                         includingAdministratorRequired: includingAdministratorRequired
-                            && rebuildable.risk == .safe && rebuildable.disposal == .permanentDelete,
+                            && (rebuildable.risk == .safe && rebuildable.disposal == .permanentDelete
+                                || CleanupRiskPolicy.trashEntryRoot(containing: candidate.path,
+                                                                    homeDirectory: home.path) != nil),
                         onVisit: { path in
                             progress?.send(.init(phase: "native", completed: before,
                                 total: candidates.count, currentPath: path))
@@ -449,7 +451,9 @@ final class NativeCore: @unchecked Sendable {
                     (candidates[$0].path, measurements[$0].bytes)
                 })
                 var category = CleanupCategory(name: first.name, paths: indices.map { candidates[$0].path },
-                    bytes: sizes.values.reduce(0, &+), pathBytes: sizes, selected: first.policy.risk == .safe,
+                    bytes: sizes.values.reduce(0, &+), pathBytes: sizes,
+                    selected: first.policy.risk == .safe
+                        && !CleanupCategory.reviewOnlyReasonKeys.contains(first.policy.reasonKey),
                     source: first.policy.source, risk: first.policy.risk,
                     disposal: first.policy.disposal, applyRoute: first.policy.applyRoute,
                     activityGuard: first.policy.activityGuard, retention: first.retention,
@@ -846,7 +850,7 @@ final class NativeCore: @unchecked Sendable {
                 let checked = preflightCleanupPath(path, homeDirectory: homeDirectory,
                     openFiles: openFiles, whitelist: whitelist, control: control,
                     includingAdministratorRequired: includingAdministratorRequired
-                        && descriptor.risk == .safe && descriptor.disposal == .permanentDelete,
+                        && (descriptor.risk == .safe && descriptor.disposal == .permanentDelete || trashItem),
                     rootIsVerifiedRebuildable: catalogVerified)
                 deferred.append(contentsOf: checked.deferredPaths)
                 entries.append(contentsOf: checked.entries)
@@ -1011,22 +1015,32 @@ final class NativeCore: @unchecked Sendable {
             return result
         }
         onVisit?(path)
+        // 废纸篓条目由用户丢弃：跳过内容类保护，硬安全检查照旧。
+        let discarded = CleanupRiskPolicy.discardedEntryRoot(containing: path, homeDirectory: homeDirectory) != nil
         guard depth < 128, metadata.st_dev == device,
               CleanupRiskPolicy.systemCleanupKind(for: contentRoot, homeDirectory: homeDirectory) == nil
                 || CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: homeDirectory) != nil,
               !isCleanupLockItem(path),
-              !CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: homeDirectory,
+              discarded || !CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: homeDirectory,
                   rebuildableRoot: contentRoot, rootIsVerifiedRebuildable: rootIsVerifiedRebuildable,
                   rebuildableRootPolicy: contentPolicy),
               !directlyMatchesWhitelist(path, entries: whitelist),
               !Self.isCoveredByScannedRoot(path, roots: excludingScannedRoots) else { return result }
         let kind = metadata.st_mode & S_IFMT
-        guard kind == S_IFDIR || kind == S_IFREG else { return result }
+        guard kind == S_IFDIR || kind == S_IFREG || (discarded && kind == S_IFLNK) else { return result }
         var deletionAccess = cleanupDeletionAccess(path, metadata: metadata)
         if deletionAccess == .user, systemCleanupRequiresAdministrator(path, metadata: metadata, homeDirectory: homeDirectory) {
             deletionAccess = .administrator
         }
         guard deletionAccess != .blocked else { return result }
+        // 链接本身作为叶子 unlink，从不跟随到目标。
+        if kind == S_IFLNK {
+            result.requiresAdministrator = deletionAccess == .administrator
+            result.wholeTreeEligible = includingAdministratorRequired || !result.requiresAdministrator
+            result.measurement.bytes = UInt64(max(0, metadata.st_blocks)) * 512
+            result.measurement.files = 1
+            return result
+        }
         let directory = kind == S_IFDIR
         if CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: homeDirectory) != nil {
             var account = stat()
@@ -1104,7 +1118,7 @@ final class NativeCore: @unchecked Sendable {
             // These exact archives explicitly permit SQLite payloads. Reading
             // their header cannot improve classification and would change
             // atime before the separate administrator worker can inspect them.
-            if !CleanupRiskPolicy.isArchivedPowerlogPath(path)
+            if !discarded && !CleanupRiskPolicy.isArchivedPowerlogPath(path)
                 && !CleanupRiskPolicy.isPowerlogTelemetryPath(path) {
                 guard let database = sqliteHeader(in: fd, path: path, homeDirectory: homeDirectory),
                       !database else { return .init() }
@@ -1427,6 +1441,16 @@ final class NativeCore: @unchecked Sendable {
             "User Logs", .core, .openFile)
         add(home.appendingPathComponent("Library/DiagnosticReports", isDirectory: true),
             "Diagnostic Reports", .core, .openFile)
+        // Nori 自身的可再生存储：缓存清单目录走原生删除边界；DirectoryIndex
+        // 的 SQLite 与 screenshot 暂存目录由 AppState 在进程内执行，不在此列。
+        for path in NoriOwnedStorage.fileTreeRoots(home: home.path) {
+            add(URL(fileURLWithPath: path, isDirectory: true),
+                NoriOwnedStorage.displayName, .core, .openFile)
+        }
+        for path in NoriOwnedStorage.orphanTemporaryFiles(home: home.path) {
+            add(URL(fileURLWithPath: path, isDirectory: false),
+                NoriOwnedStorage.displayName, .core, .openFile)
+        }
         // DerivedData 按项目单元枚举：一个活跃项目不会冻结其他项目的
         // 构建产物回收；每个单元独立适用 7 天门槛。
         let derivedData = home.appendingPathComponent("Library/Developer/Xcode/DerivedData",
@@ -1709,6 +1733,19 @@ final class NativeCore: @unchecked Sendable {
             for user in directChildren(of: larkUsers) where !isSymlink(user) {
                 add(user.appendingPathComponent("profile_explorer", isDirectory: true),
                     "Lark Doc Cache", .core, .messenger)
+            }
+        }
+
+        // 微信 4.x 按账号枚举可再生叶子；消息库与聊天文件由策略保护。
+        let wechatFiles = home.appendingPathComponent(WeChatStorage.filesRelativeRoot, isDirectory: true)
+        if cleanupPathIsPhysical(wechatFiles, home: home) {
+            for account in directChildren(of: wechatFiles)
+                where !isSymlink(account) && isDirectory(account)
+                    && WeChatStorage.isAccountDirectory(account.lastPathComponent) {
+                for leaf in WeChatStorage.leaves {
+                    add(account.appendingPathComponent(leaf.relative, isDirectory: true),
+                        leaf.label, .core, .openFile)
+                }
             }
         }
 
@@ -2035,7 +2072,9 @@ final class NativeCore: @unchecked Sendable {
             let declaredLiveCleanup = liveCleanupTargets.contains(path)
                 || (permanent && CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home) != nil)
                 || isVerifiedBrowserCacheRoot(path, homeDirectory: home)
+            // 整体丢弃的根按原子单元删除，不走逐叶保留壳的活缓存路线。
             let liveCleanup = permanent && !allowApplicationBundle
+                && CleanupRiskPolicy.discardedEntryRoot(containing: path, homeDirectory: home) == nil
                 && !isProtectedCleanupItem(url, homeDirectory: home, rebuildableRoot: path,
                                            rootIsVerifiedRebuildable: declaredLiveCleanup)
                 && (declaredLiveCleanup
@@ -2086,6 +2125,7 @@ final class NativeCore: @unchecked Sendable {
                 return
             }
             guard verifiedTargets.contains(rawPath)
+                    || (permanent && CleanupRiskPolicy.discardedEntryRoot(containing: path, homeDirectory: home) != nil)
                     || !isProtectedCleanupItem(url, allowApplicationBundle: allowApplicationBundle,
                         homeDirectory: home, rebuildableRoot: liveCleanup ? path : nil,
                         rootIsVerifiedRebuildable: declaredLiveCleanup) else {
@@ -3558,7 +3598,8 @@ final class NativeCore: @unchecked Sendable {
         let path = CleanupRiskPolicy.normalizedPathLiteral(url.path)
         guard path != home.path, path.hasPrefix(home.path + "/")
             || CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: home.path) != nil else { return false }
-        return !isProtectedCleanupItem(url, homeDirectory: home.path, rebuildableRoot: path)
+        return CleanupRiskPolicy.discardedEntryRoot(containing: path, homeDirectory: home.path) != nil
+            || !isProtectedCleanupItem(url, homeDirectory: home.path, rebuildableRoot: path)
     }
 
     private func isProtectedCleanupItem(_ url: URL,
