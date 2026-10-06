@@ -29,6 +29,26 @@ set -e
 [[ "$status" -eq 23 ]] || fail "Perl fallback did not preserve child exit status"
 pass "Perl fallback preserves child exit status"
 
+# Calibrate Perl startup and fork/exec costs on this host with a blocking reap.
+# These costs vary substantially on virtualized runners and are not polling.
+start=$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%.6f", time')
+for _ in {1..20}; do
+    /usr/bin/perl -e '
+        use strict;
+        use warnings;
+        use POSIX qw(:sys_wait_h setpgid tcgetpgrp tcsetpgrp);
+        use Time::HiRes qw(time sleep);
+        my $pid = fork();
+        defined $pid or exit 125;
+        if ($pid == 0) { exec "/usr/bin/true"; exit 127; }
+        waitpid($pid, 0) == $pid or exit 125;
+        exit(WIFEXITED($?) ? WEXITSTATUS($?) : 125);
+    ' || fail "short-command startup baseline failed"
+done
+finish=$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%.6f", time')
+baseline_elapsed=$(/usr/bin/awk -v start="$start" -v finish="$finish" \
+    'BEGIN { printf "%.3f", finish - start }')
+
 start=$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%.6f", time')
 for _ in {1..20}; do
     run_with_timeout 2 /usr/bin/true || fail "short command failed"
@@ -36,11 +56,12 @@ done
 finish=$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%.6f", time')
 elapsed=$(/usr/bin/awk -v start="$start" -v finish="$finish" \
     'BEGIN { printf "%.3f", finish - start }')
-# The former fixed 100ms poll takes at least two seconds for this batch. Keep
-# enough headroom for a loaded CI host while still detecting that regression.
-/usr/bin/awk -v elapsed="$elapsed" 'BEGIN { exit !(elapsed < 1.5) }' ||
-    fail "short-command polling regressed (${elapsed}s for 20 commands)"
-pass "Perl fallback reaps short commands promptly (${elapsed}s for 20 commands)"
+# The former fixed 100ms poll adds about two seconds to this batch, beyond
+# startup costs. Keep the same 1.5s polling allowance after calibration.
+/usr/bin/awk -v elapsed="$elapsed" -v baseline="$baseline_elapsed" \
+    'BEGIN { exit !(elapsed - baseline < 1.5) }' ||
+    fail "short-command polling regressed (${elapsed}s for 20 commands; startup baseline ${baseline_elapsed}s)"
+pass "Perl fallback reaps short commands promptly (${elapsed}s for 20 commands; startup baseline ${baseline_elapsed}s)"
 
 start=$(/usr/bin/perl -MTime::HiRes=time -e 'printf "%.6f", time')
 set +e
