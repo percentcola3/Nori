@@ -95,17 +95,21 @@ enum AnalysisDiskScopes {
     static func normalizedRoots(_ roots: [String], home: String) -> [String] {
         let homePath = URL(fileURLWithPath: home).standardizedFileURL.path
         let physicalHome = physicalPath(homePath)
-        let candidates = Set(roots.map { path -> String in
+        let normalizedPaths: [String] = roots.map { path -> String in
             let physical = physicalPath(path)
             // Preserve persisted home keys, even when the caller's fixture or
             // home lives below /var rather than its /private/var spelling.
             if physical == physicalHome { return homePath }
             if physical.hasPrefix(physicalHome + "/") {
-                return homePath + physical.dropFirst(physicalHome.count)
+                return homePath + String(physical.dropFirst(physicalHome.count))
             }
             return physical
-        }).sorted {
-            return $0.utf8.count == $1.utf8.count ? $0 < $1 : $0.utf8.count < $1.utf8.count
+        }
+        let uniquePaths = Set(normalizedPaths)
+        let candidates = uniquePaths.sorted { lhs, rhs in
+            let lhsLength = lhs.utf8.count
+            let rhsLength = rhs.utf8.count
+            return lhsLength == rhsLength ? lhs < rhs : lhsLength < rhsLength
         }
         var identities = Set<AnalysisFileIdentity>()
         var accepted: [(path: String, fingerprint: AnalysisFileFingerprint?)] = []
