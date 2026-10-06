@@ -275,7 +275,7 @@ for arch in $BUILD_ARCHS; do
 
     cp "$SWIFT_SOURCE_DIR/Support/Info.plist" "$CONTENTS/Info.plist"
     /usr/libexec/PlistBuddy -c \
-        "Set :SUFeedURL https://github.com/percentcola3/sweep/releases/latest/download/appcast-$arch.xml" \
+        "Set :SUFeedURL https://github.com/percentcola3/Nori/releases/latest/download/appcast-$arch.xml" \
         "$CONTENTS/Info.plist"
 
     echo "==> Bundling bridge support libraries from $MOLE_SRC"

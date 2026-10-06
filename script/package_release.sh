@@ -63,7 +63,7 @@ if [[ -n "${SM_SPARKLE_PRIVATE_KEY_FILE:-}" ]]; then
     [[ -n "${SM_SPARKLE_BIN:-}" ]] || release_signing_error 'SM_SPARKLE_BIN is required when signing update feeds'
     [[ -n "${RELEASE_TAG:-}" ]] || release_signing_error 'RELEASE_TAG is required when signing update feeds'
     APPCAST_OPTIONS=(--tag "$RELEASE_TAG" --source-info "$ROOT_DIR/SimpleMole/Support/Info.plist"
-        --dist-dir "$ROOT_DIR/dist" --repository "${GH_REPO:-percentcola3/sweep}"
+        --dist-dir "$ROOT_DIR/dist" --repository "${GH_REPO:-percentcola3/Nori}"
         --sign-tool "$SM_SPARKLE_BIN/sign_update" --private-key-file "$SM_SPARKLE_PRIVATE_KEY_FILE")
     if [[ -f "$ROOT_DIR/docs/releases/$RELEASE_TAG.md" ]]; then
         APPCAST_OPTIONS+=(--notes-file "$ROOT_DIR/docs/releases/$RELEASE_TAG.md")

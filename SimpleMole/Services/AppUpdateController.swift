@@ -89,9 +89,9 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate,
         // Select the installed executable's architecture, including an Intel build under Rosetta.
         // Hardware detection could replace that build with an incompatible architecture.
         #if arch(arm64)
-        return "https://github.com/percentcola3/sweep/releases/latest/download/appcast-arm64.xml"
+        return "https://github.com/percentcola3/Nori/releases/latest/download/appcast-arm64.xml"
         #else
-        return "https://github.com/percentcola3/sweep/releases/latest/download/appcast-x86_64.xml"
+        return "https://github.com/percentcola3/Nori/releases/latest/download/appcast-x86_64.xml"
         #endif
     }
 

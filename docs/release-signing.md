@@ -73,10 +73,10 @@ The workflow exposes this secret only to the update-signing step, writes it to a
 
 The two feeds are served directly from the latest published stable GitHub Release:
 
-- `https://github.com/percentcola3/sweep/releases/latest/download/appcast-arm64.xml`
-- `https://github.com/percentcola3/sweep/releases/latest/download/appcast-x86_64.xml`
+- `https://github.com/percentcola3/Nori/releases/latest/download/appcast-arm64.xml`
+- `https://github.com/percentcola3/Nori/releases/latest/download/appcast-x86_64.xml`
 
-Each feed's enclosure uses an immutable tagged URL such as `https://github.com/percentcola3/sweep/releases/download/v1.0.1/Nori-arm64.dmg`. Drafts include their candidate feeds, but remain unavailable to installed clients until the maintainer publishes the stable Release. No Pages branch or post-publication write to the default branch is required. Before the first release with these assets is published, update checks can fail because the feeds do not exist; this is not evidence that the installed App is up to date. Versions without Sparkle need one manual installation of a version that includes it.
+Each feed's enclosure uses an immutable tagged URL such as `https://github.com/percentcola3/Nori/releases/download/v1.0.1/Nori-arm64.dmg`. Drafts include their candidate feeds, but remain unavailable to installed clients until the maintainer publishes the stable Release. No Pages branch or post-publication write to the default branch is required. Before the first release with these assets is published, update checks can fail because the feeds do not exist; this is not evidence that the installed App is up to date. Versions without Sparkle need one manual installation of a version that includes it.
 
 For local packaging with feeds, provide `RELEASE_TAG`, `SM_SPARKLE_BIN` (the pinned distribution's `bin` directory), and `SM_SPARKLE_PRIVATE_KEY_FILE` (the existing exported key outside `dist`). Without the private-key variable, `package_release.sh` retains its App/DMG-only behavior. After generation, feeds can be checked without the private key:
 
@@ -198,7 +198,7 @@ CI 使用 `macos-15` 和 `/Applications/Xcode_26.2.app/Contents/Developer`，串
 
 CI 只在归档签名步骤提供 `NORI_SPARKLE_PRIVATE_KEY`，用权限 0600 的临时文件交给官方 `sign_update --ed-key-file <文件> -p <DMG>`，结束后删除。`script/release_appcast.sh` 用 CryptoKit 和公开密钥独立验签，并校验实际归档长度、App 单一架构、版本和构建号、最低系统版本以及对应架构的 feed URL。任一架构失败都不会写入新的 feeds，上传范围始终不包含凭据。
 
-App 按编译架构读取 `https://github.com/percentcola3/sweep/releases/latest/download/appcast-arm64.xml` 或 `appcast-x86_64.xml`。feed 内下载链接使用不可变的标签地址，例如 `.../releases/download/v1.0.1/Nori-arm64.dmg`。草稿自带候选 feeds，但用户只会在维护者公开正式 Release 后读到它们，无需 Pages 分支或发布后写入主分支。首个包含 feed 的版本公开前，更新检查可能因文件不存在而失败，不能显示为“已经是最新版本”；不含 Sparkle 的旧版需先手动安装一次新版。
+App 按编译架构读取 `https://github.com/percentcola3/Nori/releases/latest/download/appcast-arm64.xml` 或 `appcast-x86_64.xml`。feed 内下载链接使用不可变的标签地址，例如 `.../releases/download/v1.0.1/Nori-arm64.dmg`。草稿自带候选 feeds，但用户只会在维护者公开正式 Release 后读到它们，无需 Pages 分支或发布后写入主分支。首个包含 feed 的版本公开前，更新检查可能因文件不存在而失败，不能显示为“已经是最新版本”；不含 Sparkle 的旧版需先手动安装一次新版。
 
 本机需要生成 feeds 时，在打包前设置 `RELEASE_TAG`、`SM_SPARKLE_BIN`（固定依赖的 `bin` 目录）及 `SM_SPARKLE_PRIVATE_KEY_FILE`（`dist` 外已经导出的原密钥文件）。不设置私钥变量时，`package_release.sh` 仍只打包 App/DMG。生成后的 feeds 可以运行上方的 `release_appcast.sh verify` 和 `test_release_appcast.sh` 验证，不需要私钥。Ed25519 更新签名不会让自签名 App 获得 Apple 公证，也不能保证系统隐私授权保留。
 

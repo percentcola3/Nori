@@ -221,7 +221,7 @@ def main():
     parser.add_argument("--public-config", type=Path, default=Path(__file__).resolve().parent.parent / "signing/update.plist")
     parser.add_argument("--tag")
     parser.add_argument("--previous-identity", type=Path)
-    parser.add_argument("--repository", default="percentcola3/sweep")
+    parser.add_argument("--repository", default="percentcola3/Nori")
     parser.add_argument("--dist-dir", type=Path)
     parser.add_argument("--archs", nargs="+", choices=ARCHITECTURES, default=list(ARCHITECTURES))
     parser.add_argument("--notes-file", type=Path)

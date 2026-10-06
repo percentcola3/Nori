@@ -43,7 +43,7 @@ with tempfile.TemporaryDirectory(prefix="nori-appcast-fixture-") as temporary:
         contents = dist / arch / "Nori.app" / "Contents"
         (contents / "MacOS").mkdir(parents=True)
         expect(["clang", "-target", arch + "-apple-macos13.0", str(c_source), "-o", str(contents / "MacOS" / "Nori")])
-        app_info = dict(info, SUFeedURL="https://github.com/percentcola3/sweep/releases/latest/download/appcast-" + arch + ".xml")
+        app_info = dict(info, SUFeedURL="https://github.com/percentcola3/Nori/releases/latest/download/appcast-" + arch + ".xml")
         (contents / "Info.plist").write_bytes(plistlib.dumps(app_info))
         (dist / ("Nori-" + arch + ".dmg")).write_bytes(b"archive fixture " + arch.encode() + b"\x00\xff" * 256)
     base = [sys.executable, str(root / "script/release_appcast.py")]
@@ -58,12 +58,12 @@ with tempfile.TemporaryDirectory(prefix="nori-appcast-fixture-") as temporary:
     parsed = ET.fromstring(originals["arm64"])
     item = parsed.find("channel/item")
     assert item.find("description").text == "<pre># Nori 1.2.3\n\n修复 &lt;脚本&gt; &amp; 更新。</pre>"
-    assert item.find("enclosure").get("url") == "https://github.com/percentcola3/sweep/releases/download/v1.2.3/Nori-arm64.dmg"
+    assert item.find("enclosure").get("url") == "https://github.com/percentcola3/Nori/releases/download/v1.2.3/Nori-arm64.dmg"
     checks += 2
 
     for attribute, value, reason in [
-        ("url", "https://github.com/percentcola3/sweep/releases/latest/download/Nori-arm64.dmg", "immutable tagged asset"),
-        ("url", "https://github.com/percentcola3/sweep/releases/download/v1.2.3/Nori-x86_64.dmg", "immutable tagged asset"),
+        ("url", "https://github.com/percentcola3/Nori/releases/latest/download/Nori-arm64.dmg", "immutable tagged asset"),
+        ("url", "https://github.com/percentcola3/Nori/releases/download/v1.2.3/Nori-x86_64.dmg", "immutable tagged asset"),
         ("url", "https://attacker.example/Nori-arm64.dmg", "immutable tagged asset"),
         ("length", "1", "length does not match"),
         (SPARKLE + "edSignature", base64.b64encode(bytes(64)).decode(), "signature verification failed"),
@@ -101,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix="nori-appcast-fixture-") as temporary:
     expect(generate, False, "differs from source metadata")
     arm_plist.write_bytes(plistlib.dumps(dict(arm_info, SUPublicEDKey=base64.b64encode(bytes(32)).decode())))
     expect(generate, False, "public update key differs")
-    arm_plist.write_bytes(plistlib.dumps(dict(arm_info, SUFeedURL="https://github.com/percentcola3/sweep/releases/latest/download/appcast-x86_64.xml")))
+    arm_plist.write_bytes(plistlib.dumps(dict(arm_info, SUFeedURL="https://github.com/percentcola3/Nori/releases/latest/download/appcast-x86_64.xml")))
     expect(generate, False, "feed URL does not match")
     arm_plist.write_bytes(plistlib.dumps(arm_info))
     public_config.write_bytes(plistlib.dumps({"PublicEDKey": base64.b64encode(bytes(32)).decode()}))
