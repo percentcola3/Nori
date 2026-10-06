@@ -234,7 +234,16 @@ struct CleanupScanTests {
         let deep = await NativeCore.shared.scanCleanup(homeDirectory: home.path, mode: .deep,
                                                      agentPresence: installedPresence)
         let deepPaths = Set(deep.categories.flatMap(\.paths))
-        expect(deepPaths.isSuperset(of: quickPaths), "deep scan lost quick results")
+        // Deep discovery can replace a manual whole-app review row with
+        // precise cache leaves. Only the safe inventory must be a superset.
+        let quickSafePaths = Set(quick.categories.filter { $0.risk == .safe }.flatMap(\.paths))
+        let deepSafePaths = Set(deep.categories.filter { $0.risk == .safe }.flatMap(\.paths))
+        expect(deepSafePaths.isSuperset(of: quickSafePaths),
+               "deep scan lost safe quick results: \(quickSafePaths.subtracting(deepSafePaths).sorted())")
+        for path in deepPaths {
+            expect(!deepPaths.contains { $0 != path && $0.hasPrefix(path + "/") },
+                   "overlapping deep scan work under \(path)")
+        }
         expect(deepPaths.contains(home.path + "/Library/Application Support/Example/Cache"), "deep support cache missing")
         // 未安装应用（含已不在废纸篓）的沙盒容器按“历史残留”整叶呈现：
         // Caches/Logs 叶子可回收，容器根与其余数据保持复核态。
@@ -1224,6 +1233,18 @@ struct CleanupScanTests {
         expect(!reviewCategories.contains { category in
             category.paths.contains { $0.contains("com.apple.") }
         }, "Apple data must not be offered")
+        let offeredOrphanCache = dataHome.appendingPathComponent(
+            "Library/Containers/\(gone)/Data/Library/Caches/unused")
+        try writeData("Library/Containers/\(gone)/Data/Library/Caches/unused")
+        let nonOverlappingReview = NativeCore.shared.appDataReviewCategories(
+            home: dataHome, offered: [offeredOrphanCache.path], whitelist: []).flatMap(\.paths)
+        expect(!nonOverlappingReview.contains {
+            $0 == offeredOrphanCache.path || offeredOrphanCache.path.hasPrefix($0 + "/")
+                || $0.hasPrefix(offeredOrphanCache.path + "/")
+        }, "an orphaned app's review root overlapped an already-offered cache descendant")
+        expect(nonOverlappingReview.contains(dataHome.appendingPathComponent(
+            "Library/Preferences/\(gone).plist").path),
+               "excluding an overlapping orphan root hid independent review data")
         let orphanedSettings = reviewCategories.first { $0.name == "Orphaned Settings" }
         expect(orphanedSettings?.paths == [dataHome.appendingPathComponent("Library/Application Support/com.example.tiny-gone").path]
                && orphanedSettings?.selected == false,

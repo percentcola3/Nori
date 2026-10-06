@@ -588,7 +588,9 @@ final class NativeCore: @unchecked Sendable {
                 let token = Self.appDataOwnerToken(path)
                 let reverseDNS = CleanupRiskPolicy.isValidReverseDNSOwner(token)
                 let orphaned = reverseDNS && Self.isOrphanedAppToken(token, installed: installed)
-                if overlapsOffered(path) && !orphaned {
+                // Already-offered cache descendants must never also appear
+                // inside a whole-app review item, even when the app is absent.
+                if overlapsOffered(path) {
                     guard root.lastPathComponent == "Application Support", isDirectory(child) else { continue }
                     for nested in directChildren(of: child) where admissible(nested) && !control.shouldStop {
                         let nestedPath = CleanupRiskPolicy.normalizedPathLiteral(nested.path)
