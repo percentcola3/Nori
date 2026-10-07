@@ -3350,9 +3350,30 @@ final class NativeCore: @unchecked Sendable {
             return DeletionPlan.Item(record: file.path, identity: identity)
         }
         let missing = cleanableFiles.count - items.count
-        var result = applyCleanup(items: items, permanent: false, homeDirectory: homeDirectory,
-                                  allowedRoots: [app.path], allowApplicationBundle: true,
-                                  verifiedTargets: includingData.intersection(reviewedPlan.dataPaths))
+        // Move the app first. If a surviving/respawned process still owns the
+        // bundle, retain its data instead of partially uninstalling a live app.
+        var result = ApplySummary(removed: 0, skipped: 0, failed: 0, messages: [])
+        if !appRemovedByBrew {
+            result = applyCleanup(items: items.filter { $0.record == app.path },
+                                  permanent: false, homeDirectory: homeDirectory,
+                                  allowedRoots: [app.path], allowApplicationBundle: true)
+            if !result.removedPaths.contains(app.path) || fileManager.fileExists(atPath: app.path) {
+                result = ApplySummary(removed: result.removed, skipped: result.skipped,
+                                      failed: max(result.failed, 1),
+                                      messages: result.messages + ["The application bundle was not removed."],
+                                      removedPaths: result.removedPaths)
+                return verifyUninstallResult(result, files: plan.files)
+            }
+        }
+        let residues = applyCleanup(items: items.filter { $0.record != app.path }, permanent: false,
+                                    homeDirectory: homeDirectory,
+                                    verifiedTargets: includingData.intersection(reviewedPlan.dataPaths))
+        result = ApplySummary(removed: result.removed + residues.removed,
+                              skipped: result.skipped + residues.skipped,
+                              failed: result.failed + residues.failed,
+                              messages: result.messages + residues.messages,
+                              removedPaths: result.removedPaths.union(residues.removedPaths),
+                              reclaimedBytes: result.reclaimedBytes &+ residues.reclaimedBytes)
         if appRemovedByBrew {
             result = ApplySummary(removed: result.removed + 1, skipped: result.skipped,
                                   failed: result.failed, messages: result.messages,

@@ -177,7 +177,8 @@ final class L10n: ObservableObject {
             _, featureValue in featureValue
         }
         let withUpdates = withMaintenance.merging(L10nUpdateTables.table(for: language)) { _, value in value }
-        let withTaskFeedback = withUpdates.merging(L10nTaskFeedbackTables.table(for: language)) { _, value in value }
+        let withSoftwareUpdates = withUpdates.merging(L10nSoftwareUpdateTables.table(for: language)) { _, value in value }
+        let withTaskFeedback = withSoftwareUpdates.merging(L10nTaskFeedbackTables.table(for: language)) { _, value in value }
         var result = withTaskFeedback.merging(L10nCleanupTaskTables.table(for: language)) { _, value in value }
         for feature in [L10nDeveloperShellTables.table(for: language), L10nDeveloperNetworkTables.table(for: language),
                         L10nDeveloperExistingTables.table(for: language), L10nDeveloperWorkspaceTables.table(for: language),

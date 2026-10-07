@@ -27,6 +27,7 @@ struct DeveloperCLIServiceTests {
         expect(snapshot.hasRelativePATHEntry, "Report relative and empty PATH entries without searching the current directory")
         let uv = entry("uv", in: snapshot)
         expect(uv.isFound && !uv.isInPATH && !uv.hasPATHShadowing, "An extra installation is not a PATH conflict")
+        expect(uv.preferredLocation?.source == "PATH / local", "A user bin directory is not a macOS system directory")
         expect(!entry("flutter", in: snapshot).isFound, "Represent tools outside the bounded discovery scope as not found")
         expect(DeveloperCLIService.inspectVersion(of: node, snapshot: snapshot) == .value("v20.1.0"), "Run the exact preferred executable with fixed version arguments")
         expect(DeveloperCLIService.inspectVersion(of: uv, snapshot: snapshot) == .value("uv 0.8.0"), "Read a version from a discovered extra installation")

@@ -1765,10 +1765,9 @@ test_native_cask_uninstall_contract() {
         "$native_core" | /usr/bin/grep -q 'autoremove'; then
         fail "native cask uninstall runs unreviewed brew autoremove"
     fi
-    if /usr/bin/sed -n '/func previewUninstall(_ app:/,/func uninstallJob(for app:/p' \
-        "$ROOT_DIR/SimpleMole/AppState.swift" | /usr/bin/grep -q 'confirmation = Confirmation'; then
-        fail "uninstall action still inserts an application confirmation dialog"
-    fi
+    /usr/bin/sed -n '/func previewUninstall(_ app:/,/func uninstallJob(for app:/p' \
+        "$ROOT_DIR/SimpleMole/AppState.swift" | /usr/bin/grep -q 'confirmation = Confirmation' || \
+        fail "uninstall action must confirm removal and forced process shutdown"
     pass "native Homebrew cask discovery, token validation and uninstall"
 }
 
@@ -1783,7 +1782,7 @@ test_uninstall_queue() {
         fail "uninstall row does not render the current app queue state"
     /usr/bin/grep -Fq 'state.cancelQueuedUninstall(id: job.id)' "$view_source" || \
         fail "pending uninstall cancellation is not exposed in the UI"
-    /usr/bin/grep -Fq 'uninstallQueue.enqueue(app: app, plan: plan)' "$state_source" || \
+    /usr/bin/grep -Fq 'uninstallQueue.enqueue(app: app, plan: plan, dataPaths: dataPaths)' "$state_source" || \
         fail "uninstall confirmation does not enqueue its captured request"
     /usr/bin/grep -Fq 'let target = job.app' "$state_source" || \
         fail "uninstall worker does not use the queued application identity"
@@ -2527,6 +2526,10 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     fi
     bash "$ROOT_DIR/script/test_login_item.sh" || fail "login item opt-in and system status tests"
     bash "$ROOT_DIR/script/test_uninstall_residue.sh" || fail "uninstall residue discovery and result tests"
+    bash "$ROOT_DIR/script/test_uninstall_processes.sh" || fail "confirmed uninstall process shutdown tests"
+    bash "$ROOT_DIR/script/test_cli_tools.sh" || fail "multi-ecosystem CLI inventory tests"
+    bash "$ROOT_DIR/script/test_software_updates.sh" || fail "application and CLI version checks"
+    bash "$ROOT_DIR/script/test_software_update_execution.sh" || fail "software update commands and running-process closure"
     bash "$ROOT_DIR/script/test_administrator_uninstall.sh" || fail "administrator uninstall and Trash safety tests"
 fi
 test_native_core_ownership_contract

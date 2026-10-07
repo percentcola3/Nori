@@ -30,6 +30,7 @@ struct TaskFeedbackView: View {
                     ScrollView {
                         Text(details.joined(separator: "\n\n"))
                             .font(.system(size: 11))
+                            .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }

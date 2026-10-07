@@ -9,6 +9,8 @@ extension AppState {
         guard !needle.isEmpty else { return commandLineTools }
         return commandLineTools.filter {
             $0.name.lowercased().contains(needle) || $0.manager.displayName.lowercased().contains(needle)
+                || ($0.installationSource?.lowercased().contains(needle) ?? false)
+                || ($0.agentInstallation?.name.lowercased().contains(needle) ?? false)
         }
     }
 
@@ -22,6 +24,7 @@ extension AppState {
                 CommandLineToolInventory.scan(home: home)
             }.value
             commandLineTools = tools
+            softwareUpdateResults = softwareUpdateResults.filter { !$0.key.hasPrefix("cli:") }
             commandLineToolsScanned = true
             isScanningCommandLineTools = false
             commandLineToolStatus = tools.isEmpty ? L10n.shared.t("cli.status.none")
@@ -35,7 +38,7 @@ extension AppState {
         commandLineToolBusyID = tool.id
         commandLineToolStatus = L10n.shared.tf("cli.status.uninstalling", tool.name)
         let home = NSHomeDirectory()
-        let agentInstallation = tool.agentInstallationID.flatMap { id in
+        let agentInstallation = tool.agentInstallation ?? tool.agentInstallationID.flatMap { id in
             agentCLIInstallations.first { $0.id == id }
         }
         Task {
@@ -51,15 +54,15 @@ extension AppState {
             commandLineToolBusyID = nil
             if outcome.succeeded {
                 commandLineTools.removeAll { $0.id == tool.id }
-                commandLineToolStatus = L10n.shared.tf("cli.status.uninstalled", tool.name, ByteFormat.format(tool.bytes))
                 if tool.agentID != nil { agentHasScanned = false }
                 resampleAfterMutation()
             } else {
-                commandLineToolStatus = L10n.shared.tf("cli.status.failed", tool.name)
-                presentTaskFailure(message: commandLineToolStatus,
-                                   details: outcome.messages.filter { !$0.isEmpty }, detailsAreLocalized: true)
+                presentTaskFailure(message: L10n.shared.tf("cli.status.failed", tool.name),
+                                   details: outcome.messages.filter { !$0.isEmpty })
             }
             if !outcome.messages.isEmpty { log(outcome.messages.joined(separator: "\n")) }
+            commandLineToolStatus = L10n.shared.tf("cli.status.count", commandLineTools.count,
+                ByteFormat.format(commandLineTools.reduce(0) { $0 &+ $1.bytes }))
         }
     }
 }

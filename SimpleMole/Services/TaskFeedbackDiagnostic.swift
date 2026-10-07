@@ -23,6 +23,15 @@ enum TaskFeedbackDiagnostic {
                 || text.hasSuffix("\n" + translated) { return text }
         }
         let statusPrefix = "Package manager exited with status "
+        let openPrefix = "Open by "
+        if text.hasPrefix(openPrefix), let separator = text.range(of: " (PID "),
+           let end = text.range(of: "): ", range: separator.upperBound..<text.endIndex) {
+            let name = String(text[text.index(text.startIndex, offsetBy: openPrefix.count)..<separator.lowerBound])
+            let pid = String(text[separator.upperBound..<end.lowerBound])
+            if Int32(pid) != nil {
+                return String(format: localize("uninstall.reason.openProcess"), name, pid)
+            }
+        }
         if text.hasPrefix(statusPrefix),
            let status = text.dropFirst(statusPrefix.count).split(separator: ".").first,
            Int(status) != nil {
@@ -62,6 +71,8 @@ enum TaskFeedbackDiagnostic {
     }
 
     private static let rules: [Rule] = [
+        .init(prefix: "Uninstall processes could not be stopped.", key: "uninstall.reason.stop"),
+        .init(prefix: "The application bundle was not removed.", key: "uninstall.reason.bundle"),
         .init(prefix: "Quit running Agent owners before uninstalling CLI: ", key: "task.reason.runningApps"),
         .init(prefix: "Kept Agent resource while its owner is running (", key: "task.reason.runningApps"),
         .init(prefix: "Skipped while owning application is running: ", key: "task.reason.runningApps"),

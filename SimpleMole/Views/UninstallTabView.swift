@@ -2,14 +2,13 @@ import AppKit
 import SwiftUI
 
 /// Single-level app uninstaller. The row owns its optional file drawer; the
-/// uninstall action goes straight into the serialized background queue and
-/// never navigates away or opens an app-level confirmation dialog.
+/// uninstall action confirms removal and forced process shutdown before
+/// entering the serialized background queue.
 struct UninstallTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isListPresented = false
-    @State private var showsResultDetails = false
 
     private var isActive: Bool {
         let pages = state.visiblePages
@@ -74,6 +73,14 @@ struct UninstallTabView: View {
                 .frame(width: 220)
                 .accessibilityIdentifier("uninstall-segment")
             searchField
+            Button { state.checkSoftwareUpdates() } label: {
+                Label(l10n.t(state.isCheckingSoftwareUpdates ? "software.updates.checking" : "software.updates.check"),
+                      systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(SecondaryButtonStyle())
+            .controlSize(.small)
+            .disabled(state.isCheckingSoftwareUpdates || state.isScanningApps || state.isScanningCommandLineTools
+                      || state.uninstallQueue.hasWork || state.commandLineToolBusyID != nil || state.softwareUpdatingID != nil)
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
@@ -102,45 +109,23 @@ struct UninstallTabView: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.surface2))
     }
 
-    // Show current work and failures; successful uninstalls leave no notice.
+    // Completed jobs belong in the log, never in a persistent page banner.
     private var statusJob: UninstallJob? {
         if state.isScanningApps && !state.uninstallQueue.hasWork { return nil }
         return state.uninstallQueue.activeJob
             ?? state.uninstallQueue.jobs.first { $0.state.isPending }
-            ?? state.uninstallQueue.jobs.last { $0.state == .failed }
     }
 
-    private var statusRow: some View {
+    @ViewBuilder private var statusRow: some View {
+        if statusJob != nil || (state.isScanningApps && !state.appListStatus.isEmpty) {
         HStack(spacing: 8) {
             if let job = statusJob {
-                if job.state == .failed {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.warning)
-                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(job.message?.components(separatedBy: "\n").first ?? job.app.name)
                         .font(.system(size: 11, weight: .medium))
                         .lineLimit(1)
                     UninstallJobStateLabel(job: job,
                                            position: state.uninstallQueuePosition(for: job.app))
-                }
-                if job.state.isFinished, let message = job.message {
-                    Button { showsResultDetails.toggle() } label: {
-                        Image(systemName: "info.circle")
-                    }
-                    .buttonStyle(MoleIconButtonStyle(size: 22))
-                    .accessibilityLabel(l10n.t("uninstall.resultDetails"))
-                    .popover(isPresented: $showsResultDetails) {
-                        ScrollView {
-                            Text(message)
-                                .font(.system(size: 11))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(14)
-                        }
-                        .frame(width: 480, height: 220)
-                    }
                 }
             } else {
                 if !state.appListStatus.isEmpty {
@@ -153,7 +138,7 @@ struct UninstallTabView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
-        .onChange(of: statusJob?.id) { _ in showsResultDetails = false }
+        }
     }
 
     @ViewBuilder
@@ -184,10 +169,15 @@ struct UninstallTabView: View {
                             plan: state.uninstallPlan(for: app),
                             job: state.uninstallJob(for: app),
                             queuePosition: state.uninstallQueuePosition(for: app),
+                            update: state.softwareUpdateResults[SoftwareUpdateService.appKey(app)],
+                            isCheckingUpdate: state.softwareUpdateCheckingIDs.contains(SoftwareUpdateService.appKey(app)),
+                            updatingID: state.softwareUpdatingID,
+                            externalPending: state.softwareUpdateHandoffIDs.contains(SoftwareUpdateService.appKey(app)),
                             dataSelection: Binding(
                                 get: { state.uninstallDataSelections[app.id] ?? [] },
                                 set: { state.uninstallDataSelections[app.id] = $0.isEmpty ? nil : $0 }),
                             onCancel: { job in state.cancelQueuedUninstall(id: job.id) },
+                            onUpdate: { state.updateSoftware(app) },
                             onUninstall: { state.previewUninstall(app) })
                     }
                 }
@@ -203,8 +193,13 @@ private struct UninstallAppRow: View {
     let plan: UninstallPlan?
     let job: UninstallJob?
     let queuePosition: Int?
+    let update: SoftwareUpdateResult?
+    let isCheckingUpdate: Bool
+    let updatingID: String?
+    let externalPending: Bool
     @Binding var dataSelection: Set<String>
     let onCancel: (UninstallJob) -> Void
+    let onUpdate: () -> Void
     let onUninstall: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -234,6 +229,15 @@ private struct UninstallAppRow: View {
                     .help(space.map { L10n.shared.tf("uninstall.space.footprint",
                         ByteFormat.format($0.totalBytes), ByteFormat.format($0.optionalDataBytes)) } ?? "")
                 disclosureButton
+                if update?.state == .available {
+                    Button(action: onUpdate) {
+                        Label(L10n.shared.t(updatingID == SoftwareUpdateService.appKey(app)
+                            ? "software.install.working" : "software.install.action"), systemImage: "arrow.down.circle")
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .controlSize(.small)
+                    .disabled(updatingID != nil || job?.state.isActive == true || job?.state.isPending == true)
+                }
                 if let job, job.state.isPending || job.state.isActive {
                     HStack(spacing: 5) {
                         UninstallJobStateLabel(job: job, position: queuePosition)
@@ -254,6 +258,7 @@ private struct UninstallAppRow: View {
                     }
                     .buttonStyle(DangerButtonStyle())
                     .controlSize(.small)
+                    .disabled(updatingID != nil)
                 }
             }
             .padding(.horizontal, 12)
@@ -296,6 +301,7 @@ private struct UninstallAppRow: View {
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            SoftwareUpdateBadge(result: update, isChecking: isCheckingUpdate, showsInstalled: true, externalPending: externalPending)
             if let job, job.state == .failed {
                 UninstallJobStateLabel(job: job, position: queuePosition)
             }
@@ -552,7 +558,7 @@ private struct CommandLineToolsSection: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .buttonStyle(MoleIconButtonStyle(size: 22))
-                .disabled(state.isScanningCommandLineTools || state.commandLineToolBusyID != nil)
+                .disabled(state.isScanningCommandLineTools || state.commandLineToolBusyID != nil || state.isCheckingSoftwareUpdates || state.softwareUpdatingID != nil)
                 .help(l10n.t("common.rescan"))
                 .accessibilityLabel(l10n.t("common.rescan"))
             }
@@ -586,7 +592,7 @@ private struct CommandLineToolsSection: View {
         } message: {
             Text(pendingUninstall.map { tool in
                 l10n.tf(tool.agentID == nil ? "cli.uninstall.confirm.message" : "cli.uninstall.confirm.agentMessage",
-                        tool.manager.displayName, tool.path)
+                        tool.installationSource ?? tool.manager.displayName, tool.path)
             } ?? "")
         }
     }
@@ -604,7 +610,7 @@ private struct CommandLineToolsSection: View {
                     if !tool.version.isEmpty {
                         Text(tool.version).font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
                     }
-                    DevTag(text: tool.manager.displayName)
+                    DevTag(text: tool.installationSource ?? tool.manager.displayName)
                     if !tool.installedOnRequest {
                         DevTag(text: l10n.t("cli.tag.dependency"))
                     }
@@ -620,6 +626,17 @@ private struct CommandLineToolsSection: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 8)
+            SoftwareUpdateBadge(result: state.softwareUpdateResults[SoftwareUpdateService.toolKey(tool)],
+                                isChecking: state.softwareUpdateCheckingIDs.contains(SoftwareUpdateService.toolKey(tool)))
+            if state.softwareUpdateResults[SoftwareUpdateService.toolKey(tool)]?.state == .available {
+                Button { state.updateSoftware(tool) } label: {
+                    Label(l10n.t(state.softwareUpdatingID == SoftwareUpdateService.toolKey(tool)
+                        ? "software.install.working" : "software.install.action"), systemImage: "arrow.down.circle")
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .controlSize(.small)
+                .disabled(state.isBusy || state.isCheckingSoftwareUpdates || state.isScanningCommandLineTools)
+            }
             if tool.agentID != nil {
                 Button { state.jump(to: .agents) } label: {
                     Label(l10n.t("cli.agentData"), systemImage: "arrow.up.forward")
@@ -628,8 +645,11 @@ private struct CommandLineToolsSection: View {
                 .controlSize(.small)
                 .help(l10n.t("cli.agentData.hint"))
             }
-            SizeBadge(text: ByteFormat.format(tool.bytes), prominent: false)
-            if busy {
+            SizeBadge(text: tool.sizeIsKnown ? ByteFormat.format(tool.bytes) : "—", prominent: false)
+            if tool.manager == .local && !tool.canUninstall {
+                Text(l10n.t("software.tools.readOnly"))
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+            } else if busy {
                 ProgressView().controlSize(.small)
             } else {
                 Button { pendingUninstall = tool } label: {

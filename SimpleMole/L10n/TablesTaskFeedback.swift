@@ -337,7 +337,10 @@ enum L10nTaskFeedbackTables {
         precondition(summaryValues.count == summaryKeys.count, "Task summary translation count mismatch")
         let remainingValues = remainingTranslations[language] ?? []
         precondition(remainingValues.count == remainingKeys.count, "Remaining task translation count mismatch")
+        let uninstallValues = uninstallTranslations[language] ?? []
+        precondition(uninstallValues.count == uninstallKeys.count, "Uninstall task translation count mismatch")
         return Dictionary(uniqueKeysWithValues: zip(keys, values))
+            .merging(Dictionary(uniqueKeysWithValues: zip(uninstallKeys, uninstallValues))) { _, value in value }
             .merging(Dictionary(uniqueKeysWithValues: zip(developerKeys, developerValues))) { _, value in value }
             .merging(Dictionary(uniqueKeysWithValues: zip(summaryKeys, summaryValues))) { _, value in value }
             .merging(Dictionary(uniqueKeysWithValues: zip(remainingKeys, remainingValues))) { _, value in value }
@@ -660,6 +663,130 @@ enum L10nTaskFeedbackTables {
             "Bazı öğeler korundu. Ayrıntıları inceleyin, gerekirse ilgili agent’ları kapatın ve yeniden tarayın.",
             "%@ kaldırıldı. Kalan verileri bulmak için Temizleme sayfasında tarama yapın.",
             "Tarama kısmen tamamlandı. Mevcut sonuçları inceleyin."
+        ]
+    ]
+
+private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm.message","uninstall.confirm.running","uninstall.confirm.force","uninstall.status.closing","uninstall.reason.stop","uninstall.reason.bundle","uninstall.reason.openProcess"]
+    private static let uninstallTranslations: [AppLanguage: [String]] = [
+        .en: [
+            "Uninstall %@?",
+            "Remove the application, its caches and the selected app data. Shared and protected items stay in place.",
+            "%@ or its background processes are still running. Continuing will force quit them; unsaved work may be lost.",
+            "Any app processes running when this queued uninstall begins will be force quit. Unsaved work may be lost.",
+            "Closing %@…",
+            "Some app processes could not be safely stopped. Nothing was removed. Close them and retry.",
+            "The application remains installed.",
+            "In use by %@ (PID %@)."
+        ],
+        .zhHans: [
+            "卸载 %@？",
+            "将移除应用、缓存和勾选的应用数据。共享或受保护的项目会保留。",
+            "%@ 或其后台进程仍在运行。继续卸载会强制结束这些进程，未保存的内容可能丢失。",
+            "任务开始时若应用或后台进程正在运行，会强制结束；未保存的内容可能丢失。",
+            "正在结束 %@ 的进程…",
+            "部分应用进程无法安全结束，尚未移除任何项目。请退出这些进程后重试。",
+            "应用仍然保留，尚未卸载。",
+            "占用进程：%@（PID %@）。"
+        ],
+        .zhHant: [
+            "解除安裝 %@？",
+            "將移除應用程式、快取及勾選的應用程式資料。共用或受保護的項目會保留。",
+            "%@ 或其背景程序仍在執行。繼續解除安裝會強制結束這些程序，未儲存的內容可能遺失。",
+            "工作開始時若應用程式或背景程序仍在執行，將強制結束；未儲存的內容可能遺失。",
+            "正在結束 %@ 的程序…",
+            "部分應用程式程序無法安全結束，尚未移除任何項目。請結束這些程序後重試。",
+            "應用程式仍然保留，尚未解除安裝。",
+            "使用中的程序：%@（PID %@）。"
+        ],
+        .ja: [
+            "%@ を削除しますか？",
+            "アプリ、キャッシュ、選択したアプリデータを削除します。共有項目と保護された項目は保持します。",
+            "%@ またはそのバックグラウンドプロセスが実行中です。続行すると強制終了し、未保存の作業が失われる可能性があります。",
+            "待機中の削除が始まる時点で実行中のアプリプロセスは強制終了します。未保存の作業が失われる可能性があります。",
+            "%@ のプロセスを終了中…",
+            "一部のアプリプロセスを安全に終了できませんでした。項目は削除していません。プロセスを終了してから再試行してください。",
+            "アプリはまだインストールされています。",
+            "使用中のプロセス：%@（PID %@）。"
+        ],
+        .ko: [
+            "%@을(를) 제거할까요?",
+            "앱, 캐시, 선택한 앱 데이터를 제거합니다. 공유 항목과 보호된 항목은 유지됩니다.",
+            "%@ 또는 백그라운드 프로세스가 실행 중입니다. 계속하면 강제 종료되며 저장하지 않은 작업이 손실될 수 있습니다.",
+            "대기 중인 제거가 시작될 때 실행 중인 앱 프로세스는 강제 종료됩니다. 저장하지 않은 작업이 손실될 수 있습니다.",
+            "%@ 프로세스 종료 중…",
+            "일부 앱 프로세스를 안전하게 종료하지 못했습니다. 제거된 항목은 없습니다. 프로세스를 종료한 후 다시 시도하세요.",
+            "앱이 아직 설치되어 있습니다.",
+            "사용 중인 프로세스: %@ (PID %@)."
+        ],
+        .de: [
+            "%@ deinstallieren?",
+            "Die App, ihre Caches und die ausgewählten App-Daten werden entfernt. Gemeinsame und geschützte Elemente bleiben erhalten.",
+            "%@ oder zugehörige Hintergrundprozesse laufen noch. Beim Fortfahren werden sie sofort beendet; ungespeicherte Arbeit kann verloren gehen.",
+            "Beim Start der vorgemerkten Deinstallation werden laufende App-Prozesse sofort beendet. Ungespeicherte Arbeit kann verloren gehen.",
+            "Prozesse von %@ werden beendet…",
+            "Einige App-Prozesse konnten nicht sicher beendet werden. Es wurde nichts entfernt. Beende diese Prozesse und versuche es erneut.",
+            "Die App ist weiterhin installiert.",
+            "Verwendet von %@ (PID %@)."
+        ],
+        .fr: [
+            "Désinstaller %@ ?",
+            "L’application, ses caches et les données sélectionnées seront supprimés. Les éléments partagés ou protégés seront conservés.",
+            "%@ ou ses processus d’arrière-plan sont encore actifs. Continuer forcera leur arrêt ; le travail non enregistré peut être perdu.",
+            "Les processus actifs de l’app seront forcés à quitter au début de cette désinstallation en attente. Le travail non enregistré peut être perdu.",
+            "Arrêt des processus de %@…",
+            "Certains processus de l’app n’ont pas pu être arrêtés en toute sécurité. Rien n’a été supprimé. Fermez-les, puis réessayez.",
+            "L’application est toujours installée.",
+            "Utilisé par %@ (PID %@)."
+        ],
+        .es: [
+            "¿Desinstalar %@?",
+            "Se eliminarán la aplicación, sus cachés y los datos seleccionados. Se conservarán los elementos compartidos y protegidos.",
+            "%@ o sus procesos en segundo plano siguen activos. Continuar forzará su cierre; puedes perder el trabajo sin guardar.",
+            "Al comenzar esta desinstalación en espera se forzará el cierre de los procesos activos de la app. Puedes perder el trabajo sin guardar.",
+            "Cerrando procesos de %@…",
+            "No se pudieron detener algunos procesos de la app de forma segura. No se eliminó nada. Ciérralos e inténtalo de nuevo.",
+            "La aplicación sigue instalada.",
+            "En uso por %@ (PID %@)."
+        ],
+        .pt: [
+            "Desinstalar %@?",
+            "O aplicativo, seus caches e os dados selecionados serão removidos. Itens compartilhados ou protegidos serão mantidos.",
+            "%@ ou seus processos em segundo plano ainda estão ativos. Continuar forçará o encerramento; o trabalho não salvo poderá ser perdido.",
+            "Os processos ativos do app serão encerrados à força quando esta desinstalação na fila começar. O trabalho não salvo poderá ser perdido.",
+            "Encerrando processos de %@…",
+            "Alguns processos do app não puderam ser encerrados com segurança. Nada foi removido. Encerre-os e tente novamente.",
+            "O aplicativo continua instalado.",
+            "Em uso por %@ (PID %@)."
+        ],
+        .it: [
+            "Disinstallare %@?",
+            "L’app, le sue cache e i dati selezionati saranno rimossi. Gli elementi condivisi o protetti saranno mantenuti.",
+            "%@ o i suoi processi in background sono ancora attivi. Continuando verranno terminati forzatamente; il lavoro non salvato potrebbe andare perso.",
+            "I processi attivi dell’app saranno terminati forzatamente all’avvio di questa disinstallazione in coda. Il lavoro non salvato potrebbe andare perso.",
+            "Chiusura dei processi di %@…",
+            "Alcuni processi dell’app non possono essere terminati in sicurezza. Nessun elemento è stato rimosso. Chiudili e riprova.",
+            "L’app è ancora installata.",
+            "In uso da %@ (PID %@)."
+        ],
+        .ru: [
+            "Удалить %@?",
+            "Будут удалены приложение, его кэши и выбранные данные. Общие и защищённые объекты останутся.",
+            "%@ или его фоновые процессы ещё работают. Продолжение принудительно завершит их; несохранённая работа может быть потеряна.",
+            "При запуске этого удаления из очереди работающие процессы приложения будут принудительно завершены. Несохранённая работа может быть потеряна.",
+            "Завершение процессов %@…",
+            "Некоторые процессы приложения нельзя безопасно завершить. Ничего не удалено. Завершите их и повторите попытку.",
+            "Приложение по-прежнему установлено.",
+            "Используется процессом %@ (PID %@)."
+        ],
+        .tr: [
+            "%@ kaldırılsın mı?",
+            "Uygulama, önbellekleri ve seçilen uygulama verileri kaldırılır. Paylaşılan ve korunan öğeler tutulur.",
+            "%@ veya arka plan işlemleri hâlâ çalışıyor. Devam edilirse zorla kapatılır; kaydedilmemiş çalışmalar kaybolabilir.",
+            "Sıradaki bu kaldırma başladığında çalışan uygulama işlemleri zorla kapatılır. Kaydedilmemiş çalışmalar kaybolabilir.",
+            "%@ işlemleri kapatılıyor…",
+            "Bazı uygulama işlemleri güvenli şekilde durdurulamadı. Hiçbir şey kaldırılmadı. İşlemleri kapatıp tekrar deneyin.",
+            "Uygulama hâlâ yüklü.",
+            "%@ tarafından kullanılıyor (PID %@)."
         ]
     ]
 

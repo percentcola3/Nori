@@ -14,6 +14,7 @@ struct UninstallJob: Identifiable, Equatable {
     let id: UUID
     let app: UninstallApp
     let plan: UninstallPlan?
+    let dataPaths: Set<String>
     fileprivate(set) var state: State = .queued
     fileprivate(set) var message: String?
 }
@@ -36,10 +37,10 @@ struct UninstallQueue {
     }
 
     @discardableResult
-    mutating func enqueue(app: UninstallApp, plan: UninstallPlan?) -> UUID? {
+    mutating func enqueue(app: UninstallApp, plan: UninstallPlan?, dataPaths: Set<String> = []) -> UUID? {
         guard !app.appIdentity.isEmpty, !containsPendingOrActive(app) else { return nil }
         jobs.removeAll { $0.state.isFinished && $0.app.id == app.id }
-        let job = UninstallJob(id: UUID(), app: app, plan: plan)
+        let job = UninstallJob(id: UUID(), app: app, plan: plan, dataPaths: dataPaths)
         jobs.append(job)
         trimHistory()
         return job.id

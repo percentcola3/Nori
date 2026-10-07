@@ -20,6 +20,12 @@ extension Color {
     static let surface1 = Color.gray
     static let surface2 = Color.gray
     static let surface3 = Color.gray
+    static let selectionFill = Color.blue
+}
+struct ListRowSurface: ViewModifier {
+    var selected = false
+    var grouped = false
+    func body(content: Content) -> some View { content }
 }
 struct ListRowGlass: ViewModifier {
     var selected = false

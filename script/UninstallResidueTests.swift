@@ -165,6 +165,21 @@ struct UninstallResidueTests {
         expect(!automatic(linkedPlan, "Library/Application Support/LinkedFixture/Cache"), "Followed symlink ancestor")
 
         // Simulate the filesystem outcome, without using Trash or touching installed apps.
+        let helper = app.path + "/Contents/Frameworks/crashpad"
+        let blockedCore = NativeCore(cleanupOpenFileRecordsProbe: {
+            [.init(pid: 12345, process: "chrome_crashpad_handler", descriptor: "txt", access: "r", path: helper)]
+        })
+        let selectedData: Set<String> = [preferences, storage]
+        let blockedPlan = fresh.includingData(selectedData)
+        let blocked = blockedCore.applyUninstall(app, plan: fresh, homeDirectory: home.path,
+                                                includingData: selectedData)
+        expect(blocked.removed == 0 && !blocked.succeeded
+               && blockedPlan.files.filter { !$0.informational }.allSatisfy { fm.fileExists(atPath: $0.path) },
+               "A blocked app bundle must retain every cache and selected data path")
+        let unknownCore = NativeCore(cleanupOpenFileRecordsProbe: { nil })
+        let unknown = unknownCore.applyUninstall(app, plan: fresh, homeDirectory: home.path)
+        expect(unknown.removed == 0 && !unknown.succeeded,
+               "Unknown occupancy must stop before any app data is moved")
         try fm.removeItem(atPath: app.path)
         let partial = core.verifyUninstallResult(.init(removed: 1, skipped: 1, failed: 0, messages: []),
                                                 files: fresh.files)

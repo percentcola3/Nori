@@ -367,6 +367,12 @@ final class AppState: ObservableObject {
     @Published var commandLineToolsScanned = false
     @Published var commandLineToolStatus = ""
     @Published var commandLineToolBusyID: String?
+    @Published var softwareUpdateResults: [String: SoftwareUpdateResult] = [:]
+    @Published var softwareUpdateCheckingIDs = Set<String>()
+    @Published var isCheckingSoftwareUpdates = false
+    @Published var softwareUpdatingID: String?
+    @Published var softwareUpdateHandoffIDs = Set<String>()
+    let softwareUpdateService = SoftwareUpdateService()
     @Published var appListStatus: String
     @Published var isScanningApps = false
     @Published private(set) var isRestoringInstalledApps = true
@@ -884,6 +890,7 @@ final class AppState: ObservableObject {
 
     var isBusyExcludingUninstall: Bool {
         isScanning || isApplying || isSlimming
+            || softwareUpdatingID != nil
             || isDeveloperCommandRunning
             || isDeveloperConfigurationWriting
             || isScanningEnv
@@ -3088,7 +3095,11 @@ final class AppState: ObservableObject {
         }
     }
 
+    private var uninstallConfirmationGeneration = UUID()
+
     func previewUninstall(_ app: UninstallApp) {
+        guard softwareUpdatingID == nil else { return }
+        guard confirmation == nil, taskNotice == nil else { return }
         guard !uninstallQueue.containsPendingOrActive(app) else { return }
         guard authorize(.uninstall(app: app), presentingPermissionCenter: true) else { return }
         guard !app.appIdentity.isEmpty else {
@@ -3103,12 +3114,29 @@ final class AppState: ObservableObject {
         let plan = cached.flatMap {
             $0.includesProtectedAppData && !$0.fileIdentities.isEmpty ? $0 : nil
         }
-        // The row's destructive action is already explicit. Do not insert an
-        // application-level confirmation between the click and queue entry;
-        // the queue keeps the request's identity snapshot and NativeCore
-        // performs the final identity and path checks before any side effect.
-        guard uninstallQueue.enqueue(app: app, plan: plan) != nil else { return }
-        startNextUninstallIfPossible()
+        let dataPaths = uninstallDataSelections[app.id] ?? []
+        let generation = UUID()
+        uninstallConfirmationGeneration = generation
+        Task {
+            let processes = await Task.detached(priority: .utility) {
+                UninstallProcessController.processes(for: app, samples: ProcessSampler.shared.sample())
+            }.value
+            guard uninstallConfirmationGeneration == generation, confirmation == nil,
+                  taskNotice == nil, !uninstallQueue.containsPendingOrActive(app) else { return }
+            var message = l10n.t("uninstall.confirm.message")
+            if !processes.isEmpty {
+                message += "\n\n" + l10n.tf("uninstall.confirm.running", app.name)
+                message += "\n" + Set(processes.map(\.name)).sorted().joined(separator: ", ")
+            } else {
+                message += "\n\n" + l10n.t("uninstall.confirm.force")
+            }
+            confirmation = Confirmation(title: l10n.tf("uninstall.confirm.title", app.name),
+                message: message, confirmLabel: l10n.t("uninstall.action")) { [weak self] in
+                    guard let self else { return }
+                    guard self.uninstallQueue.enqueue(app: app, plan: plan, dataPaths: dataPaths) != nil else { return }
+                    self.startNextUninstallIfPossible()
+                }
+        }
     }
 
     func uninstallJob(for app: UninstallApp) -> UninstallJob? {
@@ -3171,6 +3199,13 @@ final class AppState: ObservableObject {
             finishUninstall(job, succeeded: false, message: l10n.t("uninstall.queue.permissionLost"))
             return
         }
+        statusText = l10n.tf("uninstall.status.closing", target.name)
+        guard await UninstallProcessController.stop(target) else {
+            finishUninstall(job, succeeded: false,
+                message: l10n.tf("status.uninstallPartial", target.name),
+                details: ["Uninstall processes could not be stopped."])
+            return
+        }
         // The cached plan is for presentation only. Apps create caches after
         // inventory scans and while requests wait in the queue; rescan the
         // same captured application identity immediately before removal.
@@ -3180,10 +3215,16 @@ final class AppState: ObservableObject {
             finishUninstall(job, succeeded: false, message: l10n.tf("log.uninstallPreviewFail", target.name))
             return
         }
+        guard await UninstallProcessController.stop(target) else {
+            finishUninstall(job, succeeded: false,
+                message: l10n.tf("status.uninstallPartial", target.name),
+                details: ["Uninstall processes could not be stopped."])
+            return
+        }
         uninstallQueue.markRunning(job.id)
         statusText = l10n.tf("status.uninstalling", target.name)
         log(l10n.tf("log.uninstallApply", target.name))
-        let includingData = (uninstallDataSelections[target.id] ?? []).intersection(plan.dataPaths)
+        let includingData = job.dataPaths.intersection(plan.dataPaths)
         let result: NativeCore.ApplySummary
         if plan.needsAdmin && !plan.isBrewCask {
             let elevated = await AdministratorUninstallService.apply(target)
@@ -3226,23 +3267,24 @@ final class AppState: ObservableObject {
                 !$0.hasPrefix("Open-file check ") && !$0.hasPrefix("Retained app data or shared/system item:")
                     && !$0.hasPrefix("Uninstall residue remains:")
             }
-            if !reasons.isEmpty { detail += "\n" + reasons.joined(separator: "\n") }
+            let localizedReasons = TaskFeedbackDiagnostic.localized(reasons)
+            if let reason = localizedReasons.first { detail += "\n" + reason }
             if !result.remainingPaths.isEmpty {
                 detail += "\n" + l10n.tf("uninstall.remaining", result.remainingPaths.count)
-                    + "\n" + result.remainingPaths.joined(separator: "\n")
             }
             finishUninstall(job, succeeded: false,
-                            message: l10n.tf("status.uninstallPartial", target.name) + "\n" + detail)
+                            message: l10n.tf("status.uninstallPartial", target.name) + "\n" + detail,
+                            details: reasons + result.remainingPaths)
         }
     }
 
-    private func finishUninstall(_ job: UninstallJob, succeeded: Bool, message: String) {
+    private func finishUninstall(_ job: UninstallJob, succeeded: Bool, message: String, details: [String] = []) {
         uninstallQueue.finish(job.id, succeeded: succeeded, message: message)
         noteHeaderReaction(succeeded ? .success : .attention)
         resampleAfterMutation()
         statusText = message
         log(message)
-        if !succeeded { presentTaskFailure(message: message) }
+        if !succeeded { presentTaskFailure(message: message, details: details) }
     }
 
     /// Watches the roots where app installs and uninstalls become visible.

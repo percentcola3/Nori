@@ -13,16 +13,19 @@ final class CleanupScanControl: @unchecked Sendable {
     private var lastDirectory = ""
     private var lastDirectorySentAt = -Double.infinity
     private let onDirectory: (@Sendable (String) -> Void)?
+    private let cancellationSource: CleanupScanControl?
     let startedAt = ProcessInfo.processInfo.systemUptime
     let totalBudget: TimeInterval
     let directoryBudget: TimeInterval
 
     init(mode: CleanupScanMode, totalBudget: TimeInterval? = nil,
          directoryBudget: TimeInterval? = nil,
-         onDirectory: (@Sendable (String) -> Void)? = nil) {
+         onDirectory: (@Sendable (String) -> Void)? = nil,
+         cancellationSource: CleanupScanControl? = nil) {
         self.totalBudget = totalBudget ?? (mode == .quick ? 45 : .infinity)
         self.directoryBudget = directoryBudget ?? (mode == .quick ? 8 : .infinity)
         self.onDirectory = onDirectory
+        self.cancellationSource = cancellationSource
     }
 
     /// Bounded delivery across concurrent workers; callbacks run outside the lock.
@@ -38,7 +41,8 @@ final class CleanupScanControl: @unchecked Sendable {
 
     func cancel() { lock.lock(); cancelled = true; lock.unlock() }
     var isCancelled: Bool {
-        lock.lock(); defer { lock.unlock() }; return cancelled
+        lock.lock(); let local = cancelled; lock.unlock()
+        return local || (cancellationSource?.isCancelled ?? false)
     }
     var elapsed: TimeInterval { ProcessInfo.processInfo.systemUptime - startedAt }
     var shouldStop: Bool { isCancelled || elapsed >= totalBudget }

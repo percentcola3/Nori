@@ -47,6 +47,17 @@ struct TaskFeedbackLocalizationTests {
                        "Primary failure feedback does not fall back to English in \(language.rawValue)")
             }
             let localize: (String) -> String = { table[$0] ?? $0 }
+            expect(table["uninstall.confirm.title"]!.components(separatedBy: "%@").count == 2
+                   && table["uninstall.confirm.running"]!.components(separatedBy: "%@").count == 2,
+                   "Uninstall confirmation and running warning preserve app names in \(language.rawValue)")
+            let uninstall = TaskFeedbackDiagnostic.localized([
+                "Open by chrome_crashpad_handler (PID 4044): /Applications/Cursor.app/Contents/Frameworks/a-very-long-path",
+                "The application bundle was not removed.",
+                "Uninstall processes could not be stopped."
+            ], using: localize)
+            expect(uninstall == [String(format: table["uninstall.reason.openProcess"]!, "chrome_crashpad_handler", "4044"),
+                                 table["uninstall.reason.bundle"]!, table["uninstall.reason.stop"]!],
+                   "Uninstall feedback explains the blocker without raw English or framework paths in \(language.rawValue)")
             let path = "/Users/fixture/a folder/技能: source"
             let messages = TaskFeedbackDiagnostic.localized([
                 "Open-file check 0.03s; available=yes",

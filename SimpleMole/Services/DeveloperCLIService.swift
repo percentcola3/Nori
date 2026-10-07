@@ -54,6 +54,10 @@ struct DeveloperCLISnapshot: Equatable, Sendable {
 /// the PATH of an interactive terminal.
 enum DeveloperCLIService {
     static let tools: [DeveloperCLITool] = [
+        .init(id: "bash", name: "Bash", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
+        .init(id: "zsh", name: "Zsh", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
+        .init(id: "fish", name: "Fish", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
+        .init(id: "nu", name: "Nushell", category: .utilities, versionArguments: ["--version"], allowsVersionProbe: true),
         .init(id: "node", name: "Node.js", category: .web, versionArguments: ["--version"], allowsVersionProbe: true),
         .init(id: "npm", name: "npm", category: .web, versionArguments: ["--version"], allowsVersionProbe: true),
         .init(id: "pnpm", name: "pnpm", category: .web, versionArguments: ["--version"], allowsVersionProbe: true),
@@ -252,7 +256,9 @@ enum DeveloperCLIService {
 
     private static func source(for path: String) -> String {
         let names = [("/.nvm/", "nvm"), ("/fnm/", "fnm"), ("/.nodenv/", "nodenv"), ("/.pyenv/", "pyenv"), ("/.volta/", "Volta"), ("/.asdf/", "asdf"), ("/.sdkman/", "SDKMAN"), ("/Java/JavaVirtualMachines/", "JDK"), ("/mise/", "mise"), ("/.cargo/", "rustup / Cargo"), ("/.bun/", "Bun"), ("/.deno/", "Deno"), ("/Android/sdk/", "Android SDK"), ("/opt/homebrew/", "Homebrew (Apple Silicon)"), ("/usr/local/", "/usr/local"), ("/usr/bin/", "macOS"), ("/bin/", "macOS")]
-        return names.first(where: { path.contains($0.0) })?.1 ?? "PATH / local"
+        return names.first(where: { prefix, name in
+            name == "macOS" ? path.hasPrefix(prefix) : path.contains(prefix)
+        })?.1 ?? "PATH / local"
     }
 
     private static func canProbe(_ tool: DeveloperCLITool, at location: DeveloperCLILocation) -> Bool {
@@ -276,6 +282,7 @@ enum DeveloperCLIService {
         return ["PATH": directories.joined(separator: ":"), "HOME": snapshot.homePath,
                 "LANG": "C", "LC_ALL": "C", "HOMEBREW_NO_AUTO_UPDATE": "1",
                 "COREPACK_ENABLE_NETWORK": "0", "PYTHONNOUSERSITE": "1",
+                "RUSTUP_AUTO_INSTALL": "0", "GOTOOLCHAIN": "local",
                 "CHECKPOINT_DISABLE": "1", "GH_NO_UPDATE_NOTIFIER": "1",
                 "NO_COLOR": "1", "TERM": "dumb"]
     }
