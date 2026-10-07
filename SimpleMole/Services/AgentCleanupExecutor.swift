@@ -502,6 +502,9 @@ enum AgentCleanupExecutor {
         let paths: [String]
         private let servers: [AgentMCPServer]
         private let callback: ((Int, Int, String) -> Void)?
+        // Native cleanup reports from parallel workers. Keep state changes and
+        // callback delivery together so observers see a serial, monotonic stream.
+        private let lock = NSRecursiveLock()
         private var completedPaths = Set<String>()
         private var lastPath: String
         private var lastSentAt = Date.distantPast
@@ -516,6 +519,8 @@ enum AgentCleanupExecutor {
         }
 
         func complete(path: String) {
+            lock.lock()
+            defer { lock.unlock() }
             let covered = paths.filter { $0 == path || $0.hasPrefix(path + "/") }
             let previousCount = completedPaths.count
             completedPaths.formUnion(covered)
@@ -527,6 +532,8 @@ enum AgentCleanupExecutor {
         /// Leaf traversal updates the current file without pretending another
         /// logical selection completed. Keep UI delivery to at most 10 Hz.
         func current(path: String, force: Bool = false) {
+            lock.lock()
+            defer { lock.unlock() }
             guard force || path != lastPath else { return }
             let now = Date()
             guard force || now.timeIntervalSince(lastSentAt) >= 0.1 else { return }
@@ -536,6 +543,8 @@ enum AgentCleanupExecutor {
         }
 
         func finish() {
+            lock.lock()
+            defer { lock.unlock() }
             callback?(total, total, servers.last?.configPath ?? lastPath)
         }
     }

@@ -563,6 +563,37 @@ struct AgentCatalogTests {
                    home + "/Library/Application Support/Codex/Cache/entry", home + "/.codex/log/idle.log"])
                && codexSafeCategories.flatMap(\.paths).allSatisfy(AgentCatalog.exists),
                "freshly verified Codex caches/logs were blocked by a broad persistent-data prefix: \(codexCacheCleanup.summary.messages)")
+        // Exercise parallel root completion and leaf updates repeatedly. A slow
+        // observer widens the overlap window and must still receive serial events.
+        for round in 0..<16 {
+            for root in codexSafeCategories.flatMap(\.paths) {
+                for leaf in 0..<8 {
+                    try Data("fixture".utf8).write(to: URL(fileURLWithPath: root + "/stress-\(leaf)"))
+                }
+            }
+            let observerLock = NSLock()
+            var activeCallbacks = 0
+            var overlappingCallbacks = false
+            var events: [(Int, Int)] = []
+            let stressCleanup = AgentCleanupExecutor.execute(codexSafeCategories,
+                running: runningClients, home: home, permanent: true, presence: sandboxPresence,
+                onProgress: { completed, total, _ in
+                    observerLock.lock()
+                    activeCallbacks += 1
+                    overlappingCallbacks = overlappingCallbacks || activeCallbacks > 1
+                    events.append((completed, total))
+                    observerLock.unlock()
+                    Thread.sleep(forTimeInterval: 0.001)
+                    observerLock.lock()
+                    activeCallbacks -= 1
+                    observerLock.unlock()
+                })
+            expect(!overlappingCallbacks && events.first?.0 == 0 && events.last?.0 == 3
+                   && events.allSatisfy { $0.1 == 3 }
+                   && zip(events, events.dropFirst()).allSatisfy { $0.0.0 <= $0.1.0 }
+                   && stressCleanup.summary.removedPaths.count == 24,
+                   "parallel Agent progress overlapped, regressed or lost a root in round \(round)")
+        }
         let unknownRuntime = AgentCleanupExecutor.blockingResources([cacheCategory, selectedState],
             running: .unavailable, home: home, presence: sandboxPresence)
         expect(unknownRuntime.paths == [home + "/.codex/state_5.sqlite"] && unknownRuntime.owners.isEmpty
