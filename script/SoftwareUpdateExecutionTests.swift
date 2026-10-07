@@ -40,6 +40,8 @@ struct SoftwareUpdateExecutionTests {
             path: root.path + "/pnpm/global/5/node_modules/fixture-cli"), latest: "2.0", home: root.path, executable: manager.path)!
         precondition(pnpmCommand.arguments.suffix(2) == ["--global-dir", root.path + "/pnpm/global/5"]
                      && pnpmCommand.expectedRoot == root.path + "/pnpm/global/5/node_modules")
+        precondition(SoftwareUpdateExecution.toolCommand(npm, latest: "v2.0", home: root.path, executable: manager.path) != nil,
+                     "A stable version with a v prefix retains the existing update contract")
         let ran = await SoftwareUpdateExecution.run(command)
         let recorded = try String(contentsOf: log, encoding: .utf8)
         precondition(ran.succeeded && recorded == "install\n--global\n@fixture/tool@2.0\n")
@@ -56,6 +58,35 @@ struct SoftwareUpdateExecutionTests {
         for (type, name, path, expected) in cases {
             precondition(SoftwareUpdateExecution.toolCommand(tool(type, name: name, path: path), latest: "2.0",
                 home: root.path, executable: manager.path)?.arguments == expected)
+        }
+        // Update and uninstall must share the captured manager, environment
+        // and root probe across every supported package manager.
+        let pairedTools = [npm, tool(.pnpm, name: "@fixture/tool",
+            path: root.path + "/pnpm/global/5/node_modules/@fixture/tool")]
+            + cases.map { tool($0.0, name: $0.1, path: $0.2) }
+        for var installation in pairedTools {
+            installation.managerExecutable = manager.path
+            let update = SoftwareUpdateExecution.toolCommand(installation, latest: "2.0", home: root.path)!
+            let remove = CLIManagedCommands.command(installation, action: .uninstall, home: root.path)!
+            precondition(update.executable == remove.executable && update.environment == remove.environment
+                         && update.expectedRoot == remove.expectedRoot && update.rootProbe == remove.rootProbe,
+                         "Both actions must bind the same installation, not the active PATH installation")
+            precondition(remove.environment["PATH"]?.hasPrefix(manager.deletingLastPathComponent().path + ":") == true
+                         && remove.environment["HOME"] == root.path)
+        }
+        precondition(command.matchesExpectedRoot("  " + global.path + "\n"))
+        for invalidRoot in ["relative/root", "", "/wrong/root", global.path + "-other"] {
+            precondition(!command.matchesExpectedRoot(invalidRoot), "Root checks reject relative, empty and neighboring installations")
+        }
+        var privatePackage = npm
+        privatePackage.supportsPublicRegistryUpdates = false
+        privatePackage.managerExecutable = manager.path
+        precondition(SoftwareUpdateExecution.toolCommand(privatePackage, latest: "2.0", home: root.path) == nil
+                     && CLIManagedCommands.command(privatePackage, action: .uninstall, home: root.path) != nil,
+                     "Registry update permission does not change a private package's uninstall route")
+        for version in ["--latest", "2.0;touch injected", "2.0\n--force"] {
+            precondition(CLIManagedCommands.command(npm, action: .update(version: version), home: root.path,
+                executable: manager.path) == nil, "The shared builder rejects malformed version selectors")
         }
         for name in ["--all", "fixture;touch injected", "bad name"] {
             precondition(SoftwareUpdateExecution.toolCommand(tool(.npm, name: name, path: global.path + "/" + name),
@@ -88,8 +119,8 @@ struct SoftwareUpdateExecutionTests {
         try fm.createDirectory(at: binaries, withIntermediateDirectories: true)
         let target = binaries.appendingPathComponent("target")
         let other = root.appendingPathComponent("other")
-        try fm.copyItem(atPath: "/bin/sleep", toPath: target.path)
-        try fm.copyItem(atPath: "/bin/sleep", toPath: other.path)
+        try OwnedProcessFixture.makeSleeper(at: target)
+        try OwnedProcessFixture.makeSleeper(at: other)
         let a = Process(), b = Process()
         a.executableURL = target; a.arguments = ["20"]
         b.executableURL = other; b.arguments = ["20"]

@@ -25,6 +25,9 @@ swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Services/DiskAnalysisWorker.swift" \
     "$ROOT_DIR/SimpleMole/Services/MediaSlimmer.swift" \
     "$WORK/NativeCore.swift" \
+    "$ROOT_DIR/SimpleMole/Services/ApplicationSizeMeasurer.swift" \
+    "$ROOT_DIR/SimpleMole/Services/ApplicationInventoryService.swift" \
+    "$ROOT_DIR/SimpleMole/Services/UninstallPlanningService.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
     "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
     "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift" \

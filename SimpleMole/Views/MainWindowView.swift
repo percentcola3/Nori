@@ -50,7 +50,6 @@ struct MainWindowView: View {
             }
         }
         .environment(\.liquidNamespace, dialogNamespace)
-        .environment(\.liquidDialogID, activeDialog)
         .frame(minWidth: 760, idealWidth: 940, minHeight: 620, idealHeight: 720)
         .background { GlassSurface().ignoresSafeArea() }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))

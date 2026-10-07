@@ -193,20 +193,14 @@ final class NativeCore: @unchecked Sendable {
         }
     }
 
-    struct OptimizeReport: Sendable {
-        let tasks: [OptimizeTask]
-        let finishedAt: Date
-    }
-
     private static let cleanupLogger = Logger(subsystem: "com.nori.app", category: "cleanup")
     let fileManager = FileManager.default
+    private let applicationInventory: any ApplicationInventoryReading
+    private let applicationSizer: any ApplicationSizeMeasuring
     private let sizeKeys: Set<URLResourceKey> = [
         .isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey,
         .fileAllocatedSizeKey, .totalFileAllocatedSizeKey, .fileSizeKey
     ]
-    private let maxTraversalEntries = 200_000
-    private let maxTraversalSeconds: TimeInterval = 3
-    private let largeFileThreshold: UInt64 = 100 * 1024 * 1024
     private let cleanupOpenFileProbe: (() -> Set<String>?)?
     private let cleanupOpenFileRecordsProbe: (() -> [OpenFileRecord]?)?
 
@@ -241,24 +235,22 @@ final class NativeCore: @unchecked Sendable {
         }
     }
 
+    /// Shared by secure preflight and live-cache hard-link accounting.
     private struct FileIdentity: Hashable {
         let device: UInt64
         let inode: UInt64
     }
 
-    private struct TreeMeasure {
-        var bytes: UInt64 = 0
-        var files: Int = 0
-        var largeFiles: [AnalyzeReport.LargeFile] = []
-        var truncated = false
-    }
-
     /// The optional probe keeps fixture tests deterministic; production uses
     /// the user-scoped lsof snapshot, and an unavailable probe always refuses.
     init(cleanupOpenFileProbe: (() -> Set<String>?)? = nil,
-         cleanupOpenFileRecordsProbe: (() -> [OpenFileRecord]?)? = nil) {
+         cleanupOpenFileRecordsProbe: (() -> [OpenFileRecord]?)? = nil,
+         applicationInventory: (any ApplicationInventoryReading)? = nil,
+         applicationSizer: any ApplicationSizeMeasuring = BoundedApplicationSizeMeasurer()) {
         self.cleanupOpenFileProbe = cleanupOpenFileProbe
         self.cleanupOpenFileRecordsProbe = cleanupOpenFileRecordsProbe
+        self.applicationSizer = applicationSizer
+        self.applicationInventory = applicationInventory ?? NativeApplicationInventory(sizer: applicationSizer)
     }
 
     // MARK: Cleanup
@@ -2917,144 +2909,41 @@ final class NativeCore: @unchecked Sendable {
 
     // MARK: Analyze
 
-    func scanAnalyze(path: String, overview: Bool,
-                     control: CleanupScanControl = CleanupScanControl(mode: .deep),
-                     progress: ((AnalyzeReport) -> Void)? = nil) async -> AnalyzeReport {
-        await Task.detached(priority: .utility) {
-            DiskAnalysisWorker.scan(path, control: control, progress: progress)
-        }.value
-    }
-
     // MARK: Uninstall
 
     func scanInstalledApps(homeDirectory: String = NSHomeDirectory()) async -> [UninstallApp] {
-        await Task.detached(priority: .utility) { [self] in
-            let home = URL(fileURLWithPath: homeDirectory, isDirectory: true).standardizedFileURL
-            let roots = self.applicationRoots(home: home)
-            return self.installedApps(in: roots)
+        let inventory = applicationInventory
+        return await Task.detached(priority: .utility) {
+            inventory.installedApps(in: inventory.roots(home: URL(fileURLWithPath: homeDirectory).standardizedFileURL))
         }.value
     }
 
-    /// Scan canonical roots once; names and Bundle IDs are not unique installs.
     func installedApps(in roots: [(URL, String)]) -> [UninstallApp] {
-        var apps: [UninstallApp] = []
-        var seen = Set<String>()
-        for (root, source) in uniqueApplicationRoots(roots) {
-            for item in self.directChildren(of: root) {
-                guard item.pathExtension.lowercased() == "app",
-                      !self.isSymlink(item),
-                      let metadata = self.applicationMetadata(at: item),
-                      !metadata.bundleID.isEmpty,
-                      metadata.bundleID != Bundle.main.bundleIdentifier,
-                      !metadata.bundleID.hasPrefix("com.apple."),
-                      let identity = applicationDirectoryIdentity(item),
-                      seen.insert(identity).inserted else { continue }
-                let bytes = self.directorySize(item)
-                apps.append(UninstallApp(
-                    name: metadata.name,
-                    bundleID: metadata.bundleID,
-                    source: source,
-                    path: item.path,
-                    size: ByteFormat.format(bytes)))
-            }
-        }
-        return apps.sorted {
-            let lhs = ByteFormat.parse($0.size)
-            let rhs = ByteFormat.parse($1.size)
-            if lhs != rhs { return lhs > rhs }
-            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-        }
+        applicationInventory.installedApps(in: roots)
     }
 
-    /// Installer images commonly contain Applications -> /Applications.
-    /// Resolve every ancestor before enumeration and keep the first source label.
-    private func uniqueApplicationRoots(_ roots: [(URL, String)]) -> [(URL, String)] {
-        var seen = Set<String>()
-        return roots.compactMap { root, source in
-            let resolved = root.resolvingSymlinksInPath().standardizedFileURL
-            guard let identity = applicationDirectoryIdentity(resolved),
-                  seen.insert(identity).inserted else { return nil }
-            return (resolved, source)
-        }
-    }
-
-    private func applicationDirectoryIdentity(_ url: URL) -> String? {
-        var metadata = stat()
-        guard Darwin.lstat(url.path, &metadata) == 0,
-              metadata.st_mode & S_IFMT == S_IFDIR else { return nil }
-        return "\(metadata.st_dev):\(metadata.st_ino)"
-    }
-
-    /// Enumerate application locations without relying on the Mole inventory
-    /// script.  External volumes are included only when macOS reports them as
-    /// mounted; hidden volumes and the current app bundle are never traversed.
     private func applicationRoots(home: URL) -> [(URL, String)] {
-        var roots: [(URL, String)] = [
-            (URL(fileURLWithPath: "/Applications", isDirectory: true), "Applications"),
-            (URL(fileURLWithPath: "/System/Applications", isDirectory: true), "System Applications"),
-            (home.appendingPathComponent("Applications", isDirectory: true), "User Applications"),
-            (home.appendingPathComponent("Library/Application Support/Setapp/Applications",
-                                         isDirectory: true), "Setapp"),
-            (home.appendingPathComponent("Library/Application Support/Steam/steamapps/common",
-                                         isDirectory: true), "Steam")
-        ]
-        // Package-installed app bundles are occasionally placed outside the
-        // normal Applications folders. Include these roots when present; the
-        // bundle and Info.plist identities are still required before display
-        // or removal.
-        for (path, label) in [("/usr/local", "Package install"), ("/opt", "Package install")] {
-            let url = URL(fileURLWithPath: path, isDirectory: true)
-            if fileManager.fileExists(atPath: url.path) {
-                roots.append((url, label))
-            }
-        }
-        var seen = Set(roots.map { $0.0.standardizedFileURL.path })
-        if let volumes = fileManager.mountedVolumeURLs(includingResourceValuesForKeys: nil,
-                                                        options: [.skipHiddenVolumes]) {
-            for volume in volumes {
-                let applications = volume.appendingPathComponent("Applications", isDirectory: true)
-                let path = applications.standardizedFileURL.path
-                guard seen.insert(path).inserted,
-                      fileManager.fileExists(atPath: path) else { continue }
-                roots.append((applications, "External Applications"))
-            }
-        }
-        return uniqueApplicationRoots(roots)
+        applicationInventory.roots(home: home)
+    }
+
+    private func uninstallPlanner() -> UninstallPlanningService {
+        .init(dependencies: .init(inventory: applicationInventory,
+            allocatedBytes: { [self] in directorySize($0) },
+            isPhysicalPath: { [self] in cleanupPathIsPhysical($0, home: $1) },
+            requiresAdministrator: { [self] in uninstallRequiresAdministrator($0) },
+            commandOutput: { [self] in runCommandOutput($0, $1) }))
     }
 
     func uninstallPlan(for app: UninstallApp,
                        homeDirectory: String = NSHomeDirectory()) async -> UninstallPlan? {
-        await Task.detached(priority: .utility) { [self] in
-            let appURL = URL(fileURLWithPath: app.path).standardizedFileURL
-            guard self.applicationMetadata(at: appURL)?.bundleID == app.bundleID,
-                  DeletionPlan.identity(at: app.path) == app.appIdentity,
-                  DeletionPlan.identity(at: app.path + "/Contents/Info.plist") == app.infoIdentity else {
-                return nil
-            }
-            let home = URL(fileURLWithPath: homeDirectory, isDirectory: true).standardizedFileURL
-            var files = [UninstallFile(
-                bytes: self.directorySize(appURL), label: "app", path: appURL.path)]
-            // Bundle-ID caches are shared by sibling installs. Keep them when
-            // another bundle with the same ID is still present.
-            let siblingRoots = self.applicationRoots(home: home).map(\.0)
-                + [appURL.deletingLastPathComponent()]
-            let appDirectoryIdentity = self.applicationDirectoryIdentity(appURL)
-            let otherApps = siblingRoots.flatMap { self.directChildren(of: $0) }.filter { candidate in
-                candidate.path != appURL.path && candidate.pathExtension.lowercased() == "app"
-                    && self.applicationDirectoryIdentity(candidate) != appDirectoryIdentity
-                    && !self.isSymlink(candidate)
-            }
-            let hasSibling = otherApps.contains {
-                self.applicationMetadata(at: $0)?.bundleID == app.bundleID
-            }
-            files.append(contentsOf: self.relatedUninstallCandidates(
-                app: app, home: home, hasSibling: hasSibling, otherApps: otherApps))
-            let caskToken = self.nativeBrewCaskToken(for: app)
-            return UninstallPlan(files: files, needsAdmin: self.uninstallRequiresAdministrator(app.path),
-                                 isBrewCask: caskToken != nil,
-                                 caskToken: caskToken ?? "-", includesProtectedAppData: true,
-                                 scannedAt: Date())
+        let planner = uninstallPlanner()
+        return await Task.detached(priority: .utility) {
+            planner.plan(for: app, homeDirectory: homeDirectory)
         }.value
+    }
+
+    func dotDirectoryCandidates(for app: UninstallApp, home: URL, otherApps: [URL]) -> [URL] {
+        uninstallPlanner().dotDirectoryCandidates(for: app, home: home, otherApps: otherApps)
     }
 
     func uninstallRequiresAdministrator(_ path: String) -> Bool {
@@ -3062,248 +2951,6 @@ final class NativeCore: @unchecked Sendable {
         guard lstat(path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR else { return false }
         return geteuid() != 0 && (metadata.st_uid == 0
             || cleanupDeletionAccess(path, metadata: metadata) == .administrator)
-    }
-
-    /// Resolve a Homebrew cask without depending on Mole's uninstall bridge.
-    /// `brew list --cask <token>` reports the installed artifact paths, which
-    /// gives us a stronger match than comparing display names alone.
-    private func nativeBrewCaskToken(for app: UninstallApp) -> String? {
-        let candidates = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
-            .filter { fileManager.isExecutableFile(atPath: $0) }
-        guard let brew = candidates.first,
-              let tokenList = runCommandOutput(brew, ["list", "--cask", "--full-name"]) else {
-            return nil
-        }
-        let appName = URL(fileURLWithPath: app.path).lastPathComponent.lowercased()
-        guard appName.hasSuffix(".app") else { return nil }
-        let tokens = tokenList.split(whereSeparator: \.isNewline)
-            .map(String.init)
-            .filter { $0.range(of: "^[A-Za-z0-9@._+/-]+$", options: .regularExpression) != nil }
-        // Avoid a potentially expensive `brew list` call for every cask by
-        // checking only tokens whose spelling overlaps the app name.
-        let appStem = appName.dropLast(4).filter { $0.isLetter || $0.isNumber }
-            .lowercased()
-        guard !appStem.isEmpty else { return nil }
-        for token in tokens {
-            let tokenStem = token.filter { $0.isLetter || $0.isNumber }.lowercased()
-            guard tokenStem.contains(appStem) || appStem.contains(tokenStem) else { continue }
-            guard let listing = runCommandOutput(brew, ["list", "--cask", token]) else { continue }
-            if listing.split(whereSeparator: \.isNewline).contains(where: {
-                URL(fileURLWithPath: String($0)).lastPathComponent.lowercased() == appName
-            }) {
-                return token
-            }
-        }
-        return nil
-    }
-
-    /// Mixed app data stays review-only. Named app-support locations contribute
-    /// only known disposable leaves, never their parent or a vendor-wide root.
-    /// 没有登记在 Agent 目录里的 App 也常把数据放在 `~/.name`、`~/.config/name` 等处
-    /// （例如 WorkBuddy 的 `~/.workbuddy`）。按 App 名和 Bundle ID 末段关联，名字太短、
-    /// 太通用或与其他已安装 App 重名的不关联；Agent 目录已登记的根交给 Agent 规则。
-    static let genericDotNames: Set<String> = [
-        "config", "local", "cache", "share", "state", "apps", "code", "git", "ssh", "npm",
-        "node", "python", "java", "rust", "cargo", "docker", "aws", "azure", "google", "apple",
-        "macos", "system", "library", "data", "tools", "home", "user", "users",
-        "test", "demo", "default", "lite", "beta", "studio", "desktop", "mail",
-        "music", "photos", "notes", "files", "cloud", "sync", "update", "updater", "helper"
-    ]
-
-    func dotDirectoryCandidates(for app: UninstallApp, home: URL, otherApps: [URL]) -> [URL] {
-        let appURL = URL(fileURLWithPath: app.path)
-        var names = Set(uninstallSupportNames(at: appURL, bundleID: app.bundleID).map { $0.lowercased() })
-        names.insert(app.name.lowercased())
-        names.insert(app.name.lowercased().replacingOccurrences(of: " ", with: ""))
-        names.insert(app.name.lowercased().replacingOccurrences(of: " ", with: "-"))
-        if let last = app.bundleID.split(separator: ".").last { names.insert(String(last).lowercased()) }
-        let shared = Set(otherApps.flatMap { other -> [String] in
-            guard let metadata = applicationMetadata(at: other) else { return [] }
-            var tokens = uninstallSupportNames(at: other, bundleID: metadata.bundleID).map { $0.lowercased() }
-            tokens.append(metadata.name.lowercased())
-            if let last = metadata.bundleID.split(separator: ".").last { tokens.append(String(last).lowercased()) }
-            return tokens
-        })
-        let agentRoots = AgentCatalog.definitions.flatMap { AgentCatalog.dataRoots(for: $0, home: home.path) }
-        var result: [URL] = []
-        for name in names.sorted() where name.count >= 4 && !Self.genericDotNames.contains(name)
-            && !shared.contains(name) && name.range(of: #"^[a-z0-9][a-z0-9._-]*$"#, options: .regularExpression) != nil {
-            for relative in ["." + name, ".config/" + name, ".local/share/" + name, ".local/state/" + name, ".cache/" + name] {
-                let url = home.appendingPathComponent(relative, isDirectory: true)
-                guard cleanupPathIsPhysical(url, home: home), isDirectory(url),
-                      !agentRoots.contains(where: { url.path == $0 || url.path.hasPrefix($0 + "/") || $0.hasPrefix(url.path + "/") })
-                else { continue }
-                result.append(url)
-            }
-        }
-        return result
-    }
-
-    private func relatedUninstallCandidates(app: UninstallApp, home: URL,
-                                            hasSibling: Bool, otherApps: [URL]) -> [UninstallFile] {
-        var candidates: [UninstallFile] = []
-        var seen = Set<String>()
-        func append(_ url: URL, label: String) {
-            let path = CleanupRiskPolicy.normalizedPathLiteral(url.path)
-            guard seen.insert(path).inserted,
-                  fileManager.fileExists(atPath: path), !isSymlink(url) else { return }
-            if label == "related" {
-                guard cleanupPathIsPhysical(url, home: home),
-                      !CleanupRiskPolicy.isProtectedContent(path, homeDirectory: home.path) else { return }
-            }
-            let bytes = directorySize(url)
-            candidates.append(UninstallFile(bytes: bytes, label: label, path: path))
-        }
-
-        if CleanupRiskPolicy.isValidReverseDNSOwner(app.bundleID) {
-            let cacheLabel = hasSibling ? "review" : "related"
-            append(home.appendingPathComponent("Library/Caches/\(app.bundleID)", isDirectory: true),
-                   label: cacheLabel)
-            append(home.appendingPathComponent("Library/Logs/\(app.bundleID)", isDirectory: true),
-                   label: cacheLabel)
-            for relative in [
-                "Library/Caches/\(app.bundleID).ShipIt",
-                "Library/Caches/com.apple.nsurlsessiond/Downloads/\(app.bundleID)",
-                "Library/Containers/\(app.bundleID)/Data/Library/Caches",
-                "Library/Containers/\(app.bundleID)/Data/Library/Logs",
-                "Library/Containers/\(app.bundleID)/Data/tmp",
-                "Library/WebKit/\(app.bundleID)/WebsiteData/NetworkCache"
-            ] {
-                append(home.appendingPathComponent(relative, isDirectory: true), label: cacheLabel)
-            }
-
-            let appURL = URL(fileURLWithPath: app.path)
-            let supportNames = uninstallSupportNames(at: appURL, bundleID: app.bundleID)
-            let sharedNames = Set(otherApps.flatMap { other -> [String] in
-                guard let metadata = applicationMetadata(at: other) else { return [] }
-                return uninstallSupportNames(at: other, bundleID: metadata.bundleID)
-                    .map { $0.lowercased() }
-            })
-            let leaves = ["Cache", "Caches", "Code Cache", "GPUCache", "DawnCache",
-                          "ShaderCache", "GrShaderCache", "CachedData", "CachedExtensionVSIXs",
-                          "logs", "Crashpad/completed", "Service Worker/CacheStorage",
-                          "Service Worker/ScriptCache"]
-            for name in supportNames.sorted() {
-                let root = home.appendingPathComponent("Library/Application Support/" + name)
-                append(root, label: "review")
-                let namedCache = home.appendingPathComponent("Library/Caches/" + name)
-                let shared = hasSibling || sharedNames.contains(name.lowercased())
-                if CleanupRiskPolicy.core(section: "Uninstall cache", path: namedCache.path,
-                                          homeDirectory: home.path).risk == .safe {
-                    append(namedCache, label: shared ? "review" : "related")
-                }
-                guard !shared else { continue }
-                // Chromium/Electron profiles are bounded to known direct children.
-                // Do not recursively search arbitrary user data for cache-like names.
-                var profileRoots = [root]
-                if cleanupPathIsPhysical(root, home: home) {
-                    profileRoots += directChildren(of: root).filter {
-                        $0.lastPathComponent == "Default"
-                            || $0.lastPathComponent.range(of: "^Profile [0-9]+$", options: .regularExpression) != nil
-                    }
-                }
-                for profile in profileRoots {
-                    for leaf in leaves {
-                        let url = profile.appendingPathComponent(leaf)
-                        guard CleanupRiskPolicy.core(section: "Uninstall cache", path: url.path,
-                                                     homeDirectory: home.path).risk == .safe else { continue }
-                        append(url, label: "related")
-                    }
-                }
-            }
-        }
-
-        let reviewRoots = [
-            ("Library/Application Support/\(app.bundleID)", true),
-            ("Library/Preferences/\(app.bundleID).plist", false),
-            ("Library/Containers/\(app.bundleID)", true),
-            ("Library/Group Containers/\(app.bundleID)", true),
-            ("Library/Saved Application State/\(app.bundleID).savedState", true),
-            ("Library/WebKit/\(app.bundleID)", true),
-            ("Library/HTTPStorages/\(app.bundleID)", true),
-            ("Library/Caches/com.apple.nsurlsessiond/Downloads/\(app.bundleID)", true)
-        ]
-        for (relative, isDirectory) in reviewRoots {
-            append(home.appendingPathComponent(relative, isDirectory: isDirectory), label: "review")
-        }
-        if !hasSibling {
-            for root in AgentCatalog.uninstallDataRoots(appPath: app.path, appName: app.name, home: home.path) {
-                append(URL(fileURLWithPath: root), label: "review")
-            }
-            for url in dotDirectoryCandidates(for: app, home: home, otherApps: otherApps) {
-                append(url, label: "review")
-            }
-        }
-
-        // LaunchAgent/Daemon plists and privileged helpers are surfaced with
-        // exact bundle evidence. They are intentionally informational until a
-        // native administrator route is available; an unrelated system item
-        // must never be removed as a side effect of uninstalling an app.
-        let identityTokens = [app.bundleID, app.name, app.path,
-                              URL(fileURLWithPath: app.path).deletingPathExtension().path]
-            .map { $0.lowercased() }
-        func matchesApp(_ url: URL) -> Bool {
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
-            let lower = text.lowercased()
-            return identityTokens.contains { !$0.isEmpty && lower.contains($0) }
-        }
-        let plistRoots = [
-            home.appendingPathComponent("Library/LaunchAgents", isDirectory: true),
-            URL(fileURLWithPath: "/Library/LaunchAgents", isDirectory: true),
-            URL(fileURLWithPath: "/Library/LaunchDaemons", isDirectory: true)
-        ]
-        for root in plistRoots {
-            for plist in directChildren(of: root)
-                where plist.pathExtension.lowercased() == "plist" && matchesApp(plist) {
-                append(plist, label: "manual")
-            }
-        }
-
-        let helperRoot = URL(fileURLWithPath: "/Library/PrivilegedHelperTools", isDirectory: true)
-        for helper in directChildren(of: helperRoot) {
-            let lower = helper.lastPathComponent.lowercased()
-            if identityTokens.contains(where: { !$0.isEmpty && lower.contains($0) }) {
-                append(helper, label: "manual")
-            }
-        }
-
-        let diagnosticRoots = [
-            home.appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true),
-            URL(fileURLWithPath: "/Library/Logs/DiagnosticReports", isDirectory: true)
-        ]
-        for root in diagnosticRoots {
-            for report in directChildren(of: root) {
-                let lower = report.lastPathComponent.lowercased()
-                if identityTokens.contains(where: { !$0.isEmpty && lower.contains($0) }) {
-                    append(report, label: "manual")
-                }
-            }
-        }
-        return candidates
-    }
-
-    private func uninstallSupportNames(at appURL: URL, bundleID: String) -> Set<String> {
-        let bundle = Bundle(url: appURL)
-        let metadataNames = [bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String,
-                             bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,
-                             appURL.deletingPathExtension().lastPathComponent]
-            .compactMap { $0 }.filter {
-                !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("/")
-                    && !$0.utf8.contains(where: { $0 < 0x20 || $0 == 0x7f })
-                    && !["app", "electron", "google", "microsoft", "adobe", "shared"].contains($0.lowercased())
-            }
-        let knownNames: [String: String] = [
-            "com.google.Chrome": "Google/Chrome",
-            "com.google.Chrome.beta": "Google/Chrome Beta",
-            "com.microsoft.VSCode": "Code",
-            "com.microsoft.VSCodeInsiders": "Code - Insiders",
-            "com.brave.Browser": "BraveSoftware/Brave-Browser",
-            "company.thebrowser.Browser": "Arc/User Data"
-        ]
-        var names = Set(metadataNames)
-        if CleanupRiskPolicy.isValidReverseDNSOwner(bundleID) { names.insert(bundleID) }
-        if let name = knownNames[bundleID] { names.insert(name) }
-        return names
     }
 
     func applyUninstall(_ app: UninstallApp, plan reviewedPlan: UninstallPlan,
@@ -3418,77 +3065,6 @@ final class NativeCore: @unchecked Sendable {
     // MARK: Optimize
 
     // MARK: Optimize helpers
-
-    struct PreferenceRepairResult {
-        var repaired = 0
-        var failed = 0
-        var partial = false
-        var corrupt: [String] = []
-    }
-
-    /// Native port of Mole's `repair_broken_preferences`: lint third-party
-    /// plists in `~/Library/Preferences` (and recursively in `ByHost`) and move
-    /// the ones plutil rejects to Trash. Apple domains, `.GlobalPreferences`
-    /// and `loginwindow.plist` are never candidates, whitelisted paths are
-    /// skipped, and the pass stops after 15 seconds so a huge preference
-    /// folder cannot stall the optimizer.
-    func repairBrokenPreferences(homeDirectory: String, dryRun: Bool = false) -> PreferenceRepairResult {
-        var result = PreferenceRepairResult()
-        let preferences = URL(fileURLWithPath: homeDirectory)
-            .appendingPathComponent("Library/Preferences", isDirectory: true)
-        guard isDirectory(preferences), fileManager.isExecutableFile(atPath: "/usr/bin/plutil") else {
-            return result
-        }
-        let whitelist = loadWhitelist(homeDirectory: homeDirectory)
-        let deadline = Date().addingTimeInterval(15)
-
-        func isCandidate(_ url: URL, protectLoginWindow: Bool) -> Bool {
-            guard url.pathExtension == "plist", !isSymlink(url) else { return false }
-            let name = url.lastPathComponent
-            if name.hasPrefix("com.apple.") || name.hasPrefix(".GlobalPreferences") { return false }
-            if protectLoginWindow, name == "loginwindow.plist" { return false }
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
-                return false
-            }
-            return !matchesWhitelist(url.path, entries: whitelist)
-        }
-
-        var candidates = directChildren(of: preferences).filter { isCandidate($0, protectLoginWindow: true) }
-        let byHost = preferences.appendingPathComponent("ByHost", isDirectory: true)
-        if isDirectory(byHost),
-           let enumerator = fileManager.enumerator(at: byHost,
-                                                   includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-                                                   options: [.skipsPackageDescendants]) {
-            for case let url as URL in enumerator where isCandidate(url, protectLoginWindow: false) {
-                candidates.append(url)
-            }
-        }
-
-        let batchSize = 256
-        var start = 0
-        while start < candidates.count {
-            guard Date() < deadline else { result.partial = true; break }
-            let end = min(start + batchSize, candidates.count)
-            let batch = Array(candidates[start..<end])
-            start = end
-            // One lint per batch; only a failing batch is re-checked file by file.
-            if runCommand("/usr/bin/plutil", ["-lint", "-s"] + batch.map(\.path)) { continue }
-            for url in batch {
-                guard Date() < deadline else { result.partial = true; break }
-                guard fileManager.isReadableFile(atPath: url.path),
-                      !runCommand("/usr/bin/plutil", ["-lint", "-s", url.path]) else { continue }
-                result.corrupt.append(url.path)
-                if dryRun { continue }
-                do {
-                    try fileManager.trashItem(at: url, resultingItemURL: nil)
-                    result.repaired += 1
-                } catch {
-                    result.failed += 1
-                }
-            }
-        }
-        return result
-    }
 
     struct BrokenLaunchAgent: Sendable {
         let plist: String
@@ -3605,7 +3181,7 @@ final class NativeCore: @unchecked Sendable {
     }
 
     private func directorySize(_ url: URL) -> UInt64 {
-        measureTree(url).bytes
+        applicationSizer.allocatedBytes(at: url)
     }
 
     func fileSize(_ url: URL) -> UInt64 {
@@ -3792,78 +3368,8 @@ final class NativeCore: @unchecked Sendable {
         return records
     }
 
-    private func applicationMetadata(at url: URL) -> (name: String, bundleID: String)? {
-        guard let bundle = Bundle(url: url),
-              let bundleID = bundle.bundleIdentifier else { return nil }
-        let name = (bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
-            ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
-            ?? url.deletingPathExtension().lastPathComponent
-        return (name, bundleID)
-    }
-
-    // MARK: Native analysis implementation
-
-    /// Measure a tree once with hard-link de-duplication and a bounded budget.
-    /// This mirrors the useful part of Mole's scanner without invoking `du`,
-    /// `mdfind`, or a shell process.  A timeout returns the partial result and
-    /// marks it as truncated; callers still get a stable report instead of a
-    /// zero-sized failure.
-    private func measureTree(_ root: URL,
-                             excludingDirectNames: Set<String> = []) -> TreeMeasure {
-        guard fileManager.fileExists(atPath: root.path), !isSymlink(root) else { return TreeMeasure() }
-        if !isDirectory(root) {
-            let bytes = fileSize(root)
-            return TreeMeasure(bytes: bytes, files: bytes > 0 ? 1 : 0,
-                               largeFiles: bytes >= largeFileThreshold
-                                   ? [.init(name: root.lastPathComponent, path: root.path, size: bytes)] : [],
-                               truncated: false)
-        }
-        guard let enumerator = fileManager.enumerator(
-            at: root, includingPropertiesForKeys: Array(sizeKeys), options: []) else {
-            return TreeMeasure()
-        }
-        var result = TreeMeasure()
-        var visited = 0
-        let deadline = Date().addingTimeInterval(maxTraversalSeconds)
-        var seen = Set<FileIdentity>()
-        let rootDepth = root.pathComponents.count
-        for case let child as URL in enumerator {
-            visited += 1
-            if visited > maxTraversalEntries || Date() >= deadline {
-                result.truncated = true
-                break
-            }
-            if isSymlink(child) {
-                enumerator.skipDescendants()
-                continue
-            }
-            let depth = child.pathComponents.count - rootDepth
-            if depth == 1 && excludingDirectNames.contains(child.lastPathComponent) {
-                if isDirectory(child) { enumerator.skipDescendants() }
-                continue
-            }
-            if isDirectory(child) { continue }
-            guard let identity = fileIdentity(child), seen.insert(identity).inserted else { continue }
-            let bytes = fileSize(child)
-            result.bytes &+= bytes
-            if bytes > 0 { result.files += 1 }
-            if bytes >= largeFileThreshold {
-                result.largeFiles.append(.init(name: child.lastPathComponent,
-                                               path: child.path, size: bytes))
-            }
-        }
-        result.largeFiles.sort {
-            if $0.size != $1.size { return $0.size > $1.size }
-            return $0.path.localizedStandardCompare($1.path) == .orderedAscending
-        }
-        if result.largeFiles.count > 100 { result.largeFiles.removeLast(result.largeFiles.count - 100) }
-        return result
-    }
-
-    private func fileIdentity(_ url: URL) -> FileIdentity? {
-        var metadata = stat()
-        guard Darwin.lstat(url.path, &metadata) == 0 else { return nil }
-        return FileIdentity(device: UInt64(metadata.st_dev), inode: UInt64(metadata.st_ino))
+    private func applicationMetadata(at url: URL) -> ApplicationBundleMetadata? {
+        applicationInventory.metadata(at: url)
     }
 
     func runCommand(_ executable: String, _ arguments: [String]) -> Bool {

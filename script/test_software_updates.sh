@@ -10,6 +10,11 @@ swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" -module-cach
     -framework AppKit -framework IOKit "${SOURCES[@]}" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCLIService.swift" \
     "$ROOT_DIR/SimpleMole/Services/CommandLineToolInventory.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CommandLineTool.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CLIInstalledToolDiscovery.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CLIManagedCommand.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CLICommandRunner.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CLIUninstallService.swift" \
     "$ROOT_DIR/SimpleMole/Services/SoftwareUpdateService.swift" \
     "$ROOT_DIR/SimpleMole/L10n/TablesSoftwareUpdates.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \

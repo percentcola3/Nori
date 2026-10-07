@@ -49,7 +49,9 @@ def replace_body(source, marker, body):
     return source[:opening + 1] + "\n" + body + "\n    " + source[closing - 1:]
 
 state = (root / "SimpleMole/AppState.swift").read_text()
-state = replace_body(state, "    init() {", '''        statusText = L10n.shared.t("status.ready")
+state = replace_body(state, "    init(softwareUpdateChecker:", '''        self.softwareUpdateChecker = SoftwareUpdateService()
+        self.uninstallExecutor = UninstallWorkflow()
+        statusText = L10n.shared.t("status.ready")
         processStatus = ""
         portStatus = ""
         appListStatus = ""

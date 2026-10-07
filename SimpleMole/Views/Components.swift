@@ -231,32 +231,6 @@ struct MoleIconButtonStyle: ButtonStyle {
     }
 }
 
-/// 可选择列表行的统一交互表面。固定 padding，选择与按压不会改变布局。
-struct MoleSelectableRowButtonStyle: ButtonStyle {
-    let isSelected: Bool
-    var cornerRadius: CGFloat = 8
-    var horizontalPadding: CGFloat = 12
-    var verticalPadding: CGFloat = 6
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, horizontalPadding)
-            .padding(.vertical, verticalPadding)
-            .modifier(ListRowSurface(selected: isSelected))
-            .contentShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .opacity(isEnabled ? 1 : 0.45)
-            .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed,
-                                                 pressedScale: 0.99))
-            .animation(reduceMotion ? nil : MoleMotion.selection, value: isSelected)
-    }
-
-
-}
-
 /// 清理、Agent 和分析共用的内容行/卡片底色；布局先完成，再包住内容。
 /// 内容层不使用玻璃：分组头 surface2，普通行 surface1，选中态 selectionFill。
 struct ListRowSurface: ViewModifier {

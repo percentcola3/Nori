@@ -1153,22 +1153,6 @@ struct AnalyzeReport: Codable {
     }
 }
 
-/// APFS 本地快照条目。
-struct SnapshotInfo: Identifiable, Equatable {
-    let name: String
-    var id: String { name }
-}
-
-/// `docker system df` 的一行摘要（原始人读字符串直接透传）。
-struct DockerDfRow: Identifiable, Equatable {
-    let type: String
-    let count: String
-    let size: String
-    let reclaimable: String
-
-    var id: String { type }
-}
-
 /// Shell 配置体检发现项。
 struct ShellIssue: Identifiable, Equatable {
     let file: String
@@ -1183,15 +1167,6 @@ struct ShellIssue: Identifiable, Equatable {
         return file.hasPrefix(home) ? "~" + file.dropFirst(home.count) : file
     }
     var location: String { line > 0 ? "\(shortFile):\(line)" : shortFile }
-}
-
-/// 系统代理残留条目。
-struct ProxyIssue: Identifiable, Equatable {
-    let service: String
-    let kind: String   // http / https / socks
-    let endpoint: String
-
-    var id: String { "\(service)#\(kind)" }
 }
 
 struct RunResult {

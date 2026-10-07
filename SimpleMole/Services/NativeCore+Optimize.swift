@@ -160,10 +160,6 @@ extension NativeCore {
         "\(target.identity)\t\(target.path)"
     }
 
-    static func planPath(_ entry: String) -> String? {
-        entry.split(separator: "\t", maxSplits: 1).last.map(String.init)
-    }
-
     static func byteText(_ bytes: UInt64) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }

@@ -64,43 +64,6 @@ enum Parsers {
         lhs == rhs || lhs.hasPrefix(rhs + "/") || rhs.hasPrefix(lhs + "/")
     }
 
-    /// 解析 apply 脚本的 `removed=/failed=` 摘要。
-    static func applySummary(_ text: String) -> (removed: Int, failed: Int) {
-        var removed = 0
-        var failed = 0
-        for line in text.components(separatedBy: "\n") {
-            let parts = line.split(separator: "=", maxSplits: 1)
-            guard parts.count == 2 else { continue }
-            switch parts[0] {
-            case "removed": removed = Int(parts[1]) ?? removed
-            case "failed": failed = Int(parts[1]) ?? failed
-            default: break
-            }
-        }
-        return (removed, failed)
-    }
-
-    /// 解析 app_net_reset.sh 的 `step<TAB>state<TAB>detail` 输出：
-    /// 全部成功/跳过时返回一句可读摘要；任一步失败返回 nil（调用方展示
-    /// 失败文案，完整明细走日志）。
-    static func networkResetSummary(_ text: String) -> String? {
-        let rows = text.split(whereSeparator: \.isNewline).compactMap { line -> (state: String, detail: String)? in
-            let fields = line.split(separator: "\t", maxSplits: 2).map(String.init)
-            guard fields.count == 3 else { return nil }
-            return (fields[1], fields[2])
-        }
-        guard !rows.isEmpty, !rows.contains(where: { $0.state == "fail" }) else { return nil }
-        let backups = rows.map(\.detail).filter { $0.contains("backup") }
-        let done = rows.filter { $0.state == "ok" }.count
-        let skipped = rows.filter { $0.state == "skip" }.count
-        var summary = L10n.shared.tf("audit.network.resetSummary", done, rows.count, skipped)
-        if let first = backups.first, let open = first.firstIndex(of: "(") {
-            summary += " \(first[open...])"
-        }
-        return summary
-    }
-
-
     /// 解析开发环境 TSV：`bytes\tkind\tname\tpath`。同一路径出现多次时
     /// 保留 current 记录（nvm 默认版本会与 family 扫描重复）。
     static func devEnvEntries(_ text: String) -> [DevEnvEntry] {
@@ -124,57 +87,6 @@ enum Parsers {
         return order.compactMap { byPath[$0] }
     }
 
-    /// 解析 APFS 快照桥接输出：`purgeable\tbytes` 与 `snapshot\tname`。
-    static func snapshotInfo(_ text: String) -> (purgeable: UInt64, names: [String]) {
-        var purgeable: UInt64 = 0
-        var names: [String] = []
-        for line in text.components(separatedBy: "\n") {
-            let parts = line.components(separatedBy: "\t")
-            guard parts.count >= 2 else { continue }
-            switch parts[0] {
-            case "purgeable": purgeable = UInt64(parts[1]) ?? 0
-            case "snapshot": names.append(parts[1])
-            default: break
-            }
-        }
-        return (purgeable, names)
-    }
-
-    /// 解析 `docker system df` 桥接输出：`type\tcount\tsize\treclaimable`。
-    static func dockerDfRows(_ text: String) -> [DockerDfRow] {
-        var rows: [DockerDfRow] = []
-        for line in text.components(separatedBy: "\n") {
-            let parts = line.components(separatedBy: "\t")
-            guard parts.count >= 4, !parts[0].isEmpty else { continue }
-            rows.append(DockerDfRow(type: parts[0], count: parts[1],
-                                    size: parts[2], reclaimable: parts[3]))
-        }
-        return rows
-    }
-
-    /// 解析重复检测桥接输出：`bytes\tdupkey\tpath`，相邻同 key 聚为一组。
-    static func duplicateGroups(_ text: String) -> [[AnalyzeEntry]] {
-        var groups: [[AnalyzeEntry]] = []
-        var current: [AnalyzeEntry] = []
-        var currentKey = ""
-        for line in text.components(separatedBy: "\n") {
-            let parts = line.components(separatedBy: "\t")
-            guard parts.count >= 3, parts[2].hasPrefix("/") else { continue }
-            if parts[1] != currentKey {
-                if current.count >= 2 { groups.append(current) }
-                current = []
-                currentKey = parts[1]
-            }
-            current.append(AnalyzeEntry(
-                name: (parts[2] as NSString).lastPathComponent,
-                path: parts[2],
-                size: UInt64(parts[0]) ?? 0,
-                isDir: false))
-        }
-        if current.count >= 2 { groups.append(current) }
-        return groups
-    }
-
     /// 解析 Shell 配置体检输出：`file\tkind\tdetail\tline`。
     static func shellIssues(_ text: String) -> [ShellIssue] {
         var issues: [ShellIssue] = []
@@ -185,25 +97,6 @@ enum Parsers {
                                      detail: parts[2], line: Int(parts[3]) ?? 0))
         }
         return issues
-    }
-
-    /// 解析网络体检输出：proxy 行与 hosts 行。
-    static func netAudit(_ text: String) -> (proxies: [ProxyIssue], hosts: [String]) {
-        var proxies: [ProxyIssue] = []
-        var hosts: [String] = []
-        for line in text.components(separatedBy: "\n") {
-            let parts = line.components(separatedBy: "\t")
-            guard parts.count >= 2 else { continue }
-            switch parts[0] {
-            case "proxy" where parts.count >= 4:
-                proxies.append(ProxyIssue(service: parts[1], kind: parts[2], endpoint: parts[3]))
-            case "hosts":
-                hosts.append(parts[1])
-            default:
-                break
-            }
-        }
-        return (proxies, hosts)
     }
 
     // MARK: - 流量监控

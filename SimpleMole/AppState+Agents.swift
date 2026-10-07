@@ -193,27 +193,6 @@ extension AppState {
         return Self.uniqueAgentBytes(paths)
     }
 
-    /// 确认弹窗列出具体动作和影响，避免把解除关联与删除本体混为一谈。
-    var agentCleanupDetails: [String] {
-        var details = effectiveAgentCleanupSelection.categories.map {
-            "\($0.name) · \($0.paths.count) · \(ByteFormat.format($0.bytes))\n\(L10n.shared.t($0.reasonKey))"
-        }
-        details += agentSkills.filter(isAgentSkillSelected).map {
-            L10n.shared.tf($0.linked ? "agents.confirm.unlinkSkill" : "agents.confirm.deleteSkill", $0.name)
-        }
-        details += agentServers.filter(isAgentServerSelected).map {
-            L10n.shared.tf($0.issues.contains(.unreadableConfig)
-                           ? "agents.confirm.deleteConfig" : "agents.confirm.unlinkMCP", $0.name, $0.agentName)
-        }
-        details += agentMCPInstallations.filter { agentSelectedMCPInstallations.contains($0.id) }.map {
-            L10n.shared.tf("agents.confirm.deleteMCP", $0.name)
-        }
-        details += effectiveAgentCleanupSelection.cliInstallations.map {
-            L10n.shared.tf($0.onlyUnlinksExecutable ? "agents.cli.confirmLink" : "agents.cli.confirm", $0.name)
-        }
-        return details
-    }
-
     func scanAgents(completionStatus: String? = nil) {
         guard !isBusy else { return }
         agentScanning = true
@@ -317,17 +296,6 @@ extension AppState {
         agentCLIInstallations = cli
         agentHasScanned = true
         agentScanComplete = report.complete
-    }
-
-    func selectSafeAgentItems() {
-        guard !isBusy else { return }
-        for index in agentCategories.indices {
-            agentCategories[index].selected = agentCategories[index].risk == .safe
-        }
-        agentSelectedSkills = []
-        agentSelectedServers = []
-        agentSelectedMCPInstallations = []
-        agentSelectedCLIInstallations = []
     }
 
     func clearAgentSelection() {

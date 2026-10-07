@@ -124,22 +124,6 @@ struct NoriIdlePlaceholder: View {
     }
 }
 
-/// The resting placeholder with a caption underneath.
-struct NoriRestingPlaceholder: View {
-    @ObservedObject var state: AppState
-    let text: String
-
-    var body: some View {
-        NoriPlaceholderStage { size in
-            NoriIdlePlaceholder(state: state, size: size)
-            Text(text)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-    }
-}
-
 private struct NoriSVGCanvas: NSViewRepresentable {
     let url: URL
     let animates: Bool

@@ -79,12 +79,12 @@ struct UninstallProcessTests {
         selected.removeAll()
         precondition(queue.startNext(blocked: false)?.dataPaths == ["/fixture/settings"], "Keep the data scope that the user confirmed")
 
-        // Signal only an executable copied into our owned fixture, never an installed app.
+        // Signal only an executable compiled inside our owned fixture, never an installed app.
         let fixture = URL(fileURLWithPath: CommandLine.arguments[1])
         let root = fixture.appendingPathComponent("Fixture.app")
         let executable = root.appendingPathComponent("Contents/MacOS/helper")
         try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: executable.path)
+        try OwnedProcessFixture.makeSleeper(at: executable)
         try Data("fixture".utf8).write(to: root.appendingPathComponent("Contents/Info.plist"))
         let live = UninstallApp(name: "Fixture", bundleID: "com.example.fixture", source: "Fixture", path: root.path, size: "1 KB")
         let process = Process()

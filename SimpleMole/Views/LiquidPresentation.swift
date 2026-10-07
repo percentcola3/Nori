@@ -3,17 +3,10 @@ import SwiftUI
 private struct LiquidNamespaceKey: EnvironmentKey {
     static let defaultValue: Namespace.ID? = nil
 }
-private struct LiquidDialogIDKey: EnvironmentKey {
-    static let defaultValue: String? = nil
-}
 extension EnvironmentValues {
     var liquidNamespace: Namespace.ID? {
         get { self[LiquidNamespaceKey.self] }
         set { self[LiquidNamespaceKey.self] = newValue }
-    }
-    var liquidDialogID: String? {
-        get { self[LiquidDialogIDKey.self] }
-        set { self[LiquidDialogIDKey.self] = newValue }
     }
 }
 
@@ -54,39 +47,6 @@ private struct LiquidSurface: ViewModifier {
 extension View {
     func liquidSurface(_ id: String, radius: CGFloat = 20) -> some View {
         modifier(LiquidSurface(id: id, radius: radius))
-    }
-}
-
-struct LiquidActionButton: View {
-    let id: String
-    let title: String
-    let symbol: String
-    let action: () -> Void
-    @Environment(\.liquidDialogID) private var activeID
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var label: some View {
-        Label(title, systemImage: symbol)
-            .font(.system(size: 12, weight: .medium))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .contentShape(RoundedRectangle(cornerRadius: 12))
-    }
-    var body: some View {
-        if activeID == id {
-            label.hidden().accessibilityHidden(true)
-        } else if activeID != nil {
-            label.background(RoundedRectangle(cornerRadius: 12).fill(Color.surface1))
-                .allowsHitTesting(false)
-        } else {
-            Button {
-                withAnimation(reduceMotion ? nil : MoleMotion.panel, action)
-            } label: { label }
-            .buttonStyle(MolePlainButtonStyle())
-            // Native glass is composed by the window-level container and can
-            // escape ScrollView clipping. Only the modal uses liquidSurface.
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color.surface2))
-        }
     }
 }
 

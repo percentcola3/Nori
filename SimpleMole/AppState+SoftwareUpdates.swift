@@ -15,28 +15,13 @@ extension AppState {
         let ids = Set(apps.map(SoftwareUpdateService.appKey) + tools.map(SoftwareUpdateService.toolKey))
         isCheckingSoftwareUpdates = true
         softwareUpdateCheckingIDs = ids
-        let service = softwareUpdateService
+        let checker = softwareUpdateChecker
         Task {
             let targets = await Task.detached(priority: .utility) {
                 apps.map { SoftwareUpdateService.appTarget($0, cask: casks[$0.id]) }
                     + tools.map(SoftwareUpdateService.toolTarget)
             }.value
-            await service.clearCache()
-            let results = await withTaskGroup(of: (String, SoftwareUpdateResult).self,
-                                             returning: [String: SoftwareUpdateResult].self) { group in
-                var next = 0
-                func enqueue(_ index: Int) {
-                    let target = targets[index]
-                    group.addTask { (target.id, await service.check(target)) }
-                }
-                while next < min(4, targets.count) { enqueue(next); next += 1 }
-                var completed: [String: SoftwareUpdateResult] = [:]
-                while let (id, result) = await group.next() {
-                    completed[id] = result
-                    if next < targets.count { enqueue(next); next += 1 }
-                }
-                return completed
-            }
+            let results = await SoftwareUpdateCheckBatch.run(targets, using: checker)
             let currentIDs = Set(installedApps.map(SoftwareUpdateService.appKey)
                                  + commandLineTools.map(SoftwareUpdateService.toolKey))
             softwareUpdateResults.merge(results.filter { currentIDs.contains($0.key) }) { _, new in new }

@@ -776,9 +776,6 @@ final class DirectoryBrowserModel: ObservableObject {
         let urls = selectedEntries.map(\.url)
         NSWorkspace.shared.activateFileViewerSelecting(urls.isEmpty ? [breadcrumbDirectory] : urls)
     }
-    func dragFileURLs(for entry: DirectoryEntry) -> [URL] {
-        selectedIDs.contains(entry.id) ? selectedEntries.map(\.url) : [entry.url]
-    }
     func copySelection() { writeClipboard(cutting: false) }
     func cutSelection() { writeClipboard(cutting: true) }
     private func writeClipboard(cutting: Bool) {

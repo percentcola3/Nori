@@ -28,6 +28,10 @@ private final class PageTestPermissions {
 
 /// Production page methods are inserted by test_cleanup_page_state.sh.
 /// The fixture replaces windows, scans and deletion with observable effects.
+private final class CleanupRuntimeState {
+    var retryAction: (() -> Void)?
+}
+
 private final class PageStateFixture {
     struct Attempt {
         let categories: [CleanupCategory]
@@ -45,7 +49,7 @@ private final class PageStateFixture {
     var cleanupCelebrating = false
     var cleanupFeedbackID = 0
     var cleanupRetryAvailable = false
-    var cleanupRetryAction: (() -> Void)?
+    let cleanupRuntime = CleanupRuntimeState()
     var cleanupQueued = false
     var isApplying = true
     var isBusyExcludingUninstall: Bool { isApplying }
@@ -79,7 +83,7 @@ private final class PageStateFixture {
     func performApply(categories: [CleanupCategory], family: CleanupFamily,
                       mode: CleanupExecutionMode, installers: CleanupCategory? = nil,
                       maintenanceIDs: [String] = [], priorResult: CleanupExecutionResult = .init()) {
-        precondition(!cleanupRetryAvailable && cleanupRetryAction == nil,
+        precondition(!cleanupRetryAvailable && cleanupRuntime.retryAction == nil,
                      "The retry must be consumed before dispatching another task")
         attempts.append(Attempt(categories: categories, priorResult: priorResult,
                                 maintenanceIDs: maintenanceIDs))
@@ -130,7 +134,7 @@ struct CleanupPageStateTests {
             "Cleanup displayed an estimate rather than the executor's released bytes")
         precondition(page.cleanupOutcomeDetails.isEmpty && page.popupCount == 0,
                      "Partial success still displays failure diagnostics or a popup")
-        precondition(page.cleanupRetryAvailable && page.cleanupRetryAction != nil,
+        precondition(page.cleanupRetryAvailable && page.cleanupRuntime.retryAction != nil,
                      "Success feedback discarded the remaining cleanup action")
         precondition(page.isApplying && page.cleanupTaskProgress == nil && page.cleanupCelebrating,
                      "Reporting released the busy state before the caller completes verification")
@@ -154,7 +158,7 @@ struct CleanupPageStateTests {
         page.reportCleanupResult(finished, permanently: true)
         precondition(page.cleanupReclaimedBytes == 2048 && page.cleanupCompletedCount == 1,
                      "The second result accumulated the first attempt's deletion again")
-        precondition(!page.cleanupRetryAvailable && page.cleanupRetryAction == nil,
+        precondition(!page.cleanupRetryAvailable && page.cleanupRuntime.retryAction == nil,
                      "A completed plan left a stale retry action")
         page.retryFailedCleanup()
         precondition(page.attempts.count == 1, "A consumed plan dispatched another cleanup")

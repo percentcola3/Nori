@@ -15,5 +15,6 @@ swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     "$ROOT_DIR/SimpleMole/Services/UninstallProcessController.swift" \
     "$ROOT_DIR/SimpleMole/Services/UninstallQueue.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
+    "$ROOT_DIR/script/OwnedProcessFixture.swift" \
     "$ROOT_DIR/script/UninstallProcessTests.swift" -o "$TEST_DIR/tests"
 "$TEST_DIR/tests" "$FIXTURE_DIR"

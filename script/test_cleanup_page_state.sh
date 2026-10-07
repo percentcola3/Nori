@@ -12,7 +12,7 @@ import re
 import sys
 
 root, destination = map(Path, sys.argv[1:])
-source = (root / "SimpleMole/AppState.swift").read_text().splitlines()
+source = "\n".join(path.read_text() for path in sorted((root / "SimpleMole").glob("AppState*.swift"))).splitlines()
 names = ["configureCleanupRetry", "retryFailedCleanup", "recordRemainingCleanup",
          "reportCleanupResult", "prepareStartupPermissions", "refreshAuthorizationAndResume"]
 methods = []

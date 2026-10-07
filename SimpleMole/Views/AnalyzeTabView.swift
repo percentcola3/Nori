@@ -439,7 +439,13 @@ private struct AnalysisDeletionRequest {
 
 extension AnalyzeMode {
     var symbol: String {
-        self == .disk ? "internaldrive" : self == .duplicates ? "square.on.square" : (section?.symbol ?? "doc")
+        switch self {
+        case .disk: return "internaldrive"
+        case .duplicates: return "square.on.square"
+        case .largeFiles: return "doc.zipper"
+        case .images: return "photo"
+        case .videos: return "film"
+        }
     }
 }
 

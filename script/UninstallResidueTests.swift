@@ -4,6 +4,10 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
     precondition(condition(), message)
 }
 
+private struct FixedApplicationSizer: ApplicationSizeMeasuring {
+    func allocatedBytes(at root: URL) -> UInt64 { 4096 }
+}
+
 @main
 struct UninstallResidueTests {
     static func main() async throws {
@@ -51,6 +55,27 @@ struct UninstallResidueTests {
         expect(deduplicated.count == 1, "Installer aliases produced duplicate apps")
         expect(deduplicated.first?.path == app.path, "Inventory must use the real install path")
         expect(deduplicated.first?.source == "User Applications", "Alias replaced the original source")
+        let sizingDependency = FixedApplicationSizer()
+        let injectedInventory = NativeApplicationInventory(sizer: sizingDependency)
+        let injectedCore = NativeCore(applicationInventory: injectedInventory, applicationSizer: sizingDependency)
+        let injectedApps = injectedCore.installedApps(in: roots)
+        expect(injectedApps.count == 1 && injectedApps[0].size == ByteFormat.format(4096),
+               "Application discovery accepts a replacement size dependency without changing physical identity or source")
+        let sizingRoot = fixture.appendingPathComponent("owned-sizing")
+        try fm.createDirectory(at: sizingRoot, withIntermediateDirectories: true)
+        let payload = sizingRoot.appendingPathComponent("payload")
+        try Data(repeating: 97, count: 65_536).write(to: payload)
+        let nativeSizer = BoundedApplicationSizeMeasurer()
+        let singleBytes = nativeSizer.allocatedBytes(at: payload)
+        try fm.linkItem(at: payload, to: sizingRoot.appendingPathComponent("hardlink"))
+        try fm.createSymbolicLink(at: sizingRoot.appendingPathComponent("foreign-link"), withDestinationURL: home)
+        expect(singleBytes > 0 && nativeSizer.allocatedBytes(at: sizingRoot) == singleBytes,
+               "Size-only application measurement deduplicates hard links and never follows foreign symlinks")
+        expect(nativeSizer.allocatedBytes(at: sizingRoot.appendingPathComponent("foreign-link")) == 0,
+               "A symlink root cannot become an application size traversal")
+        var expiredSizer = BoundedApplicationSizeMeasurer()
+        expiredSizer.maximumEntries = 0
+        expect(expiredSizer.allocatedBytes(at: sizingRoot) == 0, "The bounded application size dependency respects its traversal budget")
         let external = fixture.appendingPathComponent("External/Applications")
         try fm.createDirectory(at: external, withIntermediateDirectories: true)
         try fm.copyItem(at: URL(fileURLWithPath: app.path),

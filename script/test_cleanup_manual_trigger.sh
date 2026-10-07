@@ -2,7 +2,10 @@
 # Source-level lifecycle regression: do not launch the app or scan the real home.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_STATE="$ROOT_DIR/SimpleMole/AppState.swift"
+CONTRACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-cleanup-contract.XXXXXX")"
+trap 'rm -rf "$CONTRACT_DIR"' EXIT
+APP_STATE="$CONTRACT_DIR/app-state.swift"
+cat "$ROOT_DIR"/SimpleMole/AppState*.swift > "$APP_STATE"
 APP_DELEGATE="$ROOT_DIR/SimpleMole/AppDelegate.swift"
 CLEANUP_VIEW="$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift"
 

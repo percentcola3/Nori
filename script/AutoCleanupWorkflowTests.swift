@@ -123,6 +123,11 @@ struct FixtureL10n {
     func tf(_ key: String, _ args: CVarArg...) -> String { key }
 }
 enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) } }
+@MainActor final class AutomationRuntimeState {
+    var scheduledRetry: DispatchWorkItem?
+    var reportedPermissionRequirement = false
+}
+
 @MainActor final class SchedulerFixture {
     static let autoCleanupLastCheckKey = "nori-scheduler-fixture-last-check"
     static let autoCleanupMinimumInterval: TimeInterval = 6 * 60 * 60
@@ -131,8 +136,7 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
     var externallyBusy = false
     var isBusy: Bool { externallyBusy || isAutoCleanupScanning }
     var taskNotice: String?
-    var scheduledAutomationRetry: DispatchWorkItem?
-    var reportedScheduledPermissionRequirement = false
+    let automationRuntime = AutomationRuntimeState()
     var autoCleanupStatus = ""
     var autoCleanupRuleIssues: [UUID: String] = [:]
     var isAutoCleanupScanning = false
@@ -215,12 +219,12 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
         s.runScheduledAutoCleanup(force: true); s.runScheduledAutoCleanup(force: true)
         expect(s.logs == 1 && !s.isAutoCleanupScanning && s.notifications == 0, "permission guard")
         s = fixture(); s.externallyBusy = true
-        s.runScheduledAutoCleanup(); let firstRetry = s.scheduledAutomationRetry
+        s.runScheduledAutoCleanup(); let firstRetry = s.automationRuntime.scheduledRetry
         s.runScheduledAutoCleanup()
-        expect(firstRetry != nil && firstRetry === s.scheduledAutomationRetry, "busy retry duplicated")
+        expect(firstRetry != nil && firstRetry === s.automationRuntime.scheduledRetry, "busy retry duplicated")
         s.cancelAutomationRetry()
         s = fixture(); s.taskNotice = "pending"
-        s.runScheduledAutoCleanup(); expect(s.scheduledAutomationRetry != nil, "notice did not defer")
+        s.runScheduledAutoCleanup(); expect(s.automationRuntime.scheduledRetry != nil, "notice did not defer")
         s.cancelAutomationRetry()
         s = fixture(); UserDefaults.standard.set(Date(), forKey: SchedulerFixture.autoCleanupLastCheckKey)
         s.runScheduledAutoCleanup(); expect(!s.isAutoCleanupScanning, "six-hour throttle bypassed")

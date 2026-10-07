@@ -9,7 +9,7 @@ source "$ROOT_DIR/script/test_developer_toolchain.sh"
 from pathlib import Path
 import re, sys
 root, dest = map(Path, sys.argv[1:])
-lines = (root / 'SimpleMole/AppState.swift').read_text().splitlines()
+lines = (root / 'SimpleMole/AppState+AutoCleanup.swift').read_text().splitlines()
 methods = []
 for name in ['addAutoCleanupRules', 'runScheduledAutoCleanup', 'noteAutoCleanupCheck', 'scheduleAutomationRetry', 'cancelAutomationRetry', 'applyAutoCleanup']:
     matches = [i for i, line in enumerate(lines) if re.match(r'^    (?:private )?func ' + name + r'\(', line)]

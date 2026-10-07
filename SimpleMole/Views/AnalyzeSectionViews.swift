@@ -2,84 +2,6 @@ import AppKit
 import ImageIO
 import SwiftUI
 
-/// 大文件/图片/视频子分类卡片：头部汇总 + 预览行 + 展开全部。
-struct SlimSectionCard: View {
-    @ObservedObject var state: AppState
-    let section: AnalyzeSection
-    let candidates: [SlimCandidate]
-    let isExpanded: Bool
-    let onToggleExpand: () -> Void
-    /// 按行所在目录发起“定时清理”规则创建（磁盘分析目录未经清理策略
-    /// 验证，规则创建时需要用户确认“仅可再生内容”）。
-    let onScheduleDirectory: (String) -> Void
-    @ObservedObject private var l10n = L10n.shared
-
-    var body: some View {
-        VStack(spacing: 8) {
-            header
-            if isExpanded {
-                LazyVStack(spacing: 8) {
-                    ForEach(candidates) { candidate in
-                        let directory = (candidate.path as NSString).deletingLastPathComponent
-                        SlimCandidateRow(candidate: candidate,
-                            isSelected: state.slimSelection.contains(candidate.path),
-                            disabled: state.isBusy,
-                            onToggle: { state.toggleSlimSelection(candidate) },
-                            onReveal: { state.revealPath(candidate.path) },
-                            onAutoClean: { onScheduleDirectory(directory) },
-                            autoCleanCovered: state.autoCleanupRuleCovering(directory: directory) != nil)
-                    }
-                }
-                .padding(.leading, 14)
-                .transition(.molePanelReveal)
-            }
-        }
-        .clipped()
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Button(action: onToggleExpand) {
-                HStack(spacing: 8) {
-                    Image(systemName: section.symbol)
-                        .font(.system(size: 11)).foregroundStyle(Color.moleAccentText)
-                    Text(l10n.t(section.titleKey))
-                        .font(.system(size: 12, weight: .semibold))
-                    Text(summary).font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(isExpanded ? 0 : -90))
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
-            Button(l10n.t("slim.selectAll")) { state.toggleSelectAllSlimCandidates(in: section) }
-                .buttonStyle(.plain).font(.system(size: 10))
-                .disabled(state.isBusy)
-        }
-        .padding(.horizontal, 10).padding(.vertical, 6)
-        .modifier(ListRowSurface(emphasis: .header))
-    }
-
-    private var summary: String {
-        switch section {
-        case .largeFiles:
-            return l10n.tf("analyze.section.summary.files", candidates.count,
-                           ByteFormat.format(candidates.reduce(0) { $0 + $1.size }))
-        case .images:
-            let summary = state.analyzeMediaSummary
-            return l10n.tf("slim.headline.images", summary.imageCount,
-                           ByteFormat.format(summary.imageBytes), MediaSlimPolicy.perKindCap)
-        case .videos:
-            let summary = state.analyzeMediaSummary
-            return l10n.tf("slim.headline.videos", summary.videoCount,
-                           ByteFormat.format(summary.videoBytes), MediaSlimPolicy.perKindCap)
-        }
-    }
-}
-
 /// 重复文件清单：不套卡片，标题行 + 模式/状态行 + 全量分组平铺，
 /// 逐个勾选后清理（每组至少保留一份）。
 struct DuplicatesSectionCard: View {
@@ -393,23 +315,5 @@ struct DuplicateThumbnail: View {
             thumbnail = decoded
         }
         .accessibilityHidden(true)
-    }
-}
-
-extension AnalyzeSection {
-    var symbol: String {
-        switch self {
-        case .largeFiles: return "doc.zipper"
-        case .images: return "photo"
-        case .videos: return "film"
-        }
-    }
-
-    var titleKey: String {
-        switch self {
-        case .largeFiles: return "analyze.section.largeFiles"
-        case .images: return "analyze.section.images"
-        case .videos: return "analyze.section.videos"
-        }
     }
 }

@@ -38,18 +38,16 @@ extension AppState {
         commandLineToolBusyID = tool.id
         commandLineToolStatus = L10n.shared.tf("cli.status.uninstalling", tool.name)
         let home = NSHomeDirectory()
-        let agentInstallation = tool.agentInstallation ?? tool.agentInstallationID.flatMap { id in
-            agentCLIInstallations.first { $0.id == id }
-        }
+        let agentInstallation = tool.agentInstallation
         Task {
             let snapshot = await captureRunningApplicationSnapshot()
-            let outcome: CommandLineToolInventory.Outcome = await Task.detached(priority: .utility) {
+            let outcome: CLIUninstallService.Outcome = await Task.detached(priority: .utility) {
                 if let agentInstallation {
                     let result = AgentCLIService.uninstall(agentInstallation, home: home, running: snapshot)
                     return .init(succeeded: result.succeeded, messages: result.messages,
                                  reclaimedBytes: result.reclaimedBytes)
                 }
-                return CommandLineToolInventory.uninstall(tool, home: home, running: snapshot)
+                return CLIUninstallService.uninstall(tool, home: home, running: snapshot)
             }.value
             commandLineToolBusyID = nil
             if outcome.succeeded {

@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MOLE_SRC="${MOLE_SRC:-$ROOT_DIR/vendor/mole}"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/nori-tests.XXXXXX")"
 RUNTIME_DIR="$TEST_ROOT/runtime"
+APP_STATE_CONTRACT_SOURCE="$TEST_ROOT/app-state-contract.swift"
+cat "$ROOT_DIR"/SimpleMole/AppState*.swift > "$APP_STATE_CONTRACT_SOURCE"
 PASSED=0
 AUTO_CLEANUP_FIXTURE=""
 
@@ -49,7 +51,7 @@ test_shell_syntax() {
 }
 
 test_native_core_ownership_contract() {
-    local app_state="$ROOT_DIR/SimpleMole/AppState.swift"
+    local app_state="$APP_STATE_CONTRACT_SOURCE"
     local native_core="$ROOT_DIR/SimpleMole/Services/NativeCore.swift"
     local system_metrics="$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift"
     local build_script="$ROOT_DIR/script/build.sh"
@@ -62,8 +64,9 @@ test_native_core_ownership_contract() {
         fail "uninstall inventory does not use NativeCore"
     /usr/bin/grep -Fq 'NativeCore.shared.uninstallPlan' "$app_state" || \
         fail "uninstall preview does not use NativeCore"
-    /usr/bin/grep -Fq 'NativeCore.shared.applyUninstall' "$app_state" || \
-        fail "uninstall apply does not use NativeCore"
+    /usr/bin/grep -Fq 'uninstallExecutor.execute(job)' "$app_state" && \
+        /usr/bin/grep -Fq 'NativeCore.shared.applyUninstall' "$ROOT_DIR/SimpleMole/Services/UninstallWorkflow.swift" || \
+        fail "uninstall workflow does not use the native deletion engine"
     /usr/bin/grep -Fq 'AnalysisInventoryCache()' "$app_state" || \
         fail "analyze does not use the native inventory cache"
     /usr/bin/grep -Fq 'NativeCore.shared.runMaintenanceTask' "$app_state" || \
@@ -128,7 +131,7 @@ test_brand_contract() {
 test_tab_motion_contract() {
     local components="$ROOT_DIR/SimpleMole/Views/Components.swift"
     local main_window="$ROOT_DIR/SimpleMole/Views/MainWindowView.swift"
-    local app_state="$ROOT_DIR/SimpleMole/AppState.swift"
+    local app_state="$APP_STATE_CONTRACT_SOURCE"
 
     /usr/bin/grep -Fq 'withAnimation(selectionAnimation)' "$components" || \
         fail "tab glass selection is not driven by an explicit animation transaction"
@@ -155,16 +158,15 @@ test_control_motion_contract() {
 
     /usr/bin/grep -Fq 'static let press = Animation' "$components" || \
         fail "ordinary controls do not share a short press animation"
-    /usr/bin/grep -Fq 'struct MoleSelectableRowButtonStyle: ButtonStyle' "$components" || \
-        fail "selectable detail rows do not share a button style"
     /usr/bin/grep -Fq 'struct MoleIconButtonStyle: ButtonStyle' "$components" || \
         fail "detail disclosure actions do not share an icon button style"
     /usr/bin/grep -Fq 'struct MolePlainButtonStyle: ButtonStyle' "$components" || \
         fail "surface-free buttons have no shared press feedback"
     /usr/bin/grep -Fq '.buttonStyle(MolePlainButtonStyle(pressedScale' "$analyze_sections" || \
         fail "disk analysis duplicate rows bypass the selectable-row interaction"
-    /usr/bin/grep -Fq '.buttonStyle(MoleSelectableRowButtonStyle' "$analyze_media" || \
-        fail "disk analysis slim rows bypass the selectable-row interaction"
+    /usr/bin/grep -Fq '.buttonStyle(MolePlainButtonStyle(pressedScale: 0.99))' "$analyze" && \
+        /usr/bin/grep -Fq '.modifier(ListRowSurface(selected: selected))' "$analyze" || \
+        fail "disk analysis content rows lack shared press feedback and selection semantics"
     /usr/bin/grep -Fq '.toggleStyle(.checkbox)' "$ROOT_DIR/SimpleMole/Views/DeveloperRuntimePanel.swift" && \
         /usr/bin/grep -Fq '.modifier(DevSelectionSurface(selected: selected))' "$ROOT_DIR/SimpleMole/Views/DeveloperRuntimePanel.swift" || \
         fail "development environment rows lack checkbox semantics or glass selection"
@@ -235,7 +237,7 @@ test_process_icon_contract() {
 test_island_contract() {
     local island="$ROOT_DIR/SimpleMole/Views/FloatingIslandView.swift"
     local app_delegate="$ROOT_DIR/SimpleMole/AppDelegate.swift"
-    local app_state="$ROOT_DIR/SimpleMole/AppState.swift"
+    local app_state="$APP_STATE_CONTRACT_SOURCE"
     local components="$ROOT_DIR/SimpleMole/Views/Components.swift"
     local l10n="$ROOT_DIR/SimpleMole/L10n/TablesProductivity.swift"
 
@@ -361,7 +363,7 @@ test_island_contract() {
 
 test_productivity_feature_contract() {
     local main_window="$ROOT_DIR/SimpleMole/Views/MainWindowView.swift"
-    local app_state="$ROOT_DIR/SimpleMole/AppState.swift"
+    local app_state="$APP_STATE_CONTRACT_SOURCE"
     local cleanup_view="$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift"
     local app_delegate="$ROOT_DIR/SimpleMole/AppDelegate.swift"
     local screenshot_service="$ROOT_DIR/SimpleMole/Services/ScreenShotService.swift"
@@ -758,9 +760,9 @@ test_local_signing_identity() {
         fail "full disk access has no granted-but-needs-relaunch detection"
     /usr/bin/grep -Fq 'permissions.disk.needsRelaunch' "$ROOT_DIR/SimpleMole/Views/PermissionCenterView.swift" || \
         fail "permission center does not offer a restart when full disk access is granted at the system level"
-    /usr/bin/grep -Fq 'Library/Logs/Nori' "$ROOT_DIR/SimpleMole/AppState.swift" || \
+    /usr/bin/grep -Fq 'Library/Logs/Nori' "$APP_STATE_CONTRACT_SOURCE" || \
         fail "relaunch helper still logs to a world-writable /tmp path"
-    if /usr/bin/grep -Fq '/tmp/nori-relaunch.log' "$ROOT_DIR/SimpleMole/AppState.swift"; then
+    if /usr/bin/grep -Fq '/tmp/nori-relaunch.log' "$APP_STATE_CONTRACT_SOURCE"; then
         fail "relaunch helper still logs to /tmp"
     fi
     pass "local self-signed identity, build selection and permission self-healing contracts"
@@ -851,7 +853,7 @@ test_theme_contract() {
 }
 
 test_process_sampler() {
-    local app_state="$ROOT_DIR/SimpleMole/AppState.swift"
+    local app_state="$APP_STATE_CONTRACT_SOURCE"
     local processes_view="$ROOT_DIR/SimpleMole/Views/ProcessesTabView.swift"
     /usr/bin/grep -Fq 'ProcessSampler.shared.sample()' "$app_state" || \
         fail "app-level process view still depends on ps text"
@@ -1674,13 +1676,13 @@ stale_identity_for() {
 
 test_uninstall_space_breakdown() {
     local native_core="$ROOT_DIR/SimpleMole/Services/NativeCore.swift"
-    /usr/bin/grep -Fq 'bytes: self.directorySize(appURL), label: "app"' \
-        "$native_core" || fail "native uninstall plan does not size the app bundle separately"
+    /usr/bin/grep -Fq 'bytes: directorySize(appURL), label: "app"' \
+        "$ROOT_DIR/SimpleMole/Services/UninstallPlanningService.swift" || fail "native uninstall plan does not size the app bundle separately"
     /usr/bin/grep -q 'uninstall.action' "$ROOT_DIR/SimpleMole/Views/UninstallTabView.swift" || \
         fail "uninstall list action is not wired to the uninstall label"
     /usr/bin/grep -Fq 'return matches.sorted' "$ROOT_DIR/SimpleMole/Services/UninstallListProjection.swift" || \
         fail "uninstall list is not sorted by estimated reclaimable bytes"
-    /usr/bin/grep -Fq 'scheduler: uninstallPresentationQueue' "$ROOT_DIR/SimpleMole/AppState.swift" || \
+    /usr/bin/grep -Fq 'scheduler: uninstallPresentationQueue' "$APP_STATE_CONTRACT_SOURCE" || \
         fail "uninstall list sorting is not moved off the UI actor"
     /usr/bin/grep -Fq 'let space: UninstallSpaceBreakdown' "$ROOT_DIR/SimpleMole/Models.swift" || \
         fail "uninstall space is still recomputed during rendering"
@@ -1701,23 +1703,23 @@ test_uninstall_space_breakdown() {
     if /usr/bin/grep -q 'uninstall.preview"' "$ROOT_DIR/SimpleMole/Views/UninstallTabView.swift"; then
         fail "uninstall list still exposes the preview label"
     fi
-    /usr/bin/grep -Fq 'NativeCore.shared.scanInstalledApps' "$ROOT_DIR/SimpleMole/AppState.swift" || \
+    /usr/bin/grep -Fq 'NativeCore.shared.scanInstalledApps' "$APP_STATE_CONTRACT_SOURCE" || \
         fail "AppState does not use the native app inventory"
-    /usr/bin/grep -Fq 'startUninstallInventoryMonitoring(includeProtectedPaths: false)' "$ROOT_DIR/SimpleMole/AppState.swift" || \
+    /usr/bin/grep -Fq 'startUninstallInventoryMonitoring(includeProtectedPaths: false)' "$APP_STATE_CONTRACT_SOURCE" || \
         fail "external installs and uninstalls do not trigger an inventory refresh"
-    /usr/bin/grep -Fq 'startUninstallInventoryMonitoring(includeProtectedPaths: true)' "$ROOT_DIR/SimpleMole/AppState.swift" || \
+    /usr/bin/grep -Fq 'startUninstallInventoryMonitoring(includeProtectedPaths: true)' "$APP_STATE_CONTRACT_SOURCE" || \
         fail "Trash inventory monitoring is not activated after Full Disk Access"
-    /usr/bin/grep -Fq 'uninstallInventoryWatchedPaths.contains(path)' "$ROOT_DIR/SimpleMole/AppState.swift" || \
+    /usr/bin/grep -Fq 'uninstallInventoryWatchedPaths.contains(path)' "$APP_STATE_CONTRACT_SOURCE" || \
         fail "inventory filesystem watchers are not idempotent"
-    /usr/bin/grep -Fq 'UninstallInventoryCache.restoreInBackground()' "$ROOT_DIR/SimpleMole/AppState.swift" || \
+    /usr/bin/grep -Fq 'UninstallInventoryCache.restoreInBackground()' "$APP_STATE_CONTRACT_SOURCE" || \
         fail "uninstall inventory is not restored across app launches"
-    /usr/bin/grep -Fq 'withTaskGroup' "$ROOT_DIR/SimpleMole/AppState.swift" || \
+    /usr/bin/grep -Fq 'withTaskGroup' "$APP_STATE_CONTRACT_SOURCE" || \
         fail "new and changed apps are not enriched in bounded background batches"
     /usr/bin/grep -Fq 'DeletionPlan.identity(at: app.path + "/Contents/Info.plist") == app.infoIdentity' \
         "$native_core" || fail "native uninstall does not bind the app Info.plist identity"
-    /usr/bin/grep -Fq 'candidate.path != appURL.path' "$native_core" || \
+    /usr/bin/grep -Fq 'candidate.path != appURL.path' "$ROOT_DIR/SimpleMole/Services/UninstallPlanningService.swift" || \
         fail "native uninstall does not protect same-Bundle-ID sibling installs"
-    /usr/bin/grep -Fq 'self.relatedUninstallCandidates(' "$native_core" || \
+    /usr/bin/grep -Fq 'files.append(contentsOf: relatedUninstallCandidates(' "$ROOT_DIR/SimpleMole/Services/UninstallPlanningService.swift" || \
         fail "native uninstall does not build an exact related-file plan"
 
     local key copy_count
@@ -1754,7 +1756,7 @@ test_uninstall_space_breakdown() {
 test_native_cask_uninstall_contract() {
     local native_core="$ROOT_DIR/SimpleMole/Services/NativeCore.swift"
     /usr/bin/grep -Fq 'private func nativeBrewCaskToken(for app: UninstallApp)' \
-        "$native_core" || fail "native uninstall does not resolve Homebrew casks"
+        "$ROOT_DIR/SimpleMole/Services/UninstallPlanningService.swift" || fail "native uninstall does not resolve Homebrew casks"
     /usr/bin/grep -Fq 'runCommand(brew, ["uninstall", "--cask", "--force", plan.caskToken])' \
         "$native_core" || fail "native cask uninstall does not use the reviewed token"
     /usr/bin/grep -Fq 'result.removed + 1' "$native_core" || \
@@ -1766,13 +1768,13 @@ test_native_cask_uninstall_contract() {
         fail "native cask uninstall runs unreviewed brew autoremove"
     fi
     /usr/bin/sed -n '/func previewUninstall(_ app:/,/func uninstallJob(for app:/p' \
-        "$ROOT_DIR/SimpleMole/AppState.swift" | /usr/bin/grep -q 'confirmation = Confirmation' || \
+        "$APP_STATE_CONTRACT_SOURCE" | /usr/bin/grep -q 'confirmation = Confirmation' || \
         fail "uninstall action must confirm removal and forced process shutdown"
     pass "native Homebrew cask discovery, token validation and uninstall"
 }
 
 test_uninstall_queue() {
-    local state_source="$ROOT_DIR/SimpleMole/AppState.swift"
+    local state_source="$APP_STATE_CONTRACT_SOURCE"
     local view_source="$ROOT_DIR/SimpleMole/Views/UninstallTabView.swift"
     if /usr/bin/grep -Eq 'isDisabled: state\.(isUninstalling|isPreviewingUninstall)|disabled\(state\.isUninstalling' \
         "$view_source"; then
@@ -1786,8 +1788,9 @@ test_uninstall_queue() {
         fail "uninstall confirmation does not enqueue its captured request"
     /usr/bin/grep -Fq 'let target = job.app' "$state_source" || \
         fail "uninstall worker does not use the queued application identity"
-    /usr/bin/grep -Fq 'NativeCore.shared.applyUninstall(target, plan: plan,' "$state_source" || \
-        fail "uninstall worker does not pass its captured target and plan to NativeCore"
+    /usr/bin/grep -Fq 'uninstallExecutor.execute(job)' "$state_source" && \
+        /usr/bin/grep -Fq 'dependencies.apply(app, plan, includingData, appAlreadyRemoved)' "$ROOT_DIR/SimpleMole/Services/UninstallWorkflow.swift" || \
+        fail "uninstall worker does not pass the captured request to its scoped executor"
     if /usr/bin/grep -Eq 'var uninstall(Target|Files|NeedsAdmin|IsBrewCask|CaskToken|IncludesProtectedAppData)' \
         "$state_source"; then
         fail "mutable row selection can still overwrite a queued uninstall request"
@@ -2379,13 +2382,13 @@ test_inventory_components() {
 test_cleanup_execution_accounting() {
     local apply_source installer_source
     apply_source=$(sed -n '/private func performApply(/,/private func reportCleanupResult/p' \
-        "$ROOT_DIR/SimpleMole/AppState.swift")
+        "$APP_STATE_CONTRACT_SOURCE")
     if printf '%s\n' "$apply_source" | grep -Fq 'cleanupScanComplete = false'; then
         fail "partial cleanup invalidates the scan and disables retry"
     fi
     # 安装包清理并入统一“清理”分发：勾选后仍走废纸篓（DR-4），不再有独立确认按钮。
     installer_source=$(sed -n '/private func performApply(/,/private func reportCleanupResult/p' \
-        "$ROOT_DIR/SimpleMole/AppState.swift")
+        "$APP_STATE_CONTRACT_SOURCE")
     printf '%s\n' "$installer_source" | grep -Fq '.installerTrash, categories: [installers], mode: mode,' || \
         fail "unified apply does not dispatch checked installers to the installer route"
     printf '%s\n' "$installer_source" | grep -Fq 'permanently: false' || \
@@ -2521,7 +2524,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
         fail "media slimming removes something other than its own temporary output"
     /usr/bin/grep -Fq 'name.hasPrefix(".") && name.contains(".nori-slim-\(token)")' "$media_slimmer" || \
         fail "media slimming temp cleanup is not bound to its own token"
-    if /usr/bin/grep -Fq 'case images' "$ROOT_DIR/SimpleMole/AppState.swift"; then
+    if /usr/bin/grep -Fq 'case images' "$APP_STATE_CONTRACT_SOURCE"; then
         fail "the standalone image tab came back; image slimming lives in disk analysis"
     fi
     bash "$ROOT_DIR/script/test_login_item.sh" || fail "login item opt-in and system status tests"
@@ -2530,6 +2533,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_cli_tools.sh" || fail "multi-ecosystem CLI inventory tests"
     bash "$ROOT_DIR/script/test_software_updates.sh" || fail "application and CLI version checks"
     bash "$ROOT_DIR/script/test_software_update_execution.sh" || fail "software update commands and running-process closure"
+    bash "$ROOT_DIR/script/test_software_workflows.sh" || fail "software workflow dependency and orchestration contracts"
     bash "$ROOT_DIR/script/test_administrator_uninstall.sh" || fail "administrator uninstall and Trash safety tests"
 fi
 test_native_core_ownership_contract

@@ -120,7 +120,7 @@ enum ShellEnvAudit {
     private static func pathLineIssue(_ line: String, at number: Int, in file: String,
                                       home: String) -> Issue? {
         guard let value = pathValue(of: line) else { return nil }
-        var segments = value.split(separator: ":", omittingEmptySubsequences: false)
+        let segments = value.split(separator: ":", omittingEmptySubsequences: false)
             .map(String.init)
         // 变量引用段（$PATH 等）不参与判定，原样保留。
         var kept: [String] = []
@@ -244,6 +244,3 @@ enum ShellEnvAudit {
         path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
     }
 }
-
-/// AppState 暴露给视图的别名，避免视图直接依赖审计实现。
-typealias ShellEnvIssue = ShellEnvAudit.Issue

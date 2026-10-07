@@ -10,6 +10,11 @@ swiftc -target "$(uname -m)-apple-macos13.0" -module-cache-path "$TEST_DIR/modul
     -framework AppKit -framework IOKit \
     "${SOURCES[@]}" \
     "$ROOT_DIR/SimpleMole/Services/CommandLineToolInventory.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CommandLineTool.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CLIInstalledToolDiscovery.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CLIManagedCommand.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CLICommandRunner.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CLIUninstallService.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCLIService.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
     "$ROOT_DIR/script/CommandLineToolInventoryTests.swift" \
