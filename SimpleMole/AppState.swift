@@ -3734,56 +3734,49 @@ final class AppState: ObservableObject {
     private static let autoCleanupLastCheckKey = "SMAutoCleanupLastCheck"
     private static let autoCleanupMinimumInterval: TimeInterval = 6 * 60 * 60
 
-    /// 通过系统目录选择器添加规则。新规则默认关闭，要求用户预览后显式启用。
-    func addAutoCleanupRule() {
-        guard !isBusy else { return }
+    /// 选择目录后进入同一个创建面板，在创建前确认用途与策略。
+    func chooseAutoCleanupDirectory() -> String? {
+        guard !isBusy else { return nil }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = false
         panel.message = l10n.t("auto.pick.message")
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
         do {
             let directory = try AutoCleanupPlanner.validatedRoot(url)
             guard !autoCleanupRules.contains(where: { $0.directories.contains(directory) }) else {
                 autoCleanupStatus = l10n.t("auto.status.duplicate")
-                return
+                return nil
             }
-            let rule = AutoCleanupRule(
-                directory: directory,
-                policy: .sizeLimit,
-                sizeLimitBytes: 5_000_000_000,
-                retentionDays: 30,
-                isEnabled: false,
-                isRegenerable: false,
-                lastRunAt: nil,
-                lastReclaimedBytes: 0)
-            autoCleanupRules.append(rule)
-            persistAutoCleanupRules()
-            // 不立刻预览：未确认“仅可再生内容”前预览必然失败，改为引导
-            // 用户先完成确认，再预览、再开启。
-            autoCleanupStatus = l10n.t("auto.status.needsConfirmation")
+            return directory
         } catch {
             autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
             log(autoCleanupStatus)
             presentTaskFailure(message: autoCleanupStatus)
+            return nil
         }
     }
 
     /// 清理类目的多个缓存目录归入一个任务，共用策略、开关和执行统计。
     /// 清理页的路径已由风险策略判定为可再生缓存，创建时直接记录
-    /// 安全授权；磁盘分析的目录由用户在规则面板里自行确认“仅可再生
-    /// 内容”。规则一律默认关闭，创建后打开面板供审阅与启用。
+    /// 安全授权；磁盘分析的目录由用户在创建面板里自行确认“仅可再生
+    /// 内容”。确认发生在创建面板里；创建成功就启用并立即检查。
     @discardableResult
     func addAutoCleanupRules(forDirectories directories: [String],
                              policy: AutoCleanupPolicy,
                              sizeLimitBytes: UInt64,
                              retentionDays: Int,
-                             cacheVerifiedRegenerable: Bool,
+                             regenerableConfirmed: Bool,
                              sourceName: String? = nil) -> (added: Int, skipped: Int) {
+        guard !isBusy, regenerableConfirmed else {
+            autoCleanupStatus = l10n.t("auto.status.needsConfirmation")
+            return (0, directories.count)
+        }
         var added = 0
         var skipped = 0
+        var addedDirectories = Set<String>()
         var failures: [String] = []
         for directory in directories {
             do {
@@ -3793,16 +3786,21 @@ final class AppState: ObservableObject {
                     skipped += 1
                     continue
                 }
-                autoCleanupRules.append(AutoCleanupRule(
+                let rule = AutoCleanupRule(
                     directory: validated,
                     sourceName: sourceName,
                     policy: policy,
                     sizeLimitBytes: sizeLimitBytes,
                     retentionDays: retentionDays,
-                    isEnabled: false,
-                    isRegenerable: cacheVerifiedRegenerable,
+                    isEnabled: true,
+                    isRegenerable: true,
                     lastRunAt: nil,
-                    lastReclaimedBytes: 0))
+                    lastReclaimedBytes: 0)
+                guard rule.isSafetyAuthorized, rule.isEnabled else {
+                    throw AutoCleanupPlannerError.rootAuthorizationChanged(validated)
+                }
+                autoCleanupRules.append(rule)
+                addedDirectories.insert(validated)
                 added += 1
             } catch {
                 skipped += 1
@@ -3812,16 +3810,22 @@ final class AppState: ObservableObject {
         }
         if added > 0 {
             autoCleanupRules = AutoCleanupRuleStore.consolidatedTasks(from: autoCleanupRules)
-            if let sourceName,
-               let index = autoCleanupRules.firstIndex(where: { $0.sourceName == sourceName }) {
+            // 合并任务的迁移规则可能因旧策略不同而暂停；明确的新建操作
+            // 仍须启用它触及的、已确认完整范围的任务。
+            for index in autoCleanupRules.indices where
+                !addedDirectories.isDisjoint(with: autoCleanupRules[index].directories) {
                 autoCleanupRules[index].policy = policy
                 autoCleanupRules[index].sizeLimitBytes = sizeLimitBytes
                 autoCleanupRules[index].retentionDays = retentionDays
-                autoCleanupRules[index].isEnabled = false
+                autoCleanupRules[index].isEnabled = autoCleanupRules[index].isSafetyAuthorized
             }
             persistAutoCleanupRules()
         }
         if !failures.isEmpty { presentTaskFailure(details: failures) }
+        if added > 0 {
+            UserDefaults.standard.removeObject(forKey: Self.autoCleanupLastCheckKey)
+            runScheduledAutoCleanup(force: true, notifyingUser: true)
+        }
         return (added, skipped)
     }
 
@@ -4046,9 +4050,11 @@ final class AppState: ObservableObject {
                     }
                     guard !plan.candidates.isEmpty else {
                         autoCleanupRuleIssues[current.id] = nil
+                        noteAutoCleanupCheck(current.id)
                         continue
                     }
                     let result = await applyAutoCleanup(rule: current, plan: plan)
+                    noteAutoCleanupCheck(current.id)
                     removed += result.removed
                     reclaimed &+= result.reclaimedBytes
                     failures += result.failed
@@ -4057,6 +4063,7 @@ final class AppState: ObservableObject {
                         : l10n.tf("auto.status.partial", result.removed, result.failed)
                 } catch {
                     failures += 1
+                    noteAutoCleanupCheck(current.id)
                     autoCleanupRuleIssues[current.id] = error.localizedDescription
                     log(l10n.tf("auto.log.ruleFailed", current.directory, error.localizedDescription))
                     failureDetails.append(current.directory + "\n" + error.localizedDescription)
@@ -4074,6 +4081,12 @@ final class AppState: ObservableObject {
                 presentTaskFailure(message: autoCleanupStatus, details: failureDetails)
             }
         }
+    }
+
+    private func noteAutoCleanupCheck(_ id: UUID) {
+        guard let index = autoCleanupRules.firstIndex(where: { $0.id == id }) else { return }
+        autoCleanupRules[index].lastCheckedAt = Date()
+        persistAutoCleanupRules()
     }
 
     private func scheduleAutomationRetry() {
@@ -4101,30 +4114,20 @@ final class AppState: ObservableObject {
               plan.candidates.allSatisfy(\.automaticEligible) else {
             return (0, max(1, plan.candidates.count), 0, [l10n.t("auto.status.authorizationRequired")])
         }
-        var stdinData = Data()
         var planned: [AutoCleanupCandidate] = []
         var preparationFailures = 0
         for candidate in plan.candidates {
             // Every candidate is a direct child of its own authorized cache root.
-            // The bridge checks each root identity even though execution is one task.
+            // 根授权由原生最终验证再次检查，不能凭路径字符串继承。
             let candidateRoot = URL(fileURLWithPath: candidate.path).deletingLastPathComponent().path
             guard !candidate.identity.isEmpty,
                   let root = rule.roots.first(where: { $0.directory == candidateRoot }),
-                  let authorizedRootIdentity = root.authorizedIdentity,
+                  root.authorizedIdentity != nil,
                   !protectedAutoCleanupDirectories(excluding: rule.id).contains(where: {
                       $0 == candidate.path || $0.hasPrefix(candidate.path + "/")
                   }) else {
                 preparationFailures += 1
                 continue
-            }
-            let plannedLatestMtime = String(
-                Int64(candidate.modifiedAt.timeIntervalSince1970.rounded(.down)))
-            for field in [candidateRoot, authorizedRootIdentity,
-                          candidate.path, candidate.identity,
-                          plannedLatestMtime,
-                          AutoCleanupRule.safetyToken] {
-                stdinData.append(contentsOf: field.utf8)
-                stdinData.append(0)
             }
             planned.append(candidate)
         }
@@ -4134,17 +4137,23 @@ final class AppState: ObservableObject {
 
         autoCleanupStatus = l10n.tf("auto.status.cleaning", planned.count)
         log(l10n.tf("auto.log.cleaning", planned.count, rule.directory))
-        let result = await MoleEngine.shared.runBridgeWithStdin(
-            "bin/app_auto_apply.sh", stdinData: stdinData, timeout: 900)
-        if !result.output.isEmpty { log(result.output) }
-        logFailure(result, stdoutAlreadyLogged: true, notifyingUser: false)
-        let summary = CleanupExecutionResult.reconciled(
-            bridgeOutput: result.output, expectedCount: planned.count)
-        let processFailure = result.succeeded || summary.failed > 0 ? 0 : 1
-        let failed = preparationFailures + summary.failed + summary.skipped + processFailure
-        let reclaimed = failed == 0 && summary.removed == planned.count
-            ? planned.reduce(0) { $0 &+ $1.bytes }
-            : 0
+        let candidatesByPath = Dictionary(planned.map { ($0.path, $0) },
+                                          uniquingKeysWith: { first, _ in first })
+        let protectedDirectories = protectedAutoCleanupDirectories(excluding: rule.id)
+        let summary = await Task.detached(priority: .utility) {
+            NativeCore.shared.applyCleanup(
+                items: planned.map { DeletionPlan.Item(record: $0.path, identity: $0.identity) },
+                permanent: false, allowedRoots: rule.directories,
+                finalValidation: { path in
+                    guard let candidate = candidatesByPath[path] else { return false }
+                    return AutoCleanupPlanner.revalidate(candidate, for: rule,
+                                                        protecting: protectedDirectories)
+                })
+        }.value
+        let failed = preparationFailures + summary.failed + summary.skipped
+        let reclaimed = summary.removedPaths.reduce(UInt64(0)) {
+            $0 &+ (candidatesByPath[$1]?.bytes ?? 0)
+        }
         if autoCleanupPreviewRuleID == rule.id {
             autoCleanupPreview = nil
             autoCleanupPreviewRuleID = nil
@@ -4157,7 +4166,7 @@ final class AppState: ObservableObject {
             persistAutoCleanupRules()
         }
         CleanupCache.invalidate()
-        return (summary.removed, failed, reclaimed, failed > 0 ? [result.diagnosticOutput] : [])
+        return (summary.removed, failed, reclaimed, failed > 0 ? summary.messages : [])
     }
 
     private func persistAutoCleanupRules() {

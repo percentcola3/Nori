@@ -4,15 +4,32 @@ struct AutoCleanupRoot {
     var directory: String
     var authorizedIdentity: String?
 }
+enum AutoCleanupPolicy { case sizeLimit, retentionDays }
+enum AutoCleanupPlannerError: Error { case rootAuthorizationChanged(String) }
+enum AutoCleanupRuleStore {
+    static var pausesConsolidatedTasks = false
+    static func consolidatedTasks(from rules: [AutoCleanupRule]) -> [AutoCleanupRule] {
+        rules.map { rule in
+            var grouped = rule
+            if pausesConsolidatedTasks { grouped.isEnabled = false }
+            return grouped
+        }
+    }
+}
 struct AutoCleanupRule: Equatable {
     static let safetyToken = "safe-trash-v4"
     var id = UUID()
     var isEnabled = true
     var isSafetyAuthorized = true
     var directory = "/fixture/cache"
+    var sourceName: String?
+    var policy = AutoCleanupPolicy.sizeLimit
+    var sizeLimitBytes: UInt64 = 1_000_000_000
+    var isRegenerable = true
     var retentionDays = 7
     var authorizedRootIdentity: String? = "1:2:3"
     var lastRunAt: Date?
+    var lastCheckedAt: Date?
     var lastReclaimedBytes: UInt64 = 0
     var executionCount = 0
     var totalReclaimedBytes: UInt64 = 0
@@ -22,6 +39,22 @@ struct AutoCleanupRule: Equatable {
             + (extraDirectory.map { [AutoCleanupRoot(directory: $0, authorizedIdentity: "2:3:4")] } ?? [])
     }
     var directories: [String] { roots.map(\.directory) }
+
+    init(directory: String = "/fixture/cache", sourceName: String? = nil,
+         policy: AutoCleanupPolicy = .sizeLimit, sizeLimitBytes: UInt64 = 1_000_000_000,
+         retentionDays: Int = 7, isEnabled: Bool = true, isRegenerable: Bool = true,
+         lastRunAt: Date? = nil, lastReclaimedBytes: UInt64 = 0) {
+        self.directory = directory
+        self.sourceName = sourceName
+        self.policy = policy
+        self.sizeLimitBytes = sizeLimitBytes
+        self.retentionDays = retentionDays
+        self.isEnabled = isEnabled
+        self.isRegenerable = isRegenerable
+        self.isSafetyAuthorized = isRegenerable
+        self.lastRunAt = lastRunAt
+        self.lastReclaimedBytes = lastReclaimedBytes
+    }
 }
 struct AutoCleanupCandidate {
     var path = "/fixture/cache/old.cache"
@@ -34,21 +67,30 @@ struct AutoCleanupPlan {
     var root = "/fixture/cache"
     var candidates = [AutoCleanupCandidate()]
 }
-struct FixtureBridgeResult {
-    var output: String
-    var succeeded = true
-    var diagnosticOutput: String { output }
+struct DeletionPlan {
+    struct Item: Sendable { let record: String; let identity: String }
 }
-@MainActor final class MoleEngine {
-    static let shared = MoleEngine()
+final class NativeCore: @unchecked Sendable {
+    struct ApplySummary: Sendable {
+        var removed: Int
+        var skipped: Int = 0
+        var failed: Int = 0
+        var removedPaths = Set<String>()
+        var messages: [String] = []
+    }
+    static let shared = NativeCore()
     var calls = 0
     var fail = false
-    var input = Data()
-    func runBridgeWithStdin(_ script: String, stdinData: Data, timeout: Int) async -> FixtureBridgeResult {
-        precondition(script == "bin/app_auto_apply.sh" && timeout == 900)
-        calls += 1; input = stdinData
-        let count = stdinData.split(separator: 0).count / 6
-        return .init(output: fail ? "removed=0\nskipped=0\nfailed=1" : "removed=\(count)\nskipped=0\nfailed=0", succeeded: !fail)
+    var items: [DeletionPlan.Item] = []
+    var allowedRoots: [String] = []
+    func applyCleanup(items: [DeletionPlan.Item], permanent: Bool, allowedRoots: [String],
+                      finalValidation: ((String) -> Bool)?) -> ApplySummary {
+        precondition(!permanent, "automatic cleanup must remain recoverable")
+        calls += 1; self.items = items; self.allowedRoots = allowedRoots
+        if fail { return .init(removed: 0, failed: items.count, messages: ["Fixture cleanup failed"]) }
+        let approved = items.filter { finalValidation?($0.record) == true }
+        return .init(removed: approved.count, skipped: items.count - approved.count,
+                     removedPaths: Set(approved.map(\.record)))
     }
 }
 enum CleanupCache { static func invalidate() {} }
@@ -59,6 +101,11 @@ enum FixtureError: Error { case unavailable }
     static var empty = false
     static var paused = false
     static var continuation: CheckedContinuation<Void, Never>?
+    static func validatedRoot(_ url: URL) throws -> String { url.path }
+    nonisolated static func revalidate(_ candidate: AutoCleanupCandidate, for rule: AutoCleanupRule,
+                                      protecting directories: [String]) -> Bool {
+        candidate.automaticEligible && rule.isSafetyAuthorized
+    }
     static func plan(for rule: AutoCleanupRule, protecting: [String]) async throws -> AutoCleanupPlan {
         calls += 1
         if paused { await withCheckedContinuation { continuation = $0 } }
@@ -89,23 +136,24 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
     var autoCleanupStatus = ""
     var autoCleanupRuleIssues: [UUID: String] = [:]
     var isAutoCleanupScanning = false
-    var applied: Int { MoleEngine.shared.calls }
+    var applied: Int { NativeCore.shared.calls }
     var applyFails: Bool {
-        get { MoleEngine.shared.fail }
-        set { MoleEngine.shared.fail = newValue }
+        get { NativeCore.shared.fail }
+        set { NativeCore.shared.fail = newValue }
     }
     var autoCleanupPreviewRuleID: UUID?
     var autoCleanupPreview: AutoCleanupPlan?
     var notifications = 0
     var logs = 0
+    var persistCalls = 0
     let l10n = FixtureL10n()
     func log(_ value: String) { logs += 1 }
     func presentTaskFailure(message: String, details: [String]) { notifications += 1 }
+    func presentTaskFailure(details: [String]) { notifications += 1 }
     func protectedAutoCleanupDirectories(excluding id: UUID) -> [String] {
         autoCleanupRules.filter { $0.id != id }.flatMap(\.directories)
     }
-    func logFailure(_ result: FixtureBridgeResult, stdoutAlreadyLogged: Bool, notifyingUser: Bool) {}
-    func persistAutoCleanupRules() {}
+    func persistAutoCleanupRules() { persistCalls += 1 }
     // PRODUCTION_SCHEDULER
 }
 @main struct AutoCleanupWorkflowTests {
@@ -114,7 +162,8 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
     }
     @MainActor static func fixture() -> SchedulerFixture {
         AutoCleanupPlanner.reset()
-        MoleEngine.shared.calls = 0; MoleEngine.shared.fail = false; MoleEngine.shared.input = Data()
+        AutoCleanupRuleStore.pausesConsolidatedTasks = false
+        NativeCore.shared.calls = 0; NativeCore.shared.fail = false; NativeCore.shared.items = []
         UserDefaults.standard.removeObject(forKey: SchedulerFixture.autoCleanupLastCheckKey)
         return SchedulerFixture()
     }
@@ -128,6 +177,34 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
     @MainActor static func main() async {
         defer { UserDefaults.standard.removeObject(forKey: SchedulerFixture.autoCleanupLastCheckKey) }
         var s = fixture()
+        s.autoCleanupRules = []
+        UserDefaults.standard.set(Date(), forKey: SchedulerFixture.autoCleanupLastCheckKey)
+        let created = s.addAutoCleanupRules(forDirectories: ["/fixture/cache"], policy: .sizeLimit,
+            sizeLimitBytes: 1_000_000_000, retentionDays: 7, regenerableConfirmed: true,
+            sourceName: "Fixture")
+        expect(created.added == 1 && s.autoCleanupRules[0].isEnabled
+               && s.autoCleanupRules[0].isSafetyAuthorized, "new task did not start enabled")
+        await settle(s)
+        expect(s.applied == 1 && s.autoCleanupRules[0].executionCount == 1 && s.persistCalls >= 2,
+               "creating a task did not immediately check, execute and persist despite the old throttle")
+        s = fixture(); s.autoCleanupRules = []
+        AutoCleanupRuleStore.pausesConsolidatedTasks = true
+        let grouped = s.addAutoCleanupRules(forDirectories: ["/fixture/cache"], policy: .sizeLimit,
+            sizeLimitBytes: 1_000_000_000, retentionDays: 7, regenerableConfirmed: true)
+        await settle(s)
+        expect(grouped.added == 1 && s.autoCleanupRules[0].isEnabled && s.applied == 1,
+               "task consolidation silently disabled an explicitly created task")
+        s = fixture(); s.autoCleanupRules = []
+        let unconfirmed = s.addAutoCleanupRules(forDirectories: ["/fixture/cache"], policy: .sizeLimit,
+            sizeLimitBytes: 1_000_000_000, retentionDays: 7, regenerableConfirmed: false)
+        expect(unconfirmed.added == 0 && s.autoCleanupRules.isEmpty && AutoCleanupPlanner.calls == 0,
+               "an unconfirmed folder became an active task")
+        s = fixture(); s.autoCleanupRules[0].isEnabled = false
+        let duplicate = s.addAutoCleanupRules(forDirectories: ["/fixture/cache"], policy: .sizeLimit,
+            sizeLimitBytes: 1_000_000_000, retentionDays: 7, regenerableConfirmed: true)
+        expect(duplicate.added == 0 && duplicate.skipped == 1 && !s.autoCleanupRules[0].isEnabled
+               && AutoCleanupPlanner.calls == 0, "duplicate creation resumed a previously paused task")
+        s = fixture()
         s.autoCleanupRules[0].isEnabled = false
         s.runScheduledAutoCleanup(force: true)
         expect(AutoCleanupPlanner.calls == 0 && !s.isAutoCleanupScanning, "disabled rule scheduled")
@@ -151,9 +228,10 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
         expect(s.applied == 1, "forced schedule did not run")
         expect(s.autoCleanupRules[0].executionCount == 1 && s.autoCleanupRules[0].lastReclaimedBytes == 4096,
                "confirmed execution statistics lost")
-        expect(String(data: MoleEngine.shared.input, encoding: .utf8)?.split(separator: "\0").map(String.init)
-               == ["/fixture/cache", "1:2:3", "/fixture/cache/old.cache", "1:3:4", "4", "safe-trash-v4"],
-               "bridge plan must bind root/candidate identities and safety token")
+        expect(NativeCore.shared.items.map(\.record) == ["/fixture/cache/old.cache"]
+               && NativeCore.shared.items.map(\.identity) == ["1:3:4"]
+               && NativeCore.shared.allowedRoots == ["/fixture/cache"],
+               "native plan must bind reviewed candidate identities and authorized roots")
         s = fixture()
         s.autoCleanupRules[0].extraDirectory = "/fixture/other-cache"
         var combinedPlan = AutoCleanupPlan()
@@ -161,13 +239,11 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
         secondCandidate.path = "/fixture/other-cache/second.cache"
         combinedPlan.candidates.append(secondCandidate)
         _ = await s.applyAutoCleanup(rule: s.autoCleanupRules[0], plan: combinedPlan)
-        let combinedFields = String(data: MoleEngine.shared.input, encoding: .utf8)?
-            .split(separator: "\0").map(String.init) ?? []
         expect(s.applied == 1 && s.autoCleanupRules[0].executionCount == 1,
                "multi-root task executed or recorded multiple times")
-        expect(combinedFields.count == 12 && combinedFields[0] == "/fixture/cache"
-               && combinedFields[6] == "/fixture/other-cache" && combinedFields[7] == "2:3:4",
-               "multi-root bridge batch lost a root authorization")
+        expect(NativeCore.shared.items.count == 2
+               && NativeCore.shared.allowedRoots == ["/fixture/cache", "/fixture/other-cache"],
+               "multi-root native batch lost an authorized scope")
         s = fixture()
         var outsidePlan = AutoCleanupPlan()
         outsidePlan.candidates[0].path = "/fixture/unapproved/old.cache"
@@ -180,6 +256,9 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
         s = fixture(); AutoCleanupPlanner.empty = true
         s.runScheduledAutoCleanup(force: true); await settle(s)
         expect(s.applied == 0 && s.notifications == 0, "empty plan applied")
+        expect(s.autoCleanupRules[0].lastCheckedAt != nil && s.autoCleanupRules[0].executionCount == 0
+               && s.autoCleanupRules[0].lastRunAt == nil,
+               "an empty scheduled check looked unexecuted or claimed a cleanup")
         s = fixture(); AutoCleanupPlanner.fail = true
         s.runScheduledAutoCleanup(force: true); await settle(s)
         expect(s.applied == 0 && s.notifications == 1 && !s.autoCleanupRuleIssues.isEmpty, "scan failure lost")

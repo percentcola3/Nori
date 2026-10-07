@@ -34,6 +34,7 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
     /// Device/inode/birth time of the directory when the user authorizes it.
     /// Recreating a directory at the same pathname never inherits consent.
     var authorizedRootIdentity: String?
+    var lastCheckedAt: Date?
     var lastRunAt: Date?
     var lastReclaimedBytes: UInt64
     /// 历史执行统计：累计执行次数与累计清理量，随每次执行递增。
@@ -93,7 +94,7 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
         case id, directory, sourceName, policy, sizeLimitBytes, retentionDays, isEnabled
         case additionalRoots
         case isRegenerable, safetyVersion, authorizedRootIdentity
-        case lastRunAt, lastReclaimedBytes
+        case lastCheckedAt, lastRunAt, lastReclaimedBytes
         case executionCount, totalReclaimedBytes
     }
 
@@ -128,6 +129,7 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
             || (Self.minimumSizeLimitBytes...Self.maximumSizeLimitBytes).contains(sizeLimitBytes)
         isEnabled = requestedEnabled && hasCurrentAuthorization && validSizeLimit
         lastRunAt = try values.decodeIfPresent(Date.self, forKey: .lastRunAt)
+        lastCheckedAt = try values.decodeIfPresent(Date.self, forKey: .lastCheckedAt)
         lastReclaimedBytes = try values.decodeIfPresent(UInt64.self, forKey: .lastReclaimedBytes) ?? 0
         // 旧数据没有统计字段：从 0 开始累计。
         executionCount = try values.decodeIfPresent(Int.self, forKey: .executionCount) ?? 0
@@ -256,6 +258,7 @@ enum AutoCleanupRuleStore {
             }
             task.isEnabled = samePolicy && task.isRegenerable && group.rules.allSatisfy(\.isEnabled)
             task.lastRunAt = group.rules.compactMap(\.lastRunAt).max()
+            task.lastCheckedAt = group.rules.compactMap(\.lastCheckedAt).max()
             task.executionCount = group.rules.map(\.executionCount).max() ?? 0
             func sum(_ values: [UInt64]) -> UInt64 {
                 values.reduce(0) { result, value in
@@ -424,6 +427,24 @@ enum AutoCleanupPlanner {
 
     static func validatedRoot(_ url: URL) throws -> String {
         try validateRoot(url).path
+    }
+
+    /// 原生执行边界再次复核根身份、直接子项、内容与整棵子树的写入时间。
+    static func revalidate(_ candidate: AutoCleanupCandidate, for rule: AutoCleanupRule,
+                           protecting directories: [String]) -> Bool {
+        guard rule.isSafetyAuthorized, candidate.automaticEligible,
+              DeletionPlan.isLexicallySafePath(candidate.path) else { return false }
+        let url = URL(fileURLWithPath: candidate.path)
+        guard let root = rule.roots.first(where: {
+            $0.directory == url.deletingLastPathComponent().path
+        }), !(directories + rule.directories).contains(where: {
+            $0 == candidate.path || $0.hasPrefix(candidate.path + "/")
+        }), let validated = try? validateRoot(URL(fileURLWithPath: root.directory)),
+              validated.path == root.directory,
+              AutoCleanupRule.rootIdentity(at: root.directory) == root.authorizedIdentity,
+              let current = try? measureItem(at: url, fileManager: .default) else { return false }
+        return current.automaticEligible && current.identity == candidate.identity
+            && current.modifiedAt == candidate.modifiedAt
     }
 
     /// 扫描与计算全部放到 utility 任务中；任何不完整读取都会让整个计划失败。

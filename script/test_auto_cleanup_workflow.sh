@@ -11,7 +11,7 @@ import re, sys
 root, dest = map(Path, sys.argv[1:])
 lines = (root / 'SimpleMole/AppState.swift').read_text().splitlines()
 methods = []
-for name in ['runScheduledAutoCleanup', 'scheduleAutomationRetry', 'cancelAutomationRetry', 'applyAutoCleanup']:
+for name in ['addAutoCleanupRules', 'runScheduledAutoCleanup', 'noteAutoCleanupCheck', 'scheduleAutomationRetry', 'cancelAutomationRetry', 'applyAutoCleanup']:
     matches = [i for i, line in enumerate(lines) if re.match(r'^    (?:private )?func ' + name + r'\(', line)]
     if len(matches) != 1:
         raise SystemExit('Expected exactly one production method: ' + name)

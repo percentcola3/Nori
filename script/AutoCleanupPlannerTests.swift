@@ -88,6 +88,10 @@ enum AutoCleanupPlannerTests {
         let oldestIdentity = try deletionIdentity(at: oldest)
         try expect(plannedOldest.identity == oldestIdentity,
                    "candidate was not bound to its scan-time identity")
+        try expect(AutoCleanupPlanner.revalidate(plannedOldest, for: exactRule, protecting: []),
+                   "unchanged automatic candidate failed final native validation")
+        try expect(!AutoCleanupPlanner.revalidate(plannedOldest, for: exactRule, protecting: [oldest.path]),
+                   "another rule's root crossed the native validation boundary")
         try expect(exactPlan.remainingBytes == exactLimit,
                    "capacity rule did not stop at its configured limit")
 
@@ -292,11 +296,37 @@ enum AutoCleanupPlannerTests {
         storedRule.sourceName = "Test Cache"
         storedRule.isEnabled = false
         storedRule.lastRunAt = Date(timeIntervalSince1970: 1_700_000_000)
+        storedRule.lastCheckedAt = Date(timeIntervalSince1970: 1_700_000_100)
         storedRule.lastReclaimedBytes = 12_345
         let storedRules = [exactRule, storedRule]
         AutoCleanupRuleStore.save(storedRules, to: defaults)
         try expect(AutoCleanupRuleStore.load(from: defaults) == storedRules,
                    "UserDefaults JSON roundtrip changed the rules")
+
+        let recheckRoot = fixtureRoot.appendingPathComponent("native-recheck")
+        let recheckItem = recheckRoot.appendingPathComponent("old-folder")
+        let recheckPayload = recheckItem.appendingPathComponent("payload.bin")
+        try fileManager.createDirectory(at: recheckItem, withIntermediateDirectories: true)
+        try Data("fixture".utf8).write(to: recheckPayload)
+        let oldDate = now.addingTimeInterval(-3 * 86_400)
+        try setModificationDate(oldDate, at: recheckPayload, fileManager: fileManager)
+        try setModificationDate(oldDate, at: recheckItem, fileManager: fileManager)
+        let recheckRule = AutoCleanupRule(directory: recheckRoot.path, policy: .retentionDays,
+            sizeLimitBytes: 0, retentionDays: 1, isRegenerable: true)
+        let recheckPlan = try await AutoCleanupPlanner.plan(for: recheckRule)
+        let recheckCandidate = try requireCandidate(recheckItem.path, in: recheckPlan)
+        try expect(AutoCleanupPlanner.revalidate(recheckCandidate, for: recheckRule, protecting: []),
+                   "unchanged directory failed native validation")
+        try setModificationDate(now, at: recheckPayload, fileManager: fileManager)
+        try expect(!AutoCleanupPlanner.revalidate(recheckCandidate, for: recheckRule, protecting: []),
+                   "nested writes after planning passed native validation")
+        try setModificationDate(oldDate, at: recheckPayload, fileManager: fileManager)
+        let model = recheckItem.appendingPathComponent("weights.safetensors")
+        try Data("protected model".utf8).write(to: model)
+        try setModificationDate(oldDate, at: model, fileManager: fileManager)
+        try setModificationDate(oldDate, at: recheckItem, fileManager: fileManager)
+        try expect(!AutoCleanupPlanner.revalidate(recheckCandidate, for: recheckRule, protecting: []),
+                   "new protected content passed native validation after timestamps were restored")
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let chromePaths = [

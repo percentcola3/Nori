@@ -5,6 +5,7 @@ struct AutoCleanupRulesView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var permissions: PermissionCenter
+    @State private var directoryIntent: AutoCleanupIntent?
 
     init(state: AppState) {
         self.state = state
@@ -20,6 +21,11 @@ struct AutoCleanupRulesView: View {
             content
         }
         .frame(width: 680, height: 560)
+        .sheet(item: $directoryIntent) { intent in
+            AutoCleanupIntentSheet(state: state, intent: intent) {
+                directoryIntent = nil
+            }
+        }
     }
 
     private var header: some View {
@@ -40,12 +46,18 @@ struct AutoCleanupRulesView: View {
                     Image(systemName: "checkmark.shield")
                         .foregroundStyle(Color.moleAccentText)
                 }
+                Text(l10n.t("auto.schedule.hint"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer(minLength: 12)
 
             Button {
-                state.addAutoCleanupRule()
+                if let directory = state.chooseAutoCleanupDirectory() {
+                    directoryIntent = AutoCleanupIntent(paths: [directory], cacheVerified: false)
+                }
             } label: {
                 Label(l10n.t("auto.addDirectory"), systemImage: "folder.badge.plus")
             }
@@ -80,9 +92,7 @@ struct AutoCleanupRulesView: View {
                     ProgressView()
                         .controlSize(.small)
                 }
-                Text(state.autoCleanupStatus.isEmpty
-                     ? l10n.t("auto.scanning")
-                     : state.autoCleanupStatus)
+                Text(schedulingStatusText)
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -92,6 +102,19 @@ struct AutoCleanupRulesView: View {
             .padding(.vertical, 7)
             .background(.quinary)
         }
+    }
+
+    private var schedulingStatusText: String {
+        if !state.isAutoCleanupScanning, !state.autoCleanupRules.isEmpty {
+            if !state.autoCleanupRules.contains(where: { $0.isSafetyAuthorized }) {
+                return l10n.t("auto.rule.waitingConfirmation")
+            }
+            if !state.autoCleanupRules.contains(where: { $0.isEnabled && $0.isSafetyAuthorized }) {
+                return l10n.t("auto.rule.disabled")
+            }
+        }
+        if !state.autoCleanupStatus.isEmpty { return state.autoCleanupStatus }
+        return l10n.t(state.isAutoCleanupScanning ? "auto.scanning" : "auto.status.ready")
     }
 
     /// 后台定时静默跳过只留一行日志；面板里显式提示，避免“已开启却
@@ -145,22 +168,20 @@ private struct AutoCleanupRuleRow: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
     let rule: AutoCleanupRule
+    @State private var showsSettings = false
+    @Environment(\.calendar) private var calendar
 
     private let gigabyte = 1_000_000_000.0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             summary
-            Divider()
-                .padding(.vertical, 10)
-            configuration
-            if rule.directories.count > 1 {
-                Text(l10n.t("auto.policy.task"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .padding(.top, 8)
-                DisclosureGroup(l10n.tf("auto.task.scope", rule.directories.count)) {
+            DisclosureGroup(isExpanded: $showsSettings) {
+                VStack(alignment: .leading, spacing: 10) {
+                    configuration
                     VStack(alignment: .leading, spacing: 5) {
+                        Text(l10n.t("auto.scope"))
+                            .font(.system(size: 10, weight: .medium))
                         ForEach(rule.directories, id: \.self) { path in
                             Text(path)
                                 .font(.system(size: 9, design: .monospaced))
@@ -169,11 +190,33 @@ private struct AutoCleanupRuleRow: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    .padding(.top, 6)
                 }
-                .font(.system(size: 10))
-                .padding(.top, 10)
+                .padding(.top, 8)
+            } label: {
+                HStack(spacing: 6) {
+                    Text(l10n.t(rule.policy == .sizeLimit ? "auto.policy.sizeLimit" : "auto.policy.retentionDays"))
+                    Text(rule.policy == .sizeLimit
+                         ? "\((Double(rule.sizeLimitBytes) / gigabyte).formatted(.number.precision(.fractionLength(0...1)))) \(l10n.t("auto.unit.gb"))"
+                         : "\(rule.retentionDays) \(l10n.t("auto.unit.days"))")
+                }
+                .help(l10n.t("auto.policy.task"))
             }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.top, 8)
+
+            HStack(spacing: 12) {
+                Text(lastRunText)
+                Spacer(minLength: 4)
+                if rule.executionCount > 0 {
+                    Text(l10n.tf("auto.stats", rule.executionCount,
+                                 ByteFormat.format(rule.totalReclaimedBytes)))
+                }
+            }
+            .font(.system(size: 10).monospacedDigit())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.top, 10)
 
             if let issue = state.autoCleanupRuleIssues[rule.id] {
                 Divider()
@@ -198,6 +241,12 @@ private struct AutoCleanupRuleRow: View {
         }
         .padding(12)
         .modifier(ListRowSurface())
+        .onAppear {
+            if !currentRule.isSafetyAuthorized { showsSettings = true }
+        }
+        .onChange(of: currentRule.isSafetyAuthorized) { authorized in
+            if !authorized { showsSettings = true }
+        }
     }
 
     private var summary: some View {
@@ -218,35 +267,53 @@ private struct AutoCleanupRuleRow: View {
                 Text(rule.sourceName ?? URL(fileURLWithPath: rule.directory).lastPathComponent)
                     .font(.system(size: 12, weight: .medium))
                     .lineLimit(1)
-                Text(rule.directories.count > 1
-                     ? l10n.tf("auto.entry.paths", rule.directories.count) : rule.directory)
-                    .font(.system(size: 9, design: .monospaced))
+                Text(l10n.tf("auto.entry.paths", rule.directories.count))
+                    .font(.system(size: 10))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if !currentRule.isSafetyAuthorized {
+                    Text(l10n.t("auto.rule.waitingConfirmation"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if !currentRule.isEnabled {
+                    Text(l10n.t("auto.rule.disabled"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             Spacer(minLength: 8)
 
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(lastRunText)
-                Text(l10n.tf("auto.lastReclaimed", ByteFormat.format(rule.lastReclaimedBytes)))
-                if currentRule.executionCount > 0 {
-                    // 累计统计：让用户看到这条规则长期以来的实际产出。
-                    Text(l10n.tf("auto.stats", currentRule.executionCount,
-                                 ByteFormat.format(currentRule.totalReclaimedBytes)))
-                        .foregroundStyle(Color.moleAccentText.opacity(0.85))
+            Menu {
+                Button {
+                    state.previewAutoCleanup(rule.id)
+                } label: {
+                    Label(previewButtonTitle, systemImage: "magnifyingglass")
                 }
-            }
-            .font(.system(size: 9).monospacedDigit())
-            .foregroundStyle(.tertiary)
-
-            Button {
-                state.removeAutoCleanupRule(rule.id)
+                .disabled(!currentRule.isSafetyAuthorized)
+                Button {
+                    state.runAutoCleanupNow(rule.id)
+                } label: {
+                    Label(l10n.t("auto.cleanNow"), systemImage: "trash")
+                }
+                .disabled(!currentRule.isSafetyAuthorized)
+                Divider()
+                Button(role: .destructive) {
+                    state.removeAutoCleanupRule(rule.id)
+                } label: {
+                    Label(l10n.t("auto.delete"), systemImage: "trash")
+                }
             } label: {
-                Label(l10n.t("auto.delete"), systemImage: "trash")
+                Label(l10n.t("auto.task.actions"), systemImage: "ellipsis")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 24, height: 24)
             }
-            .buttonStyle(DangerButtonStyle())
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
             .disabled(state.isBusy)
         }
     }
@@ -274,21 +341,6 @@ private struct AutoCleanupRuleRow: View {
 
                 Spacer(minLength: 6)
 
-                Button {
-                    state.previewAutoCleanup(rule.id)
-                } label: {
-                    Label(previewButtonTitle, systemImage: "magnifyingglass")
-                }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(state.isBusy || !currentRule.isSafetyAuthorized)
-
-                Button {
-                    state.runAutoCleanupNow(rule.id)
-                } label: {
-                    Label(l10n.t("auto.cleanNow"), systemImage: "trash")
-                }
-                .buttonStyle(DangerButtonStyle())
-                .disabled(state.isBusy || !currentRule.isSafetyAuthorized)
             }
 
             Toggle(isOn: regenerableBinding) {
@@ -428,13 +480,24 @@ private struct AutoCleanupRuleRow: View {
     }
 
     private var lastRunText: String {
+        if let lastCheckedAt = rule.lastCheckedAt,
+           lastCheckedAt >= (rule.lastRunAt ?? .distantPast) {
+            return l10n.tf("auto.lastCheck",
+                          compactDate(lastCheckedAt))
+        }
         guard let lastRunAt = rule.lastRunAt else {
             return l10n.t("auto.lastRun.never")
         }
         return l10n.tf(
             "auto.lastRun",
-            lastRunAt.formatted(date: .abbreviated, time: .shortened)
+            compactDate(lastRunAt)
         )
+    }
+
+    private func compactDate(_ date: Date) -> String {
+        let style = Date.FormatStyle.dateTime.month().day().hour().minute()
+        return date.formatted(calendar.component(.year, from: date) == calendar.component(.year, from: Date())
+                              ? style : style.year())
     }
 
     private func updateRule(_ update: (inout AutoCleanupRule) -> Void) {

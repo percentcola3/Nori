@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 自动清理入口的意图：一组目标目录 + 是否已由清理策略验证可再生。
 /// 清理页的缓存项 cacheVerified 为 true（创建规则时直接记录安全授权）；
-/// 磁盘分析的任意目录为 false（用户需要在规则面板自行确认）。
+/// 磁盘分析的任意目录为 false（用户在创建面板里确认用途）。
 struct AutoCleanupIntent: Identifiable {
     let paths: [String]
     let cacheVerified: Bool
@@ -14,8 +14,7 @@ struct AutoCleanupIntent: Identifiable {
 }
 
 /// 从清理页（可再生缓存）或磁盘分析（目录）发起的规则创建面板：选择
-/// 策略（容量上限 / 保留天数）后批量创建规则。规则默认关闭，创建完成
-/// 后打开规则面板供审阅与启用。
+/// 策略（容量上限 / 保留天数）并确认目录用途后创建并启用任务。
 struct AutoCleanupIntentSheet: View {
     @ObservedObject var state: AppState
     let intent: AutoCleanupIntent
@@ -24,6 +23,7 @@ struct AutoCleanupIntentSheet: View {
     @State private var policy: AutoCleanupPolicy = .sizeLimit
     @State private var sizeLimitGB: Double = 5
     @State private var retentionDays = 30
+    @State private var confirmsRegenerable = false
     private let gigabyte = 1_000_000_000.0
     private let displayedPaths = 3
 
@@ -92,6 +92,14 @@ struct AutoCleanupIntentSheet: View {
                     .foregroundStyle(Color.moleAccentText)
             }
 
+            if !intent.cacheVerified {
+                Toggle(l10n.t(intent.paths.count > 1 ? "auto.task.confirm" : "auto.regenerable.confirm"),
+                       isOn: $confirmsRegenerable)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 10))
+                    .disabled(state.isBusy)
+            }
+
             HStack {
                 Spacer()
                 Button { onDone() } label: {
@@ -103,7 +111,8 @@ struct AutoCleanupIntentSheet: View {
                     Label(l10n.t("auto.entry.confirm"), systemImage: "clock.arrow.circlepath")
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                .disabled(intent.paths.isEmpty || state.isBusy)
+                .disabled(intent.paths.isEmpty || state.isBusy
+                          || !(intent.cacheVerified || confirmsRegenerable))
                 .keyboardShortcut(.defaultAction)
             }
         }
@@ -170,7 +179,7 @@ struct AutoCleanupIntentSheet: View {
             policy: policy,
             sizeLimitBytes: UInt64((min(max(sizeLimitGB, 0.1), 1024) * gigabyte).rounded()),
             retentionDays: min(max(retentionDays, 1), 365),
-            cacheVerifiedRegenerable: intent.cacheVerified,
+            regenerableConfirmed: intent.cacheVerified || confirmsRegenerable,
             sourceName: intent.sourceName)
         let status: String
         if let sourceName = intent.sourceName, result.added > 0 {

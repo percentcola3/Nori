@@ -15,15 +15,17 @@ The English (`en`) and Simplified Chinese (`zh-CN`) images are native renders of
 
 ## Regenerate
 
-Requires a Mac with an active graphical desktop, Swift, and a compatible macOS 26.x SDK. These assets were rendered on macOS 27.0.1 with the macOS 26.5 SDK, from the Nori 1.0.0 working sources on October 1, 2026. Glass appearance follows the OS renderer and the accessibility transparency preference.
+Requires a Mac with an active graphical desktop, Swift, and a compatible macOS 26.x SDK. The README assets were regenerated on macOS 27.0.1 with the macOS 26.5 SDK, from the Nori 1.0.3 working sources (including the current UI changes) on October 7, 2026. Glass appearance follows the OS renderer and the fixture's accessibility transparency preference.
 
 ```sh
-DEVELOPER_DIR=/Library/Developer/CommandLineTools script/capture_readme_screenshots.sh
+DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+NORI_CAPTURE_LOCALES="en zh-CN" NORI_CAPTURE_SECTIONS="" \
+  script/capture_readme_screenshots.sh
 ```
 
-Pass a directory as the first argument to write elsewhere. `SDKROOT` can select a compatible SDK. The renderer compiles into a disposable temporary bundle and does not replace or launch the installed Nori app.
+This command regenerates the sixteen images referenced by the English and Simplified Chinese READMEs. Omitting the locale and section overrides also emits Traditional Chinese screenshots and supplementary developer-page captures in regular, narrow, and accessible layouts. Pass a directory as the first argument to write elsewhere. `SDKROOT` can select a compatible SDK. The renderer compiles into a disposable temporary bundle and does not replace or launch the installed Nori app.
 
-The script first snapshots the product sources into its temporary directory so edits in the working checkout cannot change compile inputs midway through rendering. It then adjusts temporary copies of three product source files. It replaces `AppState.init` with fixture initialization, redirects clipboard and traffic persistence to the temporary fixture directory, disables the persisted automation-rule loader, seeds a permission fixture, and seeds the island's private expanded state. All view bodies remain product code. The two fixture-only view wrappers host the runtime panel and place the island over a neutral native gradient. No source file under `SimpleMole` is changed.
+The script first snapshots the product sources into its temporary directory so edits in the working checkout cannot change compile inputs midway through rendering. It replaces `AppState.init` with fixture initialization, redirects clipboard and traffic persistence to the temporary fixture directory, disables the persisted automation-rule loader, binds cleanup grouping to the synthetic `/Users/demo` home, seeds a permission fixture, and seeds the island's private expanded state. Developer fixtures replace live audits and refresh services in the temporary copies. All view bodies remain product code. The fixture-only view wrappers host the runtime panel and place the island over a neutral native gradient. No source file under `SimpleMole` is changed.
 
 The temporary bundle has a separate identifier (`com.nori.readme-renderer`) and its own fixture defaults suite. Each language runs in a separate process with its own temporary history and locale defaults, including native date formatting. It does not start scans, deletion jobs, live inventory watchers, clipboard polling, hotkeys, or traffic monitoring. Its windows ignore mouse input.
 

@@ -349,6 +349,10 @@ struct CleanupTabView: View {
                 bytes: categories.reduce(0) { $0 &+ $1.bytes })
         }
         .sorted {
+            // 系统数据始终排在用户内容之后，其余分组仍按容量排序。
+            if ($0.kind == .system) != ($1.kind == .system) {
+                return $0.kind != .system
+            }
             if $0.bytes != $1.bytes { return $0.bytes > $1.bytes }
             return $0.kind.sortOrder < $1.kind.sortOrder
         }

@@ -68,6 +68,16 @@ state = state.replace("let trafficMonitor = TrafficMonitorStore()",
                       "let trafficMonitor = TrafficMonitorStore(defaults: ReadmeFixture.defaults, historyURL: ReadmeFixture.root.appendingPathComponent(\"traffic.json\"))")
 (root / "SimpleMole/AppState.swift").write_text(state)
 
+# The real views classify paths against the active home directory. Bind only
+# this temporary model's default to the synthetic user, so /Users/demo caches
+# do not become system-data candidates on the maintainer's Mac.
+models_path = root / "SimpleMole/Models.swift"
+models = models_path.read_text()
+marker = "init(category: CleanupCategory, homeDirectory: String = NSHomeDirectory())"
+assert marker in models
+models_path.write_text(models.replace(marker,
+    'init(category: CleanupCategory, homeDirectory: String = "/Users/demo")'))
+
 permission = (root / "SimpleMole/Services/PermissionCenter.swift").read_text()
 permission = replace_body(permission, "    private init() {", '''        signing = SigningIdentityInspector.current()
         defaults = ReadmeFixture.defaults
