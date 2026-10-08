@@ -36,11 +36,12 @@ extension AppState {
     }
 
     func uninstallCommandLineTool(_ tool: CommandLineTool) {
+        guard !isSoftwareTaskBusy else { return }
         if tool.agentInstallation != nil {
             uninstallAgentTool(tool)
             return
         }
-        guard !isBusy, !isScanningCommandLineTools, !isCheckingSoftwareUpdates,
+        guard !isAgentCLIMutationActive,
               confirmation == nil, taskNotice == nil, tool.canUninstall,
               commandLineTools.contains(tool) else { return }
         let generation = UUID()
@@ -79,7 +80,8 @@ extension AppState {
         confirmation = Confirmation(title: l10n.tf("cli.uninstall.confirm.title", tool.name), message: message,
             confirmLabel: l10n.t(isRunning ? "cli.uninstall.confirm.closeAction" : "uninstall.action")) { [weak self] in
                 guard let self, self.commandLineToolUninstallGeneration == generation,
-                      !self.isBusy, !self.isCheckingSoftwareUpdates, !self.isScanningCommandLineTools,
+                      !self.isSoftwareTaskBusy, !self.isAgentCLIMutationActive,
+                      !self.isCheckingSoftwareUpdates, !self.isScanningCommandLineTools,
                       self.commandLineTools.contains(tool) else { return }
                 self.commandLineToolBusyID = tool.id
                 self.commandLineToolStatus = self.l10n.tf("cli.status.uninstalling", tool.name)

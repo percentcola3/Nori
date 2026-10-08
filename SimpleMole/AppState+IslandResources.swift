@@ -85,7 +85,7 @@ extension AppState {
     }
 
     func cleanIslandResource(_ resource: IslandResource) {
-        guard islandCleaningResource == nil, islandClosingPIDs.isEmpty, !isBusy else {
+        guard islandCleaningResource == nil, islandClosingPIDs.isEmpty else {
             islandResourceStatus[resource] = L10n.shared.t("island.clean.busy")
             return
         }

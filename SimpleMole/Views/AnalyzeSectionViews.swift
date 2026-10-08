@@ -64,7 +64,7 @@ struct DuplicatesSectionCard: View {
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .controlSize(.small)
-                .disabled(state.isBusy)
+                .disabled(state.isAnalysisTaskBusy)
             }
         }
     }
@@ -156,7 +156,7 @@ struct DuplicatesSectionCard: View {
                             isSelected: state.duplicateSelection.contains(member.path),
                             canSelect: DuplicateSelectionPolicy.canSelect(
                                 isSelected: state.duplicateSelection.contains(member.path),
-                                unselectedCount: unselectedCount), disabled: state.isBusy || state.isScanningDuplicates,
+                                unselectedCount: unselectedCount), disabled: state.isAnalysisTaskBusy || state.isScanningDuplicates,
                             onToggle: { state.toggleDuplicateSelection(member) },
                             onPreview: { onPreview(member.path) })
                     }

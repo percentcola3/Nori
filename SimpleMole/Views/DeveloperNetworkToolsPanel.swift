@@ -116,7 +116,7 @@ struct DeveloperNetworkToolsPanel: View {
             if !model.probes.isEmpty { Color.clear.frame(height: 6) }
         }
     }
-    private var writing: Bool { model.isSaving || workspace.commandRunning || state.isBusy }
+    private var writing: Bool { model.isSaving || workspace.commandRunning || state.isDeveloperTaskBusy }
 
     private func mirrorDraft(_ id: String) -> Binding<DeveloperNetworkToolsModel.MirrorDraft> {
         Binding(get: { model.mirrorDrafts[id] ?? .init() }, set: { model.mirrorDrafts[id] = $0 })

@@ -96,11 +96,7 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate,
     }
 
     func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
-        guard isSafeToRelaunch() else {
-            status = .deferred
-            throw NSError(domain: "com.nori.app.updates", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: L10n.shared.t("updates.busy")])
-        }
+        // Checking does not interrupt work. Defer only the installation restart below.
         status = .checking
     }
 
@@ -124,7 +120,6 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate,
         let nsError = error as NSError
         // Sparkle also aborts a cycle when it has positively found no newer compatible version.
         if nsError.domain == SUSparkleErrorDomain, nsError.code == SUError.noUpdateError.rawValue { return }
-        if nsError.domain == "com.nori.app.updates" { return }
         if nsError.domain == SUSparkleErrorDomain, nsError.code == SUError.installationCanceledError.rawValue {
             status = .idle
             return

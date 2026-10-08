@@ -49,7 +49,7 @@ struct DeveloperRuntimePanel: View {
                 ForEach(group.entries) { entry in
                     DeveloperRuntimeRow(entry: entry,
                                         selected: state.devEnvSelection.contains(entry.path),
-                                        enabled: !state.isBusy) {
+                                        enabled: !state.isDeveloperTaskBusy) {
                         guard DeveloperRuntimePolicy.canClean(entry) else { return }
                         if state.devEnvSelection.contains(entry.path) {
                             state.devEnvSelection.remove(entry.path)
@@ -76,7 +76,7 @@ struct DeveloperRuntimePanel: View {
                         Label(L10n.shared.t("dev.cleanup.trash"), systemImage: "trash")
                     }
                     .buttonStyle(SecondaryButtonStyle(tint: .danger))
-                    .disabled(state.isBusy)
+                    .disabled(state.isDeveloperTaskBusy)
                 }
                 .padding(.horizontal, 14).padding(.vertical, 10)
             }
@@ -98,7 +98,7 @@ struct DeveloperRuntimePanel: View {
             ForEach(Array(actions.enumerated()), id: \.element.id) { offset, action in
                 if offset == 0 { DevDivider() } else { DevDivider(inset: 14) }
                 DeveloperCacheActionRow(action: action, running: state.gcRunningId == action.id,
-                                        enabled: !state.isBusy && !state.isRefreshingGc) { state.runGc(action) }
+                                        enabled: !state.isDeveloperTaskBusy && !state.isRefreshingGc) { state.runGc(action) }
             }
         }
     }

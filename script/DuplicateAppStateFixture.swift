@@ -30,7 +30,9 @@ final class AppState: ObservableObject {
     let duplicateWorkspaceStore: DuplicateWorkspaceStore
     var scheduledRuns = 0
     var failures: [String] = []
-    var isBusy: Bool { isScanningDuplicates || isDeletingDuplicates }
+    var externallyBusy = false
+    var isAnalysisTaskBusy: Bool { isAnalyzing || isScanningDuplicates || isDeletingDuplicates }
+    var isBusy: Bool { externallyBusy || isAnalysisTaskBusy }
     var isIncrementalAnalysisScanning: Bool {
         (isAnalyzing || isScanningDuplicates) && !analysisScanIsFull
     }

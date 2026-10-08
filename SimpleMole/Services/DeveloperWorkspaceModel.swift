@@ -86,8 +86,9 @@ final class DeveloperWorkspaceModel: ObservableObject {
     func didChangeEnvironment() { refreshRevision &+= 1 }
 
     func proposeShellProfile(state: AppState) {
+        guard state.confirmation == nil else { return }
         state.confirmation = .init(title: L10n.shared.t("dev.shell.profile"), message: L10n.shared.t("dev.shell.profile.confirm"), confirmLabel: L10n.shared.t("dev.command.run")) { [weak self, weak state] in
-            guard let self, let state, !self.commandRunning, !state.isBusy else { return }
+            guard let self, let state, !self.commandRunning, !state.isDeveloperTaskBusy else { return }
             self.commandRunning = true
             self.commandTitleKey = "dev.shell.profile"
             self.commandSucceeded = nil
@@ -155,6 +156,7 @@ final class DeveloperWorkspaceModel: ObservableObject {
 
     func propose(_ command: DeveloperCommand?, state: AppState) {
         guard let command else { operationError = L10n.shared.t("dev.operation.unavailable"); return }
+        guard state.confirmation == nil else { return }
         state.confirmation = .init(title: L10n.shared.t(command.titleKey),
                                    message: L10n.shared.t("dev.command.confirm") + "\n\n" + command.display,
                                    confirmLabel: L10n.shared.t("dev.command.run")) { [weak self] in self?.enqueue(command) }
@@ -174,12 +176,12 @@ final class DeveloperWorkspaceModel: ObservableObject {
         profileTask?.cancel()
     }
 
-    /// Claims the same global busy state as a queued command before an async
+    /// Claims the developer page's busy state as a queued command before an async
     /// configuration save can yield. Queued commands resume after its refresh.
     @discardableResult
     func runConfigurationWrite(titleKey: String, failureKey: String = "dev.network.invalidSettings",
                                operation: @escaping @MainActor () async throws -> Void) -> Bool {
-        guard !commandRunning, queue.isEmpty, appState?.isBusy != true else {
+        guard !commandRunning, queue.isEmpty, appState?.isDeveloperTaskBusy != true else {
             operationError = L10n.shared.t("dev.operation.unavailable")
             return false
         }
@@ -225,7 +227,7 @@ final class DeveloperWorkspaceModel: ObservableObject {
     }
 
     private func runNext() {
-        guard !commandRunning, !queue.isEmpty, appState?.isBusy != true else { return }
+        guard !commandRunning, !queue.isEmpty, appState?.isDeveloperTaskBusy != true else { return }
         let command = queue.removeFirst()
         queuedCount = queue.count
         commandRunning = true

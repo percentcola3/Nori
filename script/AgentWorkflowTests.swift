@@ -409,11 +409,15 @@ final class AppState {
     var logs: [String] = []
     var uninstallQueue = WorkflowUninstallQueue()
     var cleanupQueued = false
+    var externallyBusy = false
+    var commandLineToolBusyID: String?
+    var softwareUpdatingID: String?
     var queueStarts = 0
     private var isDispatchingConfirmation = false
     var taskNotice: TaskFeedbackNotice?
     private var taskFeedbackQueue = TaskFeedbackQueue()
-    var isBusyExcludingUninstall: Bool { agentScanning || agentApplying || agentProgramBusyID != nil }
+    var isAgentTaskBusy: Bool { agentScanning || agentApplying || agentProgramBusyID != nil }
+    var isBusyExcludingUninstall: Bool { isAgentTaskBusy || externallyBusy }
     var isBusy: Bool { isBusyExcludingUninstall || uninstallQueue.hasWork || cleanupQueued }
     func log(_ message: String) { logs.append(message) }
     func invalidateAgentStorageFootprints() { agentStorageFootprints = [:] }
@@ -571,6 +575,7 @@ struct AgentWorkflowTests {
         try await unknownRuntime(cli: true, afterCLI: false)
         try await unknownRuntime(cli: true, afterCLI: true)
         try await completeCleanup()
+        try await manuallySelectedOrphanData()
         try await incompleteCleanup(kind: "partial")
         try await incompleteCleanup(kind: "failed")
         try await incompleteCleanup(kind: "refused")
@@ -875,21 +880,34 @@ struct AgentWorkflowTests {
             f.setRunning(RunningApplicationSnapshot())
             if active { state.uninstallQueue.activeJob = "active-uninstall" }
             else { state.uninstallQueue.pendingJobs = ["pending-uninstall"] }
+            state.cleanupQueued = true
+            state.externallyBusy = true
             state.retryFailedAgentCleanup()
             if active {
-                precondition(!state.agentApplying && state.snapshots == 1 && f.cleanupCount == 0)
+                precondition(!state.agentApplying && state.snapshots == 1 && state.agentRetryAvailable,
+                             "App uninstall and Agent data deletion must not mutate shared support data together")
                 state.uninstallQueue.activeJob = nil
-                state.cleanupQueued = true
                 state.retryFailedAgentCleanup()
-                precondition(!state.agentApplying && state.snapshots == 1 && state.agentRetryAvailable)
-            } else {
-                try await waitUntil { f.cleanupGate.started }
-                precondition(state.uninstallQueue.activeJob == nil && state.uninstallQueue.pendingJobs == ["pending-uninstall"]
-                             && state.queueStarts == 0, "Pending work must not steal the accepted inline retry")
-                f.cleanupGate.release()
-                try await waitUntil { !state.agentApplying }
-                successAndIdle(state, removed: 1)
             }
+            try await waitUntil { f.cleanupGate.started }
+            precondition(state.isBusy && state.queueStarts == 0 && f.cleanupCount == 1,
+                         "Unrelated cleanup, queued software, or another tab blocked the frozen Agent data retry")
+            state.applyAgentCleanup()
+            state.retryFailedAgentCleanup()
+            precondition(f.cleanupCount == 1, "Agent reentry duplicated the active data cleanup")
+            f.cleanupGate.release()
+            try await waitUntil { !state.agentApplying }
+            successAndIdle(state, removed: 1)
+        }
+
+        for kind in ["cli-uninstall", "software-update", "app-uninstall"] {
+            let (state, f) = prepare()
+            if kind == "cli-uninstall" { state.commandLineToolBusyID = "other-tool" }
+            if kind == "software-update" { state.softwareUpdatingID = "other-update" }
+            if kind == "app-uninstall" { state.uninstallQueue.activeJob = "active-uninstall" }
+            startCLI(state)
+            precondition(!state.agentApplying && state.snapshots == 0 && f.uninstallCount == 0,
+                         "A shared package mutation must block Agent CLI removal")
         }
     }
 
@@ -993,6 +1011,34 @@ struct AgentWorkflowTests {
         successAndIdle(state, removed: 4)
         precondition(state.agentReclaimedBytes == 8192,
                      "Agent cleanup must report worker-confirmed bytes, not selected sizes")
+    }
+
+    @MainActor private static func manuallySelectedOrphanData() async throws {
+        let (state, f) = prepare()
+        state.agentCategories[0].risk = .warning
+        state.agentCategories[0].source = .aiSession
+        state.agentCategories[0].disposal = .permanentDelete
+        state.agentCategories[0].applyRoute = .aiTrash
+        state.agentCategories[0].activityGuard = .aiAgent
+        state.agentCategories[0].reasonKey = "agents.reason.showOnly"
+        state.agentCLIInstallations = []
+        state.agentSelectedSkills = []
+        state.agentSelectedServers = []
+        state.agentSelectedMCPInstallations = []
+        state.agentGroups = [AgentGroupSummary(id: "fixture", name: "Fixture", documented: true,
+            orphaned: true, categoryIDs: [state.agentCategories[0].id], skillIDs: [], serverIDs: [], bytes: 2),
+            AgentGroupSummary(id: "unselected", name: "Unselected", documented: true,
+                orphaned: true, categoryIDs: [UUID()], skillIDs: [], serverIDs: [], bytes: 1)]
+        f.cleanup.summary.removed = 1
+        f.cleanup.summary.removedPaths = ["\(workflowHome)/cache"]
+        state.applyAgentCleanup()
+        try await waitUntil { f.cleanupGate.started }
+        precondition(f.submittedRemovalID == "fixture" && f.submittedPaths == ["\(workflowHome)/cache"]
+                     && f.submittedCLIIDs.isEmpty,
+                     "Manual orphan selection must carry only its own residual scope and selected paths")
+        f.cleanupGate.release()
+        try await waitUntil { !state.agentApplying }
+        successAndIdle(state, removed: 1)
     }
 
     @MainActor private static func incompleteCleanup(kind: String) async throws {

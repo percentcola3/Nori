@@ -87,7 +87,7 @@ struct AgentsTabView: View {
             details: TaskFeedbackDiagnostic.localized(state.agentOutcomeDetails),
             applications: state.agentFailureApplications,
             completedCount: state.agentCompletedCount, feedbackID: state.agentFeedbackID,
-            scanSource: .agents, scanDisabled: state.isBusy,
+            scanSource: .agents, scanDisabled: state.isAgentTaskBusy,
             onScan: { state.requestScanAccess(.aiScan) })
     }
 
@@ -96,7 +96,7 @@ struct AgentsTabView: View {
             Label(l10n.t("agents.scan"), systemImage: "sparkle.magnifyingglass")
         }
         .buttonStyle(PrimaryButtonStyle())
-        .disabled(state.isBusy)
+        .disabled(state.isAgentTaskBusy)
     }
 
     private var emptyState: some View {
@@ -242,7 +242,7 @@ struct AgentsTabView: View {
                 Button { state.offerAgentAssociatedDataCleanup(agentIDs: [group.id]) } label: {
                     Label(l10n.t("agents.program.residuals"), systemImage: "sparkles")
                 }
-                .buttonStyle(SecondaryButtonStyle()).controlSize(.small).disabled(state.isBusy)
+                .buttonStyle(SecondaryButtonStyle()).controlSize(.small).disabled(state.isAgentTaskBusy)
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
@@ -263,7 +263,7 @@ struct AgentsTabView: View {
                 Button { state.uninstallAgentApplication(app) } label: {
                     Label(l10n.t("uninstall.action"), systemImage: "trash")
                 }
-                .buttonStyle(DangerButtonStyle()).controlSize(.small).disabled(state.isBusy)
+                .buttonStyle(DangerButtonStyle()).controlSize(.small).disabled(state.isAgentTaskBusy)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .modifier(ListRowSurface())
@@ -277,7 +277,7 @@ struct AgentsTabView: View {
         ForEach(group.categoryIDs, id: \.self) { id in
             if let category = state.agentCategories.first(where: { $0.id == id }) {
                 CategoryRowView(category: categoryBinding(for: category),
-                    selectionEnabled: !state.isBusy && !state.agentCLISelectedAgentIDs.contains(group.id),
+                    selectionEnabled: !state.isAgentTaskBusy && !state.agentCLISelectedAgentIDs.contains(group.id),
                     highlightsSensitiveData: true)
             }
         }
@@ -304,7 +304,7 @@ struct AgentsTabView: View {
             let includedByCLI = state.isAgentCategoryIncludedByCLI(category)
             // Expanding an implicitly selected row must not turn its derived
             // checkmarks into explicit data selections when the CLI is undone.
-            if !includedByCLI && !state.isBusy {
+            if !includedByCLI && !state.isAgentTaskBusy {
                 category = category.selectingPaths(update.selectedPaths)
             }
             category.expanded = update.expanded
@@ -320,7 +320,7 @@ struct AgentsTabView: View {
                     Label(l10n.t("uninstall.action"), systemImage: "trash")
                 }
                 .buttonStyle(DangerButtonStyle()).controlSize(.small)
-                .disabled(state.isBusy)
+                .disabled(state.isAgentTaskBusy || state.commandLineToolBusyID != nil || state.softwareUpdatingID != nil)
                 .accessibilityLabel(l10n.tf("agents.cli.select", installation.name))
                 Button {
                     withAnimation(reduceMotion ? nil : MoleMotion.panel) {
@@ -383,7 +383,7 @@ struct AgentsTabView: View {
         return HStack(alignment: .top, spacing: 8) {
             Toggle("", isOn: Binding(get: { selected }, set: { _ in state.toggleAgentSkill(skill) }))
                 .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
-                .disabled(skill.identity.isEmpty || state.isBusy || state.agentCLISelectedAgentIDs.contains(skill.agentID))
+                .disabled(skill.identity.isEmpty || state.isAgentTaskBusy || state.agentCLISelectedAgentIDs.contains(skill.agentID))
                 .accessibilityLabel(skill.name)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -421,7 +421,7 @@ struct AgentsTabView: View {
         return HStack(alignment: .top, spacing: 8) {
             Toggle("", isOn: Binding(get: { selected }, set: { _ in state.toggleAgentServer(server) }))
                 .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
-                .disabled(state.isBusy || state.agentCLISelectedAgentIDs.contains(server.agentID))
+                .disabled(state.isAgentTaskBusy || state.agentCLISelectedAgentIDs.contains(server.agentID))
                 .accessibilityLabel(server.name)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
@@ -459,7 +459,7 @@ struct AgentsTabView: View {
             HStack(spacing: 8) {
                 Toggle("", isOn: Binding(get: { selected }, set: { _ in state.toggleAgentMCPInstallation(installation) }))
                     .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
-                    .disabled(state.isBusy || installation.identity.isEmpty)
+                    .disabled(state.isAgentTaskBusy || installation.identity.isEmpty)
                     .accessibilityLabel(installation.name)
                 Text(installation.name).font(.system(size: 12, weight: .medium))
                 AgentRiskTag(text: l10n.t("agents.mcp.deleteBody"), high: true)
@@ -498,7 +498,7 @@ struct AgentsTabView: View {
                 Button { state.requestScanAccess(.aiScan) } label: {
                     Label(l10n.t("agents.rescan"), systemImage: "arrow.clockwise")
                 }
-                    .buttonStyle(SecondaryButtonStyle()).disabled(state.isBusy)
+                    .buttonStyle(SecondaryButtonStyle()).disabled(state.isAgentTaskBusy)
             }
             Spacer()
             Button { state.applyAgentCleanup() } label: {
@@ -506,7 +506,10 @@ struct AgentsTabView: View {
                       ? l10n.tf("agents.apply.withCount", state.agentSelectedCount, ByteFormat.format(state.agentSelectedBytes))
                       : l10n.t("agents.apply")), systemImage: "sparkles")
             }
-            .buttonStyle(PrimaryButtonStyle()).disabled(state.agentSelectedCount == 0 || state.isBusy)
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(state.agentSelectedCount == 0 || state.isAgentTaskBusy || state.uninstallQueue.activeJob != nil
+                || (!state.agentSelectedCLIInstallations.isEmpty
+                    && (state.commandLineToolBusyID != nil || state.softwareUpdatingID != nil)))
             .help(l10n.t("agents.storage.selectedImpact"))
         }
         .padding(.horizontal, 16).padding(.vertical, 10)

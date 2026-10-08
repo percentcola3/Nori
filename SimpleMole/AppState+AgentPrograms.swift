@@ -12,6 +12,14 @@ private enum AgentProgramSelection {
 
 @MainActor
 extension AppState {
+    // Agent and software CLI rows can mutate the same package-manager inventory.
+    var isAgentCLIMutationActive: Bool {
+        if agentApplying && !agentSelectedCLIInstallations.isEmpty { return true }
+        guard let id = agentProgramBusyID else { return false }
+        return agentCLIInstallations.contains { $0.id == id }
+            || commandLineTools.contains { $0.agentInstallation?.id == id }
+    }
+
     func uninstallAgentCLI(_ installation: AgentCLIInstallation) {
         guard agentCLIInstallations.contains(installation) else { return }
         requestAgentProgramRemoval(.cli(installation))
@@ -29,7 +37,13 @@ extension AppState {
     }
 
     private func requestAgentProgramRemoval(_ selection: AgentProgramSelection) {
-        guard !isBusy, confirmation == nil, taskNotice == nil, agentProgramIsAvailable(selection) else { return }
+        guard !isAgentTaskBusy, softwareUpdatingID == nil,
+              confirmation == nil, taskNotice == nil, agentProgramIsAvailable(selection) else { return }
+        if case .cli = selection {
+            guard commandLineToolBusyID == nil else { return }
+        } else if case .app(let app) = selection {
+            guard !uninstallQueue.containsPendingOrActive(app) else { return }
+        }
         let identity = DeletionPlan.identity(at: selection.path)
         agentProgramBusyID = selection.key
         Task {
@@ -65,7 +79,13 @@ extension AppState {
         }
         confirmation = Confirmation(title: l10n.tf("cli.uninstall.confirm.title", selection.name),
             message: message, confirmLabel: l10n.t(running ? "cli.uninstall.confirm.closeAction" : "uninstall.action")) { [weak self] in
-                guard let self, !self.isBusy, self.agentProgramIsAvailable(selection) else { return }
+                guard let self, !self.isAgentTaskBusy, self.softwareUpdatingID == nil,
+                      self.agentProgramIsAvailable(selection) else { return }
+                if case .cli = selection {
+                    guard self.commandLineToolBusyID == nil else { return }
+                } else if case .app(let app) = selection {
+                    guard !self.uninstallQueue.containsPendingOrActive(app) else { return }
+                }
                 self.agentProgramBusyID = selection.key
                 Task { await self.performAgentProgramRemoval(selection, identity: identity, mayClose: running) }
             }

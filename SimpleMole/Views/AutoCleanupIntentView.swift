@@ -97,7 +97,7 @@ struct AutoCleanupIntentSheet: View {
                        isOn: $confirmsRegenerable)
                     .toggleStyle(.checkbox)
                     .font(.system(size: 10))
-                    .disabled(state.isBusy)
+                    .disabled(state.isCleanupTaskBusy)
             }
 
             HStack {
@@ -111,7 +111,7 @@ struct AutoCleanupIntentSheet: View {
                     Label(l10n.t("auto.entry.confirm"), systemImage: "clock.arrow.circlepath")
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                .disabled(intent.paths.isEmpty || state.isBusy
+                .disabled(intent.paths.isEmpty || state.isCleanupTaskBusy
                           || !(intent.cacheVerified || confirmsRegenerable))
                 .keyboardShortcut(.defaultAction)
             }

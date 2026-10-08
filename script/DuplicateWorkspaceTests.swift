@@ -37,9 +37,10 @@ struct DuplicateWorkspaceTests {
                && !state.analysisScanIsFull && state.isIncrementalAnalysisScanning,
                "an active inventory scan must block duplicate scans without changing its incremental presentation")
         state.isAnalyzing = false
+        state.externallyBusy = true
         state.beginDuplicateScan(roots: [root.path], home: home.path)
         expect(state.analysisScanIsFull && !state.isIncrementalAnalysisScanning,
-               "an initial scan must use the full-scan presentation without an explicit force flag")
+               "another tab must not block the initial scan or change its full-scan presentation")
         try await waitForScan(state)
         expect(state.duplicateScanFinished && state.duplicateGroups.count == 1
                && state.duplicateSelection.count == 2 && state.scheduledRuns == 1,

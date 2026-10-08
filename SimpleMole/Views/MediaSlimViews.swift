@@ -161,7 +161,7 @@ struct SlimOptionsSheet: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .keyboardShortcut(.defaultAction)
-                .disabled(selected.isEmpty || state.isBusy)
+                .disabled(selected.isEmpty || state.isAnalysisTaskBusy)
             }
         }
         .padding(18)

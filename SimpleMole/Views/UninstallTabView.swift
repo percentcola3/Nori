@@ -7,6 +7,7 @@ import SwiftUI
 struct UninstallTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var appUpdate = AppUpdateController.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isListPresented = false
 
@@ -181,6 +182,8 @@ struct UninstallTabView: View {
                             update: state.softwareUpdateResults[SoftwareUpdateService.appKey(app)],
                             isCheckingUpdate: state.softwareUpdateCheckingIDs.contains(SoftwareUpdateService.appKey(app)),
                             updatingID: state.softwareUpdatingID,
+                            canUpdate: app.path == Bundle.main.bundleURL.path && app.bundleID == Bundle.main.bundleIdentifier
+                                ? appUpdate.canCheckForUpdates : !state.isSoftwareTaskBusy && !state.isAgentCLIMutationActive,
                             externalPending: state.softwareUpdateHandoffIDs.contains(SoftwareUpdateService.appKey(app)),
                             agentStorage: state.agentDataFootprints(for: app),
                             isAgentStorageLoading: !AgentSoftwareInventory.agentIDs(for: app)
@@ -208,6 +211,7 @@ private struct UninstallAppRow: View {
     let update: SoftwareUpdateResult?
     let isCheckingUpdate: Bool
     let updatingID: String?
+    let canUpdate: Bool
     let externalPending: Bool
     let agentStorage: [AgentStorageFootprint]
     let isAgentStorageLoading: Bool
@@ -260,7 +264,7 @@ private struct UninstallAppRow: View {
                     }
                     .buttonStyle(SecondaryButtonStyle())
                     .controlSize(.small)
-                    .disabled(updatingID != nil || job?.state.isActive == true || job?.state.isPending == true)
+                    .disabled(!canUpdate)
                 }
                 if let job, job.state.isPending || job.state.isActive {
                     HStack(spacing: 5) {
@@ -646,7 +650,7 @@ private struct CommandLineToolsSection: View {
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .controlSize(.small)
-                .disabled(state.isBusy || state.isCheckingSoftwareUpdates || state.isScanningCommandLineTools)
+                .disabled(state.isSoftwareTaskBusy || state.isAgentCLIMutationActive)
             }
             if tool.agentID != nil {
                 Button { state.jump(to: .agents) } label: {
@@ -678,8 +682,7 @@ private struct CommandLineToolsSection: View {
                 }
                 .buttonStyle(DangerButtonStyle())
                 .controlSize(.small)
-                .disabled(!tool.canUninstall || state.isBusy || state.isScanningCommandLineTools
-                          || state.isCheckingSoftwareUpdates)
+                .disabled(!tool.canUninstall || state.isSoftwareTaskBusy || state.isAgentCLIMutationActive)
                 .help(tool.canUninstall ? "" : l10n.tf("cli.tag.dependents", tool.dependents.count))
             }
         }

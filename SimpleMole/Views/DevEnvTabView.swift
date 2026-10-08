@@ -83,7 +83,7 @@ struct DevEnvTabView: View {
         .onReceive(workspace.$shellProfile) { _ in scheduleIssues() }
         .onReceive(sshModel.objectWillChange) { _ in scheduleIssues() }
         .sheet(isPresented: $state.showSimulatorDevices) {
-            SimulatorDevicesView(store: state.simulatorInventory, canMutate: !state.isBusy)
+            SimulatorDevicesView(store: state.simulatorInventory, canMutate: !state.isDeveloperTaskBusy)
                 .taskFeedback(taskNoticeBinding, retry: state.retryTaskNotice)
         }
         .sheet(isPresented: $state.showDockerDetails) {

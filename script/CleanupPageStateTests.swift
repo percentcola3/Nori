@@ -52,7 +52,7 @@ private final class PageStateFixture {
     let cleanupRuntime = CleanupRuntimeState()
     var cleanupQueued = false
     var isApplying = true
-    var isBusyExcludingUninstall: Bool { isApplying }
+    var isCleanupTaskBusy: Bool { isApplying || cleanupQueued }
     var headerMood: NoriMood?
     var popupCount = 0
     var statusText = ""

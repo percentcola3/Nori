@@ -63,7 +63,7 @@ struct AutoCleanupRulesView: View {
             }
             .buttonStyle(PrimaryButtonStyle())
             .labelStyle(.iconOnly)
-            .disabled(state.isBusy)
+            .disabled(state.isCleanupTaskBusy)
 
             Button {
                 state.showAutoCleanupSheet = false
@@ -258,7 +258,7 @@ private struct AutoCleanupRuleRow: View {
                 .fixedSize()
                 .tint(Color.moleAccentText)
                 .accessibilityLabel(l10n.t("auto.enabled"))
-                .disabled(state.isBusy || !currentRule.isSafetyAuthorized)
+                .disabled(state.isCleanupTaskBusy || !currentRule.isSafetyAuthorized)
 
             Image(systemName: "folder.fill")
                 .foregroundStyle(Color.moleAccentText)
@@ -314,7 +314,7 @@ private struct AutoCleanupRuleRow: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .disabled(state.isBusy)
+            .disabled(state.isCleanupTaskBusy)
         }
     }
 
@@ -334,7 +334,7 @@ private struct AutoCleanupRuleRow: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(width: 210)
-                .disabled(state.isBusy)
+                .disabled(state.isCleanupTaskBusy)
 
                 policyValueEditor
                     .fixedSize()
@@ -359,7 +359,7 @@ private struct AutoCleanupRuleRow: View {
                 }
             }
             .toggleStyle(.checkbox)
-            .disabled(state.isBusy)
+            .disabled(state.isCleanupTaskBusy)
             .help(l10n.t("auto.regenerable.help"))
         }
     }
@@ -390,7 +390,7 @@ private struct AutoCleanupRuleRow: View {
                 .labelsHidden()
                 .fixedSize()
             }
-            .disabled(state.isBusy)
+            .disabled(state.isCleanupTaskBusy)
         } else {
             HStack(spacing: 4) {
                 TextField(
@@ -414,7 +414,7 @@ private struct AutoCleanupRuleRow: View {
                 .labelsHidden()
                 .fixedSize()
             }
-            .disabled(state.isBusy)
+            .disabled(state.isCleanupTaskBusy)
         }
     }
 
@@ -501,7 +501,7 @@ private struct AutoCleanupRuleRow: View {
     }
 
     private func updateRule(_ update: (inout AutoCleanupRule) -> Void) {
-        guard !state.isBusy else { return }
+        guard !state.isCleanupTaskBusy else { return }
         guard var latest = state.autoCleanupRules.first(where: { $0.id == rule.id }) else { return }
         update(&latest)
         state.updateAutoCleanupRule(latest)

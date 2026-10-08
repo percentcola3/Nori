@@ -891,7 +891,8 @@ final class NativeCore: @unchecked Sendable {
     /// Permission-only failures can use the signed administrator route. Scan
     /// preflight still has to prove content, occupancy and full readability.
     /// Include descendants because a writable root can hold an ACL-locked leaf.
-    func requiresAdministratorDeletion(_ path: String, homeDirectory: String = NSHomeDirectory()) -> Bool {
+    func requiresAdministratorDeletion(_ path: String, homeDirectory: String = NSHomeDirectory(),
+                                       inspectDescendants: Bool = true) -> Bool {
         guard DeletionPlan.isLexicallySafePath(path) else { return false }
         var pending = [path]
         while let candidate = pending.popLast() {
@@ -900,7 +901,7 @@ final class NativeCore: @unchecked Sendable {
                   metadata.st_mode & S_IFMT != S_IFLNK else { continue }
             if systemCleanupRequiresAdministrator(candidate, metadata: metadata, homeDirectory: homeDirectory)
                 || cleanupDeletionAccess(candidate, metadata: metadata) == .administrator { return true }
-            if metadata.st_mode & S_IFMT == S_IFDIR {
+            if inspectDescendants, metadata.st_mode & S_IFMT == S_IFDIR {
                 guard let children = try? fileManager.contentsOfDirectory(atPath: candidate) else { continue }
                 pending.append(contentsOf: children.map { candidate + "/" + $0 })
             }

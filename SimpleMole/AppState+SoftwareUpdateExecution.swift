@@ -37,15 +37,15 @@ extension AppState {
     }
 
     private func requestSoftwareUpdate(_ selection: UpdateSelection) {
-        guard !isBusy, !isCheckingSoftwareUpdates, !isScanningApps, !isScanningCommandLineTools,
-              confirmation == nil, taskNotice == nil,
-              let result = softwareUpdateResults[selection.key], result.state == .available,
+        guard let result = softwareUpdateResults[selection.key], result.state == .available,
               result.latest != nil else { return }
         if case .app(let app, _) = selection,
            app.path == Bundle.main.bundleURL.path, app.bundleID == Bundle.main.bundleIdentifier {
             AppUpdateController.shared.checkForUpdates()
             return
         }
+        guard !isSoftwareTaskBusy, !isAgentCLIMutationActive,
+              confirmation == nil, taskNotice == nil else { return }
         softwareUpdatingID = selection.key
         let identity: String?
         switch selection {
@@ -71,11 +71,13 @@ extension AppState {
                                                 identity: String?,
                                                 processes: [ProcessSample]) {
         softwareUpdatingID = nil
+        guard confirmation == nil, taskNotice == nil else { return }
         confirmation = Confirmation(title: L10n.shared.tf("software.install.closeTitle", selection.name),
             message: L10n.shared.tf("software.install.closeMessage", selection.name)
                 + "\n\n" + Set(processes.map(\.name)).sorted().joined(separator: ", "),
             confirmLabel: L10n.shared.t("software.install.closeAction")) { [weak self] in
-                guard let self, !self.isBusy, !self.isCheckingSoftwareUpdates,
+                guard let self, !self.isSoftwareTaskBusy, !self.isAgentCLIMutationActive,
+                      !self.isCheckingSoftwareUpdates,
                       self.softwareUpdateResults[selection.key]?.state == .available else { return }
                 self.softwareUpdatingID = selection.key
                 Task { await self.performSoftwareUpdate(selection, result: result, identity: identity, mayClose: true) }

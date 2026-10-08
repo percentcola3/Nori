@@ -119,11 +119,56 @@ struct AdministratorCleanupTests {
         try expect(throttled.count == 3, "Late callbacks replaced completed progress")
     }
 
+    static func testConfirmationPlanning(in home: URL) throws {
+        let manager = FileManager.default
+        let directory = home.appendingPathComponent("Library/Caches/confirmation", isDirectory: true)
+        let leaf = directory.appendingPathComponent("payload.cache")
+        try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("permission preview".utf8).write(to: leaf)
+        func category(_ url: URL) -> CleanupCategory {
+            CleanupCategory(name: "Preview", paths: [url.path], bytes: 4096,
+                selected: true, source: .core, risk: .safe,
+                disposal: .permanentDelete, applyRoute: .genericTrash)
+        }
+        let root = category(directory)
+        let ordinary = AdministratorCleanupPlan.confirmationItems([root],
+            administratorRequiredPaths: [], homeDirectory: home.path)
+        try expect(ordinary.isEmpty, "Writable ordinary cleanup unexpectedly requested elevation")
+        let preview = AdministratorCleanupPlan.confirmationItems([root, root],
+            administratorRequiredPaths: [directory.path], homeDirectory: home.path)
+        try expect(preview.count == 1 && preview[0].identity == root.pathIdentities[directory.path]
+                   && preview[0].metadata == DeletionPlan.Metadata.read(directory.path),
+                   "Scanner permission evidence was lost, duplicated, or detached from live metadata")
+        var unselected = root
+        unselected.selected = false
+        var protected = root
+        protected.risk = .protected
+        var command = root
+        command.applyRoute = .toolCommand
+        var changed = root
+        changed.pathIdentities[directory.path] = "0:0:0"
+        try expect(AdministratorCleanupPlan.confirmationItems([unselected, protected, command, changed],
+            administratorRequiredPaths: [directory.path], homeDirectory: home.path).isEmpty,
+            "Unselected, protected, tool-command or changed paths entered administrator consent")
+
+        // A permission change on a selected root is noticed without walking
+        // its tree. Scanner hints remain responsible for descendant ACLs.
+        let selectedLeaf = category(leaf)
+        try expect(chmod(directory.path, 0o555) == 0, "Cannot prepare changed permission fixture")
+        defer { _ = chmod(directory.path, 0o755) }
+        let permissionChange = AdministratorCleanupPlan.confirmationItems([selectedLeaf],
+            administratorRequiredPaths: [], homeDirectory: home.path)
+        try expect(permissionChange.map(\.record) == [leaf.path]
+                   && manager.fileExists(atPath: leaf.path),
+                   "New root deletion permissions were missed or the preview deleted content")
+    }
+
     static func main() async throws {
         let manager = FileManager.default
         let home = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
         try testLiteralPathCoverage()
         try testProgress(at: home.appendingPathComponent("worker-progress-fixture.json"))
+        try testConfirmationPlanning(in: home)
         let caches = home.appendingPathComponent("Library/Caches/test-admin", isDirectory: true)
         try manager.createDirectory(at: caches, withIntermediateDirectories: true)
         let file = caches.appendingPathComponent("generated.cache")

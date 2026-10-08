@@ -311,19 +311,20 @@ struct DeveloperToolchainPanel: View {
                     Text(home).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
                     Spacer()
                     DevLinkButton(title: l10n.t("dev.java.default"), symbol: "checkmark") { setJavaHome(home) }
-                        .disabled(workspace.terminal.environment["JAVA_HOME"] == home || state.isBusy || shell.isSaving)
+                        .disabled(workspace.terminal.environment["JAVA_HOME"] == home || state.isDeveloperTaskBusy || shell.isSaving)
                 }.padding(14)
             }
         }
     }
 
     private func setJavaHome(_ home: String) {
+        guard state.confirmation == nil else { return }
         if let sdk = workspace.versions.first(where: { $0.manager == .sdkman && $0.candidate == "java" && home == $0.path }) { propose(.sdkman, .setDefault, sdk.version, "java"); return }
         let name = shell.inventory?.kind == .bash ? (shell.inventory?.loginFile ?? ".bash_profile") : ".zshrc"
         guard let profile = shell.profiles.first(where: { $0.name == name }),
               let text = try? DeveloperShellService.settingVariable(in: profile, variable: profile.variables.last(where: { $0.name == "JAVA_HOME" && $0.literalValue != nil }), name: "JAVA_HOME", value: home) else { workspace.operationError = l10n.t("dev.operation.unavailable"); return }
         state.confirmation = .init(title: l10n.t("dev.java.default"), message: profile.path + "\nJAVA_HOME=" + home, confirmLabel: l10n.t("common.save")) {
-            guard !state.isBusy else { workspace.operationError = l10n.t("dev.operation.unavailable"); return }
+            guard !state.isDeveloperTaskBusy else { workspace.operationError = l10n.t("dev.operation.unavailable"); return }
             Task { _ = await shell.save(text, replacing: profile) }
         }
     }
@@ -445,7 +446,7 @@ struct DeveloperShellDiagnosticsPanel: View {
             DevCardTitle(symbol: "timer", title: l10n.t("dev.shell.profile"))
             Spacer()
             DevLinkButton(title: l10n.t("dev.command.run"), symbol: "play") { workspace.proposeShellProfile(state: state) }
-                .disabled(workspace.commandRunning || state.isBusy)
+                .disabled(workspace.commandRunning || state.isDeveloperTaskBusy)
         } content: {
             if let median = workspace.shellProfile?.median {
                 DevDivider()

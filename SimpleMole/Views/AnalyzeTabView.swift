@@ -171,8 +171,8 @@ struct AnalyzeTabView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(MolePlainButtonStyle(pressedScale: 0.99))
-            .disabled(state.isBusy || scanning)
-            .opacity(state.isBusy || scanning ? 0.45 : 1)
+            .disabled(state.isAnalysisTaskBusy || scanning)
+            .opacity(state.isAnalysisTaskBusy || scanning ? 0.45 : 1)
             .accessibilityLabel(item.path)
             .accessibilityValue(l10n.t(selected ? "duplicates.row.selected" : "duplicates.row.kept"))
             Button { previewURL = URL(fileURLWithPath: item.path) } label: { Image(systemName: "eye") }
@@ -194,7 +194,7 @@ struct AnalyzeTabView: View {
             Label(l10n.t(mode.actionKey), systemImage: "magnifyingglass")
         }
         .buttonStyle(PrimaryButtonStyle(tint: .moleAccent))
-        .disabled(state.isBusy || state.isAnalyzing || state.isScanningDuplicates)
+        .disabled(state.isAnalysisTaskBusy || state.isAnalyzing || state.isScanningDuplicates)
         .accessibilityIdentifier("analysis-scan-" + mode.rawValue)
     }
 
@@ -203,7 +203,7 @@ struct AnalyzeTabView: View {
             Image(systemName: "arrow.clockwise")
         }
         .buttonStyle(AnalysisIconButtonStyle())
-        .disabled(state.isBusy || state.isAnalyzing || state.isScanningDuplicates)
+        .disabled(state.isAnalysisTaskBusy || state.isAnalyzing || state.isScanningDuplicates)
         .help(l10n.t("analyze.scan.full"))
         .accessibilityLabel(l10n.t("analyze.scan.full"))
         .accessibilityIdentifier("analysis-scan-" + mode.rawValue)
@@ -228,8 +228,8 @@ struct AnalyzeTabView: View {
                     AnalysisSelectionButtons(
                         allSelected: allSelected,
                         noneSelected: hasSelectableResults && selectedCount == 0,
-                        canSelectAll: hasSelectableResults && !state.isBusy && !scanning,
-                        canDeselectAll: selectedCount > 0 && !state.isBusy && !scanning,
+                        canSelectAll: hasSelectableResults && !state.isAnalysisTaskBusy && !scanning,
+                        canDeselectAll: selectedCount > 0 && !state.isAnalysisTaskBusy && !scanning,
                         onSelectAll: selectAll, onDeselectAll: deselectAll)
                     Spacer(minLength: 8)
                     if mode == .images {
@@ -240,7 +240,7 @@ struct AnalyzeTabView: View {
                             Label(l10n.t("slim.action"), systemImage: "arrow.down.right.and.arrow.up.left")
                         }
                         .buttonStyle(AnalysisActionButtonStyle(tint: .moleAccentText))
-                        .disabled(selectedCount == 0 || state.isBusy || scanning)
+                        .disabled(selectedCount == 0 || state.isAnalysisTaskBusy || scanning)
                     }
                     if scanning {
                         Button { cancelScan() } label: { Image(systemName: "xmark") }
@@ -259,7 +259,7 @@ struct AnalyzeTabView: View {
                             .monospacedDigit()
                     }
                     .buttonStyle(AnalysisActionButtonStyle(tint: .danger))
-                    .disabled(selectedCount == 0 || state.isBusy || scanning)
+                    .disabled(selectedCount == 0 || state.isAnalysisTaskBusy || scanning)
                     .accessibilityIdentifier("analysis-clean-selected")
                 }
             }

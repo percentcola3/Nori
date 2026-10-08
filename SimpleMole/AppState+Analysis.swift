@@ -33,7 +33,7 @@ extension AppState {
     }
 
     func scanAnalysisMode(_ mode: AnalyzeMode, forceFull: Bool = false) {
-        guard !isBusy, !isAnalyzing, !isScanningDuplicates, !isDeletingAnalysisFiles else { return }
+        guard !isAnalysisTaskBusy, !isAnalyzing, !isScanningDuplicates, !isDeletingAnalysisFiles else { return }
         if mode == .duplicates {
             scanDuplicateFiles(forceFull: forceFull)
             return

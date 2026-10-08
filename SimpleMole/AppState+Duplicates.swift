@@ -24,7 +24,7 @@ extension AppState {
     }
 
     func setDuplicateMode(_ mode: DuplicateMode) {
-        guard !isBusy, !isScanningDuplicates, duplicateMode != mode else { return }
+        guard !isAnalysisTaskBusy, !isScanningDuplicates, duplicateMode != mode else { return }
         cacheCurrentDuplicateSelection()
         duplicateMode = mode
         restoreDuplicateResult()
@@ -84,7 +84,7 @@ extension AppState {
     /// 全盘扫描的重复文件子分类：家目录内做内容级比对，系统文件、
     /// 包目录与隐藏位置由扫描策略直接排除，用户无需选择范围。
     func scanDuplicateFiles(forceFull: Bool = false) {
-        guard !isBusy, !isAnalyzing, !isScanningDuplicates else { return }
+        guard !isAnalysisTaskBusy, !isAnalyzing, !isScanningDuplicates else { return }
         guard permissionCenter.fullDiskAccessGranted else {
             duplicateStatus = L10n.shared.t("duplicates.status.noAccess")
             presentTaskFailure(message: duplicateStatus)
@@ -97,7 +97,7 @@ extension AppState {
     /// The production entry point uses the current home. Explicit roots make
     /// the operation boundary testable with generated fixtures only.
     func beginDuplicateScan(roots: [String], home: String, forceFull: Bool = false) {
-        guard !isBusy, !isAnalyzing, !isScanningDuplicates else { return }
+        guard !isAnalysisTaskBusy, !isAnalyzing, !isScanningDuplicates else { return }
         cacheCurrentDuplicateSelection()
         duplicateScanProgress.reset()
         let control = DuplicateScanControl()
@@ -178,7 +178,7 @@ extension AppState {
     func cancelDuplicateScan() { duplicateScanControl?.cancel() }
 
     func canSelectDuplicate(_ record: DuplicateFileRecord, group: DuplicateFileGroup) -> Bool {
-        guard !isBusy, !isScanningDuplicates,
+        guard !isAnalysisTaskBusy, !isScanningDuplicates,
               group.members.contains(where: { $0.path == record.path }) else { return false }
         if duplicateSelection.contains(record.path) { return true }
         return group.members.contains { $0.path != record.path && !duplicateSelection.contains($0.path) }
@@ -195,13 +195,13 @@ extension AppState {
     func selectAllDuplicates() { selectDefaultDuplicates() }
 
     func deselectAllDuplicates() {
-        guard !isBusy, !isScanningDuplicates else { return }
+        guard !isAnalysisTaskBusy, !isScanningDuplicates else { return }
         duplicateSelection = []
         cacheCurrentDuplicateSelection()
     }
 
     func selectDefaultDuplicates() {
-        guard !isBusy, !isScanningDuplicates else { return }
+        guard !isAnalysisTaskBusy, !isScanningDuplicates else { return }
         duplicateSelection = DuplicateSelectionPolicy.suggestedSelection(groups: duplicateGroups, mode: duplicateMode)
         cacheCurrentDuplicateSelection()
     }
@@ -231,7 +231,7 @@ extension AppState {
     /// route retains the cleanup whitelist and open-file checks, with a fresh
     /// group/content validation at each final mutation edge.
     func deleteSelectedDuplicates() {
-        guard !isBusy, !duplicateSelection.isEmpty else { return }
+        guard !isAnalysisTaskBusy, !duplicateSelection.isEmpty else { return }
         let groups = duplicateGroups
         let selectedPaths = duplicateSelection
         let roots = duplicateScannedRoots

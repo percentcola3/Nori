@@ -382,6 +382,7 @@ final class AppState: ObservableObject {
     @Published var devEnvSelection: Set<String> = []
     @Published var devEnvStatus: String
     @Published var isScanningEnv = false
+    @Published var isApplyingDevEnv = false
     @Published var devWorkspaceRefreshToken = 0
     @Published var isRefreshingGc = false
     @Published var devWorkspaceRefreshPending = false
@@ -733,8 +734,9 @@ final class AppState: ObservableObject {
             showPermissionCenter = false
             return
         }
-        // Busy 时保留待执行任务；下一个激活/显式“完成”会继续尝试。
-        guard !isBusy else { return }
+        // Preserve this page's pending operation while its own task is active.
+        guard let pending = authorizationCoordinator.pendingOperation,
+              !isTaskBusy(for: pending) else { return }
         guard let operation = authorizationCoordinator.takePending() else { return }
         showPermissionCenter = false
         executeProtectedOperation(operation)
@@ -746,7 +748,7 @@ final class AppState: ObservableObject {
             presentPermissionCenter()
             return
         }
-        guard !isBusy else { return }
+        guard !isTaskBusy(for: operation) else { return }
 
         activeProtectedOperation = operation
         defer { activeProtectedOperation = nil }
@@ -775,10 +777,6 @@ final class AppState: ObservableObject {
     private var uninstallInventoryGeneration = 0
     let l10n = L10n.shared
 
-    var isBusy: Bool {
-        isBusyExcludingUninstall || uninstallQueue.hasWork || cleanupQueued
-    }
-
     /// 标题栏展示的当前任务。删除类任务（清理、卸载）共用收纳动效。
     struct HeaderTask: Equatable {
         let text: String
@@ -789,7 +787,7 @@ final class AppState: ObservableObject {
         if let job = uninstallQueue.activeJob {
             return HeaderTask(text: l10n.tf("header.task.uninstalling", job.app.name), tidying: true)
         }
-        if isApplying || agentApplying || isDeletingDuplicates || isDeletingAnalysisFiles
+        if isApplying || isApplyingDevEnv || agentApplying || isDeletingDuplicates || isDeletingAnalysisFiles
             || simulatorInventory.isDeleting || cleanupQueued {
             return HeaderTask(text: l10n.t("header.task.cleaning"), tidying: true)
         }
@@ -798,20 +796,6 @@ final class AppState: ObservableObject {
         }
         if isBusy { return HeaderTask(text: l10n.t("header.task.working"), tidying: false) }
         return nil
-    }
-
-    var isBusyExcludingUninstall: Bool {
-        isScanning || isApplying || isSlimming
-            || agentProgramBusyID != nil
-            || commandLineToolBusyID != nil
-            || softwareUpdatingID != nil
-            || isDeveloperCommandRunning
-            || isDeveloperConfigurationWriting
-            || isScanningEnv
-            || isDeletingDuplicates || isDeletingAnalysisFiles || isRefreshingAnalysisCache
-            || gcRunningId != nil || isAutoCleanupScanning
-            || agentScanning || agentApplying
-            || simulatorInventory.isDeleting
     }
 
     /// 磁盘分析与重复文件比对是只读遍历，在后台持续执行，不阻塞其他操作
@@ -1384,7 +1368,7 @@ final class AppState: ObservableObject {
     private func startNextUninstallIfPossible() {
         if !isStoppingUninstallQueue, taskNotice == nil,
            let action = pendingCleanup, uninstallQueue.activeJob == nil,
-           !isBusyExcludingUninstall, confirmation == nil, !isDispatchingConfirmation {
+           !isUninstallMutationBlocked, confirmation == nil, !isDispatchingConfirmation {
             pendingCleanup = nil
             cleanupQueued = false
             action()
@@ -1392,7 +1376,7 @@ final class AppState: ObservableObject {
         }
         // Preserve mutual exclusion at the disk mutation edge while allowing
         // more confirmed requests to join the queue from any visible row.
-        let blocked = isBusyExcludingUninstall || confirmation != nil || isDispatchingConfirmation
+        let blocked = isUninstallMutationBlocked || confirmation != nil || isDispatchingConfirmation
             || taskNotice != nil
         // A no-op mutating access to an @Published value still publishes. Keep
         // these read-only guards outside startNext to avoid a wake-up loop.
@@ -1419,12 +1403,12 @@ final class AppState: ObservableObject {
         let outcome = await uninstallExecutor.execute(job) { phase in
             switch phase {
             case .closing:
-                statusText = l10n.tf("uninstall.status.closing", target.name)
+                appListStatus = l10n.tf("uninstall.status.closing", target.name)
             case .planning:
                 log(l10n.tf("log.uninstallScan", target.name))
             case .removing:
                 uninstallQueue.markRunning(job.id)
-                statusText = l10n.tf("status.uninstalling", target.name)
+                appListStatus = l10n.tf("status.uninstalling", target.name)
                 log(l10n.tf("log.uninstallApply", target.name))
             }
         }
@@ -1481,7 +1465,7 @@ final class AppState: ObservableObject {
         uninstallQueue.finish(job.id, succeeded: succeeded, message: message)
         noteHeaderReaction(succeeded ? .success : .attention)
         resampleAfterMutation()
-        statusText = message
+        appListStatus = message
         log(message)
         if !succeeded { presentTaskFailure(message: message, details: details) }
     }

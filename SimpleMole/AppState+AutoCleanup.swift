@@ -17,7 +17,7 @@ extension AppState {
 
     /// 选择目录后进入同一个创建面板，在创建前确认用途与策略。
     func chooseAutoCleanupDirectory() -> String? {
-        guard !isBusy else { return nil }
+        guard !isCleanupTaskBusy else { return nil }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -51,7 +51,7 @@ extension AppState {
                              retentionDays: Int,
                              regenerableConfirmed: Bool,
                              sourceName: String? = nil) -> (added: Int, skipped: Int) {
-        guard !isBusy, regenerableConfirmed else {
+        guard !isCleanupTaskBusy, regenerableConfirmed else {
             autoCleanupStatus = l10n.t("auto.status.needsConfirmation")
             return (0, directories.count)
         }
@@ -111,7 +111,7 @@ extension AppState {
     }
 
     func updateAutoCleanupRule(_ updated: AutoCleanupRule) {
-        guard !isBusy else { return }
+        guard !isCleanupTaskBusy else { return }
         guard let index = autoCleanupRules.firstIndex(where: { $0.id == updated.id }) else { return }
         let previous = autoCleanupRules[index]
         var normalized = updated
@@ -178,7 +178,7 @@ extension AppState {
     }
 
     func removeAutoCleanupRule(_ id: UUID) {
-        guard !isBusy else { return }
+        guard !isCleanupTaskBusy else { return }
         autoCleanupRules.removeAll { $0.id == id }
         autoCleanupRuleIssues[id] = nil
         if autoCleanupPreviewRuleID == id {
@@ -191,7 +191,7 @@ extension AppState {
     func previewAutoCleanup(_ id: UUID) {
         guard authorize(.previewAutoCleanup(ruleID: id),
                         presentingPermissionCenter: true) else { return }
-        guard !isBusy, let rule = autoCleanupRules.first(where: { $0.id == id }) else { return }
+        guard !isCleanupTaskBusy, let rule = autoCleanupRules.first(where: { $0.id == id }) else { return }
         isAutoCleanupScanning = true
         autoCleanupStatus = l10n.t("auto.status.scanning")
         Task {
@@ -221,7 +221,7 @@ extension AppState {
     func runAutoCleanupNow(_ id: UUID) {
         guard authorize(.runAutoCleanup(ruleID: id),
                         presentingPermissionCenter: true) else { return }
-        guard !isBusy, let rule = autoCleanupRules.first(where: { $0.id == id }) else { return }
+        guard !isCleanupTaskBusy, let rule = autoCleanupRules.first(where: { $0.id == id }) else { return }
         isAutoCleanupScanning = true
         autoCleanupStatus = l10n.t("auto.status.scanning")
         Task {
@@ -292,7 +292,7 @@ extension AppState {
         }
         automationRuntime.reportedPermissionRequirement = false
 
-        guard !isBusy, taskNotice == nil else {
+        guard !isCleanupTaskBusy, taskNotice == nil else {
             scheduleAutomationRetry()
             return
         }

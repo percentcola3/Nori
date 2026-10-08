@@ -36,7 +36,10 @@ final class AppState {
     let fixtureDefaults: UserDefaults
     var analysisAutoScanPreferences = AnalysisAutoScanPreferences()
     var analyzeMode = AnalyzeMode.images
-    var isBusy = false
+    var externallyBusy = false
+    var forcedAnalysisBusy = false
+    var isAnalysisTaskBusy: Bool { forcedAnalysisBusy || isAnalyzing || isScanningDuplicates || isDeletingAnalysisFiles }
+    var isBusy: Bool { externallyBusy || isAnalysisTaskBusy }
     var isAnalyzing = false
     var isScanningDuplicates = false
     var isDeletingAnalysisFiles = false
@@ -104,24 +107,24 @@ struct AnalysisAutomationTests {
         state.scannedAt = [.disk: due.addingTimeInterval(-4), .largeFiles: due.addingTimeInterval(-3),
                           .duplicates: due.addingTimeInterval(-2), .videos: due]
         // Images has never been scanned; the current sidebar selection must stay on it.
-        state.isBusy = true
+        state.externallyBusy = true
+        state.forcedAnalysisBusy = true
         state.runScheduledAnalysisScans()
         precondition(state.started.isEmpty && state.permissionCenter.refreshCount == 0)
-        state.isBusy = false
+        state.forcedAnalysisBusy = false
         state.isDeletingAnalysisFiles = true
         state.runScheduledAnalysisScans()
         precondition(state.started.isEmpty)
         state.isDeletingAnalysisFiles = false
-        state.taskNotice = "waiting for user"
-        state.runScheduledAnalysisScans()
-        precondition(state.started.isEmpty)
-        state.taskNotice = nil
+        state.taskNotice = "another tab's notice"
         state.permissionCenter.fullDiskAccessGranted = false
         state.runScheduledAnalysisScans()
         precondition(state.started.isEmpty)
         state.permissionCenter.fullDiskAccessGranted = true
         state.runScheduledAnalysisScans()
-        precondition(state.started == [.disk])
+        precondition(state.started == [.disk] && state.isBusy,
+                     "Another tab's active task or result notice blocked the read-only scheduler")
+        state.taskNotice = nil
         precondition(state.analyzeMode == .images, "The scheduler changed the selected sidebar item")
         state.runScheduledAnalysisScans(force: true)
         precondition(state.started == [.disk], "The scheduler started overlapping work")
@@ -211,6 +214,6 @@ struct AnalysisAutomationTests {
             precondition(translatedMedia["analyze.section.largeFiles"] != nil,
                          "Large-file category is no longer translated")
         }
-        print("Analysis automation: incremental refresh, legacy scope expansion, partial retry backoff, idle/permission gating, sequential refresh and localization passed")
+        print("Analysis automation: incremental refresh, legacy scope expansion, partial retry backoff, per-tab/permission gating, sequential refresh and localization passed")
     }
 }

@@ -96,7 +96,7 @@ extension AppState {
     }
 
     func toggleSlimSelection(_ candidate: SlimCandidate) {
-        guard !isBusy else { return }
+        guard !isAnalysisTaskBusy else { return }
         if slimSelection.contains(candidate.path) {
             slimSelection.remove(candidate.path)
         } else {
@@ -150,7 +150,7 @@ extension AppState {
     }
 
     func toggleDiskBrowserSelection(_ entry: AnalyzeEntry, in parentPath: String) {
-        guard !isBusy, diskBrowserNavigation.contains(parentPath), diskBrowserCanSelect(entry),
+        guard !isAnalysisTaskBusy, diskBrowserNavigation.contains(parentPath), diskBrowserCanSelect(entry),
               diskBrowserEntries(at: parentPath).contains(where: { $0.path == entry.path && $0.isDir == entry.isDir }) else { return }
         navigateDiskBrowser(to: parentPath)
         toggleAnalysisFileSelection(.init(name: entry.name, path: entry.path, size: entry.size))
@@ -173,7 +173,7 @@ extension AppState {
     }
 
     func toggleAnalysisFileSelection(_ item: AnalysisFileItem) {
-        guard !isBusy, analysisFileItems(for: analyzeMode).contains(where: { $0.path == item.path }) else { return }
+        guard !isAnalysisTaskBusy, analysisFileItems(for: analyzeMode).contains(where: { $0.path == item.path }) else { return }
         var selection = analysisSelection(for: analyzeMode)
         if selection.contains(item.path) {
             selection.remove(item.path)
@@ -194,12 +194,12 @@ extension AppState {
     }
 
     func selectAllAnalysisFiles() {
-        guard !isBusy else { return }
+        guard !isAnalysisTaskBusy else { return }
         setAnalysisSelection(Set(analysisFileItems(for: analyzeMode).map(\.path)), for: analyzeMode)
     }
 
     func deselectAllAnalysisFiles() {
-        guard !isBusy else { return }
+        guard !isAnalysisTaskBusy else { return }
         setAnalysisSelection([], for: analyzeMode)
     }
 
@@ -207,7 +207,7 @@ extension AppState {
     func selectDefaultAnalysisFiles() { deselectAllAnalysisFiles() }
 
     func toggleSelectAllAnalysisFiles() {
-        guard !isBusy else { return }
+        guard !isAnalysisTaskBusy else { return }
         let paths = analysisFileItems(for: analyzeMode).map(\.path)
         var selection = analysisSelection(for: analyzeMode)
         if paths.allSatisfy(selection.contains) {
@@ -220,7 +220,7 @@ extension AppState {
 
     /// 普通文件移入废纸篓；已确认可重建的缓存按策略清理，并局部同步结果。
     func deleteAnalysisFiles(_ paths: [String], mode: AnalyzeMode? = nil) {
-        guard !isBusy, !isDeletingAnalysisFiles, !paths.isEmpty else { return }
+        guard !isAnalysisTaskBusy, !isDeletingAnalysisFiles, !paths.isEmpty else { return }
         let sourceMode = mode ?? analyzeMode
         let inventoryKind: AnalysisInventoryKind = sourceMode == .disk ? .disk
             : sourceMode == .images ? .images : sourceMode == .videos ? .videos : .largeFiles
@@ -247,7 +247,6 @@ extension AppState {
             refreshAnalysisAfterMutation(removedPaths: removed)
             isDeletingAnalysisFiles = false
             let summary = L10n.shared.tf("analyze.delete.done", removed.count, failed)
-            statusText = summary
             analyzeStatus = summary
             analysisStatuses[sourceMode] = summary
             log(summary)
@@ -263,7 +262,7 @@ extension AppState {
 
     /// 某一子分类的全选/取消全选；不影响其他分类的已选项。
     func toggleSelectAllSlimCandidates(in section: AnalyzeSection) {
-        guard !isBusy else { return }
+        guard !isAnalysisTaskBusy else { return }
         let paths = slimCandidates(in: section).map(\.path)
         if paths.allSatisfy(slimSelection.contains) {
             slimSelection.subtract(paths)
@@ -277,14 +276,14 @@ extension AppState {
     }
 
     func requestSlim() {
-        guard !isBusy, !slimSelectedCandidates.isEmpty else { return }
+        guard !isAnalysisTaskBusy, !slimSelectedCandidates.isEmpty else { return }
         showSlimSheet = true
     }
 
     func startSlim() {
         showSlimSheet = false
         let targets = slimSelectedCandidates
-        guard !isBusy, !targets.isEmpty else { return }
+        guard !isAnalysisTaskBusy, !targets.isEmpty else { return }
         let options = slimOptions
         let scanFingerprints = analysisInventoryCache.restore()[.images]?.files
         isSlimming = true
@@ -347,17 +346,17 @@ extension AppState {
         if unsupported > 0 { parts.append(L10n.shared.tf("slim.summary.unsupported", unsupported)) }
         if failed > 0 { parts.append(L10n.shared.tf("slim.summary.failed", failed)) }
         if cancelled > 0 { parts.append(L10n.shared.tf("slim.summary.cancelled", cancelled)) }
-        statusText = parts.joined(separator: " · ")
-        analyzeStatus = statusText
-        analysisStatuses[.images] = statusText
+        let summary = parts.joined(separator: " · ")
+        analyzeStatus = summary
+        analysisStatuses[.images] = summary
         if cancelled == requested {
             noteHeaderReaction(nil)
         } else {
             noteHeaderReaction((failed > 0 || cancelled > 0) ? .attention : .success)
         }
-        log(statusText)
+        log(summary)
         if failed > 0 || unsupported > 0 {
-            presentTaskFailure(message: statusText, details: outcomes.compactMap { outcome in
+            presentTaskFailure(message: summary, details: outcomes.compactMap { outcome in
                 guard outcome.status == .failed || outcome.status == .unsupported else { return nil }
                 let reason = outcome.message.map { L10n.shared.t($0) } ?? ""
                 return outcome.path + (reason.isEmpty ? "" : "\n" + reason)

@@ -130,6 +130,13 @@ struct AgentCatalogTests {
             .first { $0.labelKey == "agents.label.conversationDatabase" }
         expect(conversation?.tier == .showOnly && conversation?.owners == ["opencode"]
                && conversation?.paths.count == 2, "opencode database credentials lost the high-risk owner guard")
+        // Warp's sensitive database remains an explicit manual selection.
+        let warpRoot = AgentCatalog.warpDataRoots[0]
+        let warpRelatives = ["warp.sqlite", "warp.sqlite-wal", "warp.sqlite-shm"].map { warpRoot + "/" + $0 }
+        let warpPaths = Set(warpRelatives.map { home + "/" + $0 })
+        try write("Applications/Warp.app/Contents/Info.plist")
+        for path in warpRelatives { try write(path) }
+
         // 默认 APFS 不区分大小写，因此先移除旧名字再创建历史拼写。
         try fm.removeItem(atPath: home + "/.local/share/opencode/opencode.db")
         try fm.removeItem(atPath: home + "/.local/share/opencode/opencode.db-wal")
@@ -420,6 +427,13 @@ struct AgentCatalogTests {
         let state = report.categories.first { $0.paths.contains(home + "/.codex/state_5.sqlite") }
         expect(state?.risk == .warning && state?.canSelect == true && state?.selected == false,
                "state database must remain selectable with an explicit warning")
+        let warpDatabase = report.categories.first { $0.paths.contains(home + "/" + warpRelatives[0]) }!
+        expect(warpDatabase.risk == .warning && warpDatabase.canSelect && !warpDatabase.selected
+               && warpDatabase.reasonKey == "agents.reason.showOnly" && Set(warpDatabase.paths) == warpPaths,
+               "Warp database must allow manual selection without defaulting high-risk data to cleanup")
+        let selectedWarp = warpDatabase.selectingPaths(warpDatabase.paths)
+        expect(selectedWarp.allSelected && selectedWarp.selectedPathCount == 3,
+               "manual selection did not include the complete Warp SQLite family")
         expect(report.categories.allSatisfy { $0.activityGuard == .aiAgent }, "agent category lost its guard")
         let writer = report.skills.first { $0.path == home + "/.claude/skills/writer" }
         expect(writer?.name == "writer" && writer?.summary == "Writes docs" && writer?.linked == false,
@@ -457,6 +471,18 @@ struct AgentCatalogTests {
         expect(AgentCleanupExecutor.plan([selectedState], running: RunningApplicationSnapshot(processNames: ["codex"]),
             home: home, presence: sandboxPresence).items.isEmpty,
                "sensitive state deletion ignored a running owner")
+        let runningWarp = RunningApplicationSnapshot(bundleIdentifiers: ["dev.warp.Warp-Stable"])
+        for snapshot in [runningWarp, .unavailable] {
+            expect(AgentCleanupExecutor.plan([selectedWarp], running: snapshot, home: home,
+                presence: sandboxPresence).items.isEmpty,
+                   "Warp database deletion must wait until its owner is verified idle")
+        }
+        expect(Set(AgentCleanupExecutor.blockingResources([selectedWarp], running: runningWarp,
+            home: home, presence: sandboxPresence).paths) == warpPaths,
+               "Warp's active database must report every blocked family member")
+        expect(Set(AgentCleanupExecutor.plan([selectedWarp], running: idle, home: home,
+            presence: sandboxPresence).items.map(\.record)) == warpPaths,
+               "explicitly selected idle Warp data did not reach the deletion plan")
 
         // 卸载后父节点清理：CLI 消失仍可清理已确认的精确目录，不能扩大到其它 Agent。
         let noCLI = AgentPresenceContext(applicationDirs: [], searchPath: [])
@@ -719,6 +745,34 @@ struct AgentCatalogTests {
                && !fm.fileExists(atPath: home + "/.codex/logs_2.sqlite-wal"),
                "complete SQLite family was not removed: \(whole.summary.messages)")
         expect(fm.fileExists(atPath: home + "/.codex/state_5.sqlite"), "unselected state database was touched")
+        let partialWarp = AgentCleanupExecutor.execute(
+            [warpDatabase.selectingPaths([home + "/" + warpRelatives[1]])],
+            running: idle, home: home, permanent: true, presence: sandboxPresence)
+        expect(partialWarp.summary.removed == 0 && warpPaths.allSatisfy { fm.fileExists(atPath: $0) },
+               "selecting only Warp's WAL must preserve the entire database")
+        let completeWarp = AgentCleanupExecutor.execute([selectedWarp],
+            running: idle, home: home, permanent: true, presence: sandboxPresence)
+        expect(completeWarp.summary.removed == 3 && warpPaths.allSatisfy { !fm.fileExists(atPath: $0) },
+               "explicit full-family cleanup did not remove idle Warp database fixtures: \(completeWarp.summary.messages)")
+        try fm.removeItem(atPath: home + "/Applications/Warp.app")
+        for path in warpRelatives { try write(path) }
+        try write(warpRoot + "/keep.json")
+        let orphanedWarpReport = AgentInventory.scan(home: home, presence: sandboxPresence, onlyAgentIDs: ["warp"])
+        expect(orphanedWarpReport.groups.first?.orphaned == true,
+               "Warp data must be recognized as residuals after its application is removed")
+        var orphanedWarpDatabase = orphanedWarpReport.categories.first { $0.paths.contains(home + "/" + warpRelatives[0]) }!
+        expect(orphanedWarpDatabase.canSelect && !orphanedWarpDatabase.selected,
+               "Uninstalled Warp data must remain a manual selection")
+        orphanedWarpDatabase.selected = true
+        let orphanedWarpPlan = AgentCleanupExecutor.plan([orphanedWarpDatabase], running: idle,
+            home: home, presence: sandboxPresence, removingAgentIDs: ["warp"])
+        expect(Set(orphanedWarpPlan.items.map(\.record)) == warpPaths,
+               "Manually selected Warp residuals were rejected by the installed-application filter")
+        let orphanedWarpCleanup = AgentCleanupExecutor.execute([orphanedWarpDatabase], running: idle,
+            home: home, permanent: true, presence: sandboxPresence, removingAgentIDs: ["warp"])
+        expect(orphanedWarpCleanup.summary.removed == 3 && warpPaths.allSatisfy { !fm.fileExists(atPath: $0) }
+               && fm.fileExists(atPath: home + "/" + warpRoot + "/keep.json"),
+               "Warp residual cleanup must delete only the selected database family: \(orphanedWarpCleanup.summary.messages)")
 
         // --- Skill 链接和共享本体是不同操作：解除单个关联保留本体，删除本体清掉全部关联。
         // Explicit declarations through a link must also be detached. A direct

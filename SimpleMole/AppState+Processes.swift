@@ -19,7 +19,7 @@ extension AppState {
     // MARK: - 进程与端口
 
     func refreshRuntimeIfNeeded() {
-        guard mainWindowVisible, !runtimeInFlight, !isBusy else { return }
+        guard mainWindowVisible, !runtimeInFlight else { return }
         guard visiblePages.indices.contains(selectedTab) else { return }
         if visiblePages[selectedTab] == .processes {
             if advancedProcesses { refreshProcesses() } else { refreshNativeProcesses() }
@@ -477,6 +477,7 @@ extension AppState {
     }
 
     func closePort(_ row: PortRow) {
+        guard confirmation == nil else { return }
         confirmation = Confirmation(
             title: l10n.tf("ports.confirm.title", row.pid),
             message: l10n.tf("ports.confirm.msg", row.port, row.command),

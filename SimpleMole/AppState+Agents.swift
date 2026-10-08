@@ -164,13 +164,22 @@ extension AppState {
     private var effectiveAgentCleanupSelection: AgentCleanupSelection {
         let included = agentCLIIncludedCategoryIDs
         let cliAgentIDs = agentCLISelectedAgentIDs
-        return .init(categories: agentCategories.compactMap { category in
+        let selectedCategories = agentCategories.compactMap { category in
             isAgentCategoryIncludedByCLI(category, includedCategoryIDs: included)
                 ? category.selectingPaths(category.paths).selectedSubset : category.selectedSubset
-        }, skills: agentSkills.filter { agentSelectedSkills.contains($0.path) || cliAgentIDs.contains($0.agentID) },
-        servers: agentServers.filter { agentSelectedServers.contains($0.id) || cliAgentIDs.contains($0.agentID) },
-        installations: agentMCPInstallations.filter { agentSelectedMCPInstallations.contains($0.id) },
-        cliInstallations: agentCLIInstallations.filter { agentSelectedCLIInstallations.contains($0.id) })
+        }
+        let selectedCategoryIDs = Set(selectedCategories.map(\.id))
+        // Manual selection of retained data is the same narrow consent as the
+        // residual-cleanup action. It does not select any additional paths.
+        let selectedOrphanedAgentIDs = Set(agentGroups.filter {
+            $0.orphaned && $0.categoryIDs.contains(where: selectedCategoryIDs.contains)
+        }.map(\.id))
+        return .init(categories: selectedCategories,
+            skills: agentSkills.filter { agentSelectedSkills.contains($0.path) || cliAgentIDs.contains($0.agentID) },
+            servers: agentServers.filter { agentSelectedServers.contains($0.id) || cliAgentIDs.contains($0.agentID) },
+            installations: agentMCPInstallations.filter { agentSelectedMCPInstallations.contains($0.id) },
+            cliInstallations: agentCLIInstallations.filter { agentSelectedCLIInstallations.contains($0.id) },
+            removedAgentIDs: selectedOrphanedAgentIDs)
     }
 
     var agentSelectedBytes: UInt64 {
@@ -194,7 +203,7 @@ extension AppState {
     }
 
     func scanAgents(completionStatus: String? = nil) {
-        guard !isBusy else { return }
+        guard !isAgentTaskBusy else { return }
         invalidateAgentStorageFootprints()
         agentScanning = true
         agentScanComplete = false
@@ -318,7 +327,7 @@ extension AppState {
     }
 
     func toggleAgentSkill(_ skill: AgentSkill) {
-        guard !isBusy, !skill.identity.isEmpty else { return }
+        guard !isAgentTaskBusy, !skill.identity.isEmpty else { return }
         if agentSelectedSkills.contains(skill.path) {
             agentSelectedSkills.remove(skill.path)
         } else {
@@ -327,7 +336,7 @@ extension AppState {
     }
 
     func toggleAgentServer(_ server: AgentMCPServer) {
-        guard !isBusy else { return }
+        guard !isAgentTaskBusy else { return }
         if agentSelectedServers.contains(server.id) {
             agentSelectedServers.remove(server.id)
         } else {
@@ -336,7 +345,7 @@ extension AppState {
     }
 
     func toggleAgentMCPInstallation(_ installation: AgentMCPInstallation) {
-        guard !isBusy, !installation.identity.isEmpty else { return }
+        guard !isAgentTaskBusy, !installation.identity.isEmpty else { return }
         if agentSelectedMCPInstallations.contains(installation.id) {
             agentSelectedMCPInstallations.remove(installation.id)
         } else {
@@ -345,7 +354,7 @@ extension AppState {
     }
 
     func toggleAgentCLIInstallation(_ installation: AgentCLIInstallation) {
-        guard !isBusy, agentCLIInstallations.contains(where: { $0.id == installation.id }) else { return }
+        guard !isAgentTaskBusy, agentCLIInstallations.contains(where: { $0.id == installation.id }) else { return }
         if agentSelectedCLIInstallations.contains(installation.id) {
             agentSelectedCLIInstallations.remove(installation.id)
         } else {
@@ -354,7 +363,7 @@ extension AppState {
     }
 
     func applyAgentCleanup() {
-        guard !isBusy, agentHasScanned else { return }
+        guard !isAgentTaskBusy, uninstallQueue.activeJob == nil, agentHasScanned else { return }
         let selection = effectiveAgentCleanupSelection
         guard selection.count > 0 else {
             agentStatus = L10n.shared.t("cleanup.selectNone")
@@ -367,7 +376,7 @@ extension AppState {
     /// Refresh the data preview after closing its trusted consumers, so the
     /// final confirmation binds the post-shutdown file identities.
     func offerAgentAssociatedDataCleanup(agentIDs: Set<String>, programName: String? = nil) {
-        guard !agentIDs.isEmpty, !isBusy, confirmation == nil, taskNotice == nil else { return }
+        guard !agentIDs.isEmpty, !isAgentTaskBusy, confirmation == nil, taskNotice == nil else { return }
         agentProgramBusyID = "data:" + agentIDs.sorted().joined(separator: ",")
         let home = NSHomeDirectory()
         Task { [self] in
@@ -389,6 +398,7 @@ extension AppState {
             let scope = AgentDataProcessScope.make(agentIDs: agentIDs, cli: cli, home: home)
             let probe = await Task.detached(priority: .utility) { SoftwareUpdateProcesses.probe(scope) }.value
             agentProgramBusyID = nil
+            guard confirmation == nil, taskNotice == nil else { return }
             guard probe.isComplete else {
                 presentTaskFailure(details: [l10n.t("cli.uninstall.runtimeUnknown")], detailsAreLocalized: true)
                 return
@@ -401,7 +411,7 @@ extension AppState {
                     message: l10n.t("agents.data.running.message") + "\n\n"
                         + Set(probe.processes.map(\.name)).sorted().joined(separator: ", "),
                     confirmLabel: l10n.t("agents.data.running.action")) { [weak self] in
-                        guard let self, !self.isBusy else { return }
+                        guard let self, !self.isAgentTaskBusy else { return }
                         self.agentProgramBusyID = "data:" + agentIDs.sorted().joined(separator: ",")
                         Task {
                             let stopped = await SoftwareUpdateProcesses.close(scope, stillCurrent: {
@@ -428,7 +438,7 @@ extension AppState {
             if !report.complete { message += "\n\n" + l10n.t("log.scanPartial") }
             confirmation = Confirmation(title: l10n.t("agents.data.confirm.title"), message: message,
                 confirmLabel: l10n.t("agents.confirm.proceed")) { [weak self] in
-                    guard let self, !self.isBusy else { return }
+                    guard let self, !self.isAgentTaskBusy else { return }
                     self.agentProgramBusyID = "data:" + agentIDs.sorted().joined(separator: ",")
                     Task {
                         // A desktop or an interpreter-hosted CLI can start
@@ -462,8 +472,11 @@ extension AppState {
     }
 
     private func startAgentAction(_ requestedAction: AgentTaskAction, rechecking: Bool = false) {
-        guard !isBusyExcludingUninstall, uninstallQueue.activeJob == nil,
-              !cleanupQueued, agentHasScanned else { return }
+        guard !isAgentTaskBusy, uninstallQueue.activeJob == nil, agentHasScanned else { return }
+        // CLI removals share package-manager state with the software page.
+        if !requestedAction.selection.cliInstallations.isEmpty {
+            guard commandLineToolBusyID == nil, softwareUpdatingID == nil else { return }
+        }
         agentApplying = true
         var action = requestedAction
         if rechecking {
@@ -783,10 +796,9 @@ extension AppState {
     }
 
     func retryFailedAgentCleanup() {
-        guard !isBusyExcludingUninstall, uninstallQueue.activeJob == nil,
-              !cleanupQueued, let retry = agentRetryAction else { return }
-        agentRetryAction = nil
-        agentRetryAvailable = false
+        guard !isAgentTaskBusy, let retry = agentRetryAction else { return }
+        // A shared-resource guard may defer this frozen action. Keep its retry
+        // until startAgentAction claims it or a completed attempt replaces it.
         retry()
     }
 

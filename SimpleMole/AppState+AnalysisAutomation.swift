@@ -13,8 +13,8 @@ extension AppState {
     /// at most one category so foreground work and other scheduled tasks take priority.
     /// Completion checks the remaining categories again, without changing the sidebar selection.
     func runScheduledAnalysisScans(force: Bool = false) {
-        guard !isBusy, !isAnalyzing, !isScanningDuplicates, !isDeletingAnalysisFiles,
-              analyzingMode == nil, taskNotice == nil else { return }
+        guard !isAnalysisTaskBusy, !isAnalyzing, !isScanningDuplicates, !isDeletingAnalysisFiles,
+              analyzingMode == nil else { return }
 
         let now = Date()
         // A restored home-only cache remains immediately usable. Expand it

@@ -9,6 +9,7 @@ final class CleanupRuntimeState {
     fileprivate var taskGeneration = UUID()
     fileprivate var scanControl: CleanupScanControl?
     fileprivate var progressGeneration = 0
+    fileprivate var administratorRequiredPaths = Set<String>()
 }
 
 @MainActor
@@ -63,9 +64,6 @@ extension AppState {
 
     func cancelCleanupScan() {
         cleanupRuntime.scanControl?.cancel()
-        // A read-only inventory can overlap an uninstall. Never cancel that
-        // unrelated mutation through the engine's global cancellation hook.
-        if uninstallQueue.activeJob == nil { MoleEngine.shared.cancelAll() }
     }
 
     private func finishCleanupProgress() {
@@ -87,7 +85,7 @@ extension AppState {
         guard authorize(operation, presentingPermissionCenter: true) else {
             return
         }
-        guard !isBusyExcludingUninstall, !cleanupQueued else { return }
+        guard !isCleanupTaskBusy else { return }
         family = .clean
         installerCandidates = nil
         if mode == .quick, !force, let cached = CleanupCache.restore() {
@@ -108,6 +106,7 @@ extension AppState {
                 categories = finalizedCleanupCategories(
                     await appendNoriManagedPaths(to: preflight.categories), running: snapshot)
                 cleanupDeferredPaths = preflight.deferredPaths
+                cleanupRuntime.administratorRequiredPaths = preflight.administratorRequiredPaths
                 cleanupScanComplete = preflight.succeeded && !control.isCancelled
                 if !cleanupScanComplete {
                     for index in categories.indices { categories[index].selected = false }
@@ -130,6 +129,7 @@ extension AppState {
             return
         }
         categories = []
+        if excludingScannedRoots.isEmpty { cleanupRuntime.administratorRequiredPaths = [] }
         beginCleanupProgress(mode: mode)
         isScanning = true
         cleanupScanComplete = false
@@ -142,6 +142,8 @@ extension AppState {
                 await appendNoriManagedPaths(to: completedCategories + scan.categories),
                 running: scan.runningSnapshot)
             categories = combined
+            cleanupRuntime.administratorRequiredPaths.formUnion(scan.administratorRequiredPaths)
+            cleanupRuntime.administratorRequiredPaths.formIntersection(Set(combined.flatMap(\.paths)))
             cleanupDeferredPaths = scan.deferredPaths
             cleanupScanComplete = scan.sourceScansSucceeded
             if !cleanupScanComplete {
@@ -196,7 +198,7 @@ extension AppState {
     /// 清理页唯一的扫描入口：先限时快速扫描给出结果，未完成的目录自动
     /// 升级为深度补扫。只准备清单，绝不自动打开确认或后台删除。
     func startCleanupScan() {
-        guard !isBusyExcludingUninstall, !cleanupQueued else { return }
+        guard !isCleanupTaskBusy else { return }
         family = .clean
         jump(to: .cleanup)
         scanCleanup(force: true, mode: .quick, deepFollowUp: true)
@@ -206,7 +208,7 @@ extension AppState {
 
     /// 清理页“系统数据库”卡片：只体检、列出可执行项，逐项确认后执行。
     func scanSystemMaintenance() {
-        guard !isSystemMaintenanceRunning, !isApplying else { return }
+        guard !isCleanupTaskBusy else { return }
         isSystemMaintenanceRunning = true
         systemMaintenanceStatus = l10n.t("sysmaint.status.inspecting")
         Task { @MainActor [weak self] in
@@ -223,7 +225,7 @@ extension AppState {
 
     /// 维护项勾选由统一“清理”分发执行，不再有逐项确认按钮。
     func toggleSystemMaintenance(_ rowID: String) {
-        guard !isBusy else { return }
+        guard !isCleanupTaskBusy else { return }
         if systemMaintenanceSelection.contains(rowID) {
             systemMaintenanceSelection.remove(rowID)
         } else {
@@ -279,12 +281,13 @@ extension AppState {
         /// 用户取消：合并扫描不允许把取消当作“需要深度补扫”。
         let cancelled: Bool
         let completedRoots: Set<String>
+        let administratorRequiredPaths: Set<String>
 
         init(categories: [CleanupCategory], sourceResults: [RunResult],
              requiredSourceResults: [RunResult], runtimeResult: RunResult,
              runningSnapshot: RunningApplicationSnapshot,
              deferredPaths: [String] = [], cancelled: Bool = false,
-             completedRoots: Set<String> = []) {
+             completedRoots: Set<String> = [], administratorRequiredPaths: Set<String> = []) {
             self.categories = categories
             self.sourceResults = sourceResults
             self.requiredSourceResults = requiredSourceResults
@@ -293,6 +296,7 @@ extension AppState {
             self.deferredPaths = deferredPaths
             self.cancelled = cancelled
             self.completedRoots = completedRoots
+            self.administratorRequiredPaths = administratorRequiredPaths
         }
 
         var results: [RunResult] { sourceResults + [runtimeResult] }
@@ -358,7 +362,8 @@ extension AppState {
             requiredSourceResults: [coreResult],
             runtimeResult: runtimeResult,
             runningSnapshot: snapshot,
-            deferredPaths: coreScan.deferredPaths, completedRoots: coreScan.completedRoots)
+            deferredPaths: coreScan.deferredPaths, completedRoots: coreScan.completedRoots,
+            administratorRequiredPaths: coreScan.administratorRequiredPaths)
     }
 
     func captureRunningApplicationSnapshot() async -> RunningApplicationSnapshot {
@@ -395,7 +400,7 @@ extension AppState {
     /// 开发工具扫描：包管理器卸载命令，Warning 项留给人工判断。
     func scanDeveloperTools() {
         guard authorize(.developerToolsScan, presentingPermissionCenter: true) else { return }
-        guard !isBusy else { return }
+        guard !isCleanupTaskBusy else { return }
         let scanEnvironment = fullDiskScanEnvironment
         guard scanEnvironment["FORGESWEEP_FULL_DISK_AUTHORIZED"] == "1" else { return }
         family = .tools
@@ -451,7 +456,7 @@ extension AppState {
     // MARK: - 清理执行
 
     func applyCleanup() {
-        guard !isBusyExcludingUninstall, !cleanupQueued, !isSystemMaintenanceRunning,
+        guard !isCleanupTaskBusy,
               cleanupScanComplete else {
             if !cleanupScanComplete { statusText = l10n.t("log.scanPartial") }
             return
@@ -481,7 +486,6 @@ extension AppState {
                 return applyFamily == .clean
                     ? CleanupCategory.manualCleanupCandidates(from: subsets) : subsets
             }.value
-            // 普通项目直接执行；管理员项目由最终复核后的计划单独询问。
             performApply(categories: selectedCategories,
                          family: applyFamily, mode: .manual,
                          installers: installerSelection, maintenanceIDs: maintenanceIDs)
@@ -502,6 +506,7 @@ extension AppState {
         if uninstallQueue.activeJob != nil {
             guard pendingCleanup == nil else { return }
             cleanupQueued = true
+            isApplying = false
             statusText = l10n.t("cleanup.queued")
             pendingCleanup = { [weak self] in
                 self?.performApply(categories: requested,
@@ -525,8 +530,27 @@ extension AppState {
         cleanupTaskProgress = .init()
         isApplying = true
         statusText = l10n.tf("status.processing", requestedCount)
+        let administratorRequiredPaths = cleanupRuntime.administratorRequiredPaths
         Task {
             let originalRequest = retryScope ?? requested
+            // Ask while the scan's permission evidence is available, before
+            // any full-tree freshness review or deletion. New descendant ACLs
+            // still fail closed in ordinary execution and require a new scan.
+            let proposedAdministratorItems = await Task.detached(priority: .utility) {
+                guard applyFamily == .clean else { return [DeletionPlan.Item]() }
+                if case .automatic = mode { return [DeletionPlan.Item]() }
+                return AdministratorCleanupPlan.confirmationItems(requested,
+                    administratorRequiredPaths: administratorRequiredPaths)
+            }.value
+            var includeAdministrator = false
+            if !proposedAdministratorItems.isEmpty {
+                guard let decision = await confirmAdministratorCleanup(proposedAdministratorItems) else {
+                    cleanupTaskProgress = nil
+                    isApplying = false
+                    return
+                }
+                includeAdministrator = decision
+            }
             let reviewStarted = Date()
             let snapshot = await captureRunningApplicationSnapshot()
             let blocked = await Task.detached(priority: .utility) {
@@ -640,33 +664,13 @@ extension AppState {
                 return
             }
 
-            // Partition the final, freshly validated plan before any destructive work.
-            // Route executors never elevate independently, even if permissions change later.
-            let administratorPreparationStarted = Date()
-            let administratorItems = await Task.detached(priority: .utility) {
-                guard applyFamily == .clean else { return [DeletionPlan.Item]() }
-                if case .automatic = mode { return [DeletionPlan.Item]() }
-                return eligible.filter {
-                    $0.risk == .safe && $0.disposal == .permanentDelete
-                        && [.genericTrash, .developerCacheTrash, .aiTrash, .xcodeTrash].contains($0.applyRoute)
-                }.flatMap { category in
-                    category.paths.compactMap { path -> DeletionPlan.Item? in
-                        guard NativeCore.shared.requiresAdministratorDeletion(path) else { return nil }
-                        return .init(record: path, identity: category.pathIdentities[path] ?? "",
-                                     metadata: DeletionPlan.Metadata.read(path))
-                    }
-                }
-            }.value
-            log(String(format: "cleanup administrator preparation %.2fs; paths=%d",
-                       Date().timeIntervalSince(administratorPreparationStarted), administratorItems.count))
-            var includeAdministrator = false
-            if !administratorItems.isEmpty {
-                guard let decision = await confirmAdministratorCleanup(administratorItems) else {
-                    cleanupTaskProgress = nil
-                    isApplying = false
-                    return
-                }
-                includeAdministrator = decision
+            // Consent may only shrink to the freshly eligible plan. Preserve
+            // the identity/metadata captured before the user answered it.
+            let eligibleIdentities = eligible.reduce(into: [String: String]()) { result, category in
+                for path in category.paths { result[path] = category.pathIdentities[path] }
+            }
+            let administratorItems = proposedAdministratorItems.filter {
+                eligibleIdentities[$0.record] == $0.identity
             }
             let administratorPaths = Set(administratorItems.map(\.record))
             let directCategories = eligible.compactMap { category in
@@ -686,6 +690,19 @@ extension AppState {
                 + (includeAdministrator ? administratorItems.count : 0)
             var completed = 0
             cleanupTaskProgress = .init(phase: .cleaning, completed: 0, total: total)
+            // Request system authorization before running normal routes, so
+            // a large ordinary cleanup cannot postpone the password prompt.
+            // Denied authorization still allows the ordinary plan to proceed.
+            if includeAdministrator, !administratorItems.isEmpty {
+                let administratorStarted = Date()
+                let administrator = await AdministratorCleanupService.apply(items: administratorItems,
+                    onProgress: cleanupProgressCallback(generation: generation, offset: completed,
+                        weight: administratorItems.count, total: total, categories: eligible))
+                log(String(format: "cleanup administrator completed %.2fs; paths=%d",
+                           Date().timeIntervalSince(administratorStarted), administratorItems.count))
+                executionResult.merge(administrator)
+                completed += administratorItems.count
+            }
             for route in CleanupApplyRoute.allCases {
                 guard let routeCategories = grouped[route], !routeCategories.isEmpty else { continue }
                 let started = Date()
@@ -699,18 +716,6 @@ extension AppState {
                 executionResult.merge(routeResult)
                 completed += routeCounts[route] ?? 0
                 cleanupTaskProgress = .init(phase: .cleaning, completed: completed, total: total)
-            }
-
-            // One verified elevation for all routes; a cancellation is never retried automatically.
-            if includeAdministrator {
-                let administratorStarted = Date()
-                let administrator = await AdministratorCleanupService.apply(items: administratorItems,
-                    onProgress: cleanupProgressCallback(generation: generation, offset: completed,
-                        weight: administratorItems.count, total: total, categories: eligible))
-                log(String(format: "cleanup administrator completed %.2fs; paths=%d",
-                           Date().timeIntervalSince(administratorStarted), administratorItems.count))
-                executionResult.merge(administrator)
-                completed += administratorItems.count
             }
 
             // 安装包可能是用户唯一的副本：勾选后由统一“清理”分发到废纸篓路线。
@@ -817,7 +822,7 @@ extension AppState {
     }
 
     func retryFailedCleanup() {
-        guard !isBusyExcludingUninstall, !cleanupQueued, let retry = cleanupRuntime.retryAction else { return }
+        guard !isCleanupTaskBusy, let retry = cleanupRuntime.retryAction else { return }
         cleanupRuntime.retryAction = nil
         cleanupRetryAvailable = false
         retry()
@@ -845,6 +850,7 @@ extension AppState {
             CleanupInventoryRefresh.refresh(displayed)
         }.value
         categories = refreshed.categories
+        cleanupRuntime.administratorRequiredPaths.formIntersection(Set(refreshed.categories.flatMap(\.paths)))
         cleanupDeferredPaths = Array(Set(cleanupDeferredPaths + refreshed.deferredPaths)).sorted()
         return refreshed.deferredPaths.isEmpty
     }

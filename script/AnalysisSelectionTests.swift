@@ -36,7 +36,9 @@ enum AnalysisFileDeletionPlan {
 
 @MainActor
 final class AppState {
-    var isBusy = false
+    var externallyBusy = false
+    var isAnalysisTaskBusy = false
+    var isBusy: Bool { externallyBusy || isAnalysisTaskBusy }
     var analyzeMode = AnalyzeMode.largeFiles
     var analyzeLargeFiles: [FixtureLargeFile] = []
     var analyzeMedia: [MediaFile] = []
@@ -157,10 +159,18 @@ struct AnalysisSelectionTests {
         precondition(state.analysisSelection(for: .images) == [otherImage])
         precondition(state.slimSelection == [otherImage], "Image checkbox and compression selection differ")
 
+        state.externallyBusy = true
+        precondition(state.isBusy, "The fixture must keep the other tab busy")
+        state.selectAllAnalysisFiles()
+        precondition(state.analysisSelection(for: .images) == [image, otherImage],
+                     "Another tab's task blocked Analysis selection")
+        state.toggleAnalysisFileSelection(imageItems[0])
+        state.externallyBusy = false
+
         let previousSelections = state.analysisFileSelectionsByMode
         let previousSlim = state.slimSelection
         let previousCurrent = state.analysisFileSelection
-        state.isBusy = true
+        state.isAnalysisTaskBusy = true
         state.selectAllAnalysisFiles()
         state.deselectAllAnalysisFiles()
         state.selectDefaultAnalysisFiles()
@@ -168,8 +178,8 @@ struct AnalysisSelectionTests {
         state.toggleAnalysisFileSelection(imageItems[0])
         precondition(state.analysisFileSelectionsByMode == previousSelections)
         precondition(state.slimSelection == previousSlim && state.analysisFileSelection == previousCurrent,
-                     "Busy state did not freeze every selection surface")
-        state.isBusy = false
+                     "An Analysis task did not freeze its own selection surfaces")
+        state.isAnalysisTaskBusy = false
         state.selectDefaultAnalysisFiles()
         precondition(state.analysisSelection(for: .images).isEmpty && state.slimSelection.isEmpty,
                      "Default image selection did not retain personal files")

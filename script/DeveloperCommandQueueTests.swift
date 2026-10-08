@@ -34,11 +34,12 @@ struct DeveloperCommandQueueTests {
             try await failureRemovesOnlyItsGroup()
             try await cancellationClearsQueue()
             try await immediateCancellationNeverStartsCommand()
-            try await externalBusyBlocksAndResumes()
+            try await developerBusyBlocksAndResumes()
+            try await otherTabWorkDoesNotBlockCommands()
             try await automaticResumeWithoutViewCallbacks()
             try await configurationWriteClaimsBeforeSuspension()
             try await disabledSamplingNeverRunsShell()
-            print("PASS: developer command queue (refresh seriality/overlapping reads, grouped failure, running/immediate cancellation, global busy, automatic resume without views, configuration write lock, sampling disabled)")
+            print("PASS: developer command queue (refresh seriality/overlapping reads, grouped failure, running/immediate cancellation, developer busy/page isolation, automatic resume without views, configuration write lock, sampling disabled)")
         } catch {
             fputs("FAIL: \(error)\n", stderr)
             exit(1)
@@ -201,37 +202,52 @@ struct DeveloperCommandQueueTests {
     }
 
     @MainActor
-    static func externalBusyBlocksAndResumes() async throws {
+    static func developerBusyBlocksAndResumes() async throws {
         await fixture.reset(allowed: [path("busy-first"), path("busy-second"), selectionKey])
         let model = DeveloperWorkspaceModel(), state = AppState()
-        state.externalBusy = true
+        state.developerBusy = true
         model.attach(state: state)
         model.enqueue(command("busy-first", refresh: true))
         model.resumeQueue()
-        try check(model.queuedCount == 1 && !model.commandRunning, "Existing AppState work must block command start")
+        try check(model.queuedCount == 1 && !model.commandRunning, "Existing developer work must block command start")
         let blocked = await fixture.snapshot()
-        try check(blocked.invocations.isEmpty, "Resume must not bypass the global busy guard")
-        state.externalBusy = false
+        try check(blocked.invocations.isEmpty, "Resume must not bypass the developer busy guard")
+        state.developerBusy = false
         model.resumeQueue()
         let first = await fixture.waitForCall(path("busy-first"))
         model.enqueue(command("busy-second"))
         await fixture.release(first)
         let refresh = await fixture.waitForCall("/usr/bin/xcode-select", arguments: ["-p"])
-        state.externalBusy = true
+        state.developerBusy = true
         await fixture.release(refresh, result: .init(output: "", exitCode: 1, timedOut: false))
         await waitForStopped(model)
         try check(model.queuedCount == 1 && state.isBusy && !state.isDeveloperCommandRunning,
-                  "New global work during refresh must defer the next queued command")
+                  "New developer work during refresh must defer the next queued command")
         model.resumeQueue()
         let stillBlocked = await fixture.snapshot()
         try check(!stillBlocked.invocations.contains { $0.path == path("busy-second") },
-                  "Explicit resume must still respect another AppState operation")
-        state.externalBusy = false
+                  "Explicit resume must still respect another developer operation")
+        state.developerBusy = false
         model.resumeQueue()
         let second = await fixture.waitForCall(path("busy-second"))
         await fixture.release(second)
         await waitForIdle(model)
-        try check(!state.isBusy && model.commandSucceeded == true, "Clearing external busy and resuming must drain the queue")
+        try check(!state.isBusy && model.commandSucceeded == true, "Clearing developer busy and resuming must drain the queue")
+    }
+
+    @MainActor
+    static func otherTabWorkDoesNotBlockCommands() async throws {
+        await fixture.reset(allowed: [path("independent")])
+        let model = DeveloperWorkspaceModel(), state = AppState()
+        state.externalBusy = true
+        model.attach(state: state)
+        model.enqueue(command("independent"))
+        let started = await fixture.waitForCall(path("independent"))
+        try check(model.commandRunning, "A task on another tab must not block developer commands")
+        await fixture.release(started)
+        await waitForIdle(model)
+        try check(state.externalBusy && !state.isDeveloperCommandRunning,
+                  "Developer completion must leave the other tab's task running")
     }
 
     @MainActor
@@ -253,27 +269,27 @@ struct DeveloperCommandQueueTests {
     static func automaticResumeWithoutViewCallbacks() async throws {
         await fixture.reset(allowed: [path("automatic-first"), path("automatic-second"), selectionKey])
         let model = DeveloperWorkspaceModel(), state = AppState()
-        state.externalBusy = true
+        state.developerBusy = true
         model.attach(state: state)
         model.enqueue(command("automatic-first", refresh: true))
         try check(model.queuedCount == 1 && !model.commandRunning,
-                  "Pending work must wait for another AppState operation")
+                  "Pending work must wait for another developer operation")
         // No View exists in this fixture and no resumeQueue() callback is sent.
-        state.externalBusy = false
+        state.developerBusy = false
         let first = await fixture.waitForCall(path("automatic-first"))
         try check(state.isDeveloperCommandRunning && state.isBusy,
-                  "The attached model must automatically resume when global busy clears")
+                  "The attached model must automatically resume when developer busy clears")
         model.enqueue(command("automatic-second"))
         await fixture.release(first)
         let refresh = await fixture.waitForCall("/usr/bin/xcode-select", arguments: ["-p"])
-        state.externalBusy = true
+        state.developerBusy = true
         await fixture.release(refresh, result: .init(output: "", exitCode: 1, timedOut: false))
         await waitForStopped(model)
         let paused = await fixture.snapshot()
         try check(model.queuedCount == 1 && !paused.invocations.contains { $0.path == path("automatic-second") },
                   "An external task during refresh must preserve the paused successor")
         // This also models switching the main tab away while the queue waits.
-        state.externalBusy = false
+        state.developerBusy = false
         let second = await fixture.waitForCall(path("automatic-second"))
         await fixture.release(second)
         await waitForIdle(model)
@@ -287,12 +303,12 @@ struct DeveloperCommandQueueTests {
         await fixture.reset(allowed: [path("save-gate"), path("after-save"), selectionKey])
         let model = DeveloperWorkspaceModel(), state = AppState()
         model.attach(state: state)
-        state.externalBusy = true
+        state.developerBusy = true
         var rejectedOperationRan = false
         let rejected = model.runConfigurationWrite(titleKey: "fixture.blocked") { rejectedOperationRan = true }
         try check(!rejected && !rejectedOperationRan && !model.commandRunning,
-                  "Configuration write must respect an existing global busy operation")
-        state.externalBusy = false
+                  "Configuration write must respect an existing developer operation")
+        state.developerBusy = false
         let accepted = model.runConfigurationWrite(titleKey: "fixture.save") {
             // This non-executing gate stands for the asynchronous atomic save.
             _ = await MoleEngine().run(executable: URL(fileURLWithPath: path("save-gate")), arguments: [], timeout: 5)

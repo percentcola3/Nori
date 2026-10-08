@@ -1797,7 +1797,7 @@ test_uninstall_queue() {
     fi
     /usr/bin/grep -Fq 'uninstallQueue.startNext(blocked: blocked)' "$state_source" || \
         fail "uninstall worker bypasses the queue's exclusive start"
-    /usr/bin/grep -Fq 'isBusyExcludingUninstall || confirmation != nil || isDispatchingConfirmation' \
+    /usr/bin/grep -Fq 'isUninstallMutationBlocked || confirmation != nil || isDispatchingConfirmation' \
         "$state_source" || fail "uninstall worker is not gated against other writes and confirmations"
     /usr/bin/grep -Fq 'state.runConfirmation(accepted)' \
         "$ROOT_DIR/SimpleMole/Views/MainWindowView.swift" || \
@@ -1842,6 +1842,11 @@ test_uninstall_queue() {
     fi
 
     pass "uninstall FIFO, immutable requests, cancellation and asynchronous single worker"
+}
+
+test_task_activity() {
+    bash "$ROOT_DIR/script/test_task_activity.sh" || fail "independent page task activity"
+    pass "independent page activity and overlapping deletion guards"
 }
 
 test_cleanup_process_probe_batching() {
@@ -2544,6 +2549,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_cli_tools.sh" || fail "multi-ecosystem CLI inventory tests"
     bash "$ROOT_DIR/script/test_software_updates.sh" || fail "application and CLI version checks"
     bash "$ROOT_DIR/script/test_software_update_execution.sh" || fail "software update commands and running-process closure"
+    bash "$ROOT_DIR/script/test_software_update_request.sh" || fail "independent signed-updater routing and software reentry"
     bash "$ROOT_DIR/script/test_cli_uninstall_workflow.sh" || fail "confirmed CLI uninstall and scoped process shutdown"
     bash "$ROOT_DIR/script/test_software_workflows.sh" || fail "software workflow dependency and orchestration contracts"
     bash "$ROOT_DIR/script/test_administrator_uninstall.sh" || fail "administrator uninstall and Trash safety tests"
@@ -2579,6 +2585,7 @@ test_packaged_apply_layout
 test_uninstall_space_breakdown
 test_native_cask_uninstall_contract
 test_uninstall_queue
+test_task_activity
 test_cleanup_process_probe_batching
 test_runtime_process_identity_binding
 test_runtime_store_aggregation

@@ -13,7 +13,7 @@ final class DeveloperWorkspaceSession {
 
     init(state: AppState) {
         workspace.attach(state: state)
-        shell.canWrite = { [weak state] in state?.isBusy == false }
+        shell.canWrite = { [weak state] in state?.isDeveloperTaskBusy == false }
         shell.savingStateChanged = { [weak self, weak state] saving in
             guard let self, let state else { return }
             if saving {

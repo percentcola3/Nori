@@ -121,6 +121,11 @@ enum ByteFormat {
 }
 @MainActor
 final class AppState {
+    struct QueueFixture {
+        var apps: [UninstallApp] = []
+        func containsPendingOrActive(_ app: UninstallApp) -> Bool { apps.contains(app) }
+    }
+    var uninstallQueue = QueueFixture()
     struct Confirmation {
         let title: String
         let message: String
@@ -137,11 +142,17 @@ final class AppState {
     var confirmation: Confirmation?
     var taskNotice: String?
     var softwareUpdateResults: [String: Int] = [:]
-    var forcedBusy = false
+    var forcedAgentBusy = false
+    var externallyBusy = false
+    var agentApplying = false
+    var agentSelectedCLIInstallations = Set<String>()
+    var commandLineToolBusyID: String?
+    var softwareUpdatingID: String?
     var isCheckingSoftwareUpdates = false
     var isScanningCommandLineTools = false
     var agentProgramRemovalGeneration = UUID()
-    var isBusy: Bool { forcedBusy || agentProgramBusyID != nil }
+    var isAgentTaskBusy: Bool { forcedAgentBusy || agentApplying || agentProgramBusyID != nil }
+    var isBusy: Bool { externallyBusy || isAgentTaskBusy }
     var cleanupScanComplete = true
     var storageInvalidations = 0
     var resamples = 0
@@ -211,6 +222,10 @@ struct AgentProgramRemovalTests {
     static func cliSuccessAndCancel(_ fixture: URL) async throws {
         let (state, selected, neighbor, other) = seededCLI(fixture)
         CLIUninstallWorkflow.results = [.finished(.init(succeeded: true))]
+        state.externallyBusy = true
+        state.uninstallAgentCLI(selected)
+        precondition(state.isBusy && state.isAgentCLIMutationActive,
+                     "The program probe must claim its own resource while another tab stays active")
         state.uninstallAgentCLI(selected)
         try await waitUntil { state.confirmation != nil }
         precondition(CLIUninstallWorkflow.calls.isEmpty && state.dataOffers.isEmpty,
@@ -316,10 +331,12 @@ struct AgentProgramRemovalTests {
         }
     }
     static func guards(_ fixture: URL) async throws {
-        for reason in 0..<3 {
+        for reason in 0..<5 {
             let (state, selected, _, _) = seededCLI(fixture)
-            if reason == 0 { state.forcedBusy = true }
+            if reason == 0 { state.forcedAgentBusy = true }
             if reason == 1 { state.taskNotice = "existing notice" }
+            if reason == 3 { state.commandLineToolBusyID = "another-tool" }
+            if reason == 4 { state.softwareUpdatingID = "another-update" }
             if reason == 2 { state.confirmation = .init(title: "existing", message: "", confirmLabel: "", onConfirm: {}) }
             state.uninstallAgentCLI(selected)
             try await Task.sleep(nanoseconds: 20_000_000)

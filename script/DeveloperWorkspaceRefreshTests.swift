@@ -11,7 +11,8 @@ final class AppState {
     var developerWorkspaceRefreshTask: Task<Void, Never>?
     var devWorkspaceRefreshPending = false
     let permissionCenter = Permissions()
-    var isBusy = false
+    var isDeveloperTaskBusy = false
+    var otherTabBusy = false
     var selectedTab = 0
     var visiblePages: [Page] = [.devenv, .cleanup]
     var runtimeScans = 0
@@ -32,32 +33,33 @@ final class AppState {
 struct DeveloperWorkspaceRefreshTests {
     @MainActor static func main() async throws {
         let immediate = AppState()
+        immediate.otherTabBusy = true
         immediate.refreshDeveloperWorkspace()
         precondition(immediate.runtimeScans == 1 && immediate.cacheScans == 1)
 
         let pending = AppState()
-        pending.isBusy = true
+        pending.isDeveloperTaskBusy = true
         pending.refreshDeveloperWorkspace()
         precondition(pending.runtimeScans == 0 && pending.devWorkspaceRefreshPending)
         try await Task.sleep(nanoseconds: 30_000_000)
-        pending.isBusy = false
+        pending.isDeveloperTaskBusy = false
         try await Task.sleep(nanoseconds: 400_000_000)
         precondition(pending.runtimeScans == 1 && !pending.devWorkspaceRefreshPending)
         precondition(pending.developerWorkspaceRefreshTask == nil)
 
         let left = AppState()
-        left.isBusy = true
+        left.isDeveloperTaskBusy = true
         left.refreshDeveloperWorkspace()
         left.selectedTab = 1
-        left.isBusy = false
+        left.isDeveloperTaskBusy = false
         try await Task.sleep(nanoseconds: 400_000_000)
         precondition(left.runtimeScans == 0, "Leaving the workbench must cancel a queued scan")
 
         let reentered = AppState()
-        reentered.isBusy = true
+        reentered.isDeveloperTaskBusy = true
         reentered.refreshDeveloperWorkspace()
         reentered.refreshDeveloperWorkspace()
-        reentered.isBusy = false
+        reentered.isDeveloperTaskBusy = false
         try await Task.sleep(nanoseconds: 400_000_000)
         precondition(reentered.runtimeScans == 1 && reentered.devWorkspaceRefreshToken == 2,
                      "Only the latest pending visit should scan")

@@ -477,7 +477,7 @@ struct PortsTabView: View {
                                 Spacer()
                                 Button(l10n.t("ports.close")) { state.closePort(row) }
                                     .buttonStyle(DangerButtonStyle())
-                                    .disabled(state.isBusy)
+                                    .disabled(state.confirmation != nil)
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)

@@ -131,7 +131,8 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
     var autoCleanupRules = [AutoCleanupRule()]
     let permissionCenter = FixturePermissions()
     var externallyBusy = false
-    var isBusy: Bool { externallyBusy || isAutoCleanupScanning }
+    var cleanupBusy = false
+    var isCleanupTaskBusy: Bool { cleanupBusy || isAutoCleanupScanning }
     var taskNotice: String?
     let automationRuntime = AutomationRuntimeState()
     var autoCleanupStatus = ""
@@ -215,11 +216,14 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
         s = fixture(); s.permissionCenter.fullDiskAccessGranted = false
         s.runScheduledAutoCleanup(force: true); s.runScheduledAutoCleanup(force: true)
         expect(s.logs == 1 && !s.isAutoCleanupScanning && s.notifications == 0, "permission guard")
-        s = fixture(); s.externallyBusy = true
+        s = fixture(); s.cleanupBusy = true
         s.runScheduledAutoCleanup(); let firstRetry = s.automationRuntime.scheduledRetry
         s.runScheduledAutoCleanup()
         expect(firstRetry != nil && firstRetry === s.automationRuntime.scheduledRetry, "busy retry duplicated")
         s.cancelAutomationRetry()
+        s = fixture(); s.externallyBusy = true
+        s.runScheduledAutoCleanup(force: true); await settle(s)
+        expect(s.applied == 1 && s.externallyBusy, "another tab prevented automatic cleanup")
         s = fixture(); s.taskNotice = "pending"
         s.runScheduledAutoCleanup(); expect(s.automationRuntime.scheduledRetry != nil, "notice did not defer")
         s.cancelAutomationRetry()

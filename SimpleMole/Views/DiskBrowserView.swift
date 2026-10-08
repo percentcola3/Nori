@@ -51,7 +51,7 @@ struct DiskBrowserView: View {
                         isOverview: path == state.diskBrowserRootPath,
                         openedPath: openedPath(after: path),
                         selectedPaths: state.analysisSelection(for: .disk),
-                        disabled: state.isBusy || scanning,
+                        disabled: state.isAnalysisTaskBusy || scanning,
                         canSelect: state.diskBrowserCanSelect,
                         onOpen: { state.openDiskBrowserDirectory($0, in: path) },
                         onToggle: {

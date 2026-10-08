@@ -8,6 +8,31 @@ enum AdministratorCleanupPlan {
     static let reportPrefix = "NORI_CLEANUP_ADMIN\t"
     static let maximumPlanBytes = 16 * 1024 * 1024
 
+    /// The scanner has already checked every descendant's deletion access.
+    /// Reuse that evidence for the prompt, then cheaply check each root for a
+    /// permission change. This is a consent preview, never deletion approval:
+    /// the runtime review and privileged worker still validate the live plan.
+    static func confirmationItems(_ categories: [CleanupCategory],
+                                  administratorRequiredPaths: Set<String>,
+                                  homeDirectory: String = NSHomeDirectory()) -> [DeletionPlan.Item] {
+        var seen = Set<String>()
+        return categories.filter {
+            $0.risk == .safe && $0.disposal == .permanentDelete
+                && [.genericTrash, .developerCacheTrash, .aiTrash, .xcodeTrash].contains($0.applyRoute)
+        }.flatMap { category in
+            category.paths.compactMap { path -> DeletionPlan.Item? in
+                guard category.isPathSelected(path), seen.insert(path).inserted,
+                      let identity = category.pathIdentities[path], !identity.isEmpty,
+                      DeletionPlan.identity(at: path) == identity,
+                      administratorRequiredPaths.contains(path)
+                        || NativeCore.shared.requiresAdministratorDeletion(path,
+                            homeDirectory: homeDirectory, inspectDescendants: false),
+                      let metadata = DeletionPlan.Metadata.read(path) else { return nil }
+                return .init(record: path, identity: identity, metadata: metadata)
+            }
+        }
+    }
+
     struct Progress: Codable, Equatable, Sendable {
         let completed: Int
         let total: Int

@@ -156,7 +156,9 @@ final class AppState: ObservableObject {
     }
     @Published var isDeveloperCommandRunning = false
     @Published var externalBusy = false
-    var isBusy: Bool { externalBusy || isDeveloperCommandRunning }
+    @Published var developerBusy = false
+    var isDeveloperTaskBusy: Bool { developerBusy || isDeveloperCommandRunning }
+    var isBusy: Bool { externalBusy || isDeveloperTaskBusy }
     var confirmation: Confirmation?
 }
 

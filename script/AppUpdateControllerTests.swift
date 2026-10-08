@@ -48,12 +48,11 @@ struct AppUpdateControllerTests {
             precondition(service.responds(to: NSSelectorFromString(selector)),
                          "Sparkle must recognize its Swift delegate callback: \(selector)")
         }
-        do {
-            try service.updater(updater, mayPerform: .updates)
-            preconditionFailure("Active tasks must defer update checks")
-        } catch {
-            precondition(service.status == .deferred)
-        }
+        try service.updater(updater, mayPerform: .updates)
+        precondition(service.status == .checking,
+                     "Active tasks must not block checking for updates; only restart is deferred")
+        service.updater(updater, didFinishUpdateCycleFor: .updates, error: nil)
+        precondition(service.status == .idle)
         safe = true
         try service.updater(updater, mayPerform: .updates)
         precondition(service.status == .checking)
@@ -81,6 +80,9 @@ struct AppUpdateControllerTests {
 
         let item = SUAppcastItem.empty()
         var installs = 0
+        precondition(!service.updater(updater, shouldPostponeRelaunchForUpdate: item,
+                                     untilInvokingBlock: { installs += 1 }),
+                     "An idle application must allow Sparkle to restart immediately")
         safe = false
         precondition(service.updater(updater, shouldPostponeRelaunchForUpdate: item,
                                     untilInvokingBlock: { installs += 1 }))

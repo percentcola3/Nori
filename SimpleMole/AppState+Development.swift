@@ -18,11 +18,11 @@ extension AppState {
         developerWorkspaceRefreshTask = nil
         devWorkspaceRefreshPending = false
         permissionCenter.refresh()
-        if isBusy {
+        if isDeveloperTaskBusy {
             devWorkspaceRefreshPending = true
             developerWorkspaceRefreshTask = Task { [weak self] in
                 guard let self else { return }
-                while self.isBusy {
+                while self.isDeveloperTaskBusy {
                     guard !Task.isCancelled, self.isDeveloperWorkspaceVisible else { return }
                     do { try await Task.sleep(nanoseconds: 300_000_000) }
                     catch { return }
@@ -47,7 +47,7 @@ extension AppState {
 
     /// DNS 缓存刷新 / 网络栈重置（管理员任务，复用提权桥接）。
     func runAdminNetworkTask(_ task: String) {
-        guard !isNetworkToolRunning else { return }
+        guard !isNetworkToolRunning, confirmation == nil else { return }
         confirmation = Confirmation(
             title: l10n.t("nettool.confirm.title"),
             message: l10n.t("nettool.confirm.\(task)"),
@@ -91,7 +91,7 @@ extension AppState {
 
     func scanDevEnv(announce: Bool = true, presentingPermissionCenter: Bool = true,
                     notifyingUser: Bool? = nil) {
-        guard !isBusy else { return }
+        guard !isDeveloperTaskBusy else { return }
         var scanEnvironment = fullDiskScanEnvironment
         scanEnvironment["NORI_DEV_SCAN_FAST"] = "1"
         isScanningEnv = true
@@ -118,7 +118,7 @@ extension AppState {
     }
 
     func applyDevEnvCleanup() {
-        guard !isBusy else { return }
+        guard !isDeveloperTaskBusy, confirmation == nil else { return }
         let paths = devEnvEntries.filter {
             DeveloperRuntimePolicy.canClean($0) && devEnvSelection.contains($0.path)
         }.map(\.path)
@@ -136,14 +136,14 @@ extension AppState {
                            ByteFormat.format(globalPackageBytes))
                 : l10n.tf("confirm.env.msg", paths.count, ByteFormat.format(bytes)),
             confirmLabel: l10n.t("confirm.apply.trash.ok")) { [weak self] in
-                guard let self else { return }
-                self.isApplying = true
-                self.statusText = self.l10n.t("status.envCleaning")
+                guard let self, !self.isDeveloperTaskBusy else { return }
+                self.isApplyingDevEnv = true
+                self.devEnvStatus = self.l10n.t("status.envCleaning")
                 self.log(self.l10n.tf("log.envClean", paths.count))
                 Task {
                     let result = await MoleEngine.shared.runBridgeWithStdin(
                         "bin/app_apply.sh", stdinData: deletionPlan.stdinData, timeout: 900)
-                    self.isApplying = false
+                    self.isApplyingDevEnv = false
                     if !result.output.isEmpty { self.log(result.output) }
                     self.logFailure(result, stdoutAlreadyLogged: true, notifyingUser: false)
                     let summary = CleanupExecutionResult.reconciled(
@@ -151,14 +151,14 @@ extension AppState {
                     let fullySucceeded = result.succeeded && summary.failed == 0 && summary.skipped == 0
                     self.noteHeaderReaction(fullySucceeded ? .success : .attention)
                     self.resampleAfterMutation()
-                    self.statusText = fullySucceeded
+                    self.devEnvStatus = fullySucceeded
                         ? self.l10n.tf("status.envDone", summary.removed)
                         : self.l10n.tf("status.envPartial", summary.failed + summary.skipped)
                     self.log(fullySucceeded
                         ? self.l10n.tf("log.envDone", summary.removed)
                         : self.l10n.tf("log.envPartial", summary.removed, summary.failed + summary.skipped))
                     if !fullySucceeded {
-                        self.presentTaskFailure(message: self.statusText, details: [result.diagnosticOutput])
+                        self.presentTaskFailure(message: self.devEnvStatus, details: [result.diagnosticOutput])
                     }
                     self.scanDevEnv(announce: false)
                     // 环境删除可能让 PATH 条目/初始化块失效：重跑体检引导用户处理。
@@ -191,14 +191,14 @@ extension AppState {
 
     /// 运行一个白名单内的官方 GC 命令，输出逐行流入日志抽屉。
     func runGc(_ action: GcAction) {
-        guard !isBusy, !isRefreshingGc else { return }
+        guard !isDeveloperTaskBusy, confirmation == nil else { return }
         confirmation = Confirmation(
             title: l10n.tf("gc.confirm.title", action.id),
             message: l10n.tf("gc.confirm.msg", action.command),
             confirmLabel: l10n.t("gc.run")) { [weak self] in
-                guard let self else { return }
+                guard let self, !self.isDeveloperTaskBusy else { return }
                 self.gcRunningId = action.id
-                self.statusText = self.l10n.tf("log.gcRun", action.command)
+                self.devEnvStatus = self.l10n.tf("log.gcRun", action.command)
                 self.log(self.l10n.tf("log.gcRun", action.command))
                 Task {
                     let result = await MoleEngine.shared.runBridge(
@@ -207,7 +207,7 @@ extension AppState {
                     self.gcRunningId = nil
                     self.noteHeaderReaction(result.succeeded ? .success : .attention)
                     self.resampleAfterMutation()
-                    self.statusText = result.succeeded
+                    self.devEnvStatus = result.succeeded
                         ? self.l10n.t("gc.finished")
                         : self.l10n.t("gc.failed")
                     self.log(result.succeeded

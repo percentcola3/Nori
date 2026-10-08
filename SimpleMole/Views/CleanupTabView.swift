@@ -122,7 +122,7 @@ struct CleanupTabView: View {
                                      details: state.cleanupOutcomeDetails,
                                      applications: state.cleanupFailureApplications,
                                      feedbackID: state.cleanupFeedbackID,
-                                     scanDisabled: state.isBusyExcludingUninstall || state.cleanupQueued,
+                                     scanDisabled: state.isCleanupTaskBusy || state.cleanupQueued,
                                      onScan: { state.requestScanAccess(.quickOptimize) })
             } else if !showsCleanupResults {
                 NoriPlaceholderStage { size in
@@ -213,7 +213,7 @@ struct CleanupTabView: View {
             Label(l10n.t("cleanup.scan"), systemImage: "magnifyingglass")
         }
         .buttonStyle(PrimaryButtonStyle())
-        .disabled(state.isBusyExcludingUninstall || state.cleanupQueued)
+        .disabled(state.isCleanupTaskBusy || state.cleanupQueued)
     }
 
     // MARK: 系统数据库维护（原系统优化页分流）
@@ -267,7 +267,7 @@ struct CleanupTabView: View {
         }
         .buttonStyle(MolePlainButtonStyle())
         .modifier(ListRowSurface(selected: isSelected))
-        .disabled(state.isBusy)
+        .disabled(state.isCleanupTaskBusy)
     }
 
     private var cleanupActions: some View {
@@ -276,7 +276,7 @@ struct CleanupTabView: View {
                 Label(l10n.t("common.rescan"), systemImage: "arrow.clockwise")
             }
             .buttonStyle(SecondaryButtonStyle())
-            .disabled(state.isBusyExcludingUninstall || state.cleanupQueued || state.isSystemMaintenanceRunning)
+            .disabled(state.isCleanupTaskBusy || state.cleanupQueued || state.isSystemMaintenanceRunning)
             // 全选/取消全选由各分组头的开关承担：底部只保留唯一的执行入口，
             // 系统维护项的勾选也由它统一分发。
             Spacer()
@@ -286,7 +286,7 @@ struct CleanupTabView: View {
                 Label(applyLabel, systemImage: "trash.fill")
             }
             .buttonStyle(PrimaryButtonStyle())
-            .disabled(!state.hasCleanupSelection || state.isBusyExcludingUninstall || state.cleanupQueued
+            .disabled(!state.hasCleanupSelection || state.isCleanupTaskBusy || state.cleanupQueued
                       || state.isSystemMaintenanceRunning || !state.cleanupScanComplete)
             .alert(l10n.tf("cleanup.appData.confirm.title", selectedAppData.count),
                    isPresented: $confirmingAppData) {
