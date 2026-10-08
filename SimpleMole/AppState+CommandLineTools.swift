@@ -15,7 +15,9 @@ extension AppState {
     }
 
     func scanCommandLineTools(force: Bool = false) {
-        guard !isScanningCommandLineTools, force || !commandLineToolsScanned else { return }
+        guard !isScanningCommandLineTools, commandLineToolBusyID == nil, softwareUpdatingID == nil,
+              confirmation == nil, force || !commandLineToolsScanned else { return }
+        commandLineToolUninstallGeneration = UUID()
         isScanningCommandLineTools = true
         commandLineToolStatus = L10n.shared.t("cli.status.scanning")
         let home = NSHomeDirectory()
@@ -29,38 +31,92 @@ extension AppState {
             isScanningCommandLineTools = false
             commandLineToolStatus = tools.isEmpty ? L10n.shared.t("cli.status.none")
                 : L10n.shared.tf("cli.status.count", tools.count, ByteFormat.format(tools.reduce(0) { $0 &+ $1.bytes }))
+            ensureAgentStorageFootprints(for: Set(tools.compactMap(\.agentID)))
         }
     }
 
     func uninstallCommandLineTool(_ tool: CommandLineTool) {
-        guard commandLineToolBusyID == nil, !isBusy, tool.canUninstall,
+        if tool.agentInstallation != nil {
+            uninstallAgentTool(tool)
+            return
+        }
+        guard !isBusy, !isScanningCommandLineTools, !isCheckingSoftwareUpdates,
+              confirmation == nil, taskNotice == nil, tool.canUninstall,
               commandLineTools.contains(tool) else { return }
+        let generation = UUID()
+        commandLineToolUninstallGeneration = generation
+        let identity = DeletionPlan.identity(at: tool.path)
         commandLineToolBusyID = tool.id
-        commandLineToolStatus = L10n.shared.tf("cli.status.uninstalling", tool.name)
-        let home = NSHomeDirectory()
-        let agentInstallation = tool.agentInstallation
+        commandLineToolStatus = l10n.tf("cli.status.checkingProcesses", tool.name)
         Task {
-            let snapshot = await captureRunningApplicationSnapshot()
-            let outcome: CLIUninstallService.Outcome = await Task.detached(priority: .utility) {
-                if let agentInstallation {
-                    let result = AgentCLIService.uninstall(agentInstallation, home: home, running: snapshot)
-                    return .init(succeeded: result.succeeded, messages: result.messages,
-                                 reclaimedBytes: result.reclaimedBytes)
-                }
-                return CLIUninstallService.uninstall(tool, home: home, running: snapshot)
+            let processes = await Task.detached(priority: .utility) {
+                SoftwareUpdateProcesses.probe(.tool(tool))
             }.value
+            guard commandLineToolUninstallGeneration == generation else { return }
             commandLineToolBusyID = nil
+            refreshCommandLineToolStatus()
+            guard commandLineTools.contains(tool), confirmation == nil, taskNotice == nil else { return }
+            guard processes.isComplete else {
+                presentTaskFailure(message: l10n.tf("cli.status.failed", tool.name),
+                                   details: [l10n.t("cli.uninstall.runtimeUnknown")], detailsAreLocalized: true)
+                return
+            }
+            presentCommandLineToolUninstallConfirmation(tool, identity: identity,
+                                                       generation: generation, processes: processes)
+        }
+    }
+
+    private func presentCommandLineToolUninstallConfirmation(_ tool: CommandLineTool, identity: String?,
+                                                             generation: UUID,
+                                                             processes: SoftwareUpdateProcesses.Probe) {
+        let isRunning = !processes.processes.isEmpty
+        var message = l10n.tf(tool.agentID == nil ? "cli.uninstall.confirm.message" : "cli.uninstall.confirm.agentMessage",
+                              tool.installationSource ?? tool.manager.displayName, tool.path)
+        if isRunning {
+            message += "\n\n" + l10n.tf("cli.uninstall.confirm.running", tool.name)
+                + "\n" + Set(processes.processes.map(\.name)).sorted().joined(separator: ", ")
+        }
+        confirmation = Confirmation(title: l10n.tf("cli.uninstall.confirm.title", tool.name), message: message,
+            confirmLabel: l10n.t(isRunning ? "cli.uninstall.confirm.closeAction" : "uninstall.action")) { [weak self] in
+                guard let self, self.commandLineToolUninstallGeneration == generation,
+                      !self.isBusy, !self.isCheckingSoftwareUpdates, !self.isScanningCommandLineTools,
+                      self.commandLineTools.contains(tool) else { return }
+                self.commandLineToolBusyID = tool.id
+                self.commandLineToolStatus = self.l10n.tf("cli.status.uninstalling", tool.name)
+                Task { await self.performCommandLineToolUninstall(tool, identity: identity,
+                                                                  generation: generation, mayClose: isRunning) }
+            }
+    }
+
+    private func performCommandLineToolUninstall(_ tool: CommandLineTool, identity: String?,
+                                                generation: UUID, mayClose: Bool) async {
+        let result = await CLIUninstallWorkflow.execute(tool, identity: identity, mayClose: mayClose)
+        guard commandLineToolUninstallGeneration == generation else { return }
+        commandLineToolBusyID = nil
+        switch result {
+        case .needsConfirmation(let processes):
+            presentCommandLineToolUninstallConfirmation(tool, identity: identity,
+                                                       generation: generation, processes: processes)
+        case .failed(let reasonKey):
+            presentTaskFailure(message: l10n.tf("cli.status.failed", tool.name),
+                               details: [l10n.t(reasonKey)], detailsAreLocalized: true)
+        case .finished(let outcome):
             if outcome.succeeded {
                 commandLineTools.removeAll { $0.id == tool.id }
+                softwareUpdateResults.removeValue(forKey: SoftwareUpdateService.toolKey(tool))
                 if tool.agentID != nil { agentHasScanned = false }
                 resampleAfterMutation()
             } else {
-                presentTaskFailure(message: L10n.shared.tf("cli.status.failed", tool.name),
+                presentTaskFailure(message: l10n.tf("cli.status.failed", tool.name),
                                    details: outcome.messages.filter { !$0.isEmpty })
             }
             if !outcome.messages.isEmpty { log(outcome.messages.joined(separator: "\n")) }
-            commandLineToolStatus = L10n.shared.tf("cli.status.count", commandLineTools.count,
-                ByteFormat.format(commandLineTools.reduce(0) { $0 &+ $1.bytes }))
         }
+        refreshCommandLineToolStatus()
+    }
+
+    private func refreshCommandLineToolStatus() {
+        commandLineToolStatus = l10n.tf("cli.status.count", commandLineTools.count,
+            ByteFormat.format(commandLineTools.reduce(0) { $0 &+ $1.bytes }))
     }
 }

@@ -62,5 +62,20 @@ struct CleanupExecutionTests {
         explained.merge(CleanupExecutionResult(failed: 1, messages: ["permission denied"]))
         try expect(explained.messages == ["cache is open", "permission denied"],
                    "route diagnostics were lost while aggregating cleanup results")
+
+        // Large successful batches are reconciled on the presentation actor.
+        // Preserve exact/prefix semantics while keeping retry selection cheap.
+        let removed = Set((0..<10_000).map { "/cache/generated/\($0)" })
+        let batch = CleanupExecutionResult(removed: removed.count, removedPaths: removed)
+        let remaining = "/cache/generated-sibling/keep"
+        let started = ProcessInfo.processInfo.systemUptime
+        try expect(batch.remainingPaths(in: Array(removed) + [remaining]) == [remaining],
+                   "large cleanup batches lost remaining sibling paths")
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        try expect(elapsed < 0.5, "large retry reconciliation stalled the presentation actor")
+        let unicode = CleanupExecutionResult(removed: 1, removedPaths: ["/cache"])
+        try expect(unicode.remainingPaths(in: ["/cache/\u{301}entry"]) == ["/cache/\u{301}entry"],
+                   "retry reconciliation changed literal Unicode prefix semantics")
+        print(String(format: "Cleanup retry reconciliation: 10000 confirmed paths in %.2fms", elapsed * 1000))
     }
 }

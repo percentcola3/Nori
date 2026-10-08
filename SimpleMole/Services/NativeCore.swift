@@ -479,7 +479,7 @@ final class NativeCore: @unchecked Sendable {
             let ageGated = candidates.filter { $0.retention > 0 }.count
             if !control.isCancelled, deferred.isEmpty {
                 categories += self.appDataReviewCategories(home: home, offered: categories.flatMap(\.paths),
-                                                           whitelist: whitelist)
+                                                           whitelist: whitelist, scanControl: control)
             }
             return CleanupScan(categories: categories.sorted(by: CleanupCategory.sizeDescending),
                 succeeded: !control.isCancelled,
@@ -552,9 +552,12 @@ final class NativeCore: @unchecked Sendable {
         return name
     }
 
-    func appDataReviewCategories(home: URL, offered: [String], whitelist: [String]) -> [CleanupCategory] {
+    func appDataReviewCategories(home: URL, offered: [String], whitelist: [String],
+                                 scanControl: CleanupScanControl? = nil) -> [CleanupCategory] {
         let installed = installedApplications(home: home)
-        let control = CleanupScanControl(mode: .deep, totalBudget: 25, directoryBudget: 10)
+        let remaining = scanControl.map { max(0, $0.totalBudget - $0.elapsed) } ?? 25
+        let control = CleanupScanControl(mode: .deep, totalBudget: min(25, remaining), directoryBudget: 10,
+                                         cancellationSource: scanControl)
         let agentRoots = AgentCatalog.definitions.flatMap { AgentCatalog.dataRoots(for: $0, home: home.path) }
         func overlaps(_ path: String, _ others: [String]) -> Bool {
             others.contains { path == $0 || $0.hasPrefix(path + "/") || path.hasPrefix($0 + "/") }
@@ -690,17 +693,30 @@ final class NativeCore: @unchecked Sendable {
                                          owners: ["com.apple.AMPDevicesAgent", "AMPDeviceDiscoveryAgent"]))
         }
         var artifacts: [String: [(String, UInt64)]] = [:]
-        let artifactPaths = projectArtifactPaths(home: home).filter {
+        let artifactPaths = projectArtifactPaths(home: home, control: control).filter {
             !overlapsOffered($0) && !directlyMatchesWhitelist($0, entries: whitelist)
         }
-        var artifactSizes = [UInt64](repeating: 0, count: artifactPaths.count)
-        let sizeLock = NSLock()
-        DispatchQueue.concurrentPerform(iterations: artifactPaths.count) { index in
-            let bytes = CleanupScanWorker.measure(artifactPaths[index], control: control).bytes
-            sizeLock.lock()
-            artifactSizes[index] = bytes
-            sizeLock.unlock()
+        let sizing = OSAllocatedUnfairLock(initialState: (next: 0, values: [UInt64](repeating: 0, count: artifactPaths.count)))
+        let queue = DispatchQueue(label: "com.nori.cleanup-review-sizing", qos: .utility, attributes: .concurrent)
+        let workers = DispatchGroup()
+        let workerCount = min(artifactPaths.count, min(4, max(1, ProcessInfo.processInfo.activeProcessorCount - 2)))
+        for _ in 0..<workerCount {
+            queue.async(group: workers) {
+                while !control.shouldStop {
+                    let index = sizing.withLock { state -> Int? in
+                        guard state.next < artifactPaths.count else { return nil }
+                        let next = state.next
+                        state.next += 1
+                        return next
+                    }
+                    guard let index else { break }
+                    let bytes = CleanupScanWorker.measure(artifactPaths[index], control: control).bytes
+                    sizing.withLock { $0.values[index] = bytes }
+                }
+            }
         }
+        workers.wait()
+        let artifactSizes = sizing.withLock { $0.values }
         for (path, bytes) in zip(artifactPaths, artifactSizes) where bytes >= 20 * 1024 * 1024 {
             artifacts[(path as NSString).lastPathComponent, default: []].append((path, bytes))
         }
@@ -713,7 +729,8 @@ final class NativeCore: @unchecked Sendable {
         return result
     }
 
-    func projectArtifactPaths(home: URL, budget: TimeInterval = 8, maximumDirectories: Int = 120_000) -> [String] {
+    func projectArtifactPaths(home: URL, budget: TimeInterval = 8, maximumDirectories: Int = 120_000,
+                              control: CleanupScanControl? = nil) -> [String] {
         let started = Date()
         let skippedTop: Set<String> = ["Library", "Applications", "Movies", "Music", "Pictures", "Public"]
         var queue = directChildren(of: home).filter {
@@ -722,7 +739,8 @@ final class NativeCore: @unchecked Sendable {
         }.map { ($0, 1) }
         var found: [String] = []
         var visited = 0
-        while visited < queue.count, visited < maximumDirectories, Date().timeIntervalSince(started) < budget {
+        while visited < queue.count, visited < maximumDirectories, Date().timeIntervalSince(started) < budget,
+              !(control?.shouldStop ?? false) {
             let (directory, depth) = queue[visited]
             visited += 1
             for child in directChildren(of: directory) where isDirectory(child) && !isSymlink(child) {
@@ -806,7 +824,8 @@ final class NativeCore: @unchecked Sendable {
                                     control: CleanupScanControl? = nil,
                                     includingAdministratorRequired: Bool = false,
                                     verifiedRebuildableRoots: Set<String> = [],
-                                    excludingPaths: Set<String> = []) -> CleanupScan {
+                                    excludingPaths: Set<String> = [],
+                                    onVisit: ((String) -> Void)? = nil) -> CleanupScan {
         let control = control ?? CleanupScanControl(mode: .deep)
         guard let openFiles = currentCleanupOpenFiles() else {
             return CleanupScan(categories: [], succeeded: false,
@@ -845,7 +864,7 @@ final class NativeCore: @unchecked Sendable {
                     openFiles: openFiles, whitelist: whitelist, control: control,
                     includingAdministratorRequired: includingAdministratorRequired
                         && (descriptor.risk == .safe && descriptor.disposal == .permanentDelete || trashItem),
-                    rootIsVerifiedRebuildable: catalogVerified)
+                    rootIsVerifiedRebuildable: catalogVerified, onVisit: onVisit)
                 deferred.append(contentsOf: checked.deferredPaths)
                 entries.append(contentsOf: checked.entries)
                 if category.isPathSelected(path) { selected.formUnion(checked.entries.map(\.path)) }
@@ -1968,6 +1987,125 @@ final class NativeCore: @unchecked Sendable {
         var reclaimedBytes: UInt64 = 0
     }
 
+    /// Raw records retain their own accounting identity. Only safe literals
+    /// participate in normalized ancestor coverage; an unsafe literal owns
+    /// only its exact record. The slash root never swallows other roots, which
+    /// matches the original exact-or-ancestor-plus-slash predicate.
+    private static func cleanupRecordCoverage(_ records: [String], roots: [String]) -> [[String]] {
+        var safeRoots: [String: (index: Int, path: String)] = [:]
+        var unsafeRoots: [String: Int] = [:]
+        for (index, root) in roots.enumerated() {
+            if DeletionPlan.isLexicallySafePath(root) {
+                let normalized = CleanupRiskPolicy.normalizedPathLiteral(root)
+                safeRoots[normalized] = (index, normalized)
+            } else {
+                unsafeRoots[root] = index
+            }
+        }
+        var covered = [[String]](repeating: [], count: roots.count)
+        for record in records {
+            guard DeletionPlan.isLexicallySafePath(record) else {
+                if let index = unsafeRoots[record] { covered[index].append(record) }
+                continue
+            }
+            let normalizedRecord = CleanupRiskPolicy.normalizedPathLiteral(record)
+            var candidate = normalizedRecord
+            while !candidate.isEmpty {
+                // NSString's parent traversal sees scalar slash boundaries,
+                // whereas Swift hasPrefix respects composed graphemes. Keep
+                // the original predicate when an indexed ancestor is found.
+                if let root = safeRoots[candidate], normalizedRecord == root.path
+                    || normalizedRecord.hasPrefix(root.path + "/") {
+                    covered[root.index].append(record)
+                    break
+                }
+                let parent = (candidate as NSString).deletingLastPathComponent
+                guard parent != "/", !parent.isEmpty, parent != candidate else { break }
+                candidate = parent
+            }
+        }
+        return covered
+    }
+
+    /// Build literal prefix lookups once instead of searching the whole lsof
+    /// snapshot for every root. Source-order first blockers are retained for
+    /// diagnostics, including the special reversible bundle-move exclusions.
+    private struct CleanupOpenFileIndex {
+        private let occupiedPrefixes: Set<String>
+        private let hasRecords: Bool
+        private let firstRecords: [String: OpenFileRecord]
+        private let firstBundleBlockers: [String: OpenFileRecord]
+
+        init(files: Set<String>?, records: [OpenFileRecord]?) {
+            hasRecords = records != nil
+            var occupied = Set<String>()
+            var first: [String: OpenFileRecord] = [:]
+            var bundle: [String: OpenFileRecord] = [:]
+            if let records {
+                for record in records {
+                    let readOnlyMetadata = record.isReadOnlyBundleMetadata
+                    for prefix in Self.prefixes(of: record.path) {
+                        if first[prefix] == nil { first[prefix] = record }
+                        if !readOnlyMetadata && !record.isObserverDirectoryHandle(onBundle: prefix),
+                           bundle[prefix] == nil { bundle[prefix] = record }
+                    }
+                }
+            } else {
+                for path in files ?? [] { occupied.formUnion(Self.prefixes(of: path)) }
+            }
+            occupiedPrefixes = occupied
+            firstRecords = first
+            firstBundleBlockers = bundle
+        }
+
+        func occupancy(of path: String, movingBundle: Bool) -> (isOpen: Bool, first: OpenFileRecord?) {
+            guard hasRecords else { return (occupiedPrefixes.contains(path), nil) }
+            let record = movingBundle ? firstBundleBlockers[path] : firstRecords[path]
+            return (record != nil, record)
+        }
+
+        private static func prefixes(of path: String) -> [String] {
+            // Do not normalize lsof/probe literals: repeated or trailing
+            // slashes must preserve exact String.hasPrefix behavior.
+            var result = [path]
+            for index in path.indices where path[index] == "/" && index != path.startIndex {
+                result.append(String(path[..<index]))
+            }
+            return result
+        }
+    }
+
+    /// Up to four workers claim roots dynamically. Shared accounting stays under one
+    /// lock; user callbacks and filesystem work always happen outside it.
+    private final class CleanupRemovalBatch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var nextIndex = 0
+        private var completed = 0
+        private var outcomes: [RootRemovalOutcome?]
+
+        init(rootCount: Int) { outcomes = [RootRemovalOutcome?](repeating: nil, count: rootCount) }
+
+        func takeNext() -> Int? {
+            lock.lock(); defer { lock.unlock() }
+            guard nextIndex < outcomes.count else { return nil }
+            let index = nextIndex
+            nextIndex += 1
+            return index
+        }
+
+        func finish(_ index: Int, outcome: RootRemovalOutcome) -> Int {
+            lock.lock(); defer { lock.unlock() }
+            outcomes[index] = outcome
+            completed += 1
+            return completed
+        }
+
+        func orderedOutcomes() -> [RootRemovalOutcome] {
+            lock.lock(); defer { lock.unlock() }
+            return outcomes.compactMap { $0 }
+        }
+    }
+
     func applyCleanup(items: [DeletionPlan.Item], permanent: Bool,
                       homeDirectory: String = NSHomeDirectory(),
                       allowedRoots: [String] = [],
@@ -1984,7 +2122,6 @@ final class NativeCore: @unchecked Sendable {
             return ApplySummary(removed: 0, skipped: 0, failed: 0, messages: [])
         }
         let nonOverlapping = DeletionPlan.nonOverlappingPaths(items.map(\.record))
-        var completedRoots = 0
         onProgress?(0, nonOverlapping.count, nonOverlapping.first ?? "")
         let home = CleanupRiskPolicy.normalizedPathLiteral(homeDirectory)
         let whitelist = loadWhitelist(homeDirectory: homeDirectory)
@@ -2012,6 +2149,8 @@ final class NativeCore: @unchecked Sendable {
 
         let itemByRecord = Dictionary(items.map { ($0.record, $0) },
                                       uniquingKeysWith: { first, _ in first })
+        let coveredRecords = Self.cleanupRecordCoverage(Array(itemByRecord.keys), roots: nonOverlapping)
+        let openFileIndex = CleanupOpenFileIndex(files: openFiles, records: openRecords)
         // 整族预检：任一成员被打开、身份变化或探测不可用，整族保留。
         var blockedFamilyMembers = Set<String>()
         for family in atomicFamilies where family.count > 1 {
@@ -2024,28 +2163,17 @@ final class NativeCore: @unchecked Sendable {
             if !intact { blockedFamilyMembers.formUnion(family) }
         }
         // 各根目录互不重叠，预检与删除并行执行；结果按原顺序汇总，消息顺序不变。
-        var outcomes = [RootRemovalOutcome?](repeating: nil, count: nonOverlapping.count)
-        let outcomeLock = NSLock()
-        DispatchQueue.concurrentPerform(iterations: nonOverlapping.count) { index in
+        let batch = CleanupRemovalBatch(rootCount: nonOverlapping.count)
+        let trashLock = NSLock()
+        let removeRoot: (Int) -> Void = { [self] index in
             let rawPath = nonOverlapping[index]
             var outcome = RootRemovalOutcome()
             onCurrentFile?(rawPath)
             defer {
-                outcomeLock.lock()
-                outcomes[index] = outcome
-                completedRoots += 1
-                let finished = completedRoots
-                outcomeLock.unlock()
+                let finished = batch.finish(index, outcome: outcome)
                 onProgress?(finished, nonOverlapping.count, rawPath)
             }
-            let coveredPaths = itemByRecord.keys.filter { record in
-                if record == rawPath { return true }
-                guard DeletionPlan.isLexicallySafePath(rawPath),
-                      DeletionPlan.isLexicallySafePath(record) else { return false }
-                let ancestor = CleanupRiskPolicy.normalizedPathLiteral(rawPath)
-                let candidate = CleanupRiskPolicy.normalizedPathLiteral(record)
-                return candidate == ancestor || candidate.hasPrefix(ancestor + "/")
-            }
+            let coveredPaths = coveredRecords[index]
             let coveredCount = coveredPaths.count
             let expectedIdentity = itemByRecord[rawPath]?.identity ?? ""
             if blockedFamilyMembers.contains(rawPath) {
@@ -2163,17 +2291,12 @@ final class NativeCore: @unchecked Sendable {
             // complete open-file snapshot and their existing protections.
             let movingBundle = allowApplicationBundle && !permanent
                 && metadata.st_mode & S_IFMT == S_IFDIR && path.hasSuffix(".app")
-            let blockers = openRecords?.filter {
-                ($0.path == path || $0.path.hasPrefix(path + "/"))
-                    && !(movingBundle && ($0.isReadOnlyBundleMetadata || $0.isObserverDirectoryHandle(onBundle: path)))
-            }
-            let pathIsOpen = blockers.map { !$0.isEmpty }
-                ?? openFiles.contains(where: { $0 == path || $0.hasPrefix(path + "/") })
+            let occupancy = openFileIndex.occupancy(of: path, movingBundle: movingBundle)
             guard liveDirectory || CleanupRiskPolicy.isPowerlogTelemetryPath(path)
-                    || !pathIsOpen else {
+                    || !occupancy.isOpen else {
                 outcome.skipped += coveredCount
                 outcome.messages.append("Skipped while the path is open: \(path)")
-                if let blocker = blockers?.first {
+                if let blocker = occupancy.first {
                     outcome.messages.append("Open by \(blocker.process) (PID \(blocker.pid)): \(blocker.path)")
                 }
                 return
@@ -2240,8 +2363,8 @@ final class NativeCore: @unchecked Sendable {
                 do {
                     var resultingURL: NSURL?
                     if let trashHandler {
-                        outcomeLock.lock()
-                        defer { outcomeLock.unlock() }
+                        trashLock.lock()
+                        defer { trashLock.unlock() }
                         try trashHandler(url)
                     } else { try fileManager.trashItem(at: url, resultingItemURL: &resultingURL) }
                     outcome.removed += coveredCount
@@ -2252,7 +2375,18 @@ final class NativeCore: @unchecked Sendable {
                 }
             }
         }
-        for outcome in outcomes.compactMap({ $0 }) {
+        // Utility QoS and a small worker budget leave room for the UI even
+        // when thousands of independent roots are ready at once.
+        let workerCount = min(nonOverlapping.count, min(4, max(1, ProcessInfo.processInfo.activeProcessorCount - 2)))
+        let removalQueue = DispatchQueue(label: "com.nori.cleanup-removal", qos: .utility, attributes: .concurrent)
+        let workers = DispatchGroup()
+        for _ in 0..<workerCount {
+            removalQueue.async(group: workers) {
+                while let index = batch.takeNext() { removeRoot(index) }
+            }
+        }
+        workers.wait()
+        for outcome in batch.orderedOutcomes() {
             removed += outcome.removed
             skipped += outcome.skipped
             failed += outcome.failed

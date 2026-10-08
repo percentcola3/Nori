@@ -44,6 +44,11 @@ struct ProcessSample: Equatable, Sendable {
 final class ProcessSampler: @unchecked Sendable {
     static let shared = ProcessSampler()
 
+    struct Snapshot: Sendable {
+        let processes: [ProcessSample]
+        let isComplete: Bool
+    }
+
     private struct Baseline {
         let cpuTimeNanoseconds: UInt64
         let startTime: UInt64
@@ -63,11 +68,18 @@ final class ProcessSampler: @unchecked Sendable {
     /// 采样所有可见进程。系统对其他用户的进程只给出有限信息，这些进程不会
     /// 出现在结果里（也不允许被操作）。
     func sample() -> [ProcessSample] {
-        let pids = Self.allPIDs()
+        snapshot().processes
+    }
+
+    /// Mutation preflight must distinguish an unreadable process table from
+    /// an idle installation. Read-only status views may keep using sample().
+    func snapshot() -> Snapshot {
+        guard let pids = Self.allPIDs() else { return .init(processes: [], isComplete: false) }
         let now = Date().timeIntervalSince1970
         var result: [ProcessSample] = []
         result.reserveCapacity(pids.count)
         var nextBaselines: [Int32: Baseline] = [:]
+        var complete = pids.contains(ProcessInfo.processInfo.processIdentifier)
 
         lock.lock()
         let previous = baselines
@@ -97,6 +109,19 @@ final class ProcessSampler: @unchecked Sendable {
             let identity = ProcessIdentity(pid: pid, startTime: startTime,
                                            ppid: Int32(bitPattern: bsd.pbi_ppid), uid: bsd.pbi_uid)
             let path = Self.path(of: pid)
+            if path.isEmpty, bsd.pbi_uid == getuid(), bsd.pbi_status != UInt32(SZOMB),
+               bsd.pbi_flags & UInt32(PROC_FLAG_INEXIT) == 0 {
+                // A process can exit during sampling. Only a still-live process
+                // whose executable cannot be read makes ownership uncertain.
+                var fresh = proc_bsdinfo()
+                if proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &fresh, bsdSize) == bsdSize,
+                   fresh.pbi_start_tvsec == bsd.pbi_start_tvsec,
+                   fresh.pbi_start_tvusec == bsd.pbi_start_tvusec,
+                   fresh.pbi_status != UInt32(SZOMB),
+                   fresh.pbi_flags & UInt32(PROC_FLAG_INEXIT) == 0 {
+                    complete = false
+                }
+            }
             let name = Self.name(from: bsd, path: path)
             let elapsed = max(0, now - Double(bsd.pbi_start_tvsec))
             result.append(ProcessSample(identity: identity, name: name, path: path,
@@ -110,7 +135,7 @@ final class ProcessSampler: @unchecked Sendable {
         lock.lock()
         baselines = nextBaselines
         lock.unlock()
-        return result
+        return .init(processes: result, isComplete: complete)
     }
 
     /// 重新采样单个进程，用来在动作前核对身份。
@@ -132,13 +157,13 @@ final class ProcessSampler: @unchecked Sendable {
 
     // MARK: - libproc helpers
 
-    private static func allPIDs() -> [Int32] {
+    private static func allPIDs() -> [Int32]? {
         var count = proc_listallpids(nil, 0)
-        guard count > 0 else { return [] }
+        guard count > 0 else { return nil }
         // 留出余量：两次调用之间可能有新进程。
         var buffer = [Int32](repeating: 0, count: Int(count) + 64)
         count = proc_listallpids(&buffer, Int32(buffer.count * MemoryLayout<Int32>.size))
-        guard count > 0 else { return [] }
+        guard count > 0, Int(count) < buffer.count else { return nil }
         return Array(buffer.prefix(Int(count)))
     }
 
@@ -146,8 +171,23 @@ final class ProcessSampler: @unchecked Sendable {
         // PROC_PIDPATHINFO_MAXSIZE = 4 * MAXPATHLEN（宏在 Swift 里不可用）。
         var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
         let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
-        guard length > 0 else { return "" }
-        return String(cString: buffer)
+        if length > 0 { return String(cString: buffer) }
+        // Updating an app can unlink the executable of a surviving helper.
+        // libproc then reports ENOENT even though the process is still alive.
+        // The kernel's launch path remains available before argv in this
+        // buffer; argv[0] is user-controlled and is never a path fallback.
+        var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
+        var size = 0
+        guard sysctl(&mib, UInt32(mib.count), nil, &size, nil, 0) == 0,
+              size > MemoryLayout<Int32>.size, size <= 1_048_576 else { return "" }
+        var bytes = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, UInt32(mib.count), &bytes, &size, nil, 0) == 0 else { return "" }
+        let start = MemoryLayout<Int32>.size
+        guard size > start, let end = bytes[start..<size].firstIndex(of: 0),
+              let path = String(bytes: bytes[start..<end], encoding: .utf8), path.hasPrefix("/"),
+              !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
+              !path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else { return "" }
+        return path
     }
 
     private static func name(from info: proc_bsdinfo, path: String) -> String {

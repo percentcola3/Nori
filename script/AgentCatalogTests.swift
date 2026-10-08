@@ -370,9 +370,10 @@ struct AgentCatalogTests {
             .contains(home + "/Library/Application Support/Kiro"),
                "orphaned leftovers must move to the cleanup funnel, not the agent funnel")
         let sandboxReport = AgentInventory.scan(home: home, presence: sandboxPresence)
-        expect(sandboxReport.groups.allSatisfy { $0.id != "kiro" }
-               && sandboxReport.categories.allSatisfy { !$0.paths.contains(home + "/Library/Application Support/Kiro") },
-               "an uninstalled tool still appears on the agents page")
+        expect(sandboxReport.groups.contains { $0.id == "kiro" && $0.orphaned }
+               && sandboxReport.categories.filter { $0.paths.contains(home + "/Library/Application Support/Kiro") }
+                   .allSatisfy { !$0.selected },
+               "orphaned Agent data must remain visible without becoming selected")
         try write("Applications/Kiro.app/Contents/Info.plist")
         expect(AgentCatalog.resolve(kiro, home: home, presence: sandboxPresence)
             .allSatisfy { $0.tier != .safe && !$0.owners.isEmpty },
@@ -1077,15 +1078,20 @@ struct AgentCatalogTests {
         expect(!rootSkillConfig.contains(containedSkill) && rootSkillConfig.contains("model = \"gpt\""),
                "whole root cleanup left a Skill path registration or damaged unrelated config")
 
-        // documented CLI / 桌面程序卸载后也必须从 Agent 页退出，历史配置不能充当本体。
+        // Data-only Agents remain visible as unselected leftovers; retained
+        // configuration still cannot count as an installed application.
         for relative in [".local/bin/claude", ".local/bin/codex", ".local/bin/opencode",
                          ".local/bin/grok", "Applications/Cursor.app"] {
             try fm.removeItem(atPath: home + "/" + relative)
         }
         let removedIDs = Set(["claude-code", "codex", "cursor", "opencode", "grok"])
         let orphanedReport = AgentInventory.scan(home: home, presence: sandboxPresence)
-        expect(orphanedReport.groups.allSatisfy { !removedIDs.contains($0.id) },
+        let leftoverGroups = orphanedReport.groups.filter { removedIDs.contains($0.id) }
+        expect(leftoverGroups.allSatisfy(\.orphaned),
                "documented agents with only data/config left still appear installed")
+        let leftoverCategoryIDs = Set(leftoverGroups.flatMap(\.categoryIDs))
+        expect(orphanedReport.categories.filter { leftoverCategoryIDs.contains($0.id) }.allSatisfy { !$0.selected },
+               "uninstall leftovers became selected without a user request")
         for agent in AgentCatalog.definitions where removedIDs.contains(agent.id) {
             expect(AgentCatalog.isOrphaned(agent, home: home, presence: sandboxPresence),
                    "\(agent.id) data was not classified as an uninstall leftover")

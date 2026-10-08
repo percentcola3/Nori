@@ -33,6 +33,20 @@ for name in names:
     method = re.sub(r"^    (?:private|fileprivate|internal|public) func ", "    func ", method, count=1)
     methods.append(f"    // Production AppState.swift:{start + 1}\n" + method)
 
+for name, declaration in [
+    ("totalBytes", re.compile(r"^    var totalBytes: UInt64 \{")),
+    ("uniqueAgentBytes", re.compile(r"^    nonisolated static func uniqueAgentBytes\(")),
+]:
+    matches = [index for index, line in enumerate(source) if declaration.match(line)]
+    if len(matches) != 1:
+        raise SystemExit(f"Expected one production AppState.{name}, found {len(matches)}")
+    start = matches[0]
+    end = next((index for index in range(start + 1, len(source)) if source[index] == "    }"), None)
+    if end is None:
+        raise SystemExit(f"Cannot safely extract AppState.{name}")
+    member = "\n".join(source[start:end + 1]).replace("nonisolated static func", "static func", 1)
+    methods.append(f"    // Production AppState.{name}\n" + member)
+
 template = (root / "script/CleanupPageStateTests.swift").read_text()
 marker = "    // APPSTATE_CLEANUP_PAGE_METHODS"
 if template.count(marker) != 1:
@@ -40,14 +54,16 @@ if template.count(marker) != 1:
 (destination / "CleanupPageStateTests.swift").write_text(template.replace(marker, "\n\n".join(methods)))
 PY
 
-swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" \
-    "$ROOT_DIR/SimpleMole/Models.swift" \
+mkdir -p "$TEST_DIR/sources"
+cp "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" \
-    "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
+    "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" "$TEST_DIR/sources/"
+swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
+    -module-cache-path "$TEST_DIR/module-cache" \
+    "$TEST_DIR/sources/"*.swift \
     "$TEST_DIR/CleanupPageStateTests.swift" \
     -o "$TEST_DIR/cleanup-page-state-tests"
 "$TEST_DIR/cleanup-page-state-tests"

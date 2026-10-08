@@ -2404,6 +2404,7 @@ test_cleanup_execution_accounting() {
     mkdir -p "$module_cache"
     swiftc -target "$arch-apple-macos13.0" \
         -module-cache-path "$module_cache" \
+        "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" \
         "$ROOT_DIR/script/CleanupExecutionTests.swift" \
         -o "$binary" || fail "compile cleanup execution accounting tests"
@@ -2493,22 +2494,32 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_cleanup_page_state.sh" || fail "cleanup inline results and pending retry tests"
     bash "$ROOT_DIR/script/test_auto_cleanup_workflow.sh" || fail "automatic cleanup scheduler lifecycle tests"
     bash "$ROOT_DIR/script/test_administrator_cleanup.sh" || fail "administrator cleanup safety tests"
+    bash "$ROOT_DIR/script/test_administrator_cleanup_performance.sh" || fail "bounded cleanup batches, path indices and UI responsiveness"
     bash "$ROOT_DIR/script/test_analysis_deletion.sh" || fail "analysis selection identity-bound Trash tests"
     bash "$ROOT_DIR/script/test_analysis_inventory.sh" || fail "independent incremental analysis cache tests"
     bash "$ROOT_DIR/script/test_analysis_selection.sh" || fail "per-category cleanup and compression selection tests"
     bash "$ROOT_DIR/script/test_analysis_automation.sh" || fail "automatic incremental analysis scheduling tests"
     bash "$ROOT_DIR/script/test_system_disk_metrics.sh" || fail "macOS available disk capacity tests"
     bash "$ROOT_DIR/script/test_agents.sh" || fail "agent cleanup catalog, skills and MCP tests"
+    bash "$ROOT_DIR/script/test_agent_scan_performance.sh" || fail "bounded Agent scan, metadata reuse and cancellation"
+    bash "$ROOT_DIR/script/test_agent_storage_footprint.sh" || fail "shared Agent/software capacity and garbage classification"
+    bash "$ROOT_DIR/script/test_agent_software_inventory.sh" || fail "selected Agent application and CLI inventory"
+    bash "$ROOT_DIR/script/test_agent_data_process_scope.sh" || fail "trusted shared-data consumers and process isolation"
+    bash "$ROOT_DIR/script/test_agent_program_removal.sh" || fail "selected Agent installation removal and separate data consent"
     bash "$ROOT_DIR/script/test_agent_cli.sh" || fail "agent CLI uninstall execution tests"
     bash "$ROOT_DIR/script/test_agent_workflow.sh" || fail "agent cleanup lifecycle tests"
     bash "$ROOT_DIR/script/test_agent_icons.sh" || fail "agent icon tests"
     bash "$ROOT_DIR/script/test_task_feedback.sh" || fail "task feedback queue tests"
     bash "$ROOT_DIR/script/test_task_feedback_localization.sh" || fail "multilingual task feedback tests"
-    # Agent 专清按用户选择直接永久删除，不弹确认、不进废纸篓；运行态与身份守卫仍在执行器里。
+    # Ordinary Agent garbage cleanup executes its captured selection directly;
+    # installation removal and associated user-data cleanup have separate consent.
     /usr/bin/grep -Eq 'AgentCleanupExecutor\.execute\([^,]+, running: snapshot, home: home, permanent: true[,)]' \
         "$ROOT_DIR/SimpleMole/AppState+Agents.swift" || fail "agent cleanup no longer deletes permanently"
-    if /usr/bin/grep -Fq 'confirmation = Confirmation(' "$ROOT_DIR/SimpleMole/AppState+Agents.swift"; then
-        fail "agent cleanup asks for confirmation again"
+    /usr/bin/grep -Fq '    func applyAgentCleanup() {' "$ROOT_DIR/SimpleMole/AppState+Agents.swift" || \
+        fail "ordinary Agent cleanup action is missing"
+    if sed -n '/^    func applyAgentCleanup() {$/,/^    }$/p' "$ROOT_DIR/SimpleMole/AppState+Agents.swift" \
+        | /usr/bin/grep -Eq 'confirmation[[:space:]]*='; then
+        fail "ordinary Agent garbage cleanup asks for confirmation again"
     fi
     bash "$ROOT_DIR/script/test_optimize.sh" || fail "optimize admin bridge safety tests"
     bash "$ROOT_DIR/script/test_cleanup_refresh.sh" || fail "post-cleanup inventory refresh tests"
@@ -2533,6 +2544,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_cli_tools.sh" || fail "multi-ecosystem CLI inventory tests"
     bash "$ROOT_DIR/script/test_software_updates.sh" || fail "application and CLI version checks"
     bash "$ROOT_DIR/script/test_software_update_execution.sh" || fail "software update commands and running-process closure"
+    bash "$ROOT_DIR/script/test_cli_uninstall_workflow.sh" || fail "confirmed CLI uninstall and scoped process shutdown"
     bash "$ROOT_DIR/script/test_software_workflows.sh" || fail "software workflow dependency and orchestration contracts"
     bash "$ROOT_DIR/script/test_administrator_uninstall.sh" || fail "administrator uninstall and Trash safety tests"
 fi

@@ -33,6 +33,10 @@ final class AppState: ObservableObject {
     @Published var agentServers: [AgentMCPServer] = []
     @Published var agentMCPInstallations: [AgentMCPInstallation] = []
     @Published var agentCLIInstallations: [AgentCLIInstallation] = []
+    @Published var agentApplications: [String: [UninstallApp]] = [:]
+    @Published var agentStorageFootprints: [String: AgentStorageFootprint] = [:]
+    @Published var agentCLIBodySizes: [String: AgentInstallationSize] = [:]
+    @Published var agentProgramBusyID: String?
     @Published var agentSelectedCLIInstallations = Set<String>()
     @Published var agentSelectedMCPInstallations = Set<String>()
     @Published var agentScanCurrentPath = ""
@@ -59,7 +63,11 @@ final class AppState: ObservableObject {
     var maintenanceRequests = 0
     var celebrationFinishes = 0
     var retryRequests = 0
-    var isBusyExcludingUninstall: Bool { isApplying || isCleanupScanning || agentApplying || agentScanning }
+    var programRemovalRequests = 0
+    var associatedDataRequests = 0
+    var isBusyExcludingUninstall: Bool {
+        isApplying || isCleanupScanning || agentApplying || agentScanning || agentProgramBusyID != nil
+    }
     var isBusy: Bool { isBusyExcludingUninstall || cleanupQueued }
     var hasCleanupSelection: Bool {
         categories.contains { $0.selectedSubset != nil }
@@ -81,6 +89,11 @@ final class AppState: ObservableObject {
     func isAgentSkillSelected(_ skill: AgentSkill) -> Bool { false }
     func isAgentServerSelected(_ server: AgentMCPServer) -> Bool { false }
     func toggleAgentCLIInstallation(_ installation: AgentCLIInstallation) {}
+    func uninstallAgentCLI(_ installation: AgentCLIInstallation) { programRemovalRequests += 1 }
+    func uninstallAgentApplication(_ app: UninstallApp) { programRemovalRequests += 1 }
+    func offerAgentAssociatedDataCleanup(agentIDs: Set<String>, programName: String? = nil) {
+        associatedDataRequests += 1
+    }
     func cancelAgentScan() { cancelRequests += 1 }
     var uninstallSegment = 0
     func jump(to key: PageKey) {}
@@ -142,6 +155,27 @@ struct AgentGroupSummary: Identifiable {
     let name: String
     let documented: Bool
     let categoryIDs: [UUID]
+    var orphaned = false
+}
+// Capacity classification is covered by AgentStorageFootprintTests. This
+// presentation fixture supplies one immutable, already-projected snapshot.
+struct AgentStorageFootprint {
+    struct Totals {
+        let identifiedDataBytes: UInt64
+        let reclaimableBytes: UInt64
+        let preservedBytes: UInt64
+        let measurementComplete: Bool
+    }
+    let values: Totals
+    static func totals(_ footprints: [Self]) -> Totals {
+        precondition(footprints.count <= 1, "The presentation fixture renders one Agent snapshot")
+        return footprints.first?.values
+            ?? .init(identifiedDataBytes: 0, reclaimableBytes: 0, preservedBytes: 0, measurementComplete: false)
+    }
+}
+struct AgentInstallationSize {
+    let bytes: UInt64
+    let complete: Bool
 }
 struct AgentCLIInstallation: Identifiable {
     enum Manager: String { case npm }
@@ -152,6 +186,7 @@ struct AgentCLIInstallation: Identifiable {
     let identities: [String: String]
     let detail: String
     let managedPaths: [String]
+    var executablePaths: [String] = []
 }
 struct AgentSkill: Identifiable {
     let id: String

@@ -3,6 +3,10 @@ import Foundation
 /// A confirmed request owns its app identity and preview snapshot. It never
 /// reads the currently selected row when it eventually reaches the worker.
 struct UninstallJob: Identifiable, Equatable {
+    enum Scope: Equatable {
+        case applicationAndResidues
+        case installationOnly
+    }
     enum State: Equatable {
         case queued, preparing, running, succeeded, failed
 
@@ -15,8 +19,18 @@ struct UninstallJob: Identifiable, Equatable {
     let app: UninstallApp
     let plan: UninstallPlan?
     let dataPaths: Set<String>
+    let scope: Scope
     fileprivate(set) var state: State = .queued
     fileprivate(set) var message: String?
+
+    init(id: UUID, app: UninstallApp, plan: UninstallPlan?, dataPaths: Set<String>,
+         scope: Scope = .applicationAndResidues) {
+        self.id = id
+        self.app = app
+        self.plan = plan
+        self.dataPaths = dataPaths
+        self.scope = scope
+    }
 }
 
 /// Main-actor-owned, in-memory FIFO. Confirmations are intentionally not
@@ -37,10 +51,11 @@ struct UninstallQueue {
     }
 
     @discardableResult
-    mutating func enqueue(app: UninstallApp, plan: UninstallPlan?, dataPaths: Set<String> = []) -> UUID? {
+    mutating func enqueue(app: UninstallApp, plan: UninstallPlan?, dataPaths: Set<String> = [],
+                          scope: UninstallJob.Scope = .applicationAndResidues) -> UUID? {
         guard !app.appIdentity.isEmpty, !containsPendingOrActive(app) else { return nil }
         jobs.removeAll { $0.state.isFinished && $0.app.id == app.id }
-        let job = UninstallJob(id: UUID(), app: app, plan: plan, dataPaths: dataPaths)
+        let job = UninstallJob(id: UUID(), app: app, plan: plan, dataPaths: dataPaths, scope: scope)
         jobs.append(job)
         trimHistory()
         return job.id

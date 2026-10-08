@@ -221,6 +221,12 @@ final class AppState: ObservableObject {
     @Published var agentServers: [AgentMCPServer] = []
     @Published var agentMCPInstallations: [AgentMCPInstallation] = []
     @Published var agentCLIInstallations: [AgentCLIInstallation] = []
+    @Published var agentApplications: [String: [UninstallApp]] = [:]
+    @Published var agentStorageFootprints: [String: AgentStorageFootprint] = [:]
+    @Published var agentCLIBodySizes: [String: AgentInstallationSize] = [:]
+    @Published var agentStorageCheckingIDs = Set<String>()
+    var agentStorageGeneration = UUID()
+    @Published var agentProgramBusyID: String?
     @Published var agentSelectedSkills: Set<String> = []
     @Published var agentSelectedServers: Set<String> = []
     @Published var agentSelectedMCPInstallations: Set<String> = []
@@ -352,6 +358,7 @@ final class AppState: ObservableObject {
     @Published var commandLineToolsScanned = false
     @Published var commandLineToolStatus = ""
     @Published var commandLineToolBusyID: String?
+    var commandLineToolUninstallGeneration = UUID()
     @Published var softwareUpdateResults: [String: SoftwareUpdateResult] = [:]
     @Published var softwareUpdateCheckingIDs = Set<String>()
     @Published var isCheckingSoftwareUpdates = false
@@ -795,6 +802,8 @@ final class AppState: ObservableObject {
 
     var isBusyExcludingUninstall: Bool {
         isScanning || isApplying || isSlimming
+            || agentProgramBusyID != nil
+            || commandLineToolBusyID != nil
             || softwareUpdatingID != nil
             || isDeveloperCommandRunning
             || isDeveloperConfigurationWriting
@@ -823,7 +832,9 @@ final class AppState: ObservableObject {
     }
 
     var totalBytes: UInt64 {
-        categories.reduce(0) { $0 + $1.bytes }
+        Self.uniqueAgentBytes(categories.filter(\.quickCleanEligible).flatMap { category in
+            category.paths.map { ($0, category.pathBytes[$0] ?? 0) }
+        })
     }
 
     init(softwareUpdateChecker: (any SoftwareUpdateChecking)? = nil,
@@ -1339,6 +1350,14 @@ final class AppState: ObservableObject {
 
     func uninstallJob(for app: UninstallApp) -> UninstallJob? {
         uninstallQueue.jobs.last { $0.app.id == app.id }
+    }
+
+    /// Agent rows use the same audited executor without navigating to the
+    /// software queue. Associated Agent data is a separate confirmed request.
+    func executeAgentApplicationRemoval(_ app: UninstallApp,
+                                         progress: (UninstallExecutionPhase) -> Void) async -> UninstallExecutionOutcome {
+        let job = UninstallJob(id: UUID(), app: app, plan: nil, dataPaths: [], scope: .installationOnly)
+        return await uninstallExecutor.execute(job, progress: progress)
     }
 
     func uninstallQueuePosition(for app: UninstallApp) -> Int? {

@@ -66,6 +66,24 @@ struct AgentPresentationTests {
             state.agentCategories = [category]
             state.agentGroups = [.init(id: "codex", name: "Codex", documented: true, categoryIDs: [category.id])]
             render("results")
+            let preservedBytes: UInt64 = 3_000_000_000
+            let preserved = CleanupCategory(name: "保留的会话与状态", paths: ["/fixture/agent/sessions"],
+                bytes: preservedBytes, pathIdentities: [:], selected: false, source: .aiSession, risk: .protected,
+                disposal: .none, applyRoute: .aiTrash, activityGuard: .aiAgent, reasonKey: "agents.reason.showOnly")
+            state.agentCategories = [category, preserved]
+            state.agentGroups = [.init(id: "codex", name: "Codex", documented: true,
+                                      categoryIDs: [category.id, preserved.id])]
+            state.agentStorageFootprints = ["codex": .init(values: .init(
+                identifiedDataBytes: preservedBytes + category.bytes, reclaimableBytes: category.bytes,
+                preservedBytes: preservedBytes, measurementComplete: true))]
+            state.agentCLIInstallations = [.init(id: "fixture-cli", agentID: "codex", name: "Codex CLI",
+                manager: .npm, identities: [:], detail: "Owned presentation installation",
+                managedPaths: ["/fixture/npm-global/lib/node_modules/@fixture/agent"])]
+            state.agentCLIBodySizes = ["fixture-cli": .init(bytes: 4_000_000, complete: true)]
+            state.agentApplications = ["codex": [.init(name: "Agent Desktop", bundleID: "test.presentation.agent",
+                source: "Fixture", path: "/fixture/Agent Desktop.app", size: "200 MB",
+                appIdentity: "fixture", infoIdentity: "fixture")]]
+            render("results-storage-split")
             state.agentApplying = true
             state.agentCleanupProgress = .init(phase: .cleaning, completed: 3, total: 7,
                 currentItem: "/fixture/agent/cache/a-long-cache-directory/actual-file")
@@ -96,7 +114,8 @@ struct AgentPresentationTests {
             precondition(!state.agentCelebrating && state.agentFeedbackID == token,
                          "Agent success must return to idle after its feedback animation")
             render("dismissed-success")
-            precondition(state.scanRequests == 0 && state.cleanupRequests == 0 && state.retryRequests == 0,
+            precondition(state.scanRequests == 0 && state.cleanupRequests == 0 && state.retryRequests == 0
+                         && state.programRemovalRequests == 0 && state.associatedDataRequests == 0,
                          "Rendering must never start real cleanup or scan actions")
             window.close()
         }

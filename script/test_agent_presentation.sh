@@ -41,6 +41,7 @@ AGENT_PRESENTATION_SOURCES=(
     "$ROOT_DIR/SimpleMole/Views/NoriCleanupTaskStage.swift"
     "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift"
     "$ROOT_DIR/SimpleMole/Views/AgentsTabView.swift"
+    "$ROOT_DIR/SimpleMole/Views/AgentStorageSummaryView.swift"
     "$ROOT_DIR/SimpleMole/Views/AgentIconView.swift"
     "$ROOT_DIR/script/CleanupPresentationFixtureState.swift"
     "$ROOT_DIR/script/AgentPresentationTests.swift"

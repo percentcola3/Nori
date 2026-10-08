@@ -291,6 +291,14 @@ struct CleanupCategory: Identifiable, Equatable {
         return copy
     }
 
+    /// Select one item while iterating this captured inventory. Its array index
+    /// proves membership without intersecting every path on each iteration.
+    func selectingPath(at index: Int) -> CleanupCategory {
+        var copy = self
+        copy.selectedPaths = copy.canSelect && paths.indices.contains(index) ? [paths[index]] : []
+        return copy
+    }
+
     mutating func setPathSelected(_ path: String, selected: Bool) {
         guard canSelect, paths.contains(path) else { return }
         if selected {

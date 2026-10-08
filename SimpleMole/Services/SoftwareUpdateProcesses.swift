@@ -8,17 +8,19 @@ enum SoftwareUpdateProcesses {
         var applicationIdentities: Set<ProcessIdentity> = []
         static func app(_ app: UninstallApp) -> Scope { .init(roots: [app.path]) }
         static func tool(_ tool: CommandLineTool) -> Scope {
-            if tool.manager == .homebrew {
-                let path = URL(fileURLWithPath: tool.path)
-                return .init(roots: [path.lastPathComponent == tool.name ? path.path : path.deletingLastPathComponent().path])
-            }
-            return .init(roots: [tool.path] + tool.executablePaths,
-                         matchesScripts: [.npm, .pnpm, .pipx, .uv].contains(tool.manager))
+            // Removing an unowned launcher link does not authorize closing
+            // the external executable that link happens to point at.
+            if tool.agentInstallation?.onlyUnlinksExecutable == true { return .init(roots: []) }
+            let paths = [tool.installationRoot] + tool.executablePaths
+                + (tool.agentInstallation?.managedPaths ?? [])
+                + (tool.agentInstallation?.executablePaths ?? [])
+            return .init(roots: Array(Set(paths)).sorted(), matchesScripts: true)
         }
         func contains(_ path: String) -> Bool {
             guard path.hasPrefix("/"), DeletionPlan.isLexicallySafePath(path) else { return false }
             let canonical = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
             return roots.contains {
+                guard DeletionPlan.isLexicallySafePath($0) else { return false }
                 let root = URL(fileURLWithPath: $0).resolvingSymlinksInPath().path
                 return canonical == root || canonical.hasPrefix(root + "/")
                     || path == $0 || path.hasPrefix($0 + "/")
@@ -29,40 +31,149 @@ enum SoftwareUpdateProcesses {
         let processes: [ProcessSample]
         let isComplete: Bool
     }
-    static func probe(_ scope: Scope, samples: [ProcessSample] = ProcessSampler.shared.sample(),
+    struct Environment {
+        /// Fixtures may inject an array; production uses one complete native
+        /// snapshot for both ownership and the idle check.
+        var sample: (() -> [ProcessSample])? = nil
+        var snapshot: () -> ProcessSampler.Snapshot = { ProcessSampler.shared.snapshot() }
+        var current: (ProcessIdentity) -> ProcessSample? = { ProcessSampler.shared.current(for: $0) }
+        var signal: (Int32, Int32) -> Bool = { kill($0, $1) == 0 }
+        var pause: () async -> Void = { try? await Task.sleep(nanoseconds: 100_000_000) }
+        var arguments: (Int32) -> [String]? = commandArguments
+        var workingDirectory: (Int32) -> String? = currentDirectory
+        var ownUID: UInt32 = getuid()
+    }
+    static func probe(_ scope: Scope, samples suppliedSamples: [ProcessSample]? = nil,
                       arguments: (Int32) -> [String]? = commandArguments,
-                      workingDirectory: (Int32) -> String? = currentDirectory) -> Probe {
-        var complete = true
+                      workingDirectory: (Int32) -> String? = currentDirectory,
+                      ownUID: UInt32 = getuid()) -> Probe {
+        let snapshot = suppliedSamples.map { ProcessSampler.Snapshot(processes: $0, isComplete: true) }
+            ?? ProcessSampler.shared.snapshot()
+        let samples = snapshot.processes
+        var complete = snapshot.isComplete
         let owned = samples.filter { sample in
             guard !sample.isZombie else { return false }
             if scope.applicationIdentities.contains(sample.identity) { return true }
             if scope.contains(sample.path) { return true }
-            guard scope.matchesScripts, sample.uid == getuid() else { return false }
+            guard scope.matchesScripts, sample.uid == ownUID else { return false }
             let name = URL(fileURLWithPath: sample.path).lastPathComponent
-            guard name == "node" || name.hasPrefix("python") || name.hasPrefix("pypy") else { return false }
+            guard isInterpreter(name) else { return false }
             guard let argv = arguments(sample.pid) else { complete = false; return false }
-            return scriptBelongs(argv, to: scope, directory: workingDirectory(sample.pid))
+            return scriptBelongs(argv, to: scope, directory: workingDirectory(sample.pid), interpreter: name)
         }
         return .init(processes: owned, isComplete: complete)
     }
 
-    static func scriptBelongs(_ arguments: [String], to scope: Scope, directory: String? = nil) -> Bool {
+    static func scriptBelongs(_ arguments: [String], to scope: Scope, directory: String? = nil,
+                              interpreter: String? = nil) -> Bool {
         guard let executable = arguments.first else { return false }
-        if scope.contains(executable) { return true }
+        // The physical executable was checked by probe. argv[0] is mutable
+        // and cannot independently authorize closing an unrelated process.
+        let name = interpreter ?? URL(fileURLWithPath: executable).lastPathComponent
+        guard isInterpreter(name) else { return false }
+        if name == "java" { return javaTarget(arguments, belongsTo: scope, directory: directory) }
         // An interpreter's first script argument identifies the running tool;
         // arbitrary data-file arguments must never authorize process closure.
         var index = 1
-        let valueOptions: Set<String> = ["--require", "-r", "--loader", "--import", "--experimental-loader", "--conditions", "--inspect-port", "--title", "-X", "-W"]
+        let shell = isShell(name)
+        let python = name.hasPrefix("python") || name.hasPrefix("pypy")
+        let valueOptions: Set<String>
+        let booleanOptions: Set<String>
+        if shell {
+            valueOptions = ["-o", "+o", "-O", "+O", "--init-file", "--rcfile", "--features"]
+            booleanOptions = ["--noprofile", "--norc", "--posix", "--restricted", "--verbose", "--login", "--no-execute", "--interactive"]
+        } else if python {
+            valueOptions = ["-X", "-W", "--check-hash-based-pycs"]
+            booleanOptions = []
+        } else {
+            valueOptions = ["--require", "-r", "--loader", "--import", "--experimental-loader", "--conditions", "-C",
+                "--inspect-port", "--title", "--watch-path", "--icu-data-dir", "--openssl-config", "--redirect-warnings",
+                "--diagnostic-dir", "--report-directory", "--report-dir", "--report-filename", "--env-file", "--env-file-if-exists",
+                "--heap-prof-dir", "--heap-prof-name", "--heap-prof-interval", "--cpu-prof-dir", "--cpu-prof-name", "--cpu-prof-interval",
+                "--trace-event-categories", "--trace-event-file-pattern", "--tls-cipher-list", "--tls-keylog", "--input-type",
+                "--unhandled-rejections", "--disable-proto", "--experimental-default-type", "--experimental-specifier-resolution",
+                "--test-reporter", "--test-reporter-destination", "--test-name-pattern", "--test-skip-pattern", "--test-timeout", "--test-shard"]
+            booleanOptions = ["-i", "--interactive", "--watch", "--watch-preserve-output", "--no-warnings", "--trace-warnings",
+                "--trace-deprecation", "--no-deprecation", "--throw-deprecation", "--pending-deprecation", "--enable-source-maps",
+                "--preserve-symlinks", "--preserve-symlinks-main", "--use-strict", "--experimental-modules", "--experimental-wasm-modules",
+                "--experimental-vm-modules", "--experimental-strip-types", "--experimental-transform-types", "--no-experimental-strip-types",
+                "--expose-gc", "--no-addons", "--zero-fill-buffers", "--inspect", "--inspect-brk", "--inspect-wait", "--check",
+                "--trace-uncaught", "--trace-sync-io", "--trace-exit", "--test", "--cpu-prof", "--heap-prof"]
+        }
         while index < arguments.count {
             let argument = arguments[index]
             index += 1
-            if argument == "--" { continue }
-            if ["-e", "-c", "-m", "--eval"].contains(argument) { return false }
+            if argument == "--" {
+                return index < arguments.count && targetBelongs(arguments[index], to: scope, directory: directory)
+            }
+            if shell {
+                // `-lc` evaluates command text; `-s` reads stdin and treats
+                // later paths as data. Neither identifies an installed script.
+                if argument.hasPrefix("-"), !argument.hasPrefix("--"),
+                   argument.dropFirst().contains(where: { $0 == "c" || $0 == "s" }) { return false }
+                if ["-C", "--command", "--init-command"].contains(argument)
+                    || argument.hasPrefix("--command=") || argument.hasPrefix("--init-command=") { return false }
+            } else {
+                if ["-e", "-c", "-m", "-p", "--eval", "--print"].contains(argument)
+                    || argument.hasPrefix("--eval=") || argument.hasPrefix("--print=") { return false }
+            }
             if valueOptions.contains(argument) { index += 1; continue }
-            if argument.hasPrefix("-") { continue }
-            if argument.hasPrefix("/") { return scope.contains(argument) }
-            guard let directory else { return false }
-            return scope.contains(URL(fileURLWithPath: directory).appendingPathComponent(argument).standardizedFileURL.path)
+            if let equals = argument.firstIndex(of: "="), valueOptions.contains(String(argument[..<equals])) { continue }
+            let attachedOptions = python ? ["-X", "-W"] : shell ? [] : ["-r", "-C"]
+            if attachedOptions.contains(where: { argument.hasPrefix($0) && argument.count > $0.count }) { continue }
+            if booleanOptions.contains(argument) { continue }
+            if !shell, !python, ["--inspect=", "--inspect-brk=", "--inspect-wait="].contains(where: argument.hasPrefix) { continue }
+            if argument.hasPrefix("-") || shell && argument.hasPrefix("+") {
+                let shortFlags = shell ? "aAbBdDeEfFghHiIkKlLmMnNpPrRtTuvxX" : python ? "bBdEiIOPqRsSuvx" : "i"
+                if !argument.hasPrefix("--"), argument.count > 1,
+                   argument.dropFirst().allSatisfy({ shortFlags.contains($0) }) { continue }
+                // An unknown option might consume the next value. It cannot
+                // be skipped and let that value masquerade as the script.
+                return false
+            }
+            return targetBelongs(argument, to: scope, directory: directory)
+        }
+        return false
+    }
+
+    private static func isShell(_ name: String) -> Bool {
+        ["sh", "bash", "zsh", "fish", "dash", "ksh", "csh", "tcsh"].contains(name)
+    }
+    private static func isInterpreter(_ name: String) -> Bool {
+        name == "node" || name == "nodejs" || name.hasPrefix("python") || name.hasPrefix("pypy")
+            || isShell(name) || name == "java"
+    }
+    private static func targetBelongs(_ path: String, to scope: Scope, directory: String?) -> Bool {
+        if path.hasPrefix("/") { return scope.contains(path) }
+        guard let directory else { return false }
+        return scope.contains(URL(fileURLWithPath: directory).appendingPathComponent(path).standardizedFileURL.path)
+    }
+    private static func javaTarget(_ arguments: [String], belongsTo scope: Scope, directory: String?) -> Bool {
+        let valueOptions: Set<String> = ["-cp", "-classpath", "--class-path", "-p", "--module-path",
+            "--upgrade-module-path", "--add-modules", "--source", "--enable-native-access", "--patch-module",
+            "--add-exports", "--add-opens", "--add-reads", "--limit-modules", "--module-version", "--describe-module"]
+        let booleanOptions: Set<String> = ["--enable-preview", "-esa", "-enablesystemassertions", "-dsa", "-disablesystemassertions",
+            "-ea", "-enableassertions", "-da", "-disableassertions", "-server", "-client", "-showversion", "--show-version"]
+        var index = 1
+        while index < arguments.count {
+            let argument = arguments[index]
+            index += 1
+            if argument == "-jar" {
+                guard index < arguments.count else { return false }
+                return targetBelongs(arguments[index], to: scope, directory: directory)
+            }
+            if ["-m", "--module"].contains(argument) || argument.hasPrefix("--module=") { return false }
+            if valueOptions.contains(argument) { index += 1; continue }
+            if let equals = argument.firstIndex(of: "="), valueOptions.contains(String(argument[..<equals])) { continue }
+            if booleanOptions.contains(argument) { continue }
+            // These JVM option families carry their value in the same token.
+            if ["-D", "-X", "-verbose:", "-agentlib:", "-agentpath:", "-javaagent:", "-ea:", "-da:"].contains(where: {
+                argument.hasPrefix($0) && argument.count > $0.count
+            }) { continue }
+            if argument.hasPrefix("-") { return false }
+            // Java's other entry point is a class name. Only source-file mode
+            // supplies a physical script path; classpaths/data are not owners.
+            return argument.hasSuffix(".java") && targetBelongs(argument, to: scope, directory: directory)
         }
         return false
     }
@@ -99,12 +210,22 @@ enum SoftwareUpdateProcesses {
 
     /// Only called after consent to close the scoped software. Revalidate argv,
     /// executable and start identity immediately before each signal.
+    @MainActor
     static func close(_ scope: Scope, ownPID own: Int32 = ProcessInfo.processInfo.processIdentifier,
-                      stillCurrent: () -> Bool) async -> Bool {
+                      environment env: Environment = Environment(), stillCurrent: () -> Bool) async -> Bool {
+        func probeCurrent(_ samples: [ProcessSample]) -> Probe {
+            probe(scope, samples: samples, arguments: env.arguments,
+                  workingDirectory: env.workingDirectory, ownUID: env.ownUID)
+        }
+        func processSnapshot() -> ProcessSampler.Snapshot {
+            env.sample.map { .init(processes: $0(), isComplete: true) } ?? env.snapshot()
+        }
         for pass in 0..<30 {
             guard !Task.isCancelled, stillCurrent() else { return false }
-            let samples = ProcessSampler.shared.sample()
-            let current = probe(scope, samples: samples)
+            let snapshot = processSnapshot()
+            guard snapshot.isComplete else { return false }
+            let samples = snapshot.processes
+            let current = probeCurrent(samples)
             guard current.isComplete else { return false }
             if current.processes.isEmpty { return true }
             let byPID = Dictionary(samples.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
@@ -120,17 +241,19 @@ enum SoftwareUpdateProcesses {
                     if parent == target.pid { return false }
                     parent = byPID[parent]?.ppid ?? 0
                 }
-                guard target.pid > 1, target.uid == getuid(),
+                guard target.pid > 1, target.uid == env.ownUID,
                       target.pid != own else { return false }
-                guard let fresh = ProcessSampler.shared.current(for: target.identity) else { continue }
-                guard fresh.path == target.path, probe(scope, samples: [fresh]).processes.count == 1 else { return false }
+                guard let fresh = env.current(target.identity) else { continue }
+                guard fresh.identity == target.identity, fresh.path == target.path,
+                      probeCurrent([fresh]).processes.count == 1 else { return false }
                 let signal = pass < 15 ? SIGTERM : SIGKILL
                 guard stillCurrent() else { return false }
-                if kill(target.pid, signal) != 0, ProcessSampler.shared.current(for: target.identity) != nil { return false }
+                if !env.signal(target.pid, signal), env.current(target.identity) != nil { return false }
             }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            await env.pause()
         }
-        let final = probe(scope)
-        return stillCurrent() && final.isComplete && final.processes.isEmpty
+        let finalSnapshot = processSnapshot()
+        let final = probeCurrent(finalSnapshot.processes)
+        return stillCurrent() && finalSnapshot.isComplete && final.isComplete && final.processes.isEmpty
     }
 }

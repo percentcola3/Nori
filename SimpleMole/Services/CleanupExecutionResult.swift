@@ -32,9 +32,7 @@ struct CleanupExecutionResult: Equatable {
 
     func remainingPaths(in paths: [String]) -> [String] {
         paths.filter { path in
-            !removedPaths.contains { removed in
-                path == removed || path.hasPrefix(removed + "/")
-            }
+            !DeletionPlan.isPathCovered(path, by: removedPaths)
         }
     }
 

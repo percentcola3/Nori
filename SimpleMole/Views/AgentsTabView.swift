@@ -136,6 +136,15 @@ struct AgentsTabView: View {
     private var resourceList: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
+                let snapshots = state.agentGroups.compactMap { state.agentStorageFootprints[$0.id] }
+                if !snapshots.isEmpty {
+                    HStack {
+                        Text(l10n.t("agents.storage.summary")).font(.system(size: 11, weight: .medium))
+                        Spacer()
+                        AgentStorageSummaryView(storage: AgentStorageFootprint.totals(snapshots))
+                    }
+                    .padding(10).modifier(ListRowSurface(emphasis: .header))
+                }
                 Text(l10n.t("agents.notice.installed"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -214,10 +223,14 @@ struct AgentsTabView: View {
                     Text(group.name).font(.system(size: 12, weight: .semibold))
                     if !group.documented { AgentRiskTag(text: l10n.t("agents.badge.review"), high: true) }
                     Spacer()
-                    Text(l10n.tf("agents.group.reclaimable", ByteFormat.format(group.id == "shared-mcp"
-                        ? AppState.uniqueAgentBytes(state.agentMCPInstallations.map { ($0.path, $0.bytes) })
-                        : state.agentGroupBytes(group))))
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                    if let footprint = state.agentStorageFootprints[group.id] {
+                        AgentStorageSummaryView(storage: AgentStorageFootprint.totals([footprint]))
+                    } else {
+                        Text(l10n.tf("agents.storage.resource", ByteFormat.format(group.id == "shared-mcp"
+                            ? AppState.uniqueAgentBytes(state.agentMCPInstallations.map { ($0.path, $0.bytes) })
+                            : state.agentGroupBytes(group))))
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
                     Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
                         .rotationEffect(.degrees(collapsed.contains(group.id) ? -90 : 0))
                 }
@@ -225,12 +238,36 @@ struct AgentsTabView: View {
             }
             .buttonStyle(.plain).disabled(state.agentApplying)
             .accessibilityValue(l10n.t(collapsed.contains(group.id) ? "agents.collapsed" : "agents.expanded"))
+            if group.orphaned {
+                Button { state.offerAgentAssociatedDataCleanup(agentIDs: [group.id]) } label: {
+                    Label(l10n.t("agents.program.residuals"), systemImage: "sparkles")
+                }
+                .buttonStyle(SecondaryButtonStyle()).controlSize(.small).disabled(state.isBusy)
+            }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
         .modifier(ListRowSurface(emphasis: .header))
     }
 
     @ViewBuilder private func groupContents(_ group: AgentGroupSummary) -> some View {
+        ForEach(state.agentApplications[group.id] ?? []) { app in
+            HStack(spacing: 8) {
+                Image(systemName: "app").foregroundStyle(Color.moleAccentText)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(l10n.tf("agents.program.desktop", app.name)).font(.system(size: 12, weight: .medium))
+                    Text(abbreviate(app.path)).font(.system(size: 9, design: .monospaced))
+                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                }
+                Spacer()
+                Text(l10n.tf("agents.program.body", app.size)).font(.system(size: 10)).foregroundStyle(.secondary)
+                Button { state.uninstallAgentApplication(app) } label: {
+                    Label(l10n.t("uninstall.action"), systemImage: "trash")
+                }
+                .buttonStyle(DangerButtonStyle()).controlSize(.small).disabled(state.isBusy)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .modifier(ListRowSurface())
+        }
         let cliInstallations = state.agentCLIInstallations.filter { $0.agentID == group.id }
         if !cliInstallations.isEmpty {
             ForEach(cliInstallations) { installation in
@@ -276,17 +313,13 @@ struct AgentsTabView: View {
     }
 
     private func cliInstallationRow(_ installation: AgentCLIInstallation) -> some View {
-        let selected = false
         let expanded = expandedCLIInstallations.contains(installation.id)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Button {
-                    state.uninstallSegment = 1
-                    state.jump(to: .uninstall)
-                } label: {
-                    Label(l10n.t("agents.cli.manageInSoftware"), systemImage: "arrow.up.forward.app")
+                Button { state.uninstallAgentCLI(installation) } label: {
+                    Label(l10n.t("uninstall.action"), systemImage: "trash")
                 }
-                .buttonStyle(SecondaryButtonStyle()).controlSize(.small)
+                .buttonStyle(DangerButtonStyle()).controlSize(.small)
                 .disabled(state.isBusy)
                 .accessibilityLabel(l10n.tf("agents.cli.select", installation.name))
                 Button {
@@ -301,6 +334,10 @@ struct AgentsTabView: View {
                             .font(.system(size: 12, weight: .medium))
                         Text(installation.manager.rawValue)
                             .font(.system(size: 10)).foregroundStyle(.secondary)
+                        if let size = state.agentCLIBodySizes[installation.id] {
+                            Text(l10n.tf("agents.program.body", size.complete ? ByteFormat.format(size.bytes) : "—"))
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                        }
                         Spacer()
                         Image(systemName: "chevron.down")
                             .font(.system(size: 9, weight: .semibold))
@@ -311,6 +348,9 @@ struct AgentsTabView: View {
                 .buttonStyle(MolePlainButtonStyle())
                 .accessibilityValue(l10n.t(expanded ? "agents.expanded" : "agents.collapsed"))
             }
+            Text(abbreviate(installation.managedPaths.first ?? installation.executablePaths.first ?? ""))
+                .font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+                .lineLimit(1).truncationMode(.middle)
             if expanded {
                 Text(installation.detail)
                     .font(.system(size: 10)).foregroundStyle(.secondary)
@@ -326,7 +366,7 @@ struct AgentsTabView: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .modifier(ListRowSurface(selected: selected))
+        .modifier(ListRowSurface())
     }
 
     private func subsectionHeader(_ title: String, count: Int) -> some View {
@@ -467,6 +507,7 @@ struct AgentsTabView: View {
                       : l10n.t("agents.apply")), systemImage: "sparkles")
             }
             .buttonStyle(PrimaryButtonStyle()).disabled(state.agentSelectedCount == 0 || state.isBusy)
+            .help(l10n.t("agents.storage.selectedImpact"))
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
     }

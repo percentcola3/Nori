@@ -95,11 +95,21 @@ private final class PageStateFixture {
 @main
 struct CleanupPageStateTests {
     static func main() {
+        let selection = category(["/fixture/first", "/fixture/second"])
+        precondition(selection.selectingPath(at: 1) == selection.selectingPaths(["/fixture/second"]),
+                     "Indexed selection changed the captured category or selected item")
+        precondition(!selection.selectingPath(at: -1).selected && !selection.selectingPath(at: 2).selected,
+                     "Indexed selection accepted a path outside the captured inventory")
+        var protectedSelection = selection
+        protectedSelection.risk = .protected
+        precondition(!protectedSelection.selectingPath(at: 0).selected,
+                     "Indexed selection bypassed protected-category restrictions")
         testPartialSuccessAndRetry()
         testCompleteFailure()
         testActualByteAggregation()
         testUnverifiedInventoryRetainsRetry()
         testStartupPermissions()
+        testGarbageTotal()
         print("Cleanup page state: partial success, actual bytes, inline failure, remaining retries and startup permissions passed")
     }
 
@@ -162,6 +172,33 @@ struct CleanupPageStateTests {
                      "A completed plan left a stale retry action")
         page.retryFailedCleanup()
         precondition(page.attempts.count == 1, "A consumed plan dispatched another cleanup")
+    }
+
+    private static func testGarbageTotal() {
+        let page = PageStateFixture()
+        var safe = category(["/fixture/cache", "/fixture/other"])
+        safe.bytes = 102_400 // The getter must use individual measured paths.
+        safe = safe.selectingPaths([])
+        var warning = category(["/fixture/history"])
+        warning.risk = .warning
+        var protected = category(["/fixture/credentials"])
+        protected.risk = .protected
+        var preserved = category(["/fixture/current-installation"])
+        preserved.disposal = .none
+        page.categories = [safe, warning, protected, preserved]
+        precondition(page.totalBytes == 8192,
+                     "Garbage totals include eligible cache paths, independently of selection")
+        let parent = category(["/fixture/cache-root"])
+        let nested = category(["/fixture/cache-root/child"])
+        let neighbor = category(["/fixture/cache-root-neighbor"])
+        page.categories = [nested, parent, neighbor, parent]
+        precondition(page.totalBytes == 8192,
+                     "A selected parent covers its child once; a same-prefix neighbor remains distinct")
+        page.categories = [warning, protected, preserved]
+        precondition(page.totalBytes == 0,
+                     "History, protected resources and retained installations cannot become garbage")
+        page.categories = []
+        precondition(page.totalBytes == 0)
     }
 
     private static func testCompleteFailure() {

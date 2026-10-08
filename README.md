@@ -74,9 +74,12 @@ The workspace also inventories runtimes, Shell, hosts, CLI, and PATH, and lets y
 
 AI tools leave more than caches behind. Nori groups each tool's local data so you can see what can be rebuilt, what contains history, and what needs care:
 
+- **Storage breakdown**: installation bodies are separate from associated data; data is split into garbage and preserved usage. Agent and Software pages share these measurements, count shared paths once, and mark partial results. Selected data shows its own deletion amount.
 - **Rebuildable caches**: old CLI versions, desktop/update/compile caches, selected by default.
-- **Needs review**: sessions, checkpoints, memories, worktrees, VM data, credentials, left unselected with risk notes.
-- **Shared resources**: Skills, MCP registrations, and CLI installations, with separate actions for unlinking vs. deleting files.
+- **Persistent data**: sessions, history, memories, worktrees, VM data and credentials require manual selection with risk notes. Other review items follow their displayed recommendations.
+- **Shared resources**: Skills and MCP registrations distinguish unlinking from deleting shared files.
+
+Uninstall a selected CLI or desktop installation directly on the Agent page. Its identified Agent data is offered separately after successful removal; running consumers require confirmation before closing. Leftovers from uninstalled Agents remain visible and unselected.
 
 Supports Claude Code, Cursor, Codex, GitHub Copilot CLI, Gemini CLI, OpenCode, Grok CLI, Devin, Windsurf, Zed, Warp, and more.
 
@@ -141,7 +144,7 @@ Create rules for any folder:
 
 Requires **macOS 13 Ventura or later**. Native Liquid Glass requires macOS 26 or later.
 
-1. Open [GitHub Releases](https://github.com/percentcola3/sweep/releases/latest).
+1. Open [GitHub Releases](https://github.com/percentcola3/Nori/releases/latest).
 2. Download `Nori-arm64.dmg` for Apple silicon or `Nori-x86_64.dmg` for Intel.
 3. Drag `Nori.app` into `/Applications`, replacing an older version after quitting it.
 4. Open Nori and grant **Full Disk Access** for scanning/cleanup. **Screen Recording** is requested separately for screenshots.
@@ -163,7 +166,7 @@ bash script/build_and_run.sh
 
 Run `bash script/test.sh` for the regression suite. Architecture, build options, safety policies, and maintenance notes are in the [development guide](docs/development.md).
 
-Bug reports and focused contributions are welcome through [Issues](https://github.com/percentcola3/sweep/issues) and pull requests.
+Bug reports and focused contributions are welcome through [Issues](https://github.com/percentcola3/Nori/issues) and pull requests.
 
 ## License and acknowledgments
 

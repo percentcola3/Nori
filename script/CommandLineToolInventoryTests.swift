@@ -343,12 +343,16 @@ struct CommandLineToolInventoryTests {
         let stubbornChildPID = DeveloperCLIService.shellQuote(home.path + "/runner/stubborn-child.pid")
         try write("home/runner/stubborn", "#!/bin/sh\ntrap '' TERM\n" + sleeperCommand
             + " 10 &\nprintf '%s' \"$!\" > " + stubbornChildPID
-            + "\nprintf '%s' \"$$\" > " + stubbornPID + "\nprintf 'before-timeout'\nwhile :; do :; done\n", executable: true)
+            + "\nprintf '%s' \"$$\" > " + stubbornPID + "\nprintf 'before-timeout'\nwait \"$!\"\n", executable: true)
         let stubbornStarted = ProcessInfo.processInfo.systemUptime
         let stubborn = runFixture("stubborn")
-        expect(fm.fileExists(atPath: home.path + "/runner/stubborn-child.pid")
-               && fm.fileExists(atPath: home.path + "/runner/stubborn.pid") && stubborn.output == "before-timeout",
-               "The stubborn fixture must reach its ready state before testing timeout and child ownership")
+        let childReady = fm.fileExists(atPath: home.path + "/runner/stubborn-child.pid")
+        let parentReady = fm.fileExists(atPath: home.path + "/runner/stubborn.pid")
+        expect(childReady && parentReady && stubborn.output == "before-timeout",
+               "The stubborn fixture must reach its ready state before testing timeout and child ownership: "
+                + "childReady=\(childReady), parentReady=\(parentReady), succeeded=\(stubborn.succeeded), "
+                + "elapsed=\(ProcessInfo.processInfo.systemUptime - stubbornStarted), "
+                + "output=\(String(stubborn.output.prefix(128)).debugDescription)")
         let stubbornChild = try childPID("stubborn-child.pid")
         let parentPIDText = try String(contentsOfFile: home.path + "/runner/stubborn.pid", encoding: .utf8)
         let parentPID = Int32(parentPIDText)!

@@ -24,5 +24,6 @@ assert template.count('// PRODUCTION_SCHEDULER') == 1
 PY
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -module-cache-path "$WORK/cache" "$WORK/tests.swift" \
+    "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" -o "$WORK/tests"
 "$WORK/tests"

@@ -1,7 +1,9 @@
 import Darwin
 import Foundation
+import os
 
 enum AdministratorCleanupService {
+    private static let logger = Logger(subsystem: "com.nori.app", category: "cleanup")
     static func apply(items: [DeletionPlan.Item],
                       onProgress: ((Int, Int, String) -> Void)? = nil) async -> CleanupExecutionResult {
         guard !items.isEmpty else { return .init() }
@@ -43,8 +45,11 @@ enum AdministratorCleanupService {
             }
         }
         defer { progressTask.cancel() }
+        let privilegedStarted = ProcessInfo.processInfo.systemUptime
         let result = await MoleEngine.shared.runPrivilegedBridge(
             "bin/app_cleanup_admin.sh", arguments: [String(getuid()), manifest.path], timeout: 900)
+        let privilegedSeconds = ProcessInfo.processInfo.systemUptime - privilegedStarted
+        logger.notice("Administrator authorization and worker finished in \(privilegedSeconds, privacy: .public)s; targets=\(items.count, privacy: .public)")
         let reports = result.output.components(separatedBy: .newlines).filter {
             $0.hasPrefix(AdministratorCleanupPlan.reportPrefix)
         }
@@ -54,13 +59,13 @@ enum AdministratorCleanupService {
               report.removed >= 0, report.skipped >= 0, report.failed >= 0 else {
             return .init(failed: items.count, messages: [result.diagnosticOutput], executionFailed: true)
         }
-        let roots = items.map(\.record)
+        let roots = Set(items.map(\.record))
         let confirmedPaths = Set(report.removedPaths)
         guard (report.removed > 0 || report.skipped > 0 || report.failed > 0),
               confirmedPaths.allSatisfy({ path in
                   DeletionPlan.isLexicallySafePath(path)
                       && CleanupRiskPolicy.normalizedPathLiteral(path) == path
-                      && roots.contains { path == $0 || path.hasPrefix($0 + "/") }
+                      && DeletionPlan.isPathCovered(path, by: roots)
               }), confirmedPaths.count <= report.removed,
               report.removed == 0 || !confirmedPaths.isEmpty else {
             return .init(failed: items.count, messages: ["Invalid administrator cleanup report."],

@@ -27,9 +27,103 @@ struct AdministratorCleanupTests {
         if !condition() { throw NSError(domain: message, code: 1) }
     }
 
+    static func testLiteralPathCoverage() throws {
+        let literals = ["", "/", "/cache", "/cache/", "/cache//", "/cache-other", "relative", "relative/",
+                        "/缓存", "/café", "/cafe\u{301}", "/cache/\u{301}"]
+        let paths = ["", "/", "//", "/cache", "/cache/", "/cache//", "/cache///leaf", "/cache/leaf",
+                     "/cache-other", "/cache-other/leaf", "/cache/../leaf", "/cache/./leaf", "relative", "relative/leaf",
+                     "relative//leaf", "/缓存/文件", "/café/leaf", "/cafe\u{301}/leaf", "/cache/\u{301}entry", "/cache//\u{301}entry"]
+        let rootSets: [Set<String>] = literals.map { Set([$0]) } + [Set(literals), []]
+        for roots in rootSets {
+            for path in paths {
+                let original = roots.contains { path == $0 || path.hasPrefix($0 + "/") }
+                try expect(DeletionPlan.isPathCovered(path, by: roots) == original,
+                           "Literal path index broadened authorization for \(path)")
+            }
+        }
+        try expect(!DeletionPlan.isPathCovered("/cache/\u{301}entry", by: ["/cache"]),
+                   "A combining mark on the separator widened String.hasPrefix coverage")
+    }
+
+    static func testProgress(at file: URL) throws {
+        let descriptor = open(file.path, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        try expect(descriptor >= 0, "Cannot create owned progress fixture")
+        defer { close(descriptor) }
+        var writes: [AdministratorCleanupPlan.Progress] = []
+        var tick: TimeInterval = 0
+        var activeWriters = 0
+        var invalidWrite = false
+        var concurrentWrite = false
+        let sink = AdministratorCleanupPlan.ProgressSink(clock: {
+            tick += 0.121
+            return tick
+        }, write: { data in
+            activeWriters += 1
+            concurrentWrite = concurrentWrite || activeWriters != 1
+            defer { activeWriters -= 1 }
+            guard AdministratorCleanupPlan.writeProgress(data, to: descriptor),
+                  let persisted = try? Data(contentsOf: file),
+                  let progress = try? JSONDecoder().decode(AdministratorCleanupPlan.Progress.self, from: persisted) else {
+                invalidWrite = true
+                return false
+            }
+            writes.append(progress)
+            return true
+        })
+        var callbacks = 0
+        let relay = AdministratorCleanupPlan.ProgressRelay { completed, total, path in
+            callbacks += 1
+            sink.submit(.init(completed: completed, total: total, path: path))
+        }
+        let roots = 256
+        relay.report(completed: 0, total: roots, path: "")
+        DispatchQueue.concurrentPerform(iterations: roots) { index in
+            relay.report(completed: index + 1, total: roots, path: "root-\(index)")
+            relay.currentFile("root-\(index)/child.cache")
+        }
+        relay.finish()
+        sink.finish()
+        try expect(!concurrentWrite && !invalidWrite && callbacks == roots * 2 + 2
+                   && writes.count == callbacks + 1,
+                   "Concurrent progress callbacks overlapped or corrupted the shared JSON descriptor")
+        try expect(zip(writes, writes.dropFirst()).allSatisfy { $0.completed <= $1.completed }
+                   && writes.allSatisfy { $0.total == roots }
+                   && writes.last?.completed == roots,
+                   "Concurrent cleanup progress moved backwards or lost its final completion")
+
+        var now: TimeInterval = 0
+        var throttled: [AdministratorCleanupPlan.Progress] = []
+        let timed = AdministratorCleanupPlan.ProgressSink(clock: { now }, write: { data in
+            guard let progress = try? JSONDecoder().decode(AdministratorCleanupPlan.Progress.self, from: data) else { return false }
+            throttled.append(progress)
+            return true
+        })
+        timed.submit(.init(completed: 0, total: 100, path: "first"))
+        now = 0.119
+        timed.submit(.init(completed: 1, total: 100, path: "withheld"))
+        try expect(throttled.count == 1, "Progress writes exceeded the 120ms limit")
+        now = 0.120
+        timed.submit(.init(completed: 2, total: 100, path: "second"))
+        try expect(throttled.count == 2, "Progress was not emitted at the 120ms boundary")
+        now = 0.121
+        for index in 0..<100 {
+            timed.submit(.init(completed: 100, total: 100, path: "final-child-\(index)"))
+        }
+        try expect(throttled.count == 2, "Current-file notifications bypassed throttling at 100 percent")
+        timed.finish()
+        try expect(throttled.count == 3 && throttled.last?.completed == 100
+                   && throttled.last?.path == "final-child-99",
+                   "A final completion was lost inside the throttle window")
+        timed.finish()
+        timed.submit(.init(completed: 1, total: 100, path: "stale"))
+        try expect(throttled.count == 3, "Late callbacks replaced completed progress")
+    }
+
     static func main() async throws {
         let manager = FileManager.default
         let home = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
+        try testLiteralPathCoverage()
+        try testProgress(at: home.appendingPathComponent("worker-progress-fixture.json"))
         let caches = home.appendingPathComponent("Library/Caches/test-admin", isDirectory: true)
         try manager.createDirectory(at: caches, withIntermediateDirectories: true)
         let file = caches.appendingPathComponent("generated.cache")
@@ -70,6 +164,17 @@ struct AdministratorCleanupTests {
                    "Elevation allowed non-garbage or protected model data")
         try expect(manager.fileExists(atPath: document.path) && manager.fileExists(atPath: model.path),
                    "Protected content changed")
+        var emptyProbeCount = 0
+        let noCandidatesCore = NativeCore(cleanupOpenFileProbe: { emptyProbeCount += 1; return [] })
+        var emptyProgress: [AdministratorCleanupPlan.Progress] = []
+        let staleModel = AdministratorCleanupPlan.Record(path: model.path, identity: "0:0:0")
+        let noCandidates = AdministratorCleanupPlan.execute([record(document), staleModel],
+            homeDirectory: home.path, core: noCandidatesCore,
+            onProgress: { emptyProgress.append(.init(completed: $0, total: $1, path: $2)) })
+        try expect(emptyProbeCount == 0 && noCandidates.skipped == 2 && noCandidates.removed == 0
+                   && Set(noCandidates.remainingPaths) == [document.path, model.path]
+                   && emptyProgress.last?.completed == 0 && emptyProgress.last?.total == 0,
+                   "An empty administrator plan made an unnecessary occupancy probe or lost refusals")
 
         let occupied = caches.appendingPathComponent("open.cache")
         try write(occupied)
@@ -123,9 +228,15 @@ struct AdministratorCleanupTests {
             return probeCount == 1 ? [] : [busyLeaf.path]
         })
         observedPaths = []
+        var preflightProgress: [AdministratorCleanupPlan.Progress] = []
         let firstPass = AdministratorCleanupPlan.execute([retryRecord], homeDirectory: home.path,
-            core: transitioningCore, onProgress: { _, _, path in observedPaths.append(path) })
+            core: transitioningCore, onProgress: { completed, total, path in
+                observedPaths.append(path)
+                if probeCount == 1 { preflightProgress.append(.init(completed: completed, total: total, path: path)) }
+            })
         try expect(observedPaths.contains(firstLeaf.path), "Nested administrator files were hidden behind their root")
+        try expect(preflightProgress.contains { $0.path == firstLeaf.path && $0.completed == 0 && $0.total == 1 },
+                   "Administrator preflight did not report its actual nested file before deletion")
         try expect(firstPass.removed == 1 && firstPass.skipped > 0
                    && !manager.fileExists(atPath: firstLeaf.path)
                    && manager.fileExists(atPath: busyLeaf.path)

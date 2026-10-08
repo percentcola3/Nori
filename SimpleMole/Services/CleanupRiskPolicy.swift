@@ -1160,6 +1160,7 @@ enum CleanupRiskPolicy {
             $0.selectedPathCount > 0 && !usesFileActivityGuard($0)
                 && (currentRisk($0) == .safe || (currentRisk($0) == .warning && $0.activityGuard == .aiAgent))
         }
+        guard !categories.isEmpty else { return [] }
         let processes = snapshot.processNames.filter { owner in
             let single = RunningApplicationSnapshot(processNames: [owner])
             return categories.contains {

@@ -55,8 +55,24 @@ struct UninstallWorkflow: UninstallExecuting {
         // Cached inventory is for presentation. Rebuild the plan for the
         // captured app identity after shutdown, immediately before removal.
         progress(.planning)
-        guard let plan = await dependencies.plan(app), !plan.files.isEmpty,
-              plan.includesProtectedAppData else { return .planUnavailable }
+        guard let freshPlan = await dependencies.plan(app), !freshPlan.files.isEmpty,
+              freshPlan.includesProtectedAppData else { return .planUnavailable }
+        let plan: UninstallPlan
+        switch job.scope {
+        case .applicationAndResidues:
+            plan = freshPlan
+        case .installationOnly:
+            // Empty dataPaths retain optional data, but ordinary cache/log
+            // residues are still automatic. Scope this request to the exact
+            // captured bundle before calling any native/package remover.
+            let bodies = freshPlan.files.filter { $0.path == app.path && $0.label == "app" && !$0.informational }
+            guard bodies.count == 1, freshPlan.fileIdentities[app.path] == app.appIdentity else {
+                return .planUnavailable
+            }
+            plan = UninstallPlan(files: bodies, fileIdentities: [app.path: app.appIdentity],
+                needsAdmin: freshPlan.needsAdmin, isBrewCask: freshPlan.isBrewCask, caskToken: freshPlan.caskToken,
+                includesProtectedAppData: freshPlan.includesProtectedAppData, scannedAt: freshPlan.scannedAt)
+        }
         guard await dependencies.stop(app) else { return .processesCouldNotStop }
         progress(.removing)
 

@@ -8,10 +8,89 @@ enum AdministratorCleanupPlan {
     static let reportPrefix = "NORI_CLEANUP_ADMIN\t"
     static let maximumPlanBytes = 16 * 1024 * 1024
 
-    struct Progress: Codable, Equatable {
+    struct Progress: Codable, Equatable, Sendable {
         let completed: Int
         let total: Int
         let path: String
+    }
+
+    /// Native cleanup reports roots and individual files from parallel workers.
+    /// Keep their shared counter and the caller's callback under one lock.
+    final class ProgressRelay: @unchecked Sendable {
+        private let lock = NSLock()
+        private let callback: ((Int, Int, String) -> Void)?
+        private var latest = Progress(completed: 0, total: 0, path: "")
+
+        init(onProgress: ((Int, Int, String) -> Void)?) { callback = onProgress }
+
+        func report(completed: Int, total: Int, path: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            let done = max(latest.completed, completed)
+            latest = Progress(completed: done, total: max(total, done), path: path)
+            callback?(latest.completed, latest.total, latest.path)
+        }
+
+        func currentFile(_ path: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            latest = Progress(completed: latest.completed, total: latest.total, path: path)
+            callback?(latest.completed, latest.total, latest.path)
+        }
+
+        func finish() {
+            lock.lock()
+            defer { lock.unlock() }
+            latest = Progress(completed: latest.total, total: latest.total, path: latest.path)
+            callback?(latest.completed, latest.total, latest.path)
+        }
+    }
+
+    /// Serialization, throttling and the complete descriptor write are one
+    /// operation. File notifications never bypass the limit at 100%; finish()
+    /// explicitly flushes the final state once after all workers return.
+    final class ProgressSink: @unchecked Sendable {
+        private let lock = NSLock()
+        private let clock: () -> TimeInterval
+        private let write: (Data) -> Bool
+        private let interval: TimeInterval
+        private var lastAttempt: TimeInterval?
+        private var latest = Progress(completed: 0, total: 0, path: "")
+        private var finished = false
+
+        init(interval: TimeInterval = 0.12,
+             clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+             write: @escaping (Data) -> Bool) {
+            self.interval = interval
+            self.clock = clock
+            self.write = write
+        }
+
+        func submit(_ progress: Progress) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !finished else { return }
+            let done = max(latest.completed, progress.completed)
+            latest = Progress(completed: done, total: max(progress.total, done), path: progress.path)
+            let now = clock()
+            guard lastAttempt.map({ now - $0 >= interval }) ?? true else { return }
+            lastAttempt = now
+            emitLocked()
+        }
+
+        func finish() {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !finished else { return }
+            finished = true
+            latest = Progress(completed: latest.total, total: latest.total, path: latest.path)
+            emitLocked()
+        }
+
+        private func emitLocked() {
+            guard let data = try? JSONEncoder().encode(latest), data.count <= 16_384 else { return }
+            _ = write(data)
+        }
     }
 
     struct Record: Codable {
@@ -65,20 +144,16 @@ enum AdministratorCleanupPlan {
             && progressMetadata.st_mode & S_IFMT == S_IFREG && progressMetadata.st_uid == uid
             && progressMetadata.st_nlink == 1 && progressMetadata.st_mode & 0o077 == 0
         defer { if progressDescriptor >= 0 { close(progressDescriptor) } }
-        var lastProgress = Date.distantPast
+        let progress = ProgressSink { data in
+            guard validProgress else { return false }
+            // Reuse the validated descriptor; never follow a replaced path as root.
+            return writeProgress(data, to: progressDescriptor)
+        }
         let summary = execute(request.records, homeDirectory: home, core: core,
             onProgress: { completed, total, path in
-                let now = Date()
-                guard completed >= total || now.timeIntervalSince(lastProgress) >= 0.12 else { return }
-                lastProgress = now
-                guard validProgress, let data = try? JSONEncoder().encode(
-                    Progress(completed: completed, total: total, path: path)), data.count <= 16_384 else { return }
-                // Reuse the validated descriptor; never follow a replaced path as root.
-                guard ftruncate(progressDescriptor, 0) == 0, lseek(progressDescriptor, 0, SEEK_SET) == 0 else { return }
-                data.withUnsafeBytes { bytes in
-                    if let address = bytes.baseAddress { _ = write(progressDescriptor, address, bytes.count) }
-                }
+                progress.submit(Progress(completed: completed, total: total, path: path))
             })
+        progress.finish()
         guard let report = try? JSONEncoder().encode(Report(summary)),
               let text = String(data: report, encoding: .utf8) else { return 70 }
         print(reportPrefix + text)
@@ -91,6 +166,8 @@ enum AdministratorCleanupPlan {
                         core: NativeCore,
                         onProgress: ((Int, Int, String) -> Void)? = nil) -> NativeCore.ApplySummary {
         let home = CleanupRiskPolicy.normalizedPathLiteral(homeDirectory)
+        let progress = ProgressRelay(onProgress: onProgress)
+        progress.report(completed: 0, total: records.count, path: "")
         var candidates: [CleanupCategory] = []
         var refused: [String] = []
         var seen = Set<String>()
@@ -137,9 +214,17 @@ enum AdministratorCleanupPlan {
                 reasonKey: policy.reasonKey))
         }
 
+        guard !candidates.isEmpty else {
+            progress.report(completed: 0, total: 0, path: "")
+            progress.finish()
+            return NativeCore.ApplySummary(removed: 0, skipped: refused.count, failed: 0,
+                messages: refused, remainingPaths: records.map(\.path))
+        }
+
+        progress.report(completed: 0, total: candidates.count, path: candidates.first?.paths.first ?? "")
         let checked = core.preflightCleanupCategories(candidates,
             homeDirectory: home, control: CleanupScanControl(mode: .deep),
-            includingAdministratorRequired: true)
+            includingAdministratorRequired: true, onVisit: { progress.currentFile($0) })
         let eligible = Set(checked.categories.flatMap(\.paths))
         let originalByPath = Dictionary(records.map { ($0.path, $0) },
                                         uniquingKeysWith: { first, _ in first })
@@ -153,7 +238,8 @@ enum AdministratorCleanupPlan {
             }
             return .init(record: path, identity: record.identity, metadata: record.metadata)
         }
-        var completed = 0
+        let total = DeletionPlan.nonOverlappingPaths(items.map(\.record)).count
+        progress.report(completed: 0, total: total, path: items.first?.record ?? "")
         let applied = items.isEmpty
             ? NativeCore.ApplySummary(removed: 0, skipped: 0, failed: 0, messages: [])
             : core.applyCleanup(items: items, permanent: true, homeDirectory: home,
@@ -161,18 +247,35 @@ enum AdministratorCleanupPlan {
                     CleanupRiskPolicy.core(section: "Cache", path: $0,
                                            homeDirectory: home).risk == .safe
                 }), onProgress: { done, total, path in
-                    completed = done
-                    onProgress?(done, total, path)
+                    progress.report(completed: done, total: total, path: path)
                 }, onCurrentFile: { path in
-                    onProgress?(completed, items.count, path)
+                    progress.currentFile(path)
                 })
+        progress.finish()
         return NativeCore.ApplySummary(
             removed: applied.removed, skipped: applied.skipped + refused.count,
             failed: applied.failed, messages: refused + applied.messages,
             removedPaths: applied.removedPaths,
             remainingPaths: records.map(\.path).filter { path in
-                !applied.removedPaths.contains { path == $0 || path.hasPrefix($0 + "/") }
+                !DeletionPlan.isPathCovered(path, by: applied.removedPaths)
             }, reclaimedBytes: applied.reclaimedBytes)
+    }
+
+    /// The caller validates ownership and file mode before retaining this FD.
+    /// Its sink serializes truncate/seek/all write retries as one operation.
+    static func writeProgress(_ data: Data, to descriptor: Int32) -> Bool {
+        guard ftruncate(descriptor, 0) == 0, lseek(descriptor, 0, SEEK_SET) == 0 else { return false }
+        return data.withUnsafeBytes { bytes in
+            guard let address = bytes.baseAddress else { return data.isEmpty }
+            var offset = 0
+            while offset < bytes.count {
+                let count = write(descriptor, address.advanced(by: offset), bytes.count - offset)
+                if count < 0 { if errno == EINTR { continue }; return false }
+                guard count > 0 else { return false }
+                offset += count
+            }
+            return true
+        }
     }
 
     static func readPrivatePlan(_ path: String, owner: uid_t) -> Data? {

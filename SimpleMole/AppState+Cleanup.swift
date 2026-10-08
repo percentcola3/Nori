@@ -527,6 +527,7 @@ extension AppState {
         statusText = l10n.tf("status.processing", requestedCount)
         Task {
             let originalRequest = retryScope ?? requested
+            let reviewStarted = Date()
             let snapshot = await captureRunningApplicationSnapshot()
             let blocked = await Task.detached(priority: .utility) {
                 var waiting: [CleanupCategory] = []
@@ -534,9 +535,12 @@ extension AppState {
                 var owners = Set<String>()
                 for category in requested {
                     var blockedPaths = Set<String>()
-                    if case .manual = mode, snapshot.isComplete {
-                        for path in category.paths {
-                            let subset = category.selectingPaths([path])
+                    if case .manual = mode, snapshot.isComplete,
+                       !CleanupRiskPolicy.usesFileActivityGuard(category) {
+                        for (index, path) in category.paths.enumerated() {
+                            // The path is already part of this captured category.
+                            // Avoid intersecting the full inventory for each item.
+                            let subset = category.selectingPath(at: index)
                             let matched = CleanupRiskPolicy.blockingOwners([subset], running: snapshot)
                             if !matched.isEmpty { blockedPaths.insert(path); owners.formUnion(matched) }
                         }
@@ -600,6 +604,8 @@ extension AppState {
                 return (eligible, protectedReasons, refusals)
             }.value
             let eligible = prepared.0
+            log(String(format: "cleanup runtime review %.2fs; paths=%d",
+                       Date().timeIntervalSince(reviewStarted), requestedCount))
             for index in categories.indices {
                 if let reason = prepared.1[categories[index].id] {
                     categories[index].risk = .protected
@@ -636,6 +642,7 @@ extension AppState {
 
             // Partition the final, freshly validated plan before any destructive work.
             // Route executors never elevate independently, even if permissions change later.
+            let administratorPreparationStarted = Date()
             let administratorItems = await Task.detached(priority: .utility) {
                 guard applyFamily == .clean else { return [DeletionPlan.Item]() }
                 if case .automatic = mode { return [DeletionPlan.Item]() }
@@ -650,6 +657,8 @@ extension AppState {
                     }
                 }
             }.value
+            log(String(format: "cleanup administrator preparation %.2fs; paths=%d",
+                       Date().timeIntervalSince(administratorPreparationStarted), administratorItems.count))
             var includeAdministrator = false
             if !administratorItems.isEmpty {
                 guard let decision = await confirmAdministratorCleanup(administratorItems) else {
@@ -694,9 +703,12 @@ extension AppState {
 
             // One verified elevation for all routes; a cancellation is never retried automatically.
             if includeAdministrator {
+                let administratorStarted = Date()
                 let administrator = await AdministratorCleanupService.apply(items: administratorItems,
                     onProgress: cleanupProgressCallback(generation: generation, offset: completed,
                         weight: administratorItems.count, total: total, categories: eligible))
+                log(String(format: "cleanup administrator completed %.2fs; paths=%d",
+                           Date().timeIntervalSince(administratorStarted), administratorItems.count))
                 executionResult.merge(administrator)
                 completed += administratorItems.count
             }

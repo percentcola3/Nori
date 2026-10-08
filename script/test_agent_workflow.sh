@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Exercise the production Agent AppState lifecycle with in-memory services.
-# No Agent scanner, CLI uninstaller, or filesystem cleanup is linked here.
+# No real scanner, application inventory, process closer or remover is linked.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKFLOW_TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-agent-workflow.XXXXXX")"
 trap 'rm -rf "$WORKFLOW_TEST_DIR"' EXIT
 source "$ROOT_DIR/script/test_developer_toolchain.sh"
 # Freeze the explicit inputs so concurrent edits cannot invalidate a long Swift
-# compile. The linked Agent workflow and feedback queue remain production code.
+# compile. The linked Agent selection/retry lifecycle and feedback queue remain
+# production code; program-removal actions have separate isolated tests.
 mkdir "$WORKFLOW_TEST_DIR/sources"
 WORKFLOW_SOURCES=(
     "$ROOT_DIR/SimpleMole/Models.swift"

@@ -83,6 +83,57 @@ struct AgentScanReport {
     var complete = true
 }
 
+// New read-only presentation dependencies have their own production service
+// tests. This legacy lifecycle fixture injects their results without linking
+// application enumeration or storage inspection against the user's computer.
+struct AgentStorageFootprint: Equatable, Sendable {
+    struct Totals {
+        let identifiedDataBytes: UInt64
+        let reclaimableBytes: UInt64
+        let preservedBytes: UInt64
+    }
+
+    static func build(report: AgentScanReport, cli: [AgentCLIInstallation]) -> [String: Self] { [:] }
+    static func totals(_ footprints: [Self]) -> Totals {
+        .init(identifiedDataBytes: 0, reclaimableBytes: 0, preservedBytes: 0)
+    }
+}
+struct AgentInstallationSize: Sendable {
+    let bytes: UInt64
+    let complete: Bool
+}
+
+enum AgentSoftwareInventory {
+    static func applications(home: String) -> [String: [UninstallApp]] {
+        precondition(home == workflowHome, "Workflow test attempted to enumerate real applications")
+        return [:]
+    }
+}
+
+enum SoftwareUpdateProcesses {
+    struct Scope: Sendable { var roots: [String] = [] }
+    struct Process: Sendable { let name: String }
+    struct Probe: Sendable {
+        let processes: [Process]
+        let isComplete: Bool
+    }
+    static func probe(_ scope: Scope) -> Probe {
+        WorkflowFixture.current.nextDataProbe()
+    }
+    @MainActor static func close(_ scope: Scope, stillCurrent: () -> Bool) async -> Bool {
+        preconditionFailure("The legacy Agent fixture must not close real processes")
+    }
+}
+
+@MainActor
+enum AgentDataProcessScope {
+    static func make(agentIDs: Set<String>, cli: [AgentCLIInstallation], home: String)
+        -> SoftwareUpdateProcesses.Scope {
+        precondition(home == workflowHome, "Workflow test attempted to inspect a real process scope")
+        return .init()
+    }
+}
+
 /// A deterministic pause at an asynchronous service boundary. Waiting never
 /// blocks the main actor and times out if the tested workflow fails to proceed.
 final class WorkflowGate {
@@ -123,6 +174,7 @@ final class WorkflowFixture {
     private var scanRequests = 0
     private var runtime = RunningApplicationSnapshot()
     private var runtimeQueue: [RunningApplicationSnapshot] = []
+    private var dataProbeQueue: [SoftwareUpdateProcesses.Probe] = []
     private var receivedCategories: [CleanupCategory] = []
     private var receivedSkills: [AgentSkill] = []
     private var receivedServers: [AgentMCPServer] = []
@@ -160,6 +212,13 @@ final class WorkflowFixture {
     func nextSnapshot() -> RunningApplicationSnapshot {
         lock.lock(); defer { lock.unlock() }
         return runtimeQueue.isEmpty ? runtime : runtimeQueue.removeFirst()
+    }
+    func setDataProbes(_ probes: [SoftwareUpdateProcesses.Probe]) {
+        lock.lock(); dataProbeQueue = probes; lock.unlock()
+    }
+    func nextDataProbe() -> SoftwareUpdateProcesses.Probe {
+        lock.lock(); defer { lock.unlock() }
+        return dataProbeQueue.isEmpty ? .init(processes: [], isComplete: true) : dataProbeQueue.removeFirst()
     }
     var cleanupCount: Int { lock.lock(); defer { lock.unlock() }; return cleanupRequests }
     var uninstallCount: Int { lock.lock(); defer { lock.unlock() }; return uninstallRequests }
@@ -261,7 +320,8 @@ enum AgentCLIService {
 enum AgentInventory {
     static func scan(home: String, control: CleanupScanControl, localize: (String) -> String,
                      includingAgentIDs: Set<String> = [],
-                     excludingGlobalCleanupCaches: Bool = false) -> AgentScanReport {
+                     excludingGlobalCleanupCaches: Bool = false,
+                     onlyAgentIDs: Set<String>? = nil) -> AgentScanReport {
         precondition(home == workflowHome, "Workflow test attempted to scan a real home")
         let fixture = WorkflowFixture.current
         fixture.recordScan(includingAgentIDs)
@@ -297,12 +357,26 @@ struct WorkflowUninstallQueue {
 
 @MainActor
 final class AppState {
+    struct Confirmation: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+        let confirmLabel: String
+        let onConfirm: () -> Void
+    }
+
     var agentCategories: [CleanupCategory] = []
     var agentGroups: [AgentGroupSummary] = []
     var agentSkills: [AgentSkill] = []
     var agentServers: [AgentMCPServer] = []
     var agentMCPInstallations: [AgentMCPInstallation] = []
     var agentCLIInstallations: [AgentCLIInstallation] = []
+    var agentStorageFootprints: [String: AgentStorageFootprint] = [:]
+    var agentCLIBodySizes: [String: AgentInstallationSize] = [:]
+    var agentApplications: [String: [UninstallApp]] = [:]
+    var agentProgramBusyID: String?
+    var confirmation: Confirmation?
+    let l10n = L10n.shared
     var agentSelectedSkills = Set<String>()
     var agentSelectedServers = Set<String>()
     var agentSelectedMCPInstallations = Set<String>()
@@ -339,9 +413,16 @@ final class AppState {
     private var isDispatchingConfirmation = false
     var taskNotice: TaskFeedbackNotice?
     private var taskFeedbackQueue = TaskFeedbackQueue()
-    var isBusyExcludingUninstall: Bool { agentScanning || agentApplying }
+    var isBusyExcludingUninstall: Bool { agentScanning || agentApplying || agentProgramBusyID != nil }
     var isBusy: Bool { isBusyExcludingUninstall || uninstallQueue.hasWork || cleanupQueued }
     func log(_ message: String) { logs.append(message) }
+    func invalidateAgentStorageFootprints() { agentStorageFootprints = [:] }
+    nonisolated static func measureAgentCLIBodies(_ installations: [AgentCLIInstallation],
+                                                 control: CleanupScanControl) -> [String: AgentInstallationSize] {
+        // Installed-body sizing is a separately tested read-only service. Keep
+        // this fixture's lifecycle inputs deterministic without any disk walk.
+        installations.reduce(into: [:]) { $0[$1.id] = .init(bytes: 0, complete: true) }
+    }
     func noteHeaderReaction(_ mood: NoriMood?) {}
     func resampleAfterMutation() { resamples += 1 }
     func presentTaskNotice(_ notice: TaskFeedbackNotice) {
@@ -502,7 +583,51 @@ struct AgentWorkflowTests {
         try await CLIResumeAfterLauncherRemoval()
         try await CLIChangedInstallationNeedsRescan()
         try await retryFeedbackUsesCurrentAttempt()
+        try await associatedDataMutationPreflight(kind: "running")
+        try await associatedDataMutationPreflight(kind: "incomplete")
+        try await associatedDataMutationPreflight(kind: "idle")
         print("Agent workflow: inline prerequisites/errors, frozen and proven CLI retries, owner/runtime guards, partial refresh, CLI + data progress, per-attempt reclaimed bytes, success without popups passed")
+    }
+
+    @MainActor private static func associatedDataMutationPreflight(kind: String) async throws {
+        let (state, f) = prepare()
+        state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
+        try await waitUntil { state.confirmation != nil }
+        precondition(f.cleanupCount == 0 && f.uninstallCount == 0 && state.snapshots == 0,
+                     "Previewing associated data cannot remove anything")
+        let accepted = state.confirmation!
+        state.confirmation = nil
+        if kind == "running" {
+            let running = SoftwareUpdateProcesses.Probe(processes: [.init(name: "node")], isComplete: true)
+            f.setDataProbes([running, running])
+        } else if kind == "incomplete" {
+            f.setDataProbes([.init(processes: [], isComplete: false)])
+        } else {
+            // Later discovery cannot substitute new paths or identities for
+            // the data snapshot that the user has already reviewed.
+            f.report.categories = [CleanupCategory(name: "New unreviewed data",
+                paths: [workflowHome + "/new-data"], bytes: 4096, selected: true)]
+        }
+        accepted.onConfirm()
+        if kind == "running" {
+            try await waitUntil { state.confirmation != nil }
+            precondition(state.confirmation?.title == L10n.shared.t("agents.data.running.title")
+                         && f.cleanupCount == 0 && f.uninstallCount == 0 && state.snapshots == 0,
+                         "A newly started interpreter-hosted CLI requires close consent before any data cleanup")
+            state.confirmation = nil
+        } else if kind == "incomplete" {
+            try await waitUntil { state.taskNotice != nil }
+            precondition(f.cleanupCount == 0 && f.uninstallCount == 0 && state.snapshots == 0,
+                         "Incomplete fresh process evidence cannot authorize data cleanup")
+        } else {
+            try await waitUntil { f.cleanupGate.started }
+            precondition(!f.submittedPaths.contains(workflowHome + "/new-data")
+                         && f.submittedPaths.contains(workflowHome + "/cache")
+                         && f.submittedSkillIdentities == ["fixture-identity"],
+                         "A fresh idle process probe preserves the confirmed data envelope")
+            f.cleanupGate.release()
+            try await waitUntil { !state.agentApplying }
+        }
     }
 
     @MainActor private static func scanKeepsInventoryRecommendations(complete: Bool) async throws {

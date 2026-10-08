@@ -72,9 +72,12 @@ Nori 不仅扫普通应用缓存，还会识别系统数据、开发构建产物
 
 AI 工具留下的不只是缓存。Nori 按工具把本地数据分组，让你看清哪些可以重建、哪些包含历史、哪些需要谨慎处理：
 
+- **容量拆分**：安装本体与关联数据分开显示，数据再分为垃圾和保留占用。Agent 页与软件页共用计量，共享路径只计算一次，部分结果明确标记；勾选数据另行显示本次删除容量。
 - **可重建缓存**：旧 CLI 版本、桌面/更新/编译缓存，默认勾选。
-- **需要审查**：会话、检查点、记忆、worktree、VM 数据、凭据，默认不勾选并带有风险说明。
-- **共享资源**：Skills、MCP 登记、CLI 安装，区分“解除关联”和“删除文件”。
+- **持久数据**：会话、历史、记忆、worktree、VM 数据和凭据需手动勾选，并带有风险说明；其他审查项按页面显示的建议处理。
+- **共享资源**：Skills、MCP 登记区分“解除关联”和“删除共享文件”。
+
+可在 Agent 页直接卸载所选 CLI 或桌面安装。卸载成功后另行确认已识别 Agent 数据清理；数据仍被使用时，先确认是否关闭相关程序。已卸载 Agent 的残留继续显示，默认不勾选。
 
 支持 Claude Code、Cursor、Codex、GitHub Copilot CLI、Gemini CLI、OpenCode、Grok CLI、Devin、Windsurf、Zed、Warp 等。
 
@@ -139,7 +142,7 @@ AI 工具留下的不只是缓存。Nori 按工具把本地数据分组，让你
 
 需要 **macOS 13 Ventura 或更高版本**。原生液态玻璃需要 macOS 26 或更高版本。
 
-1. 打开 [GitHub Releases](https://github.com/percentcola3/sweep/releases/latest)。
+1. 打开 [GitHub Releases](https://github.com/percentcola3/Nori/releases/latest)。
 2. Apple 芯片下载 `Nori-arm64.dmg`，Intel 下载 `Nori-x86_64.dmg`。
 3. 将 `Nori.app` 拖入 `/Applications`；更新前先退出旧 Nori，再覆盖安装。
 4. 打开 Nori，通过权限中心授予清理与扫描所需的**完全磁盘访问**。截图使用独立的**屏幕录制**权限。
@@ -161,7 +164,7 @@ bash script/build_and_run.sh
 
 运行 `bash script/test.sh` 执行回归检查。架构、构建选项、安全策略及维护说明见 [开发文档](docs/development.md)。
 
-欢迎通过 [Issues](https://github.com/percentcola3/sweep/issues) 和 Pull Request 提交问题与改进。
+欢迎通过 [Issues](https://github.com/percentcola3/Nori/issues) 和 Pull Request 提交问题与改进。
 
 ## 许可证与致谢
 

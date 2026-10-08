@@ -48,6 +48,9 @@ struct UninstallTabView: View {
                 isListPresented = false
                 return
             }
+            state.ensureAgentStorageFootprints(for: Set(state.installedApps.flatMap {
+                AgentSoftwareInventory.agentIDs(for: $0)
+            }))
             // Commit the tab highlight and a lightweight placeholder first.
             // Leaving the page cancels this delay, even during its transition.
             do { try await Task.sleep(nanoseconds: 160_000_000) }
@@ -57,6 +60,12 @@ struct UninstallTabView: View {
             if state.installedApps.isEmpty, !state.isRestoringInstalledApps {
                 state.scanInstalledApps(background: true)
             }
+        }
+        .onReceive(state.$installedApps.map { apps in
+            Set(apps.flatMap { AgentSoftwareInventory.agentIDs(for: $0) })
+        }.removeDuplicates()) { ids in
+            guard isActive else { return }
+            state.ensureAgentStorageFootprints(for: ids)
         }
     }
 
@@ -173,6 +182,9 @@ struct UninstallTabView: View {
                             isCheckingUpdate: state.softwareUpdateCheckingIDs.contains(SoftwareUpdateService.appKey(app)),
                             updatingID: state.softwareUpdatingID,
                             externalPending: state.softwareUpdateHandoffIDs.contains(SoftwareUpdateService.appKey(app)),
+                            agentStorage: state.agentDataFootprints(for: app),
+                            isAgentStorageLoading: !AgentSoftwareInventory.agentIDs(for: app)
+                                .isDisjoint(with: state.agentStorageCheckingIDs),
                             dataSelection: Binding(
                                 get: { state.uninstallDataSelections[app.id] ?? [] },
                                 set: { state.uninstallDataSelections[app.id] = $0.isEmpty ? nil : $0 }),
@@ -197,6 +209,8 @@ private struct UninstallAppRow: View {
     let isCheckingUpdate: Bool
     let updatingID: String?
     let externalPending: Bool
+    let agentStorage: [AgentStorageFootprint]
+    let isAgentStorageLoading: Bool
     @Binding var dataSelection: Set<String>
     let onCancel: (UninstallJob) -> Void
     let onUpdate: () -> Void
@@ -206,8 +220,12 @@ private struct UninstallAppRow: View {
     @State private var isExpanded = false
 
     private var space: UninstallSpaceBreakdown? { plan?.space }
+    private var isAgentApp: Bool { !AgentSoftwareInventory.agentIDs(for: app).isEmpty }
     private var totalText: String {
-        space.map { ByteFormat.format($0.footprintBytes) } ?? app.size
+        if isAgentApp {
+            return L10n.shared.tf("agents.program.body", app.size)
+        }
+        return space.map { ByteFormat.format($0.footprintBytes) } ?? app.size
     }
     private var actionTitle: String {
         job?.state == .failed
@@ -224,9 +242,15 @@ private struct UninstallAppRow: View {
                 appIcon
                 appIdentity
                 Spacer(minLength: 12)
-                breakdown
+                if isAgentApp {
+                    AgentStorageSummaryView(storage: AgentStorageFootprint.totals(agentStorage),
+                                            isLoading: isAgentStorageLoading)
+                        .frame(maxWidth: 210)
+                } else {
+                    breakdown
+                }
                 SizeBadge(text: totalText, prominent: plan != nil)
-                    .help(space.map { L10n.shared.tf("uninstall.space.footprint",
+                    .help(isAgentApp ? "" : space.map { L10n.shared.tf("uninstall.space.footprint",
                         ByteFormat.format($0.totalBytes), ByteFormat.format($0.optionalDataBytes)) } ?? "")
                 disclosureButton
                 if update?.state == .available {
@@ -541,7 +565,6 @@ private struct UninstallFileDrawer: View {
 private struct CommandLineToolsSection: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
-    @State private var pendingUninstall: CommandLineTool?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -582,23 +605,11 @@ private struct CommandLineToolsSection: View {
                 }
             }
         }
-        .alert(l10n.tf("cli.uninstall.confirm.title", pendingUninstall?.name ?? ""),
-               isPresented: Binding(get: { pendingUninstall != nil }, set: { if !$0 { pendingUninstall = nil } })) {
-            Button(l10n.t("common.cancel"), role: .cancel) { pendingUninstall = nil }
-            Button(l10n.t("uninstall.action"), role: .destructive) {
-                if let tool = pendingUninstall { state.uninstallCommandLineTool(tool) }
-                pendingUninstall = nil
-            }
-        } message: {
-            Text(pendingUninstall.map { tool in
-                l10n.tf(tool.agentID == nil ? "cli.uninstall.confirm.message" : "cli.uninstall.confirm.agentMessage",
-                        tool.installationSource ?? tool.manager.displayName, tool.path)
-            } ?? "")
-        }
     }
 
     private func toolRow(_ tool: CommandLineTool) -> some View {
         let busy = state.commandLineToolBusyID == tool.id
+            || (tool.agentInstallation.map { state.agentProgramBusyID == $0.id } ?? false)
         return HStack(spacing: 10) {
             Image(systemName: tool.agentID == nil ? "terminal" : "sparkles.rectangle.stack")
                 .font(.system(size: 13))
@@ -645,19 +656,30 @@ private struct CommandLineToolsSection: View {
                 .controlSize(.small)
                 .help(l10n.t("cli.agentData.hint"))
             }
-            SizeBadge(text: tool.sizeIsKnown ? ByteFormat.format(tool.bytes) : "—", prominent: false)
+            VStack(alignment: .trailing, spacing: 3) {
+                SizeBadge(text: tool.agentID == nil
+                    ? (tool.sizeIsKnown ? ByteFormat.format(tool.bytes) : "—")
+                    : l10n.tf("agents.program.body", tool.sizeIsKnown ? ByteFormat.format(tool.bytes) : "—"), prominent: false)
+                if let id = tool.agentID {
+                    AgentStorageSummaryView(storage: AgentStorageFootprint.totals(
+                        state.agentStorageFootprints[id].map { [$0] } ?? []),
+                        isLoading: state.agentStorageCheckingIDs.contains(id))
+                    .frame(maxWidth: 210)
+                }
+            }
             if tool.manager == .local && !tool.canUninstall {
                 Text(l10n.t("software.tools.readOnly"))
                     .font(.system(size: 10)).foregroundStyle(.tertiary)
             } else if busy {
                 ProgressView().controlSize(.small)
             } else {
-                Button { pendingUninstall = tool } label: {
+                Button { state.uninstallCommandLineTool(tool) } label: {
                     Label(l10n.t("uninstall.action"), systemImage: "trash")
                 }
                 .buttonStyle(DangerButtonStyle())
                 .controlSize(.small)
-                .disabled(!tool.canUninstall || state.isBusy || state.commandLineToolBusyID != nil)
+                .disabled(!tool.canUninstall || state.isBusy || state.isScanningCommandLineTools
+                          || state.isCheckingSoftwareUpdates)
                 .help(tool.canUninstall ? "" : l10n.tf("cli.tag.dependents", tool.dependents.count))
             }
         }

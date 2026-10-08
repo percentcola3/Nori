@@ -67,9 +67,6 @@ struct AutoCleanupPlan {
     var root = "/fixture/cache"
     var candidates = [AutoCleanupCandidate()]
 }
-struct DeletionPlan {
-    struct Item: Sendable { let record: String; let identity: String }
-}
 final class NativeCore: @unchecked Sendable {
     struct ApplySummary: Sendable {
         var removed: Int

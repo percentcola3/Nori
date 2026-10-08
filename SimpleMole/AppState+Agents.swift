@@ -195,6 +195,7 @@ extension AppState {
 
     func scanAgents(completionStatus: String? = nil) {
         guard !isBusy else { return }
+        invalidateAgentStorageFootprints()
         agentScanning = true
         agentScanComplete = false
         agentOutcomeMood = nil
@@ -210,8 +211,10 @@ extension AppState {
         agentStatus = L10n.shared.t("agents.status.scanning")
         agentScanCurrentPath = NSHomeDirectory()
         let generation = agentTaskGeneration
+        let delivery = AgentProgressDelivery()
         let control = CleanupScanControl(mode: .deep, totalBudget: 180, directoryBudget: 30,
             onDirectory: { [weak self] path in
+                guard delivery.shouldDeliver(completed: 0, path: path) else { return }
                 Task { @MainActor [weak self] in
                     guard let self, self.agentScanning, self.agentTaskGeneration == generation else { return }
                     self.agentScanCurrentPath = path
@@ -221,10 +224,16 @@ extension AppState {
         Task {
             defer { agentScanControl = nil }
             let home = NSHomeDirectory()
-            let (report, cli) = await Task.detached(priority: .utility) {
-                Self.loadAgentInventory(home: home, control: control)
+            let (report, cli, footprints, applications, bodies) = await Task.detached(priority: .utility) {
+                let (report, cli) = Self.loadAgentInventory(home: home, control: control)
+                return (report, cli, AgentStorageFootprint.build(report: report, cli: cli),
+                        AgentSoftwareInventory.applications(home: home),
+                        Self.measureAgentCLIBodies(cli, control: control))
             }.value
             updateAgentInventory(report, cli: cli)
+            agentStorageFootprints = footprints
+            agentApplications = applications
+            agentCLIBodySizes = bodies
             agentSelectedSkills = []
             agentSelectedServers = []
             agentSelectedMCPInstallations = []
@@ -254,25 +263,27 @@ extension AppState {
                 agentCleanupHasFeedback = true
                 recordAgentAttention()
             }
-            let total = Self.uniqueAgentBytes(report.categories.flatMap { category in
-                category.paths.map { ($0, category.pathBytes[$0] ?? 0) }
-            } + report.skills.map { ($0.path, $0.bytes) } + report.installations.map { ($0.path, $0.bytes) })
+            let totals = AgentStorageFootprint.totals(Array(footprints.values))
             let agentCount = report.groups.filter {
                 $0.id != "shared" && $0.id != "shared-mcp" && $0.id != "chrome-devtools-mcp"
             }.count
             agentStatus = completionStatus ?? (report.groups.isEmpty
                 ? L10n.shared.t("agents.status.empty")
-                : L10n.shared.tf("agents.status.done", agentCount, ByteFormat.format(total)))
+                : L10n.shared.tf("agents.status.storage", agentCount,
+                    ByteFormat.format(totals.identifiedDataBytes), ByteFormat.format(totals.reclaimableBytes),
+                    ByteFormat.format(totals.preservedBytes)))
         }
     }
 
-    nonisolated private static func loadAgentInventory(home: String, includingAgentIDs: Set<String> = [],
+    nonisolated static func loadAgentInventory(home: String, includingAgentIDs: Set<String> = [],
+        onlyAgentIDs: Set<String>? = nil,
         control: CleanupScanControl = CleanupScanControl(mode: .deep, totalBudget: 180, directoryBudget: 30))
         -> (AgentScanReport, [AgentCLIInstallation]) {
         var report = AgentInventory.scan(home: home, control: control, localize: { L10n.shared.t($0) },
                                          includingAgentIDs: includingAgentIDs,
-                                         excludingGlobalCleanupCaches: true)
-        let cli = AgentCatalog.definitions.flatMap { AgentCLIService.installations(for: $0, home: home) }
+                                         excludingGlobalCleanupCaches: true, onlyAgentIDs: onlyAgentIDs)
+        let definitions = AgentCatalog.definitions.filter { onlyAgentIDs?.contains($0.id) ?? true }
+        let cli = definitions.flatMap { AgentCLIService.installations(for: $0, home: home) }
         for agent in AgentCatalog.definitions where cli.contains(where: { $0.agentID == agent.id }) {
             if !report.groups.contains(where: { $0.id == agent.id }) {
                 report.groups.append(AgentGroupSummary(
@@ -350,6 +361,104 @@ extension AppState {
             return
         }
         startAgentAction(.init(selection: selection))
+    }
+
+    /// Installation removal and user-data removal have separate consent.
+    /// Refresh the data preview after closing its trusted consumers, so the
+    /// final confirmation binds the post-shutdown file identities.
+    func offerAgentAssociatedDataCleanup(agentIDs: Set<String>, programName: String? = nil) {
+        guard !agentIDs.isEmpty, !isBusy, confirmation == nil, taskNotice == nil else { return }
+        agentProgramBusyID = "data:" + agentIDs.sorted().joined(separator: ",")
+        let home = NSHomeDirectory()
+        Task { [self] in
+            let (report, cli, footprints) = await Task.detached(priority: .utility) {
+                let (report, cli) = Self.loadAgentInventory(home: home,
+                    includingAgentIDs: agentIDs, onlyAgentIDs: agentIDs)
+                return (report, cli, AgentStorageFootprint.build(report: report, cli: cli))
+            }.value
+            agentStorageFootprints.merge(footprints, uniquingKeysWith: { _, fresh in fresh })
+            let categoryIDs = Set(report.groups.filter { agentIDs.contains($0.id) }.flatMap(\.categoryIDs))
+            let selected = report.categories.filter { categoryIDs.contains($0.id) }.compactMap {
+                $0.canSelect ? $0.selectingPaths($0.paths).selectedSubset : nil
+            }
+            let selection = AgentCleanupSelection(categories: selected,
+                skills: report.skills.filter { agentIDs.contains($0.agentID) },
+                servers: report.servers.filter { agentIDs.contains($0.agentID) }, installations: [],
+                removedAgentIDs: agentIDs)
+            guard selection.count > 0 else { agentProgramBusyID = nil; return }
+            let scope = AgentDataProcessScope.make(agentIDs: agentIDs, cli: cli, home: home)
+            let probe = await Task.detached(priority: .utility) { SoftwareUpdateProcesses.probe(scope) }.value
+            agentProgramBusyID = nil
+            guard probe.isComplete else {
+                presentTaskFailure(details: [l10n.t("cli.uninstall.runtimeUnknown")], detailsAreLocalized: true)
+                return
+            }
+            if !probe.processes.isEmpty {
+                let identities = Dictionary(scope.roots.compactMap { path in
+                    DeletionPlan.identity(at: path).map { (path, $0) }
+                }, uniquingKeysWith: { first, _ in first })
+                confirmation = Confirmation(title: l10n.t("agents.data.running.title"),
+                    message: l10n.t("agents.data.running.message") + "\n\n"
+                        + Set(probe.processes.map(\.name)).sorted().joined(separator: ", "),
+                    confirmLabel: l10n.t("agents.data.running.action")) { [weak self] in
+                        guard let self, !self.isBusy else { return }
+                        self.agentProgramBusyID = "data:" + agentIDs.sorted().joined(separator: ",")
+                        Task {
+                            let stopped = await SoftwareUpdateProcesses.close(scope, stillCurrent: {
+                                self.agentProgramBusyID != nil && !Task.isCancelled
+                                    && identities.count == scope.roots.count
+                                    && identities.allSatisfy { DeletionPlan.identity(at: $0.key) == $0.value }
+                            })
+                            self.agentProgramBusyID = nil
+                            guard stopped else {
+                                self.presentTaskFailure(details: [self.l10n.t("cli.uninstall.closeFailed")],
+                                                        detailsAreLocalized: true)
+                                return
+                            }
+                            self.offerAgentAssociatedDataCleanup(agentIDs: agentIDs, programName: programName)
+                        }
+                    }
+                return
+            }
+            let impact = Self.uniqueAgentBytes(selection.categories.flatMap { category in
+                category.paths.map { ($0, category.pathBytes[$0] ?? 0) }
+            } + selection.skills.filter { !$0.linked }.map { ($0.path, $0.bytes) })
+            var message = l10n.tf("agents.data.confirm.message", ByteFormat.format(impact))
+            if let programName { message = l10n.tf("agents.data.programRemoved", programName) + "\n\n" + message }
+            if !report.complete { message += "\n\n" + l10n.t("log.scanPartial") }
+            confirmation = Confirmation(title: l10n.t("agents.data.confirm.title"), message: message,
+                confirmLabel: l10n.t("agents.confirm.proceed")) { [weak self] in
+                    guard let self, !self.isBusy else { return }
+                    self.agentProgramBusyID = "data:" + agentIDs.sorted().joined(separator: ",")
+                    Task {
+                        // A desktop or an interpreter-hosted CLI can start
+                        // while the data confirmation is open. Refresh exact
+                        // installation scopes rather than relying on names.
+                        let currentCLI = await Task.detached(priority: .utility) {
+                            AgentCatalog.definitions.filter { agentIDs.contains($0.id) }
+                                .flatMap { AgentCLIService.installations(for: $0, home: home) }
+                        }.value
+                        let scope = AgentDataProcessScope.make(agentIDs: agentIDs, cli: currentCLI, home: home)
+                        let current = await Task.detached(priority: .utility) {
+                            SoftwareUpdateProcesses.probe(scope)
+                        }.value
+                        self.agentProgramBusyID = nil
+                        guard current.isComplete else {
+                            self.presentTaskFailure(details: [self.l10n.t("cli.uninstall.runtimeUnknown")],
+                                                    detailsAreLocalized: true)
+                            return
+                        }
+                        guard current.processes.isEmpty else {
+                            self.offerAgentAssociatedDataCleanup(agentIDs: agentIDs, programName: programName)
+                            return
+                        }
+                        // Preserve the confirmed data identities and amount;
+                        // a fresh probe cannot expand the deletion selection.
+                        self.updateAgentInventory(report, cli: cli)
+                        self.startAgentAction(.init(selection: selection))
+                    }
+                }
+        }
     }
 
     private func startAgentAction(_ requestedAction: AgentTaskAction, rechecking: Bool = false) {
@@ -571,12 +680,14 @@ extension AppState {
         let original = pendingAction?.selection ?? effectiveAgentCleanupSelection
         agentStatus = L10n.shared.t("agents.status.refreshing")
         let home = NSHomeDirectory()
-        let (report, cli) = await Task.detached(priority: .utility) {
+        let (report, cli, footprints) = await Task.detached(priority: .utility) {
             // A removed CLI can leave data after a later failure. Keep those
             // accepted Agent scopes visible even though installed=false now.
-            Self.loadAgentInventory(home: home, includingAgentIDs: original.catalogAgentIDs)
+            let (report, cli) = Self.loadAgentInventory(home: home, includingAgentIDs: original.catalogAgentIDs)
+            return (report, cli, AgentStorageFootprint.build(report: report, cli: cli))
         }.value
         updateAgentInventory(report, cli: cli)
+        agentStorageFootprints = footprints
         let remaining = report.complete ? original.retainingPresentResources(report) : original
         let selectedPaths = Set(remaining.categories.flatMap(\.paths))
         agentCategories = agentCategories.map { $0.selectingPaths(selectedPaths) }

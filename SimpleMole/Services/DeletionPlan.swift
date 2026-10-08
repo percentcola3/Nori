@@ -111,6 +111,22 @@ struct DeletionPlan {
         return "/" + parts.joined(separator: "/")
     }
 
+    /// The literal equivalent of `path == root || path.hasPrefix(root + "/")`.
+    /// Walk component boundaries once instead of scanning every submitted root.
+    /// This is a relationship query, not authorization: callers still validate
+    /// lexical safety and normalization. Never resolve or normalize raw input.
+    static func isPathCovered(_ path: String, by roots: Set<String>) -> Bool {
+        guard !roots.isEmpty else { return false }
+        if roots.contains(path) { return true }
+        for slash in path.utf8.indices where path.utf8[slash] == 0x2f {
+            let candidate = String(path[..<slash])
+            // String.hasPrefix respects grapheme boundaries. A combining
+            // mark following '/' must not widen the old literal predicate.
+            if roots.contains(candidate), path.hasPrefix(candidate + "/") { return true }
+        }
+        return false
+    }
+
     static func nonOverlappingPaths(_ paths: [String]) -> [String] {
         // A selected ancestor covers its descendants regardless of input
         // order. Keeping the first child instead could leave the rest of a
