@@ -274,7 +274,7 @@ expect_failure 'timed out after 1 seconds' bash -c 'source "$1"; run_bounded 1 /
 if grep -Fq "$SENTINEL" "$WORK/output"; then fail 'timeout race leaked command arguments'; fi
 expect_failure 'supervisor failed' bash -c 'source "$1"; run_bounded 1 /usr/bin/python3 -c "import time; time.sleep(1.1)" "$2"' \
     _ "$WORK/interrupt-bounded-functions" "$SENTINEL"
-if rg -Fq "$SENTINEL" "$WORK/hosted-output" "$WORK/hosted-cleanup-output" "$WORK/output"; then
+if /usr/bin/grep -Fq "$SENTINEL" "$WORK/hosted-output" "$WORK/hosted-cleanup-output" "$WORK/output"; then
     fail 'bounded import/cleanup leaked password material'
 fi
 

@@ -7,10 +7,11 @@ TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-agent-data-scope-build.XXXXXX")"
 FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/.agent-data-scope-fixture.XXXXXX")"
 trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 SOURCES=()
+SOURCE_LIST="$(/usr/bin/grep -Eo '"\$ROOT_DIR/SimpleMole/[^" ]+"' "$ROOT_DIR/script/test_agent_cli.sh" \
+    | /usr/bin/sed 's/"\$ROOT_DIR\///; s/"$//' | /usr/bin/awk '!seen[$0]++')"
 while IFS= read -r relative; do
     SOURCES+=("$ROOT_DIR/$relative")
-done < <(rg -o '"\$ROOT_DIR/SimpleMole/[^" ]+"' "$ROOT_DIR/script/test_agent_cli.sh" \
-    | sed 's/"\$ROOT_DIR\///; s/"$//' | awk '!seen[$0]++')
+done <<< "$SOURCE_LIST"
 SOURCES+=("$ROOT_DIR/SimpleMole/Services/CommandLineTool.swift"
     "$ROOT_DIR/SimpleMole/Services/SoftwareUpdateProcesses.swift"
     "$ROOT_DIR/SimpleMole/Services/ProcessSampler.swift"

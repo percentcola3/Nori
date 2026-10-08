@@ -7,7 +7,8 @@ CLI_WORKFLOW_TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-cli-uninstall-workflow.
 CLI_WORKFLOW_FIXTURE="$(mktemp -d "$ROOT_DIR/.cli-uninstall-workflow-fixture.XXXXXX")"
 trap 'rm -rf "$CLI_WORKFLOW_TEST_DIR" "$CLI_WORKFLOW_FIXTURE"' EXIT
 SOURCES=()
-while IFS= read -r line; do SOURCES+=("$line"); done < <(rg -o '"\$ROOT_DIR/SimpleMole/[^"]*"' "$ROOT_DIR/script/test_agent_cli.sh" | sed "s#\"\\\$ROOT_DIR/#$ROOT_DIR/#; s#\"\$##")
+SOURCE_LIST="$(/usr/bin/grep -Eo '"\$ROOT_DIR/SimpleMole/[^"]*"' "$ROOT_DIR/script/test_agent_cli.sh" | /usr/bin/sed "s#\"\\\$ROOT_DIR/#$ROOT_DIR/#; s#\"\$##")"
+while IFS= read -r line; do SOURCES+=("$line"); done <<< "$SOURCE_LIST"
 SOURCES+=(
     "$ROOT_DIR/SimpleMole/Services/CommandLineTool.swift"
     "$ROOT_DIR/SimpleMole/Services/CLIManagedCommand.swift"
