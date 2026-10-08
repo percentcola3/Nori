@@ -40,7 +40,8 @@ for _ in {1..20}; do
         use Time::HiRes qw(time sleep);
         my $pid = fork();
         defined $pid or exit 125;
-        if ($pid == 0) { exec "/usr/bin/true"; exit 127; }
+        if ($pid == 0) { setpgid(0, 0); exec "/usr/bin/true"; exit 127; }
+        setpgid($pid, $pid);
         waitpid($pid, 0) == $pid or exit 125;
         exit(WIFEXITED($?) ? WEXITSTATUS($?) : 125);
     ' || fail "short-command startup baseline failed"
@@ -84,9 +85,11 @@ case "$fixture_root" in
 esac
 owner_pid=""
 child_pid=""
+unrelated_pid=""
 cleanup() {
     [[ "$owner_pid" =~ ^[0-9]+$ ]] && /bin/kill -KILL "$owner_pid" 2>/dev/null || true
     [[ "$child_pid" =~ ^[0-9]+$ ]] && /bin/kill -KILL "$child_pid" 2>/dev/null || true
+    [[ "$unrelated_pid" =~ ^[0-9]+$ ]] && /bin/kill -KILL "$unrelated_pid" 2>/dev/null || true
     /bin/rm -rf -- "$fixture_root"
 }
 trap cleanup EXIT
@@ -123,5 +126,50 @@ done
 [[ -z "$child_pid" ]] || fail "Perl fallback orphaned a child after owner death"
 pass "Perl fallback preserves owner-death cleanup"
 
+# A timeout must also stop descendants in the dedicated group while an
+# unrelated fixture process stays alive. Signal targets all originate here.
+run_with_timeout 0.5 /bin/sh -c '
+    /bin/sleep 30 &
+    printf "%s\n" "$!" > "$1"
+    wait
+' timeout-grandchild "$fixture_root/grandchild.pid" &
+owner_pid=$!
+/bin/sleep 30 &
+unrelated_pid=$!
+set +e
+wait "$owner_pid"
+status=$?
+set -e
+owner_pid=""
+[[ "$status" -eq 124 ]] || fail "descendant fixture did not return timeout status 124"
+child_pid=$(<"$fixture_root/grandchild.pid")
+[[ "$child_pid" =~ ^[0-9]+$ ]] || fail "descendant fixture PID is invalid"
+for _ in {1..100}; do
+    if ! /bin/kill -0 "$child_pid" 2>/dev/null; then child_pid=""; break; fi
+    /bin/sleep 0.02
+done
+[[ -z "$child_pid" ]] || fail "Perl timeout left a descendant alive"
+/bin/kill -0 "$unrelated_pid" 2>/dev/null || fail "Perl timeout signalled an unrelated fixture process"
+/bin/kill -TERM "$unrelated_pid" 2>/dev/null || true
+wait "$unrelated_pid" 2>/dev/null || true
+unrelated_pid=""
+pass "Perl fallback preserves descendant cleanup and unrelated process isolation"
+
+set +e
+run_with_timeout 2 /bin/sh -c 'kill -TERM $$'
+status=$?
+set -e
+[[ "$status" -eq 143 ]] || fail "Perl fallback lost child signal status 143"
+pass "Perl fallback preserves child signal status"
+
 trap - EXIT
 cleanup
+
+# Exercise macOS timer coalescing explicitly, rather than depending on the
+# runner inheriting background scheduling. The same assertions and allowances
+# run again; a regression cannot hide behind an ordinary foreground run.
+if [[ "${1:-}" != --background-policy && -x /usr/sbin/taskpolicy ]]; then
+    /usr/sbin/taskpolicy -b /bin/bash "$ROOT_DIR/script/TimeoutFallbackTests.sh" --background-policy ||
+        fail "Perl fallback failed under macOS background timer policy"
+    pass "Perl fallback wakes promptly under macOS background timer policy"
+fi

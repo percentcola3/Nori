@@ -214,6 +214,14 @@ run_with_timeout() {
                     || $original_pgrp != $my_pgrp;
             }
 
+            # A child exit must interrupt the wait timer. macOS can coalesce
+            # background timers from 10ms to 100-200ms; polling alone then
+            # delays even an already-finished probe. Install before fork so an
+            # immediate exit cannot miss the notification. Reap only in the
+            # normal loop, preserving child exit status and signal handling.
+            my $child_changed = 0;
+            $SIG{CHLD} = sub { $child_changed = 1; };
+
             my $pid = fork();
             defined $pid or exit 125;
 
@@ -288,6 +296,7 @@ run_with_timeout() {
             my $deadline = $started_at + $duration;
 
             while (1) {
+                $child_changed = 0;
                 my $result = waitpid($pid, WNOHANG);
                 if ($result == $pid) {
                     my $status = $?;
@@ -317,7 +326,9 @@ run_with_timeout() {
                     exit 124;
                 }
 
-                sleep(time() < $fast_poll_deadline ? 0.01 : 0.1);
+                # If SIGCHLD arrived between waitpid and this point, recheck
+                # immediately instead of entering a fresh coalesced timer.
+                sleep(time() < $fast_poll_deadline ? 0.01 : 0.1) unless $child_changed;
             }
         ' "$duration" "$@"
         return $?

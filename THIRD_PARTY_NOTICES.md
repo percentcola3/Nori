@@ -15,6 +15,10 @@ build time. Only the audited helper libraries needed by optional specialty
 bridges are packaged; Nori's clean, analyze, uninstall, optimize and
 status paths run through its native Swift services.
 
+The vendored timeout helper includes local changes for prompt child-exit
+wakeups under macOS background timer coalescing. Process-group shutdown,
+owner-death checks and terminal handoff are retained.
+
 Nori is distributed under the GNU General Public License v3.0. The complete
 license is included in [`LICENSE`](LICENSE), and Mole's original copyright
 and license notices remain in the vendored source.
