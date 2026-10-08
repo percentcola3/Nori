@@ -19,6 +19,24 @@ struct AgentCLIInstallation: Identifiable, Equatable, Sendable {
     let detail: String
     fileprivate var partialRemovalProof: AgentCLIPartialRemovalProof? = nil
 
+    /// Installation metadata is shared across inventories and presentations.
+    /// Retry authority stays file-private and is issued only after this service
+    /// observes partial removal; callers cannot construct it through this API.
+    init(id: String, agentID: String, name: String, executablePaths: [String], managedPaths: [String],
+         manager: Manager, managerExecutable: String?, packageName: String?,
+         identities: [String: String], detail: String) {
+        self.id = id
+        self.agentID = agentID
+        self.name = name
+        self.executablePaths = executablePaths
+        self.managedPaths = managedPaths
+        self.manager = manager
+        self.managerExecutable = managerExecutable
+        self.packageName = packageName
+        self.identities = identities
+        self.detail = detail
+    }
+
     var onlyUnlinksExecutable: Bool {
         manager == .native && Set(managedPaths) == Set(executablePaths)
             && managedPaths.allSatisfy(AgentCatalog.isSymlink)
