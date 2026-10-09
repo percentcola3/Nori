@@ -6,10 +6,14 @@ import AppKit
 final class AutomationRuntimeState {
     fileprivate var scheduledRetry: DispatchWorkItem?
     fileprivate var reportedPermissionRequirement = false
+    fileprivate var mutationActive = false
 }
 
 @MainActor
 extension AppState {
+    /// Preview planning is read-only. Manual and scheduled mutations retain
+    /// this separate claim through planning, confirmation and deletion.
+    var isAutoCleanupMutationActive: Bool { automationRuntime.mutationActive }
     // MARK: - 自动目录清理
 
     private static let autoCleanupLastCheckKey = "SMAutoCleanupLastCheck"
@@ -221,16 +225,21 @@ extension AppState {
     func runAutoCleanupNow(_ id: UUID) {
         guard authorize(.runAutoCleanup(ruleID: id),
                         presentingPermissionCenter: true) else { return }
-        guard !isCleanupTaskBusy, let rule = autoCleanupRules.first(where: { $0.id == id }) else { return }
+        guard !isCleanupTaskBusy, !isCleanupMutationBlocked,
+              let rule = autoCleanupRules.first(where: { $0.id == id }) else { return }
+        automationRuntime.mutationActive = true
         isAutoCleanupScanning = true
         autoCleanupStatus = l10n.t("auto.status.scanning")
         Task {
+            defer {
+                automationRuntime.mutationActive = false
+                isAutoCleanupScanning = false
+            }
             do {
                 let plan = try await AutoCleanupPlanner.plan(
                     for: rule, protecting: protectedAutoCleanupDirectories(excluding: id))
                 autoCleanupPreview = plan
                 autoCleanupPreviewRuleID = id
-                isAutoCleanupScanning = false
                 guard !plan.candidates.isEmpty else {
                     autoCleanupStatus = l10n.t("auto.status.empty")
                     return
@@ -243,10 +252,13 @@ extension AppState {
                     ByteFormat.format(plan.reclaimableBytes))
                 alert.addButton(withTitle: l10n.t("confirm.apply.trash.ok"))
                 alert.addButton(withTitle: l10n.t("common.cancel"))
-                guard alert.runModal() == .alertFirstButtonReturn else { return }
-                isAutoCleanupScanning = true
+                // Keep the mutation claim through the modal run loop: a
+                // queued app uninstall must not start between planning and
+                // the accepted deletion. Cancellation releases the claim.
+                guard alert.runModal() == .alertFirstButtonReturn else {
+                    return
+                }
                 let result = await applyAutoCleanup(rule: rule, plan: plan)
-                isAutoCleanupScanning = false
                 autoCleanupRuleIssues[id] = result.failed == 0 ? nil
                     : l10n.tf("auto.status.partial", result.removed, result.failed)
                 autoCleanupStatus = result.failed == 0
@@ -257,7 +269,6 @@ extension AppState {
                     presentTaskFailure(message: autoCleanupStatus, details: result.messages)
                 }
             } catch {
-                isAutoCleanupScanning = false
                 autoCleanupRuleIssues[id] = error.localizedDescription
                 autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
                 log(autoCleanupStatus)
@@ -292,7 +303,7 @@ extension AppState {
         }
         automationRuntime.reportedPermissionRequirement = false
 
-        guard !isCleanupTaskBusy, taskNotice == nil else {
+        guard !isCleanupTaskBusy, !isCleanupMutationBlocked, taskNotice == nil else {
             scheduleAutomationRetry()
             return
         }
@@ -307,9 +318,14 @@ extension AppState {
         }
         defaults.set(Date(), forKey: Self.autoCleanupLastCheckKey)
 
+        automationRuntime.mutationActive = true
         isAutoCleanupScanning = true
         autoCleanupStatus = l10n.t("auto.status.scanning")
         Task {
+            defer {
+                automationRuntime.mutationActive = false
+                isAutoCleanupScanning = false
+            }
             var removed = 0
             var reclaimed: UInt64 = 0
             var failures = 0
@@ -350,7 +366,6 @@ extension AppState {
                     failureDetails.append(current.directory + "\n" + error.localizedDescription)
                 }
             }
-            isAutoCleanupScanning = false
             if failures > 0 {
                 // 临时权限或文件竞争失败时，让下一次小时调度重试，而不是静默等待六小时。
                 defaults.removeObject(forKey: Self.autoCleanupLastCheckKey)
@@ -390,6 +405,9 @@ extension AppState {
 
     private func applyAutoCleanup(rule: AutoCleanupRule, plan: AutoCleanupPlan) async
         -> (removed: Int, failed: Int, reclaimedBytes: UInt64, messages: [String]) {
+        guard !isCleanupMutationBlocked else {
+            return (0, max(1, plan.candidates.count), 0, [l10n.t("cleanup.execution.changed")])
+        }
         guard autoCleanupRules.first(where: { $0.id == rule.id }) == rule,
               rule.isSafetyAuthorized,
               plan.candidates.allSatisfy(\.automaticEligible) else {

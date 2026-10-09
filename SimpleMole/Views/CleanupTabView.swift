@@ -287,7 +287,7 @@ struct CleanupTabView: View {
             }
             .buttonStyle(PrimaryButtonStyle())
             .disabled(!state.hasCleanupSelection || state.isCleanupTaskBusy || state.cleanupQueued
-                      || state.isSystemMaintenanceRunning || !state.cleanupScanComplete)
+                      || state.isCleanupSubmissionBlocked || state.isSystemMaintenanceRunning || !state.cleanupScanComplete)
             .alert(l10n.tf("cleanup.appData.confirm.title", selectedAppData.count),
                    isPresented: $confirmingAppData) {
                 Button(l10n.t("common.cancel"), role: .cancel) {}

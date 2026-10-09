@@ -242,7 +242,8 @@ struct AgentsTabView: View {
                 Button { state.offerAgentAssociatedDataCleanup(agentIDs: [group.id]) } label: {
                     Label(l10n.t("agents.program.residuals"), systemImage: "sparkles")
                 }
-                .buttonStyle(SecondaryButtonStyle()).controlSize(.small).disabled(state.isAgentTaskBusy)
+                .buttonStyle(SecondaryButtonStyle()).controlSize(.small)
+                .disabled(state.isAgentTaskBusy || state.isUninstallMutationBlocked || state.uninstallQueue.activeJob != nil)
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 6)
@@ -263,7 +264,8 @@ struct AgentsTabView: View {
                 Button { state.uninstallAgentApplication(app) } label: {
                     Label(l10n.t("uninstall.action"), systemImage: "trash")
                 }
-                .buttonStyle(DangerButtonStyle()).controlSize(.small).disabled(state.isAgentTaskBusy)
+                .buttonStyle(DangerButtonStyle()).controlSize(.small)
+                .disabled(state.isAgentTaskBusy || state.isUninstallMutationBlocked || state.uninstallQueue.activeJob != nil)
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
             .modifier(ListRowSurface())
@@ -320,7 +322,7 @@ struct AgentsTabView: View {
                     Label(l10n.t("uninstall.action"), systemImage: "trash")
                 }
                 .buttonStyle(DangerButtonStyle()).controlSize(.small)
-                .disabled(state.isAgentTaskBusy || state.commandLineToolBusyID != nil || state.softwareUpdatingID != nil)
+                .disabled(state.isAgentTaskBusy || state.isUninstallMutationBlocked || state.uninstallQueue.activeJob != nil)
                 .accessibilityLabel(l10n.tf("agents.cli.select", installation.name))
                 Button {
                     withAnimation(reduceMotion ? nil : MoleMotion.panel) {
@@ -507,9 +509,8 @@ struct AgentsTabView: View {
                       : l10n.t("agents.apply")), systemImage: "sparkles")
             }
             .buttonStyle(PrimaryButtonStyle())
-            .disabled(state.agentSelectedCount == 0 || state.isAgentTaskBusy || state.uninstallQueue.activeJob != nil
-                || (!state.agentSelectedCLIInstallations.isEmpty
-                    && (state.commandLineToolBusyID != nil || state.softwareUpdatingID != nil)))
+            .disabled(state.agentSelectedCount == 0 || state.isAgentTaskBusy
+                || state.isUninstallMutationBlocked || state.uninstallQueue.activeJob != nil)
             .help(l10n.t("agents.storage.selectedImpact"))
         }
         .padding(.horizontal, 16).padding(.vertical, 10)

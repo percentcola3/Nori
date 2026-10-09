@@ -2,7 +2,7 @@ import Foundation
 
 // State-only fixture: the task predicates below are compiled from production.
 @MainActor final class AppState {
-    final class Queue { var hasWork = false }
+    final class Queue { var hasWork = false; var activeJob: UUID? }
     final class Simulator { var isDeleting = false }
     let uninstallQueue = Queue()
     let simulatorInventory = Simulator()
@@ -10,6 +10,7 @@ import Foundation
     var isApplying = false
     var cleanupQueued = false
     var isAutoCleanupScanning = false
+    var isAutoCleanupMutationActive = false
     var isSystemMaintenanceRunning = false
     var isAnalyzing = false
     var isScanningDuplicates = false
@@ -83,6 +84,7 @@ enum ProtectedOperation {
         state.uninstallQueue.hasWork = false
         state.agentProgramBusyID = "agent-cli"
         precondition(state.isAgentTaskBusy && state.isUninstallMutationBlocked && !state.isSoftwareTaskBusy)
+        precondition(state.isAgentMutationBusy && state.isCleanupMutationBlocked)
         state.agentProgramBusyID = nil
         state.commandLineToolBusyID = "software-cli"
         precondition(state.isSoftwareTaskBusy && state.isUninstallMutationBlocked && !state.isAgentTaskBusy)
@@ -90,6 +92,26 @@ enum ProtectedOperation {
         state.softwareUpdatingID = "update"
         precondition(state.isSoftwareTaskBusy && state.isUninstallMutationBlocked && !state.isAgentTaskBusy)
         state.softwareUpdatingID = nil
+        state.uninstallQueue.activeJob = UUID()
+        precondition(state.isCleanupMutationBlocked, "An active uninstall must gate overlapping cleanup")
+        state.uninstallQueue.activeJob = nil
+        state.agentScanning = true
+        state.isScanningApps = true
+        precondition(!state.isCleanupMutationBlocked, "Read-only Agent/software scans must not gate cleanup")
+        state.agentScanning = false
+        state.isScanningApps = false
+        state.isAutoCleanupScanning = true
+        precondition(!state.isUninstallMutationBlocked && !state.isSoftwareMutationBlocked,
+                     "Read-only automatic-cleanup preview must not block another page's mutation")
+        state.isAutoCleanupMutationActive = true
+        precondition(state.isUninstallMutationBlocked && state.isSoftwareMutationBlocked,
+                     "Preparing or applying automatic cleanup must reserve the shared mutation gate")
+        state.isAutoCleanupScanning = false
+        state.isAutoCleanupMutationActive = false
+        state.isSystemMaintenanceRunning = true
+        precondition(!state.isUninstallMutationBlocked && !state.isSoftwareMutationBlocked,
+                     "Read-only system-maintenance inspection must not acquire a mutation claim")
+        state.isSystemMaintenanceRunning = false
         state.gcRunningId = "gc"
         precondition(state.isDeveloperTaskBusy && !state.isUninstallMutationBlocked)
         state.gcRunningId = nil

@@ -44,7 +44,7 @@ extension AppState {
             AppUpdateController.shared.checkForUpdates()
             return
         }
-        guard !isSoftwareTaskBusy, !isAgentCLIMutationActive,
+        guard !isSoftwareTaskBusy, !isSoftwareMutationBlocked,
               confirmation == nil, taskNotice == nil else { return }
         softwareUpdatingID = selection.key
         let identity: String?
@@ -76,7 +76,7 @@ extension AppState {
             message: L10n.shared.tf("software.install.closeMessage", selection.name)
                 + "\n\n" + Set(processes.map(\.name)).sorted().joined(separator: ", "),
             confirmLabel: L10n.shared.t("software.install.closeAction")) { [weak self] in
-                guard let self, !self.isSoftwareTaskBusy, !self.isAgentCLIMutationActive,
+                guard let self, !self.isSoftwareTaskBusy, !self.isSoftwareMutationBlocked,
                       !self.isCheckingSoftwareUpdates,
                       self.softwareUpdateResults[selection.key]?.state == .available else { return }
                 self.softwareUpdatingID = selection.key

@@ -33,16 +33,22 @@ private final class CleanupRuntimeState {
 }
 
 private final class PageStateFixture {
+    struct Progress {}
+    struct MaintenanceRow { let id: String }
+    struct QueueFixture { var activeJob: String? }
     struct Attempt {
         let categories: [CleanupCategory]
         let priorResult: CleanupExecutionResult
         let maintenanceIDs: [String]
+        let installers: CleanupCategory?
+        let retryScope: [CleanupCategory]?
+        let pendingMaintenanceIDs: [String]
     }
 
     var categories: [CleanupCategory] = []
     var cleanupOutcomeMood: NoriMood?
     var cleanupOutcomeDetails: [String] = []
-    var cleanupTaskProgress: String? = "verifying"
+    var cleanupTaskProgress: Progress? = .init()
     var cleanupCompletedCount = 0
     var cleanupReclaimedBytes: UInt64 = 0
     var cleanupFailureApplications: [String] = []
@@ -53,6 +59,18 @@ private final class PageStateFixture {
     var cleanupQueued = false
     var isApplying = true
     var isCleanupTaskBusy: Bool { isApplying || cleanupQueued }
+    var agentApplying = false
+    var agentProgramBusyID: String?
+    var commandLineToolBusyID: String?
+    var softwareUpdatingID: String?
+    var uninstallQueue = QueueFixture()
+    var pendingCleanup: (() -> Void)?
+    var family: CleanupFamily = .clean
+    var cleanupScanComplete = true
+    var installerCandidates: CleanupCategory?
+    var systemMaintenanceRows: [MaintenanceRow] = []
+    var systemMaintenanceSelection: Set<String> = []
+    var selectedCount: Int { categories.compactMap(\.selectedSubset).reduce(0) { $0 + $1.paths.count } }
     var headerMood: NoriMood?
     var popupCount = 0
     var statusText = ""
@@ -80,21 +98,12 @@ private final class PageStateFixture {
                             detailsAreLocalized: Bool = false) { popupCount += 1 }
     static func blockingApplicationNames(_ owners: [String]) -> [String] { owners.sorted() }
 
-    func performApply(categories: [CleanupCategory], family: CleanupFamily,
-                      mode: CleanupExecutionMode, installers: CleanupCategory? = nil,
-                      maintenanceIDs: [String] = [], priorResult: CleanupExecutionResult = .init()) {
-        precondition(!cleanupRetryAvailable && cleanupRuntime.retryAction == nil,
-                     "The retry must be consumed before dispatching another task")
-        attempts.append(Attempt(categories: categories, priorResult: priorResult,
-                                maintenanceIDs: maintenanceIDs))
-    }
-
     // APPSTATE_CLEANUP_PAGE_METHODS
 }
 
 @main
 struct CleanupPageStateTests {
-    static func main() {
+    static func main() async throws {
         let selection = category(["/fixture/first", "/fixture/second"])
         precondition(selection.selectingPath(at: 1) == selection.selectingPaths(["/fixture/second"]),
                      "Indexed selection changed the captured category or selected item")
@@ -110,6 +119,7 @@ struct CleanupPageStateTests {
         testUnverifiedInventoryRetainsRetry()
         testStartupPermissions()
         testGarbageTotal()
+        try await testMutationBoundaries()
         print("Cleanup page state: partial success, actual bytes, inline failure, remaining retries and startup permissions passed")
     }
 
@@ -120,6 +130,74 @@ struct CleanupPageStateTests {
             pathIdentities: Dictionary(uniqueKeysWithValues: paths.map { ($0, "original:" + $0) }),
             source: .core, risk: .safe, disposal: .permanentDelete,
             applyRoute: .genericTrash, activityGuard: .openFile)
+    }
+
+    private static func testMutationBoundaries() async throws {
+        let captured = category(["/fixture/captured"])
+        for gate in ["agent-data", "agent-program", "cli-uninstall", "software-update"] {
+            let page = PageStateFixture()
+            page.isApplying = false
+            page.categories = [captured]
+            page.configureCleanupRetry([captured], family: .clean, mode: .manual,
+                installers: nil, maintenanceIDs: [], result: .init(), verified: true)
+            if gate == "agent-data" { page.agentApplying = true }
+            if gate == "agent-program" { page.agentProgramBusyID = "other-agent" }
+            if gate == "cli-uninstall" { page.commandLineToolBusyID = "other-cli" }
+            if gate == "software-update" { page.softwareUpdatingID = "other-update" }
+            page.applyCleanup()
+            page.retryFailedCleanup()
+            precondition(page.attempts.isEmpty && !page.isApplying && page.cleanupRetryAvailable
+                         && page.cleanupRuntime.retryAction != nil,
+                         "Shared mutation consumed the captured cleanup retry")
+            page.agentApplying = false
+            page.agentProgramBusyID = nil
+            page.commandLineToolBusyID = nil
+            page.softwareUpdatingID = nil
+            page.categories = [category(["/fixture/new-selection"])]
+            page.retryFailedCleanup()
+            precondition(page.attempts.count == 1 && page.attempts[0].categories == [captured],
+                         "Cleanup retry expanded to a later selection")
+        }
+
+        let racing = PageStateFixture()
+        racing.isApplying = true
+        racing.agentProgramBusyID = "other-agent"
+        let installers = category(["/fixture/installer"])
+        let originalScope = [category(["/fixture/completed", "/fixture/captured"])]
+        racing.performApply(categories: [captured], family: .clean, mode: .manual,
+            installers: installers, maintenanceIDs: ["maintenance"],
+            priorResult: .init(removed: 1, reclaimedBytes: 23), retryScope: originalScope,
+            pendingMaintenanceIDs: ["pending-maintenance"])
+        precondition(!racing.isApplying && racing.cleanupTaskProgress == nil
+                     && racing.cleanupRetryAvailable && racing.attempts.isEmpty)
+        racing.agentProgramBusyID = nil
+        racing.retryFailedCleanup()
+        let resumed = racing.attempts[0]
+        precondition(resumed.categories == [captured] && resumed.installers == installers
+                     && resumed.maintenanceIDs == ["maintenance"] && resumed.priorResult.reclaimedBytes == 23
+                     && resumed.retryScope == originalScope && resumed.pendingMaintenanceIDs == ["pending-maintenance"],
+                     "A blocked execution boundary lost its frozen request arguments")
+
+        let queued = PageStateFixture()
+        queued.isApplying = false
+        queued.categories = [captured]
+        queued.uninstallQueue.activeJob = "active-app"
+        queued.applyCleanup()
+        let deadline = Date().addingTimeInterval(3)
+        while queued.pendingCleanup == nil {
+            precondition(Date() < deadline)
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        precondition(queued.cleanupQueued && !queued.isApplying && queued.attempts.isEmpty,
+                     "Ordinary cleanup no longer waits behind active app uninstall")
+        queued.categories = [category(["/fixture/later-selection"])]
+        queued.uninstallQueue.activeJob = nil
+        let pending = queued.pendingCleanup!
+        queued.pendingCleanup = nil
+        queued.cleanupQueued = false
+        pending()
+        precondition(queued.attempts.count == 1 && queued.attempts[0].categories == [captured],
+                     "Uninstall queue resume changed the cleanup selection")
     }
 
     private static func testPartialSuccessAndRetry() {

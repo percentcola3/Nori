@@ -410,6 +410,7 @@ final class AppState {
     var uninstallQueue = WorkflowUninstallQueue()
     var cleanupQueued = false
     var externallyBusy = false
+    var isCleanupMutationBusy = false
     var commandLineToolBusyID: String?
     var softwareUpdatingID: String?
     var queueStarts = 0
@@ -591,7 +592,29 @@ struct AgentWorkflowTests {
         try await associatedDataMutationPreflight(kind: "running")
         try await associatedDataMutationPreflight(kind: "incomplete")
         try await associatedDataMutationPreflight(kind: "idle")
+        try await associatedDataMutationGuards()
         print("Agent workflow: inline prerequisites/errors, frozen and proven CLI retries, owner/runtime guards, partial refresh, CLI + data progress, per-attempt reclaimed bytes, success without popups passed")
+    }
+
+    @MainActor private static func associatedDataMutationGuards() async throws {
+        for running in [false, true] {
+            for gate in ["cleanup", "app-uninstall", "cli-uninstall", "software-update"] {
+                let (state, f) = prepare()
+                if running { f.setDataProbes([.init(processes: [.init(name: "node")], isComplete: true)]) }
+                state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
+                try await waitUntil { state.confirmation != nil }
+                let consent = state.confirmation!
+                state.confirmation = nil
+                if gate == "cleanup" { state.isCleanupMutationBusy = true }
+                if gate == "app-uninstall" { state.uninstallQueue.activeJob = "other-app" }
+                if gate == "cli-uninstall" { state.commandLineToolBusyID = "other-cli" }
+                if gate == "software-update" { state.softwareUpdatingID = "other-update" }
+                consent.onConfirm()
+                precondition(!state.agentApplying && state.agentProgramBusyID == nil
+                             && state.snapshots == 0 && f.cleanupCount == 0 && f.uninstallCount == 0,
+                             "Associated data consent crossed a shared mutation before process close or deletion")
+            }
+        }
     }
 
     @MainActor private static func associatedDataMutationPreflight(kind: String) async throws {
@@ -900,14 +923,42 @@ struct AgentWorkflowTests {
             successAndIdle(state, removed: 1)
         }
 
-        for kind in ["cli-uninstall", "software-update", "app-uninstall"] {
+        for kind in ["cleanup", "cli-uninstall", "software-update", "app-uninstall"] {
             let (state, f) = prepare()
+            if kind == "cleanup" { state.isCleanupMutationBusy = true }
             if kind == "cli-uninstall" { state.commandLineToolBusyID = "other-tool" }
             if kind == "software-update" { state.softwareUpdatingID = "other-update" }
             if kind == "app-uninstall" { state.uninstallQueue.activeJob = "active-uninstall" }
             startCLI(state)
             precondition(!state.agentApplying && state.snapshots == 0 && f.uninstallCount == 0,
                          "A shared package mutation must block Agent CLI removal")
+        }
+
+        for kind in ["cleanup", "cli-uninstall", "software-update"] {
+            let (state, f) = prepare()
+            f.setRunning(RunningApplicationSnapshot(processNames: ["FixtureHost"]))
+            state.applyAgentCleanup()
+            try await waitUntil { !state.agentApplying }
+            precondition(state.agentRetryAvailable && state.agentRetryAction != nil)
+            f.setRunning(RunningApplicationSnapshot())
+            if kind == "cleanup" { state.isCleanupMutationBusy = true }
+            if kind == "cli-uninstall" { state.commandLineToolBusyID = "other-tool" }
+            if kind == "software-update" { state.softwareUpdatingID = "other-update" }
+            state.retryFailedAgentCleanup()
+            state.applyAgentCleanup()
+            state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
+            precondition(!state.agentApplying && state.agentProgramBusyID == nil
+                         && state.agentRetryAvailable && state.agentRetryAction != nil
+                         && state.snapshots == 1 && f.cleanupCount == 0,
+                         "Shared mutation consumed a frozen Agent retry or allowed associated data removal")
+            state.isCleanupMutationBusy = false
+            state.commandLineToolBusyID = nil
+            state.softwareUpdatingID = nil
+            state.retryFailedAgentCleanup()
+            try await waitUntil { f.cleanupGate.started }
+            precondition(f.cleanupCount == 1)
+            f.cleanupGate.release()
+            try await waitUntil { !state.agentApplying }
         }
     }
 

@@ -25,6 +25,11 @@ def declaration(marker):
 template = (root / 'script/SoftwareUpdateRequestTests.swift').read_text()
 template = template.replace('// PRODUCTION_SELECTION', declaration('    private enum UpdateSelection'))
 template = template.replace('// PRODUCTION_REQUEST', declaration('    private func requestSoftwareUpdate'))
+template = template.replace('// PRODUCTION_CLOSE_CONFIRMATION', declaration('    private func presentUpdateCloseConfirmation'))
+source = (root / 'SimpleMole/AppState+TaskActivity.swift').read_text()
+_, mask = swift_literals(source)
+template = template.replace('// PRODUCTION_MUTATION_GATES', '\n'.join(declaration('    var ' + name + ': Bool') for name in [
+    'isCleanupMutationBusy', 'isAgentMutationBusy', 'isSoftwareMutationBlocked']))
 (destination / 'Tests.swift').write_text(template)
 PY
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \

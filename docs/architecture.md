@@ -31,6 +31,8 @@ These are practical seams for the current product, rather than a requirement to 
 
 ## Execution contracts
 
+`AppState+TaskActivity` separates each page's activity from shared mutation guards. Read-only inventories, automation previews and system inspection can overlap unrelated page work; each page still prevents its own reentry. Manual and scheduled automation retain a separate mutation claim through planning, confirmation and deletion. Cleanup, Agent data/program removal and Software mutations use symmetric shared-data guards, while ordinary cleanup keeps its confirmed queue behind an active app uninstall. A blocked retry retains its frozen request. The aggregate activity remains the restart-safety boundary; checking Nori updates does not restart it.
+
 A confirmed uninstall keeps the original queue request and selected data paths. The workflow stops scoped processes, obtains a fresh plan, stops any respawned scoped process, intersects selected data with that plan, and performs the appropriate administrator/native route. Failed elevation does not clean residual data. `NativeCore` remains responsible for final live identity and deletion checks.
 
 Cleanup batches build record-coverage and open-file prefix indices once, then use at most four utility workers while preserving original result order. These indices optimize relationships within the current request; file metadata and deletion checks remain live. Administrator cleanup retains separate fresh occupancy probes for preflight and deletion. Its progress relay serializes callbacks and its validated descriptor writer throttles updates, including during preflight, before explicitly publishing the final state.

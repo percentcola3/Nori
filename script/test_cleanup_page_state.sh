@@ -13,7 +13,7 @@ import sys
 
 root, destination = map(Path, sys.argv[1:])
 source = "\n".join(path.read_text() for path in sorted((root / "SimpleMole").glob("AppState*.swift"))).splitlines()
-names = ["configureCleanupRetry", "retryFailedCleanup", "recordRemainingCleanup",
+names = ["applyCleanup", "configureCleanupRetry", "retryFailedCleanup", "recordRemainingCleanup",
          "reportCleanupResult", "prepareStartupPermissions", "refreshAuthorizationAndResume"]
 methods = []
 for name in names:
@@ -33,9 +33,25 @@ for name in names:
     method = re.sub(r"^    (?:private|fileprivate|internal|public) func ", "    func ", method, count=1)
     methods.append(f"    // Production AppState.swift:{start + 1}\n" + method)
 
+# Keep the actual mutation/queue boundary and replace only the execution
+# services that would otherwise enumerate or delete files.
+declaration = next(index for index, line in enumerate(source) if line.startswith("    private func performApply("))
+execution = next(index for index in range(declaration + 1, len(source))
+                 if source[index].startswith("        let requestedCount ="))
+boundary = "\n".join(source[declaration:execution]).replace("private func", "func", 1)
+methods.append(boundary + "\n" + '''        cleanupRetryAvailable = false
+        cleanupRuntime.retryAction = nil
+        attempts.append(Attempt(categories: requested, priorResult: priorResult,
+                                maintenanceIDs: maintenanceIDs, installers: installers,
+                                retryScope: retryScope, pendingMaintenanceIDs: pendingMaintenanceIDs))
+        isApplying = false
+    }''')
+
 for name, declaration in [
     ("totalBytes", re.compile(r"^    var totalBytes: UInt64 \{")),
     ("uniqueAgentBytes", re.compile(r"^    nonisolated static func uniqueAgentBytes\(")),
+    ("isCleanupSubmissionBlocked", re.compile(r"^    var isCleanupSubmissionBlocked: Bool \{")),
+    ("isAgentMutationBusy", re.compile(r"^    var isAgentMutationBusy: Bool \{")),
 ]:
     matches = [index for index, line in enumerate(source) if declaration.match(line)]
     if len(matches) != 1:

@@ -123,6 +123,7 @@ enum ByteFormat {
 final class AppState {
     struct QueueFixture {
         var apps: [UninstallApp] = []
+        var activeJob: String?
         func containsPendingOrActive(_ app: UninstallApp) -> Bool { apps.contains(app) }
     }
     var uninstallQueue = QueueFixture()
@@ -144,6 +145,7 @@ final class AppState {
     var softwareUpdateResults: [String: Int] = [:]
     var forcedAgentBusy = false
     var externallyBusy = false
+    var isCleanupMutationBusy = false
     var agentApplying = false
     var agentSelectedCLIInstallations = Set<String>()
     var commandLineToolBusyID: String?
@@ -224,7 +226,7 @@ struct AgentProgramRemovalTests {
         CLIUninstallWorkflow.results = [.finished(.init(succeeded: true))]
         state.externallyBusy = true
         state.uninstallAgentCLI(selected)
-        precondition(state.isBusy && state.isAgentCLIMutationActive,
+        precondition(state.isBusy && state.agentProgramBusyID != nil,
                      "The program probe must claim its own resource while another tab stays active")
         state.uninstallAgentCLI(selected)
         try await waitUntil { state.confirmation != nil }
@@ -331,16 +333,31 @@ struct AgentProgramRemovalTests {
         }
     }
     static func guards(_ fixture: URL) async throws {
-        for reason in 0..<5 {
+        for reason in 0..<7 {
             let (state, selected, _, _) = seededCLI(fixture)
             if reason == 0 { state.forcedAgentBusy = true }
             if reason == 1 { state.taskNotice = "existing notice" }
             if reason == 3 { state.commandLineToolBusyID = "another-tool" }
             if reason == 4 { state.softwareUpdatingID = "another-update" }
+            if reason == 5 { state.isCleanupMutationBusy = true }
+            if reason == 6 { state.uninstallQueue.activeJob = "other-app" }
             if reason == 2 { state.confirmation = .init(title: "existing", message: "", confirmLabel: "", onConfirm: {}) }
             state.uninstallAgentCLI(selected)
             try await Task.sleep(nanoseconds: 20_000_000)
             precondition(state.agentProgramBusyID == nil && CLIUninstallWorkflow.calls.isEmpty && state.dataOffers.isEmpty)
+        }
+        for reason in ["cleanup", "app-uninstall", "cli-uninstall", "software-update"] {
+            let (blocked, item, _, _) = seededCLI(fixture)
+            blocked.uninstallAgentCLI(item)
+            try await waitUntil { blocked.confirmation != nil }
+            if reason == "cleanup" { blocked.isCleanupMutationBusy = true }
+            if reason == "app-uninstall" { blocked.uninstallQueue.activeJob = "other-app" }
+            if reason == "cli-uninstall" { blocked.commandLineToolBusyID = "other-tool" }
+            if reason == "software-update" { blocked.softwareUpdatingID = "other-update" }
+            consent(blocked)
+            precondition(blocked.agentProgramBusyID == nil && CLIUninstallWorkflow.calls.isEmpty
+                         && blocked.dataOffers.isEmpty,
+                         "An earlier Agent CLI consent crossed a later shared mutation")
         }
         let (state, selected, _, _) = seededCLI(fixture)
         state.uninstallAgentCLI(selected)
@@ -372,6 +389,28 @@ struct AgentProgramRemovalTests {
         let path = fixture.appendingPathComponent("Chosen.app").path
         let app = UninstallApp(name: "Chosen", bundleID: "test.agent.one", path: path,
             appIdentity: DeletionPlan.identity(at: path)!, infoIdentity: DeletionPlan.identity(at: path + "/Contents/Info.plist")!)
+        for boundary in ["request", "confirmation"] {
+            for reason in ["cleanup", "app-uninstall", "cli-uninstall", "software-update"] {
+                reset()
+                let blocked = AppState()
+                blocked.agentApplications = ["agent-one": [app]]
+                blocked.installedApps = [app]
+                if boundary == "confirmation" {
+                    blocked.uninstallAgentApplication(app)
+                    try await waitUntil { blocked.confirmation != nil }
+                }
+                if reason == "cleanup" { blocked.isCleanupMutationBusy = true }
+                if reason == "app-uninstall" { blocked.uninstallQueue.activeJob = "other-app" }
+                if reason == "cli-uninstall" { blocked.commandLineToolBusyID = "other-tool" }
+                if reason == "software-update" { blocked.softwareUpdatingID = "other-update" }
+                if boundary == "request" { blocked.uninstallAgentApplication(app) }
+                else { consent(blocked) }
+                precondition(blocked.agentProgramBusyID == nil && blocked.uninstallExecutor.jobs.isEmpty
+                             && blocked.dataOffers.isEmpty,
+                             "Agent app removal crossed a shared mutation at the \(boundary) boundary")
+            }
+        }
+        reset()
         desktopState.agentApplications = ["agent-one": [app]]
         desktopState.installedApps = [app]
         desktopState.uninstallAgentApplication(app)

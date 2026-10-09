@@ -21,6 +21,7 @@ mkdir -p "$TEST_DIR/sources"
 CLEANUP_PRESENTATION_SOURCES=(
     "$ROOT_DIR"/SimpleMole/L10n/*.swift
     "$ROOT_DIR/SimpleMole/Models.swift"
+    "$ROOT_DIR/SimpleMole/AppState+TaskActivity.swift"
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift"

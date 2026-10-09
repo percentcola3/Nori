@@ -31,11 +31,29 @@ extension AppState {
     // Cleanup and uninstall can remove the same application data. Read-only
     // scans and unrelated page activity do not participate in this boundary.
     var isCleanupMutationBusy: Bool {
-        isApplying || isSystemMaintenanceRunning || isAutoCleanupScanning
+        isApplying || isAutoCleanupMutationActive
+    }
+
+    var isAgentMutationBusy: Bool {
+        agentApplying || agentProgramBusyID != nil
+    }
+
+    /// Mutations outside the cleanup page can share the same application data.
+    /// Inventory discovery and page-local selection do not acquire this gate.
+    var isCleanupMutationBlocked: Bool {
+        uninstallQueue.activeJob != nil || isCleanupSubmissionBlocked
+    }
+
+    var isCleanupSubmissionBlocked: Bool {
+        isAgentMutationBusy || commandLineToolBusyID != nil || softwareUpdatingID != nil
+    }
+
+    var isSoftwareMutationBlocked: Bool {
+        isCleanupMutationBusy || isAgentMutationBusy
     }
 
     var isUninstallMutationBlocked: Bool {
-        isCleanupMutationBusy || agentApplying || agentProgramBusyID != nil
+        isCleanupMutationBusy || isAgentMutationBusy
             || commandLineToolBusyID != nil || softwareUpdatingID != nil
     }
 

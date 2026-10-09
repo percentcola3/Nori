@@ -1845,6 +1845,10 @@ test_uninstall_queue() {
 }
 
 test_task_activity() {
+    if [[ "${SM_TEST_SKIP_SWIFT:-0}" == "1" ]]; then
+        printf 'ok - Task activity Swift tests skipped (SM_TEST_SKIP_SWIFT=1)\n'
+        return
+    fi
     bash "$ROOT_DIR/script/test_task_activity.sh" || fail "independent page task activity"
     pass "independent page activity and overlapping deletion guards"
 }
@@ -2551,6 +2555,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_software_update_execution.sh" || fail "software update commands and running-process closure"
     bash "$ROOT_DIR/script/test_software_update_request.sh" || fail "independent signed-updater routing and software reentry"
     bash "$ROOT_DIR/script/test_cli_uninstall_workflow.sh" || fail "confirmed CLI uninstall and scoped process shutdown"
+    bash "$ROOT_DIR/script/test_cli_uninstall_request.sh" || fail "generic CLI request guards and stale confirmation"
     bash "$ROOT_DIR/script/test_software_workflows.sh" || fail "software workflow dependency and orchestration contracts"
     bash "$ROOT_DIR/script/test_administrator_uninstall.sh" || fail "administrator uninstall and Trash safety tests"
 fi
