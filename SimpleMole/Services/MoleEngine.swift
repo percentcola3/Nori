@@ -215,7 +215,10 @@ final class MoleEngine {
     func run(executable: URL, arguments: [String], environment: [String: String],
              currentDirectory: URL? = nil, stdinData: Data? = nil,
              timeout: TimeInterval? = nil, onLine: ((String) -> Void)? = nil,
-             cancellation: (() -> Void)? = nil) async -> RunResult {
+             cancellation: (() -> Void)? = nil, captureLimit: Int? = nil) async -> RunResult {
+        guard !Task.isCancelled else {
+            return RunResult(output: "", exitCode: 130, timedOut: false)
+        }
         var stdoutFDs = [Int32](repeating: -1, count: 2)
         var stderrFDs = [Int32](repeating: -1, count: 2)
         var stdinFDs = [Int32](repeating: -1, count: 2)
@@ -227,8 +230,8 @@ final class MoleEngine {
         Self.markCloseOnExec(stdoutFDs + stderrFDs + stdinFDs)
 
         let drains = DispatchGroup()
-        let stdoutCollector = StreamCollector(prefix: nil, capturesOutput: true, onLine: onLine)
-        let stderrCollector = StreamCollector(prefix: "[stderr] ", capturesOutput: true, onLine: onLine)
+        let stdoutCollector = StreamCollector(prefix: nil, capturesOutput: true, onLine: onLine, captureLimit: captureLimit)
+        let stderrCollector = StreamCollector(prefix: "[stderr] ", capturesOutput: true, onLine: onLine, captureLimit: captureLimit)
         let stdoutReader = PipeReader(fileDescriptor: stdoutFDs[0], collector: stdoutCollector, group: drains)
         let stderrReader = PipeReader(fileDescriptor: stderrFDs[0], collector: stderrCollector, group: drains)
 
@@ -313,6 +316,8 @@ final class MoleEngine {
         state.withLock { current in
             current.tracked.append(running)
         }
+        // A cancellation handler can run between spawn and process registration.
+        if Task.isCancelled { Self.terminate(running) }
 
         // 必须在 spawn 成功后再写 stdin；否则大于 pipe 缓冲区的路径集会永久阻塞。
         if let stdinData { inputWriter?.start(stdinData) }
@@ -368,7 +373,8 @@ final class MoleEngine {
             Self.logger.error("subprocess stderr: \(stderrOutput, privacy: .private)")
         }
         return RunResult(output: stdoutCollector.finish(), errorOutput: stderrOutput,
-                         exitCode: exitCode, timedOut: timedOut)
+                         exitCode: exitCode, timedOut: timedOut,
+                         outputTruncated: stdoutCollector.isTruncated || stderrCollector.isTruncated)
     }
 
     private func forget(_ process: RunningProcess) {
@@ -586,11 +592,20 @@ private final class StreamCollector {
     private let prefix: String?
     private let capturesOutput: Bool
     private let onLine: ((String) -> Void)?
+    private let captureLimit: Int?
+    private var truncated = false
 
-    init(prefix: String?, capturesOutput: Bool, onLine: ((String) -> Void)?) {
+    init(prefix: String?, capturesOutput: Bool, onLine: ((String) -> Void)?, captureLimit: Int? = nil) {
         self.prefix = prefix
         self.capturesOutput = capturesOutput
         self.onLine = onLine
+        self.captureLimit = captureLimit.map { max(0, $0) }
+    }
+
+    var isTruncated: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return truncated
     }
 
     func append(_ chunk: Data) {
@@ -598,11 +613,22 @@ private final class StreamCollector {
         var lines: [String] = []
         lock.lock()
         guard !didFinish else { lock.unlock(); return }
-        if capturesOutput { captured.append(chunk) }
+        if capturesOutput {
+            let remaining = captureLimit.map { max(0, $0 - captured.count) } ?? chunk.count
+            captured.append(chunk.prefix(remaining))
+            if chunk.count > remaining { truncated = true }
+        }
+        guard onLine != nil else { lock.unlock(); return }
         pendingLine.append(chunk)
         while let newline = pendingLine.firstIndex(of: 0x0A) {
-            lines.append(String(decoding: pendingLine[..<newline], as: UTF8.self))
+            let line = pendingLine[..<newline]
+            if let captureLimit, line.count > captureLimit { truncated = true }
+            lines.append(String(decoding: line.prefix(captureLimit ?? line.count), as: UTF8.self))
             pendingLine.removeSubrange(...newline)
+        }
+        if let captureLimit, pendingLine.count > captureLimit {
+            pendingLine = Data(pendingLine.prefix(captureLimit))
+            truncated = true
         }
         lock.unlock()
         emit(lines)

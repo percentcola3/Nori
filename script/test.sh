@@ -2532,6 +2532,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_directory_files.sh" || fail "directory file operation safety tests"
     bash "$ROOT_DIR/script/test_directory_search.sh" || fail "directory persistent index and search tests"
     bash "$ROOT_DIR/script/test_directory_browser.sh" || fail "directory navigation and clipboard workflow tests"
+    bash "$ROOT_DIR/script/test_directory_git.sh" || fail "directory Git repository operation tests"
     bash "$ROOT_DIR/script/test_media.sh" || fail "file slimming tests"
     # 瘦身只删除自己的临时输出；原件只能经注入的 Trash 离开原位。
     media_slimmer="$ROOT_DIR/SimpleMole/Services/MediaSlimmer.swift"

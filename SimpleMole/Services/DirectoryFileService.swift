@@ -14,6 +14,7 @@ struct DirectoryEntry: Identifiable, Hashable, Sendable {
     let logicalBytes: Int64?
     var allocatedBytes: Int64?
     let modifiedAt: Date?
+    var isGitRepository: Bool = false
 
     static func metadata(url: URL) throws -> DirectoryEntry {
         let url = try DirectoryFileService.fileURL(url)
@@ -29,12 +30,20 @@ struct DirectoryEntry: Identifiable, Hashable, Sendable {
         // stat flags do not require opening the content of cloud placeholders.
         let hidden = url.lastPathComponent.hasPrefix(".") || (info.st_flags & UInt32(UF_HIDDEN)) != 0
         let measured = !isDirectory || isLink
+        let isGitRepository: Bool
+        if isDirectory, !isLink, info.st_flags & 0x40000000 == 0,
+           let marker = try? DirectoryFileService.fileInfo(url.appendingPathComponent(".git")) {
+            isGitRepository = [S_IFDIR, S_IFREG].contains(marker.st_mode & S_IFMT)
+        } else {
+            isGitRepository = false
+        }
         return DirectoryEntry(id: url.path, url: url, name: url.lastPathComponent,
                               isDirectory: isDirectory, isSymbolicLink: isLink, isHidden: hidden,
                               logicalBytes: measured ? max(0, Int64(info.st_size)) : nil,
                               allocatedBytes: measured ? DirectoryFileService.blocks(info) : nil,
                               modifiedAt: Date(timeIntervalSince1970: Double(info.st_mtimespec.tv_sec)
-                                  + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000))
+                                  + Double(info.st_mtimespec.tv_nsec) / 1_000_000_000),
+                              isGitRepository: isGitRepository)
     }
 }
 

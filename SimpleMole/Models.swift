@@ -1182,12 +1182,14 @@ struct RunResult {
     let errorOutput: String
     let exitCode: Int32
     let timedOut: Bool
+    let outputTruncated: Bool
 
-    init(output: String, errorOutput: String = "", exitCode: Int32, timedOut: Bool) {
+    init(output: String, errorOutput: String = "", exitCode: Int32, timedOut: Bool, outputTruncated: Bool = false) {
         self.output = output
         self.errorOutput = errorOutput
         self.exitCode = exitCode
         self.timedOut = timedOut
+        self.outputTruncated = outputTruncated
     }
 
     var succeeded: Bool { exitCode == 0 && !timedOut }

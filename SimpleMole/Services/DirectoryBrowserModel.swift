@@ -12,6 +12,7 @@ enum DirectorySizeState: Equatable {
 @MainActor
 final class DirectoryBrowserModel: ObservableObject {
     @Published private(set) var currentDirectory: URL
+    @Published private(set) var currentDirectoryIsGitRepository = false
     @Published private(set) var entries: [DirectoryEntry] = []
     @Published var selectedIDs: Set<String> = []
     @Published var query = "" {
@@ -69,6 +70,9 @@ final class DirectoryBrowserModel: ObservableObject {
     private let sizeCache: DirectorySizeCache
     private let sizeStorageDirectory: URL
     private let sizeCalibrationInterval: TimeInterval
+    private let sizeIdleReleaseDelay: TimeInterval
+    private var sizeIdleReleaseTask: Task<Void, Never>?
+    private var sizeStartupTask: Task<Void, Never>?
     private var sizeTask: Task<Void, Never>?
     private var sizeTimer: Timer?
     private var sizeWatcher: DirectorySizeWatcher?
@@ -100,13 +104,15 @@ final class DirectoryBrowserModel: ObservableObject {
 
     init(defaults: UserDefaults = .standard, homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
          initialDirectory: URL? = nil, indexDatabaseURL: URL? = nil, pasteboard: NSPasteboard = .general,
-         sizeCacheURL: URL? = nil, sizeCalibrationInterval: TimeInterval = 6 * 3600) {
+         sizeCacheURL: URL? = nil, sizeCalibrationInterval: TimeInterval = 6 * 3600,
+         sizeIdleReleaseDelay: TimeInterval = 120) {
         self.defaults = defaults
         self.homeDirectory = homeDirectory
         self.pasteboard = pasteboard
         self.sizeCache = DirectorySizeCache(cacheURL: sizeCacheURL)
         self.sizeStorageDirectory = DirectorySizeCache.storageURL(cacheURL: sizeCacheURL).deletingLastPathComponent()
         self.sizeCalibrationInterval = max(1, sizeCalibrationInterval)
+        self.sizeIdleReleaseDelay = max(0, sizeIdleReleaseDelay)
         let saved = defaults.string(forKey: "NoriDirectoryLastPath").map { URL(fileURLWithPath: $0) }
         let initial = initialDirectory ?? saved ?? homeDirectory
         let directory = initial.standardizedFileURL
@@ -127,6 +133,8 @@ final class DirectoryBrowserModel: ObservableObject {
         sizeScheduleTask?.cancel()
         sizeWatchTask?.cancel()
         sizeChangeTask?.cancel()
+        sizeIdleReleaseTask?.cancel()
+        sizeStartupTask?.cancel()
     }
 
     var hasSearchQuery: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
@@ -157,7 +165,10 @@ final class DirectoryBrowserModel: ObservableObject {
     func start() {
         guard !isActive else { return }
         isActive = true
-        startSizeBackgroundWork()
+        let pendingRelease = sizeIdleReleaseTask
+        pendingRelease?.cancel()
+        sizeIdleReleaseTask = nil
+        startSizeBackgroundWork(after: pendingRelease)
         reloadDirectory()
         updateClipboardState()
         clipboardTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
@@ -167,6 +178,7 @@ final class DirectoryBrowserModel: ObservableObject {
     }
 
     func suspend() {
+        guard isActive else { return }
         isActive = false
         generation = UUID()
         searchGeneration = UUID()
@@ -180,8 +192,18 @@ final class DirectoryBrowserModel: ObservableObject {
         clipboardTimer = nil
         isLoading = false
         isSearching = false
-        // The app owns the cache, scheduler and recursive watcher. Leaving the
-        // tab only suspends navigation/search; queued utility I/O keeps going.
+        let delay = UInt64(sizeIdleReleaseDelay * 1_000_000_000)
+        sizeIdleReleaseTask = Task { [weak self, sizeCache] in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled, let self, !self.isActive else { return }
+            self.stopSizeBackgroundWork()
+            self.lastSizeAttempt.removeAll()
+            self.sizeRecords = self.sizeRecords.mapValues {
+                DirectorySizeRecord(result: $0.result, updatedAt: $0.updatedAt, isStale: true)
+            }
+            self.applySizeRecords()
+            await sizeCache.releaseTrees()
+        }
     }
 
     func clearError() { errorMessage = nil }
@@ -220,6 +242,7 @@ final class DirectoryBrowserModel: ObservableObject {
         sizeUpdatedAt = [:]
         sizePartialIDs = []
         currentDirectory = url
+        currentDirectoryIsGitRepository = false
         query = ""
         showHidden = hiddenVisibility[url.path] ?? true
         selectedIDs.removeAll()
@@ -284,13 +307,18 @@ final class DirectoryBrowserModel: ObservableObject {
         errorMessage = nil
         loadTask = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
-                Result { try DirectoryFileService.list(directory: directory, showHidden: true) }
+                Result {
+                    let entries = try DirectoryFileService.list(directory: directory, showHidden: true)
+                    let isRepository = (try? DirectoryEntry.metadata(url: directory).isGitRepository) ?? false
+                    return (entries: entries, isRepository: isRepository)
+                }
             }.value
             guard let self, !Task.isCancelled, self.generation == ticket else { return }
             self.isLoading = false
             switch result {
-            case .success(let items):
-                self.folderEntries = items
+            case .success(let listing):
+                self.currentDirectoryIsGitRepository = listing.isRepository
+                self.folderEntries = listing.entries
                 self.updateSearch(calibrateSizes: calibrateSizes)
                 if !self.pendingRevealIDs.isEmpty {
                     self.selectedIDs = self.pendingRevealIDs.intersection(Set(self.entries.map(\.id)))
@@ -298,12 +326,14 @@ final class DirectoryBrowserModel: ObservableObject {
                 }
                 self.watch(directory)
             case .failure(let error):
+                self.currentDirectoryIsGitRepository = false
                 self.folderEntries = []
                 self.entries = []
                 self.sizeStates = [:]
                 self.sizeUpdatedAt = [:]
                 self.sizePartialIDs = []
                 self.errorMessage = L10n.shared.tf("dir.error.operation", error.localizedDescription)
+                self.measureDirectories()
             }
         }
     }
@@ -468,11 +498,18 @@ final class DirectoryBrowserModel: ObservableObject {
     private func measureDirectories(calibrate: Bool = false) {
         let directories = entries.filter { $0.isDirectory && !$0.isSymbolicLink }.map(\.url)
         applySizeRecords()
-        guard !directories.isEmpty else { return }
         let session = sizeSessionID
+        let ticket = searchGeneration
+        let navigation = generation
+        let startup = sizeStartupTask
         Task { [weak self, sizeCache] in
+            await startup?.value
+            guard let self, self.sizeSessionID == session, self.sizeBackgroundStarted,
+                  self.searchGeneration == ticket, self.generation == navigation else { return }
+            await sizeCache.retainTrees(for: directories)
             let cached = await sizeCache.records(for: directories)
-            guard let self, self.sizeSessionID == session, self.sizeBackgroundStarted else { return }
+            guard self.sizeSessionID == session, self.sizeBackgroundStarted,
+                  self.searchGeneration == ticket, self.generation == navigation else { return }
             for url in directories {
                 // The actor owns eviction and freshness. In-memory values are
                 // only a presentation cache, never a reason to skip observing.
@@ -487,7 +524,7 @@ final class DirectoryBrowserModel: ObservableObject {
         }
     }
 
-    func startSizeBackgroundWork() {
+    private func startSizeBackgroundWork(after pendingRelease: Task<Void, Never>?) {
         guard !sizeBackgroundStarted else { return }
         sizeBackgroundStarted = true
         sizeSessionID = UUID()
@@ -500,14 +537,25 @@ final class DirectoryBrowserModel: ObservableObject {
             Task { @MainActor [weak self] in self?.scheduleSizeCalibration() }
         }
         sizeTimer?.tolerance = 20
-        scheduleSizeWatcherUpdate()
-        scheduleSizeCalibration()
+        let session = sizeSessionID
+        // A quick reopen must not let the previous idle release discard its new trees.
+        sizeStartupTask = Task { [weak self, sizeCache] in
+            await pendingRelease?.value
+            guard !Task.isCancelled, let self, self.sizeSessionID == session else { return }
+            await sizeCache.retainTrees(for: self.visibleSizeDirectories)
+            guard !Task.isCancelled, self.sizeSessionID == session else { return }
+            self.sizeStartupTask = nil
+            self.scheduleSizeWatcherUpdate()
+            self.scheduleSizeCalibration()
+        }
     }
 
-    /// App-lifetime work, independently testable without advancing the run loop.
+    /// Work stays active briefly after leaving the directory page.
     /// Only previously observed roots are due; browsing never starts a disk-wide scan.
     func runScheduledSizeRefresh(now: Date = Date(), force: Bool = false) async {
         let session = sizeSessionID
+        await sizeStartupTask?.value
+        guard !Task.isCancelled, sizeBackgroundStarted, sizeSessionID == session else { return }
         var urls = force ? await sizeCache.observedDirectories()
             : await sizeCache.dueDirectories(now: now, interval: sizeCalibrationInterval)
         urls.append(contentsOf: visibleSizeDirectories.filter {
@@ -726,8 +774,7 @@ final class DirectoryBrowserModel: ObservableObject {
         scheduleSizeWatcherUpdate()
     }
 
-    /// Explicit teardown for model fixtures and owners that release the workspace.
-    /// Normal tab switching deliberately calls suspend() instead.
+    /// Stop background I/O after the grace period or when the workspace is released.
     func stopSizeBackgroundWork() {
         sizeSessionID = UUID()
         sizeTimer?.invalidate()
@@ -738,6 +785,8 @@ final class DirectoryBrowserModel: ObservableObject {
         sizeScheduleTask?.cancel()
         sizeWatchTask?.cancel()
         sizeChangeTask?.cancel()
+        sizeStartupTask?.cancel()
+        sizeStartupTask = nil
         sizeTask = nil
         sizeScheduleTask = nil
         sizeWatchTask = nil
@@ -831,6 +880,23 @@ final class DirectoryBrowserModel: ObservableObject {
         guard !urls.isEmpty else { return }
         perform(changedPaths: urls, itemCount: urls.count) { try DirectoryFileService.trash(urls); return [] }
     }
+    func beginGitOperation() -> Bool {
+        guard !isWorking else { return false }
+        isWorking = true
+        errorMessage = nil
+        statusMessage = L10n.shared.t("dir.git.working")
+        return true
+    }
+
+    func finishGitOperation(at repository: URL, error: String?) {
+        isWorking = false
+        if isActive { reloadDirectory() }
+        errorMessage = error
+        statusMessage = error == nil ? L10n.shared.t("dir.git.completed") : nil
+        invalidateSizes(paths: [repository])
+        enqueueIndexChanges([repository])
+    }
+
     private func perform(changedPaths: [URL], itemCount: Int, consumedCutURLs: [URL] = [],
                          action: @escaping @Sendable () throws -> [URL]) {
         guard !isWorking else { return }

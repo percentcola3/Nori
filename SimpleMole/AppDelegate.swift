@@ -37,11 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
         updateStatusItem()
-        appState.directoryBrowser.startSizeBackgroundWork()
 
         AppUpdateController.shared.start { [weak self] in
             guard let self else { return false }
             return !self.appState.isBusy && self.appState.confirmation == nil
+                && !self.appState.directoryBrowser.isWorking
                 && self.appState.taskNotice == nil
                 && self.screenshotProcess?.isRunning != true
                 && !RatioCaptureController.shared.isCapturing
@@ -743,7 +743,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func observeMainWindow(_ window: NSWindow) {
         NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification, object: window)
-            .sink { [weak self] _ in self?.appState.mainWindowVisible = true }
+            .sink { [weak self] _ in
+                self?.appState.mainWindowVisible = true
+                self?.resumeDirectoryBrowserIfVisible()
+            }
             .store(in: &observables)
         NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification, object: window)
             .sink { [weak self] _ in self?.appState.mainWindowVisible = false }
@@ -753,8 +756,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.setActivationPolicy(.accessory)
                 self?.appState.mainWindowVisible = false
                 self?.appState.trafficMonitor.setPageVisible(false)
+                self?.appState.directoryBrowser.suspend()
             }
             .store(in: &observables)
+        NotificationCenter.default.publisher(for: NSWindow.didMiniaturizeNotification, object: window)
+            .sink { [weak self] _ in self?.appState.directoryBrowser.suspend() }
+            .store(in: &observables)
+        NotificationCenter.default.publisher(for: NSWindow.didDeminiaturizeNotification, object: window)
+            .sink { [weak self] _ in self?.resumeDirectoryBrowserIfVisible() }
+            .store(in: &observables)
+        NotificationCenter.default.publisher(for: NSApplication.didHideNotification)
+            .sink { [weak self] _ in self?.appState.directoryBrowser.suspend() }
+            .store(in: &observables)
+        NotificationCenter.default.publisher(for: NSApplication.didUnhideNotification)
+            .sink { [weak self] _ in self?.resumeDirectoryBrowserIfVisible() }
+            .store(in: &observables)
+    }
+
+    private func resumeDirectoryBrowserIfVisible() {
+        guard !NSApp.isHidden, mainWindow?.isVisible == true, mainWindow?.isMiniaturized == false,
+              appState.visiblePages.indices.contains(appState.selectedTab),
+              appState.visiblePages[appState.selectedTab] == .directory else { return }
+        appState.directoryBrowser.start()
     }
 
     private var observables: Set<AnyCancellable> = []

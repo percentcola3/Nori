@@ -206,6 +206,17 @@ struct DirectoryFileServiceTests {
         }
         expectFailure("missing trash items must be reported") { try Service.trash([missing]) }
         expect(try read(protected) == "protected", "failed trash leaves unrelated entries intact")
+        let checkout = try Service.createDirectory(in: fixture, name: "git-checkout")
+        _ = try Service.createDirectory(in: checkout, name: ".git")
+        let worktree = try Service.createDirectory(in: fixture, name: "git-worktree")
+        let marker = try Service.createFile(in: worktree, name: ".git")
+        try Data("gitdir: /fixture/repository/worktrees/example\n".utf8).write(to: marker)
+        expect(try DirectoryEntry(url: checkout).isGitRepository,
+               "a checkout marker is detected without invoking Git")
+        expect(try DirectoryEntry(url: worktree).isGitRepository,
+               "a worktree gitfile is detected without requiring a .git directory")
+        expect(try !DirectoryEntry(url: folder).isGitRepository && !DirectoryEntry(url: file).isGitRepository,
+               "ordinary folders and files do not get a repository marker")
         print("Directory filesystem tests passed")
     }
 }

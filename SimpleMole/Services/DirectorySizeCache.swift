@@ -254,8 +254,8 @@ actor DirectorySizeCache {
     private static let maximumStateBytes = 4 << 20
     /// 内存成员树的总节点预算与单根上限；超出的根只保留汇总值，
     /// 下次刷新时重新完整测量。
-    private static let treeNodeBudget = 400_000
-    private static let treeNodeLimitPerRoot = 250_000
+    private static let treeNodeBudget = 50_000
+    private static let treeNodeLimitPerRoot = 25_000
     private let cacheURL: URL
     private let inspectionObserver: (@Sendable (String) async -> Void)?
     private var loaded = false
@@ -266,6 +266,7 @@ actor DirectorySizeCache {
     private var revisions: [String: UInt64] = [:]
     private var inFlight: [String: Int] = [:]
     private var accessedAt: [String: Date] = [:]
+    private var retainedTreePaths: Set<String>?
     private var lastDiagnostics = DirectorySizeCacheDiagnostics(inspectedCount: 0, enumerationCount: 0,
                                                                 inspectedPaths: [], enumeratedDirectories: [])
 
@@ -301,6 +302,21 @@ actor DirectorySizeCache {
 
     func diagnostics() -> DirectorySizeCacheDiagnostics { lastDiagnostics }
 
+    /// Keep detailed trees only for these measured roots, within the node
+    /// budget. Summaries and freshness remain available for every cached root.
+    func retainTrees(for urls: [URL]) {
+        retainedTreePaths = Set(urls.filter(\.isFileURL).map(Self.normalizedPath))
+        trimTrees()
+    }
+
+    /// Paused observation leaves summaries visible but stale. Future refreshes
+    /// cannot retain trees until the browser supplies another retention scope.
+    func releaseTrees() {
+        loadIfNeeded()
+        retainTrees(for: [])
+        stale.formUnion(roots.keys)
+    }
+
     func refresh(_ url: URL, mode: DirectorySizeRefreshMode = .incremental) async -> DirectorySizeRecord? {
         loadIfNeeded()
         guard url.isFileURL else { return nil }
@@ -333,7 +349,7 @@ actor DirectorySizeCache {
             if scanner.rootUnreadable {
                 stale.insert(path)
                 needsCalibration.insert(path)
-                if previous?.node == nil {
+                if previous?.measured != true {
                     // Observe unreadable first-use roots so watcher/timer
                     // retries can recover later, without presenting zero as
                     // a measured size. The placeholder is never visible.
@@ -354,7 +370,10 @@ actor DirectorySizeCache {
                 return nil
             }
             let result = node?.result ?? DirectorySizeResult(bytes: 0, isComplete: false)
-            let stored = StoredRoot(path: path, node: node, bytes: result.bytes,
+            // Recheck after the scan's awaits: navigation or idle release may
+            // have changed which roots can retain their detailed trees.
+            let retainedNode = retainedTreePaths?.contains(path) == false ? nil : node
+            let stored = StoredRoot(path: path, node: retainedNode, bytes: result.bytes,
                                     isComplete: result.isComplete, updatedAt: Date(), measured: true)
             roots[path] = stored
             stale.remove(path)
@@ -464,7 +483,8 @@ actor DirectorySizeCache {
         }
         for path in ordered {
             guard let count = roots[path]?.node?.nodeCount else { continue }
-            if count <= Self.treeNodeLimitPerRoot && used + count <= Self.treeNodeBudget {
+            if retainedTreePaths?.contains(path) != false,
+               count <= Self.treeNodeLimitPerRoot && used + count <= Self.treeNodeBudget {
                 used += count
             } else {
                 roots[path]?.node = nil

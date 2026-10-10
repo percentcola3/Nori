@@ -163,8 +163,42 @@ struct DirectoryBrowserTests {
         try await testUnifiedSearch(in: root, defaults: defaults, clipboard: clipboard)
         try await testTargetedPaste(in: root, defaults: defaults, clipboard: clipboard)
         try await testBackgroundSizes(in: root, defaults: defaults, clipboard: clipboard)
+        try await testIdleSizeRelease(in: root, defaults: defaults, clipboard: clipboard)
         try await testVisibleSizeCacheCapacity(in: root, defaults: defaults, clipboard: clipboard)
+        try await testGitOperationLifecycle(in: root, defaults: defaults, clipboard: clipboard)
         print("Directory model: history, hidden preferences, filtering, isolated clipboard copy/move and partial retry, mutation refresh and lifecycle passed")
+    }
+
+    static func testGitOperationLifecycle(in root: URL, defaults: UserDefaults, clipboard: NSPasteboard) async throws {
+        let parent = root.appendingPathComponent("git-model")
+        let repository = parent.appendingPathComponent("repository")
+        try FileManager.default.createDirectory(at: repository.appendingPathComponent(".git"),
+                                               withIntermediateDirectories: true)
+        let model = DirectoryBrowserModel(defaults: defaults, homeDirectory: parent, initialDirectory: parent,
+            indexDatabaseURL: root.appendingPathComponent("git-model-index.sqlite"), pasteboard: clipboard,
+            sizeCacheURL: root.appendingPathComponent("git-model-cache/sizes.json"))
+        defer { model.suspend(); model.stopSizeBackgroundWork() }
+        model.start()
+        try await settle { !model.isLoading && model.entries.contains { $0.isGitRepository } }
+        precondition(!model.currentDirectoryIsGitRepository, "The parent of a repository was marked as a Git root")
+        model.navigate(to: repository)
+        try await settle { !model.isLoading && model.currentDirectoryIsGitRepository }
+        precondition(model.beginGitOperation() && !model.beginGitOperation(), "Git operations must be serialized")
+        model.createFile(name: "blocked.txt")
+        precondition(!FileManager.default.fileExists(atPath: repository.appendingPathComponent("blocked.txt").path),
+                     "File mutations must not race a Git checkout")
+        let changedFile = repository.appendingPathComponent("from-git.txt")
+        try Data("Git operation result".utf8).write(to: changedFile)
+        model.finishGitOperation(at: repository, error: nil)
+        try await settle { !model.isWorking && !model.isLoading && model.entries.contains { $0.url == changedFile } }
+        model.goUp()
+        try await settle { !model.isLoading && !model.currentDirectoryIsGitRepository }
+        precondition(model.beginGitOperation())
+        model.suspend()
+        model.finishGitOperation(at: repository, error: "fixture failure")
+        precondition(!model.isLoading && !model.isWorking && model.errorMessage == "fixture failure",
+                     "Completing a Git action offscreen must release the lock and preserve its error without reopening navigation")
+        print("Directory Git integration: repository display, mutation locking, refresh and offscreen completion passed")
     }
 
     static func testUnifiedSearch(in root: URL, defaults: UserDefaults, clipboard: NSPasteboard) async throws {
@@ -352,6 +386,58 @@ struct DirectoryBrowserTests {
         precondition(model.entries.first?.allocatedBytes == DirectoryFileService.allocatedSize(of: folder).bytes,
                      "Mutation failed to update the observed parent total")
         print("Directory background sizes: cached filtering, recursive hidden edits offscreen, six-hour calibration and ancestor mutation passed")
+    }
+
+    static func testIdleSizeRelease(in root: URL, defaults: UserDefaults, clipboard: NSPasteboard) async throws {
+        let parent = root.appendingPathComponent("idle-size-workspace")
+        let folder = parent.appendingPathComponent("folder")
+        let payload = folder.appendingPathComponent("payload.bin")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(repeating: 0x61, count: 32_768).write(to: payload)
+        let model = DirectoryBrowserModel(defaults: defaults, homeDirectory: parent, initialDirectory: parent,
+            indexDatabaseURL: root.appendingPathComponent("idle-index.sqlite"), pasteboard: clipboard,
+            sizeCacheURL: root.appendingPathComponent("idle-cache/sizes.json"), sizeIdleReleaseDelay: 0.15)
+        defer { model.suspend(); model.stopSizeBackgroundWork() }
+        model.start()
+        try await settle { model.sizeStates[folder.path] == .complete && !model.isCalculatingSizes }
+        let initialBytes = model.entries.first?.allocatedBytes
+        let initialUpdated = model.sizeUpdatedAt[folder.path]
+
+        model.suspend()
+        try await settle { model.sizeStates[folder.path] == .stale }
+        precondition(model.entries.first?.allocatedBytes == initialBytes,
+                     "Idle release discarded the displayed size summary")
+        try Data(repeating: 0x62, count: 131_072).write(to: payload)
+        await model.runScheduledSizeRefresh(force: true)
+        precondition(!model.isCalculatingSizes && model.sizeUpdatedAt[folder.path] == initialUpdated,
+                     "Idle workspace restarted background measurement")
+
+        model.start()
+        precondition(model.entries.first?.allocatedBytes == initialBytes,
+                     "Reopening lost the cached total before measurement completed")
+        let changed = DirectoryFileService.allocatedSize(of: folder)
+        try await settle {
+            model.entries.first?.allocatedBytes == changed.bytes
+                && model.sizeStates[folder.path] == .complete && !model.isCalculatingSizes
+        }
+        precondition(model.sizeUpdatedAt[folder.path] != initialUpdated,
+                     "Reopening failed to calibrate changes made while the watcher was stopped")
+
+        model.suspend()
+        model.start()
+        try await settle { !model.isLoading && !model.isCalculatingSizes }
+        let resumedUpdated = model.sizeUpdatedAt[folder.path]
+        try await Task.sleep(nanoseconds: 300_000_000)
+        precondition(model.sizeStates[folder.path] == .complete
+            && model.sizeUpdatedAt[folder.path] == resumedUpdated,
+                     "Returning within the grace period did not cancel the idle release")
+        try Data(repeating: 0x63, count: 262_144).write(to: payload)
+        let watched = DirectoryFileService.allocatedSize(of: folder)
+        try await settle {
+            model.entries.first?.allocatedBytes == watched.bytes
+                && model.sizeStates[folder.path] == .complete && !model.isCalculatingSizes
+        }
+        print("Directory idle release: preserved totals, paused I/O, offline changes and quick-return cancellation passed")
     }
 
     static func testVisibleSizeCacheCapacity(in root: URL, defaults: UserDefaults, clipboard: NSPasteboard) async throws {

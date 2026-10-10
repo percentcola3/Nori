@@ -11,6 +11,7 @@ struct DirectoryTabView: View {
     @Namespace private var dragNamespace
     @Namespace private var dialogNamespace
     @State private var dialog: DirectoryDialog?
+    @State private var gitDirectory: URL?
     @State private var dialogText = ""
     @State private var isDropTarget = false
     @FocusState private var focusedField: DirectoryInput?
@@ -28,7 +29,7 @@ struct DirectoryTabView: View {
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 10)
-            .disabled(dialog != nil)
+            .disabled(dialog != nil || gitDirectory != nil)
 
             if let dialog {
                 Button { dismissDialog() } label: {
@@ -43,11 +44,25 @@ struct DirectoryTabView: View {
                     .environment(\.liquidNamespace, dialogNamespace)
                     .transition(.opacity)
             }
+            if let gitDirectory {
+                Button { dismissGitPanel() } label: {
+                    Color.clear.contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(l10n.t("dir.git.close"))
+                DirectoryGitPanel(url: gitDirectory, model: model, onClose: dismissGitPanel)
+                    .padding(22)
+                    .frame(width: 410)
+                    .liquidSurface("directory-git")
+                    .environment(\.liquidNamespace, dialogNamespace)
+                    .transition(.opacity)
+            }
         }
         .background { keyboardCommands }
         .onAppear { model.start() }
         .onDisappear { model.suspend() }
         .animation(reduceMotion ? nil : MoleMotion.panel, value: dialog)
+        .animation(reduceMotion ? nil : MoleMotion.panel, value: gitDirectory)
         .accessibilityIdentifier("directory-tab")
     }
 
@@ -73,6 +88,15 @@ struct DirectoryTabView: View {
             HStack(spacing: 4) {
                 breadcrumbs
                     .frame(minWidth: 120, maxWidth: .infinity)
+                if model.currentDirectoryIsGitRepository, !model.hasSearchQuery {
+                    Button { presentGitPanel(model.currentDirectory) } label: {
+                        Image(systemName: "arrow.triangle.branch")
+                    }
+                    .buttonStyle(MoleIconButtonStyle(size: 30))
+                    .help(l10n.t("dir.git.actions"))
+                    .accessibilityLabel(l10n.t("dir.git.actions"))
+                    .accessibilityIdentifier("directory-git-actions")
+                }
                 pathControls
             }
         }
@@ -310,6 +334,11 @@ struct DirectoryTabView: View {
             model.revealSelectionInFinder()
         }
         Button(l10n.t("dir.path.copy")) { focusedField = .files; model.copyPath(entry.url) }
+        if entry.isGitRepository {
+            Button { presentGitPanel(entry.url) } label: {
+                Label(l10n.t("dir.git.actions"), systemImage: "arrow.triangle.branch")
+            }
+        }
         Divider()
         Button(l10n.t("dir.copy")) { selectForAction(entry); model.copySelection() }
             .disabled(model.isWorking)
@@ -337,12 +366,21 @@ struct DirectoryTabView: View {
     }
 
     private func presentDialog(_ next: DirectoryDialog, text: String = "") {
+        gitDirectory = nil
         dialogText = text
         dialog = next
         focusedField = .dialog
     }
 
     private func dismissDialog() { dialog = nil; focusedField = .files }
+
+    private func presentGitPanel(_ url: URL) {
+        dialog = nil
+        gitDirectory = url
+        focusedField = nil
+    }
+
+    private func dismissGitPanel() { gitDirectory = nil; focusedField = .files }
 
     private var dialogTitleKey: String {
         switch dialog {
@@ -404,7 +442,7 @@ struct DirectoryTabView: View {
             }
             .disabled(focusedField != .files || dialog != nil || model.isWorking)
         }
-        .disabled(dialog != nil)
+        .disabled(dialog != nil || gitDirectory != nil)
         .frame(width: 0, height: 0).opacity(0).accessibilityHidden(true)
     }
 
@@ -439,6 +477,7 @@ private struct DirectoryFileRow<MenuContent: View>: View {
 
     private var kind: String {
         if entry.isSymbolicLink { return l10n.t("dir.kind.link") }
+        if entry.isGitRepository { return l10n.t("dir.git.repository") }
         if entry.isDirectory { return l10n.t("dir.kind.folder") }
         let fileExtension = entry.url.pathExtension
         return fileExtension.isEmpty ? l10n.t("dir.kind.file") : fileExtension.uppercased()
@@ -489,7 +528,7 @@ private struct DirectoryFileRow<MenuContent: View>: View {
     private var columns: some View {
         HStack(spacing: 12) {
             HStack(spacing: 9) {
-                Image(systemName: entry.isSymbolicLink ? "arrowshape.turn.up.right" : entry.isDirectory ? "folder.fill" : "doc")
+                Image(systemName: entry.isSymbolicLink ? "arrowshape.turn.up.right" : entry.isGitRepository ? "arrow.triangle.branch" : entry.isDirectory ? "folder.fill" : "doc")
                     .foregroundStyle(entry.isDirectory ? Color.accentText : Color.secondary)
                     .font(.system(size: 16)).frame(width: 22)
                 VStack(alignment: .leading, spacing: 3) {

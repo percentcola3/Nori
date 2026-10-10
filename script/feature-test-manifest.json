@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "features": [
     {
+      "name": "目录浏览与 Git 仓库操作",
+      "suites": [
+        "test_directory_git.sh",
+        "test_directory_browser.sh",
+        "test_directory_files.sh"
+      ]
+    },
+    {
       "name": "清理与缓存、日志、垃圾",
       "suites": [
         "test_cleanup_scan.sh",
@@ -171,6 +179,9 @@
         "test_cleanup_presentation.sh",
         "test_cleanup_refresh.sh",
         "test_cleanup_scan.sh",
+        "test_directory_browser.sh",
+        "test_directory_files.sh",
+        "test_directory_git.sh",
         "test_disk_analysis.sh",
         "test_duplicate_deletion.sh",
         "test_duplicate_responsiveness.sh",

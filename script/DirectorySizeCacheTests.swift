@@ -283,6 +283,107 @@ struct DirectorySizeCacheTests {
         }
         expect(await bounded.observedDirectories().count == 128, "observed roots have a bounded persistence footprint")
 
+        let retentionLeft = fixture.appendingPathComponent("retention-left", isDirectory: true)
+        let retentionRight = fixture.appendingPathComponent("retention-right", isDirectory: true)
+        try manager.createDirectory(at: retentionLeft, withIntermediateDirectories: false)
+        try manager.createDirectory(at: retentionRight, withIntermediateDirectories: false)
+        try write(retentionLeft.appendingPathComponent("first"), bytes: 8192)
+        try write(retentionRight.appendingPathComponent("second"), bytes: 16384)
+        let retentionURL = fixture.appendingPathComponent("retention-cache/state.json")
+        let retentionCache = DirectorySizeCache(cacheURL: retentionURL)
+        _ = await refresh(retentionCache, retentionLeft)
+        _ = await refresh(retentionCache, retentionRight)
+        let beforeRelease = await retentionCache.records(for: [retentionLeft, retentionRight])
+        let persistedBeforeRelease = try Data(contentsOf: retentionURL)
+        await retentionCache.releaseTrees()
+        let releasedRecords = await retentionCache.records(for: [retentionLeft, retentionRight])
+        expect(releasedRecords.count == beforeRelease.count && beforeRelease.allSatisfy { path, record in
+            releasedRecords[path]?.result == record.result
+                && releasedRecords[path]?.updatedAt == record.updatedAt
+                && releasedRecords[path]?.isStale == true
+        }, "releasing detailed trees preserves totals and timestamps, marking them stale for resumed observation")
+        expect(try Data(contentsOf: retentionURL) == persistedBeforeRelease,
+               "releasing detailed trees leaves persisted summaries unchanged")
+        expect(await retentionCache.observedDirectories().count == 2,
+               "releasing detailed trees preserves watcher observation")
+        expect(await retentionCache.dueDirectories().count == 2,
+               "released summaries are due for refresh when browser observation resumes")
+        try write(retentionLeft.appendingPathComponent("added-after-release"), bytes: 32768)
+        let rescanned = await refresh(retentionCache, retentionLeft)
+        expect(rescanned.result == DirectoryFileService.allocatedSize(of: retentionLeft),
+               "refresh without a retained tree rescans and updates the correct total")
+        _ = await refresh(retentionCache, retentionLeft)
+        expect((await retentionCache.diagnostics()).enumerationCount > 0,
+               "refreshes after release do not silently retain detailed trees again")
+        let summaryWithoutTree = (await retentionCache.records(for: [retentionLeft]))[retentionLeft.path]!
+        await retentionCache.releaseTrees()
+        let releasedSummaryWithoutTree = (await retentionCache.records(for: [retentionLeft]))[retentionLeft.path]!
+        expect(releasedSummaryWithoutTree.result == summaryWithoutTree.result
+            && releasedSummaryWithoutTree.updatedAt == summaryWithoutTree.updatedAt
+            && releasedSummaryWithoutTree.isStale,
+            "pausing observation also marks a summary stale when its tree was already absent")
+
+        try manager.setAttributes([.posixPermissions: 0o000], ofItemAtPath: retentionLeft.path)
+        let releasedRootIsUnreadable = !manager.isReadableFile(atPath: retentionLeft.path)
+        let beforeReleasedRootFailure = (await retentionCache.records(for: [retentionLeft]))[retentionLeft.path]!
+        let releasedRootFailure = await retentionCache.refresh(retentionLeft)
+        if releasedRootIsUnreadable {
+            expect(releasedRootFailure?.result == beforeReleasedRootFailure.result
+                && releasedRootFailure?.updatedAt == beforeReleasedRootFailure.updatedAt
+                && releasedRootFailure?.isStale == true,
+                "an unreadable root keeps its previous summary after its detailed tree was released")
+        }
+        try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: retentionLeft.path)
+
+        await retentionCache.retainTrees(for: [retentionLeft])
+        _ = await refresh(retentionCache, retentionLeft)
+        _ = await refresh(retentionCache, retentionLeft)
+        expect((await retentionCache.diagnostics()).inspectedCount == 0,
+               "the active retention scope supports incremental tree reuse")
+        let beforeScopeChange = (await retentionCache.records(for: [retentionLeft]))[retentionLeft.path]
+        await retentionCache.retainTrees(for: [retentionRight])
+        expect((await retentionCache.records(for: [retentionLeft]))[retentionLeft.path] == beforeScopeChange,
+               "changing the retention scope preserves summaries outside the new scope")
+        _ = await refresh(retentionCache, retentionLeft)
+        expect((await retentionCache.diagnostics()).enumerationCount > 0,
+               "changing the retention scope evicts detailed trees outside the new scope")
+        _ = await refresh(retentionCache, retentionRight)
+        _ = await refresh(retentionCache, retentionRight)
+        expect((await retentionCache.diagnostics()).inspectedCount == 0,
+               "newly active roots retain their detailed trees")
+
+        let releaseDuringScanBox = InFlightBox()
+        let releaseDuringScanCache = DirectorySizeCache(
+            cacheURL: fixture.appendingPathComponent("release-during-scan-cache/state.json"),
+            inspectionObserver: { path in
+                if path == retentionLeft.path, let cache = releaseDuringScanBox.takeOnce() {
+                    await cache.releaseTrees()
+                }
+            })
+        releaseDuringScanBox.install(releaseDuringScanCache)
+        await releaseDuringScanCache.retainTrees(for: [retentionLeft])
+        expect((await refresh(releaseDuringScanCache, retentionLeft)).result
+            == DirectoryFileService.allocatedSize(of: retentionLeft),
+            "an in-flight scan still publishes its summary after tree release")
+        _ = await refresh(releaseDuringScanCache, retentionLeft)
+        expect((await releaseDuringScanCache.diagnostics()).enumerationCount > 0,
+               "an in-flight scan cannot restore a detailed tree after release")
+
+        let scopeDuringScanBox = InFlightBox()
+        let scopeDuringScanCache = DirectorySizeCache(
+            cacheURL: fixture.appendingPathComponent("scope-during-scan-cache/state.json"),
+            inspectionObserver: { path in
+                if path == retentionLeft.path, let cache = scopeDuringScanBox.takeOnce() {
+                    await cache.retainTrees(for: [retentionRight])
+                }
+            })
+        scopeDuringScanBox.install(scopeDuringScanCache)
+        await scopeDuringScanCache.retainTrees(for: [retentionLeft])
+        _ = await refresh(scopeDuringScanCache, retentionLeft)
+        _ = await refresh(scopeDuringScanCache, retentionLeft)
+        expect((await scopeDuringScanCache.diagnostics()).enumerationCount > 0,
+               "an in-flight scan cannot retain a detailed tree outside the latest scope")
+
         // reset()：内存清单与持久化封套一起消失，之后的 persist 只能写出
         // 新观测到的根，旧根不会复活（清理管道删除自有缓存的前提）。
         let resetCacheURL = fixture.appendingPathComponent("reset-cache/state.json")
