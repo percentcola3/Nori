@@ -275,7 +275,12 @@ final class MoleEngine {
         }
 
         // 关闭其他并发任务的 pipe，避免它们被新子进程继承导致 EOF 永不到达。
-        let spawnFlags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)
+        // Swift worker threads may block signals. Git and its transport children
+        // must receive their normal signals, including when a fetch fails.
+        var childSignalMask = sigset_t()
+        sigemptyset(&childSignalMask)
+        record(posix_spawnattr_setsigmask(&attributes, &childSignalMask))
+        let spawnFlags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK)
         record(posix_spawnattr_setflags(&attributes, spawnFlags))
         record(posix_spawnattr_setpgroup(&attributes, 0))
         guard setupError == 0 else {
