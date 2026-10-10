@@ -65,10 +65,36 @@ final class AppState: ObservableObject {
     var retryRequests = 0
     var programRemovalRequests = 0
     var associatedDataRequests = 0
-    var isBusyExcludingUninstall: Bool {
-        isApplying || isCleanupScanning || agentApplying || agentScanning || agentProgramBusyID != nil
+    // The presentation harness links the production page/mutation predicates.
+    // All unrelated domains stay idle; these values never start real services.
+    final class Queue {
+        var activeJob: String?
+        var hasWork: Bool { activeJob != nil }
     }
-    var isBusy: Bool { isBusyExcludingUninstall || cleanupQueued }
+    final class Simulator { var isDeleting = false }
+    let uninstallQueue = Queue()
+    let simulatorInventory = Simulator()
+    var isScanning: Bool { isCleanupScanning }
+    var isAutoCleanupScanning = false
+    var isAutoCleanupMutationActive = false
+    var isAnalyzing = false
+    var isScanningDuplicates = false
+    var isSlimming = false
+    var isDeletingDuplicates = false
+    var isDeletingAnalysisFiles = false
+    var isRefreshingAnalysisCache = false
+    var isScanningApps = false
+    var isScanningCommandLineTools = false
+    var isCheckingSoftwareUpdates = false
+    var commandLineToolBusyID: String?
+    var softwareUpdatingID: String?
+    var isScanningEnv = false
+    var isApplyingDevEnv = false
+    var isRefreshingGc = false
+    var gcRunningId: String?
+    var isDeveloperCommandRunning = false
+    var isDeveloperConfigurationWriting = false
+    var isNetworkToolRunning = false
     var hasCleanupSelection: Bool {
         categories.contains { $0.selectedSubset != nil }
             || installerCandidates?.selectedSubset != nil
@@ -126,6 +152,12 @@ final class AppState: ObservableObject {
         if systemMaintenanceSelection.contains(id) { systemMaintenanceSelection.remove(id) }
         else { systemMaintenanceSelection.insert(id) }
     }
+}
+
+enum ProtectedOperation {
+    case cleanupScan, deepCleanupScan, quickOptimize, developerToolsScan
+    case previewAutoCleanup, runAutoCleanup, aiScan, installedAppsScan, uninstall
+    case developmentEnvironmentScan, diskOverview
 }
 
 // These auxiliary sections remain empty throughout the presentation fixtures.

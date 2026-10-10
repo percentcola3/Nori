@@ -66,6 +66,7 @@ struct AutoCleanupCandidate {
 struct AutoCleanupPlan {
     var root = "/fixture/cache"
     var candidates = [AutoCleanupCandidate()]
+    var reclaimableBytes: UInt64 { candidates.reduce(0) { $0 &+ $1.bytes } }
 }
 final class NativeCore: @unchecked Sendable {
     struct ApplySummary: Sendable {
@@ -120,9 +121,30 @@ struct FixtureL10n {
     func tf(_ key: String, _ args: CVarArg...) -> String { key }
 }
 enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) } }
+enum ProtectedOperation { case previewAutoCleanup(ruleID: UUID), runAutoCleanup(ruleID: UUID) }
+@MainActor final class NSAlert {
+    enum Style { case warning }
+    enum Response { case alertFirstButtonReturn, alertSecondButtonReturn }
+    static var response = Response.alertFirstButtonReturn
+    static var onRun: (() -> Void)?
+    static var runs = 0
+    var alertStyle = Style.warning
+    var messageText = ""
+    var informativeText = ""
+    func addButton(withTitle title: String) {}
+    func runModal() -> Response {
+        Self.runs += 1
+        Self.onRun?()
+        return Self.response
+    }
+}
+@MainActor final class FixtureUninstallQueue {
+    var activeJob: UUID?
+}
 @MainActor final class AutomationRuntimeState {
     var scheduledRetry: DispatchWorkItem?
     var reportedPermissionRequirement = false
+    var mutationActive = false
 }
 
 @MainActor final class SchedulerFixture {
@@ -134,6 +156,13 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
     var cleanupBusy = false
     var isCleanupTaskBusy: Bool { cleanupBusy || isAutoCleanupScanning }
     var taskNotice: String?
+    let uninstallQueue = FixtureUninstallQueue()
+    var isApplying = false
+    var isSystemMaintenanceRunning = false
+    var agentApplying = false
+    var agentProgramBusyID: String?
+    var commandLineToolBusyID: String?
+    var softwareUpdatingID: String?
     let automationRuntime = AutomationRuntimeState()
     var autoCleanupStatus = ""
     var autoCleanupRuleIssues: [UUID: String] = [:]
@@ -151,11 +180,26 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
     let l10n = FixtureL10n()
     func log(_ value: String) { logs += 1 }
     func presentTaskFailure(message: String, details: [String]) { notifications += 1 }
+    func presentTaskFailure(message: String) { notifications += 1 }
     func presentTaskFailure(details: [String]) { notifications += 1 }
     func protectedAutoCleanupDirectories(excluding id: UUID) -> [String] {
         autoCleanupRules.filter { $0.id != id }.flatMap(\.directories)
     }
     func persistAutoCleanupRules() { persistCalls += 1 }
+    func authorize(_ operation: ProtectedOperation, presentingPermissionCenter: Bool) -> Bool {
+        permissionCenter.fullDiskAccessGranted
+    }
+    func startFixtureUninstall() -> Bool {
+        guard !isUninstallMutationBlocked, uninstallQueue.activeJob == nil else { return false }
+        uninstallQueue.activeJob = UUID()
+        return true
+    }
+    func startFixtureAgentMutation(program: Bool) -> Bool {
+        guard !isCleanupMutationBusy, uninstallQueue.activeJob == nil else { return false }
+        if program { agentProgramBusyID = "fixture-agent-program" }
+        else { agentApplying = true }
+        return true
+    }
     // PRODUCTION_SCHEDULER
 }
 @main struct AutoCleanupWorkflowTests {
@@ -165,6 +209,7 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
     @MainActor static func fixture() -> SchedulerFixture {
         AutoCleanupPlanner.reset()
         AutoCleanupRuleStore.pausesConsolidatedTasks = false
+        NSAlert.response = .alertFirstButtonReturn; NSAlert.onRun = nil; NSAlert.runs = 0
         NativeCore.shared.calls = 0; NativeCore.shared.fail = false; NativeCore.shared.items = []
         UserDefaults.standard.removeObject(forKey: SchedulerFixture.autoCleanupLastCheckKey)
         return SchedulerFixture()
@@ -224,6 +269,99 @@ enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) 
         s = fixture(); s.externallyBusy = true
         s.runScheduledAutoCleanup(force: true); await settle(s)
         expect(s.applied == 1 && s.externallyBusy, "another tab prevented automatic cleanup")
+        s = fixture(); s.uninstallQueue.activeJob = UUID()
+        s.runAutoCleanupNow(s.autoCleanupRules[0].id)
+        expect(AutoCleanupPlanner.calls == 0 && s.applied == 0 && NSAlert.runs == 0,
+               "active app uninstall did not block manual automatic-cleanup mutation")
+        s.runScheduledAutoCleanup(force: true)
+        expect(AutoCleanupPlanner.calls == 0 && s.applied == 0 && s.automationRuntime.scheduledRetry != nil,
+               "active app uninstall did not safely defer a scheduled automatic cleanup")
+        s.previewAutoCleanup(s.autoCleanupRules[0].id); await settle(s)
+        expect(AutoCleanupPlanner.calls == 1 && s.applied == 0 && s.autoCleanupPreview != nil,
+               "read-only preview must stay independent of app uninstall")
+        s.uninstallQueue.activeJob = nil
+        s.runScheduledAutoCleanup(force: true); await settle(s)
+        expect(s.applied == 1 && s.automationRuntime.scheduledRetry == nil,
+               "deferred schedule did not resume after app uninstall")
+        for previewConsumer in ["uninstall", "agent-data", "agent-program"] {
+            s = fixture(); AutoCleanupPlanner.paused = true
+            let preview = s
+            preview.previewAutoCleanup(preview.autoCleanupRules[0].id)
+            for _ in 0..<1000 {
+                if AutoCleanupPlanner.continuation != nil { break }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            expect(AutoCleanupPlanner.continuation != nil && preview.isAutoCleanupScanning
+                   && !preview.isAutoCleanupMutationActive && !preview.isSoftwareMutationBlocked,
+                   "read-only preview acquired a shared mutation claim")
+            let started = previewConsumer == "uninstall" ? preview.startFixtureUninstall()
+                : preview.startFixtureAgentMutation(program: previewConsumer == "agent-program")
+            expect(started, "a preview that started first blocked " + previewConsumer)
+            AutoCleanupPlanner.continuation?.resume(); AutoCleanupPlanner.continuation = nil
+            await settle(preview)
+            expect(preview.applied == 0 && preview.autoCleanupPreview != nil,
+                   "read-only preview performed a mutation or lost its result")
+        }
+        for external in ["agent-data", "agent-program", "cli", "update"] {
+            s = fixture()
+            switch external {
+            case "agent-data": s.agentApplying = true
+            case "agent-program": s.agentProgramBusyID = "fixture-agent-program"
+            case "cli": s.commandLineToolBusyID = "fixture-cli"
+            default: s.softwareUpdatingID = "fixture-update"
+            }
+            s.runAutoCleanupNow(s.autoCleanupRules[0].id)
+            s.runScheduledAutoCleanup(force: true)
+            expect(AutoCleanupPlanner.calls == 0 && s.applied == 0 && s.automationRuntime.scheduledRetry != nil,
+                   "external mutation did not defer automatic cleanup: " + external)
+            let refused = await s.applyAutoCleanup(rule: s.autoCleanupRules[0], plan: AutoCleanupPlan())
+            expect(refused.failed > 0 && s.applied == 0,
+                   "external mutation crossed final apply: " + external)
+            s.previewAutoCleanup(s.autoCleanupRules[0].id); await settle(s)
+            expect(AutoCleanupPlanner.calls == 1 && s.applied == 0,
+                   "external mutation prevented a read-only preview: " + external)
+            s.agentApplying = false; s.agentProgramBusyID = nil
+            s.commandLineToolBusyID = nil; s.softwareUpdatingID = nil
+            s.runScheduledAutoCleanup(force: true); await settle(s)
+            expect(s.applied == 1, "automatic cleanup did not resume after " + external)
+        }
+        for manual in [false, true] {
+            s = fixture(); AutoCleanupPlanner.paused = true
+            let running = s
+            if manual { running.runAutoCleanupNow(running.autoCleanupRules[0].id) }
+            else { running.runScheduledAutoCleanup(force: true) }
+            for _ in 0..<1000 {
+                if AutoCleanupPlanner.continuation != nil { break }
+                try? await Task.sleep(nanoseconds: 1_000_000)
+            }
+            expect(AutoCleanupPlanner.continuation != nil && running.isUninstallMutationBlocked
+                   && !running.startFixtureUninstall()
+                   && !running.startFixtureAgentMutation(program: false)
+                   && !running.startFixtureAgentMutation(program: true),
+                   "automatic cleanup that started first did not reserve the shared mutation boundary")
+            if manual {
+                NSAlert.onRun = {
+                    expect(running.isAutoCleanupScanning && running.isUninstallMutationBlocked
+                           && !running.startFixtureUninstall()
+                           && !running.startFixtureAgentMutation(program: false)
+                           && !running.startFixtureAgentMutation(program: true),
+                           "manual confirmation released its mutation claim inside the modal run loop")
+                }
+            }
+            AutoCleanupPlanner.continuation?.resume(); AutoCleanupPlanner.continuation = nil
+            await settle(running)
+            expect(running.applied == 1 && running.startFixtureUninstall(),
+                   "completed automatic cleanup did not release the shared mutation boundary")
+            NSAlert.onRun = nil
+        }
+        s = fixture(); s.uninstallQueue.activeJob = UUID()
+        let mutationBlocked = await s.applyAutoCleanup(rule: s.autoCleanupRules[0], plan: AutoCleanupPlan())
+        expect(mutationBlocked.failed > 0 && s.applied == 0,
+               "an active app uninstall crossed the final automatic-cleanup apply boundary")
+        s = fixture(); NSAlert.response = .alertSecondButtonReturn
+        s.runAutoCleanupNow(s.autoCleanupRules[0].id); await settle(s)
+        expect(s.applied == 0 && !s.isUninstallMutationBlocked && s.startFixtureUninstall(),
+               "cancelled manual cleanup retained the shared mutation claim")
         s = fixture(); s.taskNotice = "pending"
         s.runScheduledAutoCleanup(); expect(s.automationRuntime.scheduledRetry != nil, "notice did not defer")
         s.cancelAutomationRetry()

@@ -183,7 +183,7 @@ struct UninstallTabView: View {
                             isCheckingUpdate: state.softwareUpdateCheckingIDs.contains(SoftwareUpdateService.appKey(app)),
                             updatingID: state.softwareUpdatingID,
                             canUpdate: app.path == Bundle.main.bundleURL.path && app.bundleID == Bundle.main.bundleIdentifier
-                                ? appUpdate.canCheckForUpdates : !state.isSoftwareTaskBusy && !state.isAgentCLIMutationActive,
+                                ? appUpdate.canCheckForUpdates : !state.isSoftwareTaskBusy && !state.isSoftwareMutationBlocked,
                             externalPending: state.softwareUpdateHandoffIDs.contains(SoftwareUpdateService.appKey(app)),
                             agentStorage: state.agentDataFootprints(for: app),
                             isAgentStorageLoading: !AgentSoftwareInventory.agentIDs(for: app)
@@ -650,7 +650,7 @@ private struct CommandLineToolsSection: View {
                 }
                 .buttonStyle(SecondaryButtonStyle())
                 .controlSize(.small)
-                .disabled(state.isSoftwareTaskBusy || state.isAgentCLIMutationActive)
+                .disabled(state.isSoftwareTaskBusy || state.isSoftwareMutationBlocked)
             }
             if tool.agentID != nil {
                 Button { state.jump(to: .agents) } label: {
@@ -682,7 +682,7 @@ private struct CommandLineToolsSection: View {
                 }
                 .buttonStyle(DangerButtonStyle())
                 .controlSize(.small)
-                .disabled(!tool.canUninstall || state.isSoftwareTaskBusy || state.isAgentCLIMutationActive)
+                .disabled(!tool.canUninstall || state.isSoftwareTaskBusy || state.isSoftwareMutationBlocked)
                 .help(tool.canUninstall ? "" : l10n.tf("cli.tag.dependents", tool.dependents.count))
             }
         }

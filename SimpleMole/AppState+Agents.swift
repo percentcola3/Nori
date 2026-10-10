@@ -363,7 +363,8 @@ extension AppState {
     }
 
     func applyAgentCleanup() {
-        guard !isAgentTaskBusy, uninstallQueue.activeJob == nil, agentHasScanned else { return }
+        guard !isAgentTaskBusy, !isCleanupMutationBusy, uninstallQueue.activeJob == nil,
+              commandLineToolBusyID == nil, softwareUpdatingID == nil, agentHasScanned else { return }
         let selection = effectiveAgentCleanupSelection
         guard selection.count > 0 else {
             agentStatus = L10n.shared.t("cleanup.selectNone")
@@ -376,7 +377,9 @@ extension AppState {
     /// Refresh the data preview after closing its trusted consumers, so the
     /// final confirmation binds the post-shutdown file identities.
     func offerAgentAssociatedDataCleanup(agentIDs: Set<String>, programName: String? = nil) {
-        guard !agentIDs.isEmpty, !isAgentTaskBusy, confirmation == nil, taskNotice == nil else { return }
+        guard !agentIDs.isEmpty, !isAgentTaskBusy, !isCleanupMutationBusy,
+              uninstallQueue.activeJob == nil, commandLineToolBusyID == nil, softwareUpdatingID == nil,
+              confirmation == nil, taskNotice == nil else { return }
         agentProgramBusyID = "data:" + agentIDs.sorted().joined(separator: ",")
         let home = NSHomeDirectory()
         Task { [self] in
@@ -411,7 +414,9 @@ extension AppState {
                     message: l10n.t("agents.data.running.message") + "\n\n"
                         + Set(probe.processes.map(\.name)).sorted().joined(separator: ", "),
                     confirmLabel: l10n.t("agents.data.running.action")) { [weak self] in
-                        guard let self, !self.isAgentTaskBusy else { return }
+                        guard let self, !self.isAgentTaskBusy, !self.isCleanupMutationBusy,
+                              self.uninstallQueue.activeJob == nil, self.commandLineToolBusyID == nil,
+                              self.softwareUpdatingID == nil else { return }
                         self.agentProgramBusyID = "data:" + agentIDs.sorted().joined(separator: ",")
                         Task {
                             let stopped = await SoftwareUpdateProcesses.close(scope, stillCurrent: {
@@ -438,7 +443,9 @@ extension AppState {
             if !report.complete { message += "\n\n" + l10n.t("log.scanPartial") }
             confirmation = Confirmation(title: l10n.t("agents.data.confirm.title"), message: message,
                 confirmLabel: l10n.t("agents.confirm.proceed")) { [weak self] in
-                    guard let self, !self.isAgentTaskBusy else { return }
+                    guard let self, !self.isAgentTaskBusy, !self.isCleanupMutationBusy,
+                          self.uninstallQueue.activeJob == nil, self.commandLineToolBusyID == nil,
+                          self.softwareUpdatingID == nil else { return }
                     self.agentProgramBusyID = "data:" + agentIDs.sorted().joined(separator: ",")
                     Task {
                         // A desktop or an interpreter-hosted CLI can start
@@ -472,11 +479,8 @@ extension AppState {
     }
 
     private func startAgentAction(_ requestedAction: AgentTaskAction, rechecking: Bool = false) {
-        guard !isAgentTaskBusy, uninstallQueue.activeJob == nil, agentHasScanned else { return }
-        // CLI removals share package-manager state with the software page.
-        if !requestedAction.selection.cliInstallations.isEmpty {
-            guard commandLineToolBusyID == nil, softwareUpdatingID == nil else { return }
-        }
+        guard !isAgentTaskBusy, !isCleanupMutationBusy, uninstallQueue.activeJob == nil,
+              commandLineToolBusyID == nil, softwareUpdatingID == nil, agentHasScanned else { return }
         agentApplying = true
         var action = requestedAction
         if rechecking {

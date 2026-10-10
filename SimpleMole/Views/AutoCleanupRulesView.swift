@@ -299,7 +299,7 @@ private struct AutoCleanupRuleRow: View {
                 } label: {
                     Label(l10n.t("auto.cleanNow"), systemImage: "trash")
                 }
-                .disabled(!currentRule.isSafetyAuthorized)
+                .disabled(!currentRule.isSafetyAuthorized || state.isCleanupMutationBlocked)
                 Divider()
                 Button(role: .destructive) {
                     state.removeAutoCleanupRule(rule.id)

@@ -17,9 +17,25 @@ enum SoftwareUpdateService {
     static func toolKey(_ tool: CommandLineTool) -> String { "tool:" + tool.path }
 }
 enum DeletionPlan { static func identity(at path: String) -> String? { "fixture-identity" } }
+struct ProcessSample: Sendable { let name: String }
 enum SoftwareUpdateProcesses {
-    struct Probe { let isComplete = true; let processes: [Int] = [] }
-    static func probe(_ scope: Int) -> Probe { .init() }
+    struct Probe: Sendable { let isComplete: Bool; let processes: [ProcessSample] }
+    static func probe(_ scope: Int) -> Probe { ProbeFixture.shared.probe() }
+}
+final class ProbeFixture: @unchecked Sendable {
+    static let shared = ProbeFixture()
+    private let lock = NSLock()
+    private var running = false
+    func setRunning(_ value: Bool) { lock.lock(); running = value; lock.unlock() }
+    func probe() -> SoftwareUpdateProcesses.Probe {
+        lock.lock(); defer { lock.unlock() }
+        return .init(isComplete: true, processes: running ? [.init(name: "fixture")] : [])
+    }
+}
+final class L10n {
+    static let shared = L10n()
+    func t(_ key: String) -> String { key }
+    func tf(_ key: String, _ arguments: CVarArg...) -> String { key }
 }
 @MainActor
 final class AppUpdateController {
@@ -36,13 +52,25 @@ final class AppUpdateController {
 final class AppState {
     var externallyBusy = false
     var softwareBusy = false
-    var isAgentCLIMutationActive = false
-    var confirmation: String?
+    var isApplying = false
+    var isSystemMaintenanceRunning = false
+    var isAutoCleanupMutationActive = false
+    var agentApplying = false
+    var agentProgramBusyID: String?
+    var isCheckingSoftwareUpdates = false
+    struct Confirmation {
+        let title: String
+        let message: String
+        let confirmLabel: String
+        let onConfirm: () -> Void
+    }
+    var confirmation: Confirmation?
     var taskNotice: String?
     var softwareUpdateResults: [String: SoftwareUpdateResult] = [:]
     var softwareUpdatingID: String?
     var isSoftwareTaskBusy: Bool { softwareBusy || softwareUpdatingID != nil }
-    var isBusy: Bool { externallyBusy || isSoftwareTaskBusy || isAgentCLIMutationActive }
+    var isBusy: Bool { externallyBusy || isSoftwareTaskBusy || isSoftwareMutationBlocked }
+    // PRODUCTION_MUTATION_GATES
     var scopeRequests = 0
     var installations = 0
     var failures = 0
@@ -59,10 +87,7 @@ extension AppState {
         failures += 1
         softwareUpdatingID = nil
     }
-    private func presentUpdateCloseConfirmation(_ selection: UpdateSelection, result: SoftwareUpdateResult,
-                                                identity: String?, processes: [Int]) {
-        preconditionFailure("The fixture has no running process")
-    }
+    // PRODUCTION_CLOSE_CONFIRMATION
     private func performSoftwareUpdate(_ selection: UpdateSelection, result: SoftwareUpdateResult,
                                        identity: String?, mayClose: Bool) async {
         installations += 1
@@ -83,8 +108,9 @@ struct SoftwareUpdateRequestTests {
         }
         state.externallyBusy = true
         state.softwareBusy = true
-        state.isAgentCLIMutationActive = true
-        state.confirmation = "another tab's confirmation"
+        state.agentApplying = true
+        state.isApplying = true
+        state.confirmation = .init(title: "another tab", message: "", confirmLabel: "", onConfirm: {})
         state.taskNotice = "another tab's result"
         state.requestFixture(app)
         precondition(state.isBusy && AppUpdateController.shared.acceptedChecks == 1
@@ -99,7 +125,8 @@ struct SoftwareUpdateRequestTests {
                      "An app at another path must not inherit Nori's self-update route")
 
         state.softwareBusy = false
-        state.isAgentCLIMutationActive = false
+        state.agentApplying = false
+        state.isApplying = false
         state.confirmation = nil
         state.taskNotice = nil
         state.requestFixture(other)
@@ -120,6 +147,35 @@ struct SoftwareUpdateRequestTests {
         state.requestFixture(app)
         precondition(AppUpdateController.shared.acceptedChecks == 1,
                      "Unavailable or incomplete metadata must not start the self-update route")
+        for gate in ["cleanup", "automatic-cleanup", "agent-data", "agent-program"] {
+            for boundary in ["request", "confirmation"] {
+                let blocked = AppState()
+                blocked.externallyBusy = true
+                blocked.softwareUpdateResults[SoftwareUpdateService.appKey(other)] = .init(state: .available, latest: "2.0")
+                ProbeFixture.shared.setRunning(boundary == "confirmation")
+                if boundary == "confirmation" {
+                    blocked.requestFixture(other)
+                    let deadline = Date().addingTimeInterval(3)
+                    while blocked.confirmation == nil {
+                        precondition(Date() < deadline)
+                        try await Task.sleep(nanoseconds: 5_000_000)
+                    }
+                }
+                if gate == "cleanup" { blocked.isApplying = true }
+                if gate == "automatic-cleanup" { blocked.isAutoCleanupMutationActive = true }
+                if gate == "agent-data" { blocked.agentApplying = true }
+                if gate == "agent-program" { blocked.agentProgramBusyID = "another-program" }
+                if boundary == "request" { blocked.requestFixture(other) }
+                else {
+                    let consent = blocked.confirmation!
+                    blocked.confirmation = nil
+                    consent.onConfirm()
+                }
+                precondition(blocked.softwareUpdatingID == nil && blocked.installations == 0,
+                             "Software update crossed a shared mutation at the \(boundary) boundary")
+            }
+        }
+        ProbeFixture.shared.setRunning(false)
         print("Software update requests: independent Nori checks, signed-updater reentry, exact app identity, per-page updates and duplicate protection passed")
     }
 }

@@ -456,7 +456,7 @@ extension AppState {
     // MARK: - 清理执行
 
     func applyCleanup() {
-        guard !isCleanupTaskBusy,
+        guard !isCleanupTaskBusy, !isCleanupSubmissionBlocked,
               cleanupScanComplete else {
             if !cleanupScanComplete { statusText = l10n.t("log.scanPartial") }
             return
@@ -515,6 +515,22 @@ extension AppState {
                                    priorResult: priorResult, retryScope: retryScope,
                                    pendingMaintenanceIDs: pendingMaintenanceIDs)
             }
+            return
+        }
+        guard !isCleanupSubmissionBlocked else {
+            // Selection preparation yields to other pages. Keep the original
+            // request intact if another shared mutation claimed the boundary.
+            cleanupRuntime.retryAction = { [weak self] in
+                self?.performApply(categories: requested,
+                                   family: applyFamily, mode: mode,
+                                   installers: installers, maintenanceIDs: maintenanceIDs,
+                                   priorResult: priorResult, retryScope: retryScope,
+                                   pendingMaintenanceIDs: pendingMaintenanceIDs)
+            }
+            cleanupRetryAvailable = true
+            cleanupTaskProgress = nil
+            isApplying = false
+            statusText = l10n.t("island.clean.busy")
             return
         }
         let requestedCount = requested.reduce(0) { $0 + $1.paths.count }
@@ -822,7 +838,8 @@ extension AppState {
     }
 
     func retryFailedCleanup() {
-        guard !isCleanupTaskBusy, let retry = cleanupRuntime.retryAction else { return }
+        guard !isCleanupTaskBusy, !isCleanupSubmissionBlocked,
+              let retry = cleanupRuntime.retryAction else { return }
         cleanupRuntime.retryAction = nil
         cleanupRetryAvailable = false
         retry()
