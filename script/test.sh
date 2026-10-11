@@ -2385,7 +2385,6 @@ test_cleanup_risk_policy() {
         "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
         "$ROOT_DIR/SimpleMole/Services/Parsers.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupCache.swift" \
-        "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
         "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
         "$ROOT_DIR/script/CleanupRiskPolicyTests.swift" \
