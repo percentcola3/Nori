@@ -88,10 +88,9 @@ enum CleanupRisk: String, Codable, CaseIterable, Hashable, Sendable {
     case protected
 }
 
-/// 候选内容的处置动作。命名与执行器的实际行为一致：清理页的删除路由执行
-/// 永久删除（`NativeCore.applyCleanup(permanent: true)`）；移入废纸篓只发生
-/// 在卸载等显式传入 non-permanent 的流程。旧快照里的 "trash" 解码为
-/// permanentDelete，行为不变。
+/// 候选内容的默认处置动作：清理页的普通删除路由执行永久删除；Agent 专清
+/// 会按风险把会话、历史等用户数据改为移入废纸篓。旧快照里的 "trash"
+/// 解码为 permanentDelete，行为不变。
 enum CleanupDisposal: String, Codable, CaseIterable, Hashable, Sendable {
     case permanentDelete
     case command
@@ -200,6 +199,12 @@ struct CleanupCategory: Identifiable, Equatable {
     /// Identity captured when the scan produced the path. Apply must recheck
     /// this value before deleting so a replaced path cannot be removed.
     var pathIdentities: [String: String]
+    var retentionClass: AgentRetentionClass?
+    var pathActivity: [String: Date]
+    var pathNotes: [String: String]
+    /// Scan-time guards that a retention change must not override, such as
+    /// uncommitted or unmerged worktrees. Apply still rechecks current state.
+    var pathRetentionBlocked: Set<String>
     private(set) var selectedPaths: Set<String>
     var expanded: Bool
     var source: CleanupSource
@@ -221,6 +226,10 @@ struct CleanupCategory: Identifiable, Equatable {
          bytes: UInt64,
          pathBytes: [String: UInt64]? = nil,
          pathIdentities: [String: String]? = nil,
+         retentionClass: AgentRetentionClass? = nil,
+         pathActivity: [String: Date] = [:],
+         pathNotes: [String: String] = [:],
+         pathRetentionBlocked: Set<String> = [],
          selected: Bool? = nil,
          expanded: Bool = false,
          source: CleanupSource = .unknown,
@@ -245,6 +254,10 @@ struct CleanupCategory: Identifiable, Equatable {
         self.pathIdentities = pathIdentities ?? paths.reduce(into: [String: String]()) { result, path in
             if let identity = DeletionPlan.identity(at: path) { result[path] = identity }
         }
+        self.retentionClass = retentionClass
+        self.pathActivity = pathActivity.filter { knownPaths.contains($0.key) }
+        self.pathNotes = pathNotes.filter { knownPaths.contains($0.key) }
+        self.pathRetentionBlocked = pathRetentionBlocked.intersection(knownPaths)
         let shouldSelect = risk != .protected && (selected ?? (risk == .safe))
         self.selectedPaths = shouldSelect ? knownPaths : []
         self.expanded = expanded
@@ -325,6 +338,9 @@ struct CleanupCategory: Identifiable, Equatable {
         subset.paths = selectedPathList
         subset.pathBytes = pathBytes.filter { selectedPaths.contains($0.key) }
         subset.pathIdentities = pathIdentities.filter { selectedPaths.contains($0.key) }
+        subset.pathActivity = pathActivity.filter { selectedPaths.contains($0.key) }
+        subset.pathNotes = pathNotes.filter { selectedPaths.contains($0.key) }
+        subset.pathRetentionBlocked.formIntersection(selectedPaths)
         subset.bytes = selectedPathBytes
         subset.selectedPaths = Set(selectedPathList)
         return subset
@@ -341,6 +357,9 @@ struct CleanupCategory: Identifiable, Equatable {
         subset.paths = ordered
         subset.pathBytes = pathBytes.filter { kept.contains($0.key) }
         subset.pathIdentities = pathIdentities.filter { kept.contains($0.key) }
+        subset.pathActivity = pathActivity.filter { kept.contains($0.key) }
+        subset.pathNotes = pathNotes.filter { kept.contains($0.key) }
+        subset.pathRetentionBlocked.formIntersection(kept)
         subset.bytes = ordered.reduce(0) { $0 &+ (subset.pathBytes[$1] ?? 0) }
         subset.selectedPaths.formIntersection(kept)
         return subset

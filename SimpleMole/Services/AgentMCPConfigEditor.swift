@@ -193,7 +193,7 @@ enum AgentMCPConfigEditor {
     }
 
     /// 固定备份保留最新原貌，时间戳副本保留首次及后续原貌；权限沿用配置文件。
-    private static func backup(_ path: String) -> Bool {
+    static func backup(_ path: String) -> Bool {
         guard let data = FileManager.default.contents(atPath: path) else { return false }
         do {
             let archive = path + ".nori-backup-" + UUID().uuidString

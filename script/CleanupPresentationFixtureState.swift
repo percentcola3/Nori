@@ -1,8 +1,13 @@
 import AppKit
 import SwiftUI
 
+enum AgentCodexFeatureEditor {
+    enum State: Equatable, Sendable { case enabled, disabled, unknown }
+}
+
 /// Fixture state only: the production cleanup view is compiled unchanged, but
 /// button actions never start inventory watchers, scans, or deletion workers.
+@MainActor
 final class AppState: ObservableObject {
     enum ScanAccess { case quickOptimize, aiScan }
     @Published var categories: [CleanupCategory] = []
@@ -28,6 +33,10 @@ final class AppState: ObservableObject {
     @Published var cleanupRetryAvailable = false
     @Published var statusText = ""
     @Published var agentCategories: [CleanupCategory] = []
+    @Published var agentRetentionPreferences = AgentRetentionPreferences()
+    @Published var awakePreferences = AwakePreferences()
+    let awake = AwakeSessionController()
+    @Published var agentCodexThreadStoreCompression: AgentCodexFeatureEditor.State?
     @Published var agentGroups: [AgentGroupSummary] = []
     @Published var agentSkills: [AgentSkill] = []
     @Published var agentServers: [AgentMCPServer] = []
@@ -110,10 +119,28 @@ final class AppState: ObservableObject {
     func agentGroupBytes(_ group: AgentGroupSummary) -> UInt64 {
         agentCategories.filter { group.categoryIDs.contains($0.id) }.reduce(0) { $0 + $1.bytes }
     }
+    func agentStorageTotals(for agentID: String? = nil) -> AgentStorageFootprint.Totals? {
+        let snapshots = agentID.map { id in agentStorageFootprints[id].map { [$0] } ?? [] }
+            ?? agentGroups.compactMap { agentStorageFootprints[$0.id] }
+        return snapshots.isEmpty ? nil : AgentStorageFootprint.totals(snapshots)
+    }
     func isAgentCategorySelected(_ category: CleanupCategory, path: String) -> Bool { category.isPathSelected(path) }
     func isAgentCategoryIncludedByCLI(_ category: CleanupCategory) -> Bool { false }
     func isAgentSkillSelected(_ skill: AgentSkill) -> Bool { false }
     func isAgentServerSelected(_ server: AgentMCPServer) -> Bool { false }
+    func setAgentRetention(_ rule: AgentRetentionRule, for retentionClass: AgentRetentionClass, agentID: String) {
+        agentRetentionPreferences.set(rule, for: retentionClass, agentID: agentID)
+    }
+    func setCodexThreadStoreCompression(_ enabled: Bool) {
+        agentCodexThreadStoreCompression = enabled ? .enabled : .disabled
+    }
+    func startAwakeSession() {
+        _ = awake.start(mode: awakePreferences.defaultMode)
+    }
+    func endAwakeSession() { awake.end(reason: .manual) }
+    func setAwakeDefaultMode(_ mode: AwakeMode) { awakePreferences.defaultMode = mode }
+    func setAwakeBatteryFloor(_ percent: Int) { awakePreferences.batteryFloorPercent = percent }
+    func setAwakeThermalProtection(_ enabled: Bool) { awakePreferences.endAtCriticalThermal = enabled }
     func toggleAgentCLIInstallation(_ installation: AgentCLIInstallation) {}
     func uninstallAgentCLI(_ installation: AgentCLIInstallation) { programRemovalRequests += 1 }
     func uninstallAgentApplication(_ app: UninstallApp) { programRemovalRequests += 1 }
@@ -188,6 +215,8 @@ struct AgentGroupSummary: Identifiable {
     let documented: Bool
     let categoryIDs: [UUID]
     var orphaned = false
+    var lastActivity: Date? = nil
+    var unused = false
 }
 // Capacity classification is covered by AgentStorageFootprintTests. This
 // presentation fixture supplies one immutable, already-projected snapshot.
@@ -256,4 +285,7 @@ struct AgentMCPInstallation: Identifiable {
 enum AgentCatalog {
     struct Definition { let id: String; let name: String }
     static let definitions = [Definition(id: "codex", name: "Codex")]
+    static func absolute(_ relative: String, home: String) -> String {
+        URL(fileURLWithPath: home).appendingPathComponent(relative).standardizedFileURL.path
+    }
 }

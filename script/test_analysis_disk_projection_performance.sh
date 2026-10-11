@@ -29,6 +29,7 @@ trap 'rm -rf "$PROJECTION_TEST_DIR"' EXIT
 mkdir "$PROJECTION_TEST_DIR/sources"
 SOURCES=(
     "$ROOT_DIR/SimpleMole/Models.swift"
+    "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift"

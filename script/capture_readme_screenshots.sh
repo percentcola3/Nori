@@ -131,7 +131,7 @@ SDKROOT="$CAPTURE_SDK" swiftc -Onone -whole-module-optimization \
     -target "$(uname -m)-apple-macos13.0" \
     -module-cache-path "$CAPTURE_TMP/module-cache" \
     -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit \
-    -framework IOKit -framework ServiceManagement \
+    -framework IOKit -framework ServiceManagement -framework UserNotifications \
     "${SOURCES[@]}" "$CAPTURE_TMP/AppState.swift" "$CAPTURE_TMP/PermissionCenter.swift" \
     "$CAPTURE_TMP/FloatingIslandView.swift" "$CAPTURE_TMP/ReadmeScreenshots.swift" \
     -o "$CAPTURE_APP/Contents/MacOS/NoriReadme"

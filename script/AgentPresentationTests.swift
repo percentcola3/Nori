@@ -66,6 +66,16 @@ struct AgentPresentationTests {
             state.agentCategories = [category]
             state.agentGroups = [.init(id: "codex", name: "Codex", documented: true, categoryIDs: [category.id])]
             render("results")
+            let cursorCategory = CleanupCategory(name: "对话历史", paths: ["/fixture/cursor/history"], bytes: 8192,
+                pathIdentities: [:], retentionClass: .conversations, selected: false, risk: .warning)
+            state.agentCategories = [category, cursorCategory]
+            state.agentGroups.append(.init(id: "cursor", name: "Cursor", documented: true,
+                categoryIDs: [cursorCategory.id]))
+            state.setAgentRetention(.days(30), for: .conversations, agentID: "codex")
+            state.setAgentRetention(.days(7), for: .artifacts, agentID: "codex")
+            state.setAgentRetention(.never, for: .conversations, agentID: "cursor")
+            state.setAgentRetention(.days(180), for: .artifacts, agentID: "cursor")
+            render("results-per-agent-retention")
             let preservedBytes: UInt64 = 3_000_000_000
             let preserved = CleanupCategory(name: "保留的会话与状态", paths: ["/fixture/agent/sessions"],
                 bytes: preservedBytes, pathIdentities: [:], selected: false, source: .aiSession, risk: .protected,

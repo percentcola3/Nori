@@ -185,7 +185,7 @@ struct UninstallTabView: View {
                             canUpdate: app.path == Bundle.main.bundleURL.path && app.bundleID == Bundle.main.bundleIdentifier
                                 ? appUpdate.canCheckForUpdates : !state.isSoftwareTaskBusy && !state.isSoftwareMutationBlocked,
                             externalPending: state.softwareUpdateHandoffIDs.contains(SoftwareUpdateService.appKey(app)),
-                            agentStorage: state.agentDataFootprints(for: app),
+                            agentStorage: state.agentStorageTotals(for: AgentSoftwareInventory.agentIDs(for: app)),
                             isAgentStorageLoading: !AgentSoftwareInventory.agentIDs(for: app)
                                 .isDisjoint(with: state.agentStorageCheckingIDs),
                             dataSelection: Binding(
@@ -213,7 +213,7 @@ private struct UninstallAppRow: View {
     let updatingID: String?
     let canUpdate: Bool
     let externalPending: Bool
-    let agentStorage: [AgentStorageFootprint]
+    let agentStorage: AgentStorageFootprint.Totals
     let isAgentStorageLoading: Bool
     @Binding var dataSelection: Set<String>
     let onCancel: (UninstallJob) -> Void
@@ -247,7 +247,7 @@ private struct UninstallAppRow: View {
                 appIdentity
                 Spacer(minLength: 12)
                 if isAgentApp {
-                    AgentStorageSummaryView(storage: AgentStorageFootprint.totals(agentStorage),
+                    AgentStorageSummaryView(storage: agentStorage,
                                             isLoading: isAgentStorageLoading)
                         .frame(maxWidth: 210)
                 } else {
@@ -665,8 +665,7 @@ private struct CommandLineToolsSection: View {
                     ? (tool.sizeIsKnown ? ByteFormat.format(tool.bytes) : "—")
                     : l10n.tf("agents.program.body", tool.sizeIsKnown ? ByteFormat.format(tool.bytes) : "—"), prominent: false)
                 if let id = tool.agentID {
-                    AgentStorageSummaryView(storage: AgentStorageFootprint.totals(
-                        state.agentStorageFootprints[id].map { [$0] } ?? []),
+                    AgentStorageSummaryView(storage: state.agentStorageTotals(for: [id]),
                         isLoading: state.agentStorageCheckingIDs.contains(id))
                     .frame(maxWidth: 210)
                 }

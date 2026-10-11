@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 import Combine
 import Darwin
+import UserNotifications
 
 /// 灵动岛指标的独立发布者：采样结果和网络趋势只通知观察它的视图。
 @MainActor
@@ -57,6 +58,9 @@ final class AppState: ObservableObject {
 
     /// 指标每 2 秒刷新一次，只有灵动岛关心；独立成对象，避免每次采样让所有页面重算。
     let metricsStore = MetricsStore()
+    @Published var awakePreferences = AwakePreferences.load()
+    let awake = AwakeSessionController()
+    private var awakeNotificationAuthorizationRequested = false
     var metrics: MetricsSnapshot {
         get { metricsStore.metrics }
         set { metricsStore.metrics = newValue }
@@ -215,22 +219,50 @@ final class AppState: ObservableObject {
     // MARK: Agent 专清
     // 独立于磁盘清理的清单：不写入 `categories`，也不进入快速清理与自动化。
 
-    @Published var agentCategories: [CleanupCategory] = []
-    @Published var agentGroups: [AgentGroupSummary] = []
-    @Published var agentSkills: [AgentSkill] = []
-    @Published var agentServers: [AgentMCPServer] = []
-    @Published var agentMCPInstallations: [AgentMCPInstallation] = []
-    @Published var agentCLIInstallations: [AgentCLIInstallation] = []
+    @Published var agentCategories: [CleanupCategory] = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    @Published var agentRetentionPreferences = AgentRetentionPreferences.load()
+    @Published var agentCodexThreadStoreCompression: AgentCodexFeatureEditor.State?
+    @Published var agentGroups: [AgentGroupSummary] = [] {
+        didSet { agentSelectionSummaryCache = nil; agentStorageTotalsCache = [:] }
+    }
+    @Published var agentSkills: [AgentSkill] = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    @Published var agentServers: [AgentMCPServer] = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    @Published var agentMCPInstallations: [AgentMCPInstallation] = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    @Published var agentCLIInstallations: [AgentCLIInstallation] = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
     @Published var agentApplications: [String: [UninstallApp]] = [:]
-    @Published var agentStorageFootprints: [String: AgentStorageFootprint] = [:]
+    @Published var agentStorageFootprints: [String: AgentStorageFootprint] = [:] {
+        didSet { agentStorageTotalsCache = [:] }
+    }
+    // Derived presentation values are invalidated only by their inputs, never
+    // by navigation, metrics ticks or unrelated AppState publications.
+    var agentSelectionSummaryCache: (count: Int, bytes: UInt64)?
+    var agentStorageTotalsCache: [String: AgentStorageFootprint.Totals] = [:]
     @Published var agentCLIBodySizes: [String: AgentInstallationSize] = [:]
     @Published var agentStorageCheckingIDs = Set<String>()
     var agentStorageGeneration = UUID()
     @Published var agentProgramBusyID: String?
-    @Published var agentSelectedSkills: Set<String> = []
-    @Published var agentSelectedServers: Set<String> = []
-    @Published var agentSelectedMCPInstallations: Set<String> = []
-    @Published var agentSelectedCLIInstallations: Set<String> = []
+    @Published var agentSelectedSkills: Set<String> = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    @Published var agentSelectedServers: Set<String> = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    @Published var agentSelectedMCPInstallations: Set<String> = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    @Published var agentSelectedCLIInstallations: Set<String> = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
     @Published var agentScanning = false
     @Published var agentScanCurrentPath = ""
     @Published var agentApplying = false
@@ -900,6 +932,10 @@ final class AppState: ObservableObject {
             self.scheduleUninstallInventoryRefresh(after: cachedInventory.isEmpty ? 0.4 : 2.0)
         }
 
+        awake.$lastEnd
+            .compactMap { $0 }
+            .sink { [weak self] event in self?.handleAwakeEnd(event.reason) }
+            .store(in: &cancellables)
         refreshMetrics()
         $selectedTab
             .removeDuplicates()
@@ -1126,6 +1162,63 @@ final class AppState: ObservableObject {
 
     // MARK: - 指标
 
+    func startAwakeSession() {
+        requestAwakeNotificationAuthorizationIfNeeded()
+        _ = awake.start(mode: awakePreferences.defaultMode)
+    }
+
+    func endAwakeSession() {
+        awake.end(reason: .manual)
+    }
+
+    func setAwakeBatteryFloor(_ percent: Int) {
+        guard [0, 5, 10, 15, 20, 30].contains(percent) else { return }
+        awakePreferences.batteryFloorPercent = percent
+        awakePreferences.save()
+    }
+
+    func setAwakeThermalProtection(_ enabled: Bool) {
+        awakePreferences.endAtCriticalThermal = enabled
+        awakePreferences.save()
+    }
+
+    func setAwakeDefaultMode(_ mode: AwakeMode) {
+        awakePreferences.defaultMode = mode
+        awakePreferences.save()
+    }
+
+    private func evaluateAwakeSession(_ sample: MetricsSnapshot) {
+        awake.evaluate(metrics: AwakeMetrics(
+            batteryPercent: sample.batteryPresent ? Int(sample.batteryPercent.rounded()) : nil,
+            batteryCharging: sample.batteryCharging,
+            thermalLevel: sample.thermalLevel), preferences: awakePreferences)
+    }
+
+    private func requestAwakeNotificationAuthorizationIfNeeded() {
+        guard !awakeNotificationAuthorizationRequested else { return }
+        awakeNotificationAuthorizationRequested = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    private func handleAwakeEnd(_ reason: AwakeEndReason) {
+        let message: String
+        switch reason {
+        case .battery(let percent):
+            message = l10n.tf("awake.notice.battery", percent)
+        case .thermal:
+            message = l10n.t("awake.notice.thermal")
+        case .manual, .quit:
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "Nori"
+        content.body = message
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "nori-awake-ended-\(UUID().uuidString)",
+                content: content, trigger: nil))
+    }
+
     func refreshMetrics() {
         guard !metricsSampleInFlight else { return }
         metricsSampleInFlight = true
@@ -1137,6 +1230,7 @@ final class AppState: ObservableObject {
             guard let self else { return }
             self.metricsSampleInFlight = false
             self.metricsStore.record(sample)
+            self.evaluateAwakeSession(sample)
         }
     }
 
@@ -1159,7 +1253,9 @@ final class AppState: ObservableObject {
             let sample = await Task.detached(priority: .utility) {
                 SystemMetrics.sample(includeBluetooth: includeBluetooth)
             }.value
-            self?.metricsStore.metrics = sample
+            guard let self else { return }
+            self.metricsStore.metrics = sample
+            self.evaluateAwakeSession(sample)
         }
         refreshIslandProcesses(force: true)
     }

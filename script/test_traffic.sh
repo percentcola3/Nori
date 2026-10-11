@@ -7,6 +7,8 @@ trap 'rm -rf "$TRAFFIC_TEST_ROOT"' EXIT
 arch="$(uname -m)"
 sources=(
     "$ROOT_DIR/SimpleMole/Models.swift"
+    "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift"
+    "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift"

@@ -25,6 +25,7 @@ swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
     -module-cache-path "$TEST_DIR/cache" \
     -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
@@ -39,11 +40,13 @@ swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
     "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentProjectStorage.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCLIService.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentInventory.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentMCPConfigEditor.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentCodexFeatureEditor.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCleanupExecutor.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
     "$ROOT_DIR/script/AgentCatalogTests.swift" \
@@ -55,6 +58,7 @@ else
     swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDK_PATH" \
         -module-cache-path "$TEST_DIR/cache" \
         "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
+        "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentProjectStorage.swift" \
         "$ROOT_DIR/script/AgentProjectStorageTests.swift" \
@@ -63,6 +67,7 @@ else
     swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDK_PATH" \
         -module-cache-path "$TEST_DIR/cache" \
         "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
+        "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentProjectStorage.swift" \
         "$ROOT_DIR/script/AgentHostPresenceTests.swift" \

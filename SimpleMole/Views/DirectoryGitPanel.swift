@@ -19,7 +19,8 @@ struct DirectoryGitPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                Label(l10n.t("dir.git.repository"), systemImage: "arrow.triangle.branch")
+                GitRepositoryIcon(size: 20)
+                Text(l10n.t("dir.git.repository"))
                     .font(.system(size: 15, weight: .semibold))
                 Spacer(minLength: 8)
                 Button(action: onClose) { Image(systemName: "xmark") }
@@ -81,7 +82,7 @@ struct DirectoryGitPanel: View {
                 }
             } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: "arrow.triangle.branch")
+                    GitRepositoryIcon(size: 15)
                     Text(repository.branch ?? String(repository.head.prefix(8)))
                         .lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: 0)

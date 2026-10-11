@@ -107,7 +107,7 @@ swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -
     -module-cache-path "$TEST_DIR/module-cache" \
     -F "$SPARKLE_DIR" -framework Sparkle -Xlinker -rpath -Xlinker "$SPARKLE_DIR" \
     -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit \
-    -framework IOKit -framework ServiceManagement -framework WebKit \
+    -framework IOKit -framework ServiceManagement -framework UserNotifications -framework WebKit \
     "${SOURCES[@]}" "$TEST_DIR/ReadmeFixture.swift" "$TEST_DIR/IslandSidePresentationTests.swift" \
     -o "$FIXTURE_APP/Contents/MacOS/IslandSidePresentationTests"
 /usr/bin/codesign --force --sign - "$FIXTURE_APP" >/dev/null

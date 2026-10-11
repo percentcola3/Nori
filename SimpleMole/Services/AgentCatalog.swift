@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Agent 专清的三档目录：
@@ -8,6 +9,10 @@ enum AgentTier: String, Sendable {
     case safe, review, showOnly
 }
 
+enum AgentTemporaryRoot: Hashable, Sendable {
+    case userTemp, systemTmp
+}
+
 struct AgentTarget: Sendable {
     enum Kind: Sendable {
         /// 固定路径（相对 home）。
@@ -16,6 +21,17 @@ struct AgentTarget: Sendable {
         case leaves(root: String, names: [String])
         /// root 的直接子项逐项列出（会话、项目转录等），供用户按项勾选。
         case children(String)
+        case childrenExcluding(root: String, names: [String])
+        /// root 下限定深度的普通文件；用于按日期分层存放的会话。
+        case files(root: String, maxDepth: Int)
+        /// dir 下指定前缀的直接子项。
+        case prefixed(dir: String, prefix: String)
+        /// VS Code 系扩展清单中已淘汰、且不再安装的版本目录。
+        case obsoleteExtensions(root: String)
+        /// root 下限定深度的 Git worktree；命中后不再进入其源码树。
+        case worktrees(root: String, maxDepth: Int)
+        /// 当前用户临时根或系统临时根下匹配前缀的直接子项。
+        case temporary(root: AgentTemporaryRoot, prefix: String)
         /// 每个项目目录中的数据分别列出；用于把转录与持久 memory 拆开。
         case projectContents(root: String, excluding: [String])
         case projectLeaves(root: String, names: [String])
@@ -89,6 +105,7 @@ struct AgentDefinition: Sendable {
 
 enum AgentCatalog {
     static let appSupport = "Library/Application Support/"
+    static let claudeSystemTemporaryPrefix = "claude-\(getuid())"
 
     /// Chromium/Electron 可再生缓存叶子，与 Mole 浏览器目录审计一致。
     static let electronCacheLeaves = [
@@ -97,6 +114,22 @@ enum AgentCatalog {
         "component_crx_cache", "extensions_crx_cache", "CachedData", "CachedExtensionVSIXs",
         "logs", "Crashpad/completed"
     ]
+
+    private static let clineHostRoots = [
+        appSupport + "Code/User/globalStorage/saoudrizwan.claude-dev",
+        appSupport + "Code - Insiders/User/globalStorage/saoudrizwan.claude-dev",
+        appSupport + "Cursor/User/globalStorage/saoudrizwan.claude-dev"
+    ]
+
+    private static func clineHostTargets(root: String) -> [AgentTarget] {
+        [
+            .init(.review, .children(root + "/tasks"), "agents.label.transcripts"),
+            .init(.review, .path(root + "/checkpoints"), "agents.label.checkpoints"),
+            .init(.review, .path(root + "/cache"), "agents.label.cache"),
+            .init(.showOnly, .path(root + "/settings/cline_mcp_settings.json"),
+                  "agents.label.configuration")
+        ]
+    }
 
     /// 路径与风险证据见 docs/agent-cleanup-research/；Safe 必须是可再生数据。
     static let definitions: [AgentDefinition] = [
@@ -108,6 +141,11 @@ enum AgentCatalog {
                                        links: [".local/bin/claude"]),
                       "agents.label.oldVersions", owners: []),
                 .init(.safe, .path(".claude/statsig"), "agents.label.cache"),
+                .init(.safe, .temporary(root: .userTemp, prefix: "claude-"),
+                      "agents.label.tempFiles", owners: []),
+                .init(.safe, .temporary(root: .systemTmp, prefix: claudeSystemTemporaryPrefix),
+                      "agents.label.tempFiles", owners: []),
+                .init(.safe, .children(".claude/ide"), "agents.label.tempFiles"),
                 .init(.review, .projectContents(root: ".claude/projects", excluding: ["memory"]),
                       "agents.label.transcripts"),
                 .init(.showOnly, .projectLeaves(root: ".claude/projects", names: ["memory"]),
@@ -164,15 +202,30 @@ enum AgentCatalog {
                 .init(.review, .sqlite(dir: ".codex", prefix: "logs_", ext: ".sqlite"),
                       "agents.label.logDatabase"),
                 .init(.review, .path(".codex/.tmp"), "agents.label.tempFiles"),
+                .init(.safe, .temporary(root: .userTemp, prefix: ".com.openai.codex."),
+                      "agents.label.tempFiles", owners: []),
+                .init(.safe, .temporary(root: .userTemp, prefix: "codex-project-tool-"),
+                      "agents.label.tempFiles", owners: []),
+                .init(.safe, .temporary(root: .userTemp, prefix: "com.openai.codex"),
+                      "agents.label.tempFiles", owners: []),
+                .init(.safe, .temporary(root: .systemTmp, prefix: "codex-browser-use"),
+                      "agents.label.tempFiles", owners: []),
                 .init(.safe, .path(".codex/tmp"), "agents.label.tempFiles"),
                 .init(.safe, .path(".codex/log"), "agents.label.logs"),
                 .init(.safe, .path(".codex/models_cache.json"), "agents.label.cache"),
+                .init(.safe, .prefixed(dir: ".codex", prefix: "..codex-global-state.json"),
+                      "agents.label.tempFiles"),
                 .init(.review, .path(".codex/cache"), "agents.label.cache"),
                 .init(.review, .children(".codex/db-backups"), "agents.label.fileHistory"),
+                .init(.review, .prefixed(dir: ".codex", prefix: "config.toml.bak"),
+                      "agents.label.configBackups"),
                 .init(.showOnly, .children(".codex/shell_snapshots"), "agents.label.shellSnapshots"),
                 .init(.review, .path(".codex/generated_images"), "agents.label.generatedImages"),
                 .init(.review, .children(".codex/archived_sessions"), "agents.label.archivedSessions"),
-                .init(.showOnly, .path(".codex/sessions"), "agents.label.sessions", owners: []),
+                .init(.review, .files(root: ".codex/sessions", maxDepth: 3),
+                      "agents.label.sessions", owners: []),
+                .init(.review, .children(".codex/computer-use/sessions"), "agents.label.sessions"),
+                .init(.review, .children(".codex/attachments"), "agents.label.attachments"),
                 .init(.showOnly, .sqlite(dir: ".codex", prefix: "state_", ext: ".sqlite"),
                       "agents.label.stateDatabase", owners: []),
                 .init(.showOnly, .sqlite(dir: ".codex", prefix: "thread_history_", ext: ".sqlite"),
@@ -238,6 +291,11 @@ enum AgentCatalog {
                 .init(.safe, .path("Library/Caches/com.todesktop.230313mzl4w4u92"),
                       "agents.label.cache"),
                 .init(.safe, .path("Library/Caches/cursor-compile-cache"), "agents.label.compileCache"),
+                .init(.safe, .path(".cursor/statsig-cache.json"), "agents.label.cache"),
+                .init(.safe, .obsoleteExtensions(root: ".cursor/extensions"),
+                      "agents.label.obsoleteExtensions"),
+                .init(.review, .prefixed(dir: ".cursor", prefix: "mcp.json.nori-backup"),
+                      "agents.label.configBackups"),
                 .init(.review, .path(appSupport + "Cursor/snapshots"), "agents.label.checkpoints"),
                 .init(.showOnly, .path(".cursor/projects"), "agents.label.transcripts", owners: []),
                 .init(.showOnly, .path(appSupport + "Cursor/User/workspaceStorage"),
@@ -257,7 +315,8 @@ enum AgentCatalog {
                       "agents.label.oldVersions", owners: []),
                 .init(.showOnly, .sqliteTree(root: ".cursor/chats", prefix: "store", ext: ".db", maxDepth: 3),
                       "agents.label.conversationDatabase"),
-                .init(.showOnly, .children(".cursor/worktrees"), "agents.label.worktrees"),
+                .init(.review, .worktrees(root: ".cursor/worktrees", maxDepth: 2),
+                      "agents.label.worktrees"),
                 .init(.showOnly, .path(".cursor/cli-config.json"), "agents.label.configuration")
             ],
             skillDirectories: [".cursor/skills"],
@@ -323,15 +382,97 @@ enum AgentCatalog {
                 .init(path: ".gemini/antigravity/mcp_config.json", format: .json(keyPath: "mcpServers"))
             ]),
         AgentDefinition(
+            id: "aider", name: "Aider", owners: ["aider"],
+            detect: [".aider"], documented: true,
+            targets: [
+                .init(.safe, .path(".aider/caches"), "agents.label.cache"),
+                .init(.showOnly, .path(".aider/oauth-keys.env"), "agents.label.credentials"),
+                .init(.showOnly, .path(".aider.conf.yml"), "agents.label.configuration"),
+                .init(.showOnly, .path(".aider/analytics.json"), "agents.label.appData"),
+                .init(.showOnly, .path(".aider/installs.json"), "agents.label.appData")
+            ], skillDirectories: [], mcpSources: []),
+        AgentDefinition(
+            id: "goose", name: "Goose", owners: ["goose", "Goose"],
+            detect: [".config/goose", ".local/share/goose", ".local/state/goose",
+                     appSupport + "Goose", appSupport + "Block/goose"], documented: true,
+            targets: [
+                .init(.safe, .path(".local/state/goose/logs"), "agents.label.logs"),
+                .init(.safe, .path(".local/share/goose/model_catalog"), "agents.label.cache"),
+                .init(.safe, .leaves(root: appSupport + "Goose", names: electronCacheLeaves),
+                      "agents.label.appCache"),
+                .init(.safe, .path(appSupport + "Goose/logs"), "agents.label.logs"),
+                .init(.review, .sqlite(dir: ".local/share/goose/sessions", prefix: "", ext: ".jsonl"),
+                      "agents.label.sessions"),
+                .init(.showOnly, .sqlite(dir: ".local/share/goose/sessions", prefix: "sessions", ext: ".db"),
+                      "agents.label.conversationDatabase"),
+                .init(.review, .path(".config/goose/mcp-apps-cache"), "agents.label.appData"),
+                .init(.showOnly, .path(".local/share/goose/apps"), "agents.label.appData"),
+                .init(.showOnly, .path(".config/goose/config.yaml"), "agents.label.configuration"),
+                .init(.showOnly, .path(".config/goose/secrets.yaml"), "agents.label.credentials"),
+                .init(.showOnly, .path(appSupport + "Block/goose"), "agents.label.appData")
+            ],
+            skillDirectories: [".config/goose/skills"],
+            // Goose 的 YAML extensions 合并多层配置，现有编辑器不做不可靠的单项改写。
+            mcpSources: [],
+            implicitSkillDirectories: [".agents/skills", ".claude/skills", ".config/agents/skills"]),
+        AgentDefinition(
+            id: "cline", name: "Cline", owners: ["cline"],
+            detect: [".cline"] + clineHostRoots, documented: true,
+            targets: clineHostRoots.flatMap(clineHostTargets) + [
+                .init(.showOnly, .path(".cline/data/globalState.json"), "agents.label.workspaceState"),
+                .init(.showOnly, .path(".cline/data/secrets.json"), "agents.label.credentials"),
+                .init(.showOnly, .sqlite(dir: ".cline/data/db", prefix: "", ext: ".db"),
+                      "agents.label.stateDatabase"),
+                .init(.review, .children(".cline/data/sessions"), "agents.label.sessions"),
+                .init(.review, .path(".cline/data/logs"), "agents.label.logs"),
+                .init(.showOnly, .path(".cline/data/settings"), "agents.label.configuration")
+            ],
+            skillDirectories: [".cline/skills"],
+            mcpSources: [.init(path: ".cline/data/settings/cline_mcp_settings.json",
+                               format: .json(keyPath: "mcpServers"))]
+                + clineHostRoots.map {
+                    .init(path: $0 + "/settings/cline_mcp_settings.json",
+                          format: .json(keyPath: "mcpServers"))
+                },
+            implicitSkillDirectories: [".agents/skills"]),
+        AgentDefinition(
+            id: "continue", name: "Continue", owners: ["cn"],
+            detect: [".continue"], documented: true,
+            targets: [
+                .init(.review, .childrenExcluding(root: ".continue/sessions", names: ["sessions.json"]),
+                      "agents.label.sessions"),
+                .init(.review, .sqlite(dir: ".continue/index", prefix: "autocompleteCache", ext: ".sqlite"),
+                      "agents.label.cache"),
+                .init(.review, .sqlite(dir: ".continue/index", prefix: "index", ext: ".sqlite"),
+                      "agents.label.index"),
+                .init(.review, .sqlite(dir: ".continue/index", prefix: "docs", ext: ".sqlite"),
+                      "agents.label.index"),
+                .init(.review, .path(".continue/index/lancedb"), "agents.label.index"),
+                // globalContext.json 含 MCP OAuth，不能随派生索引整根清理。
+                .init(.showOnly, .path(".continue/index/globalContext.json"), "agents.label.credentials"),
+                .init(.review, .path(".continue/dev_data"), "agents.label.appData"),
+                .init(.review, .path(".continue/logs"), "agents.label.logs"),
+                .init(.review, .path(".continue/.utils/.chromium-browser-snapshots"), "agents.label.runtime"),
+                .init(.showOnly, .path(".continue/config.yaml"), "agents.label.configuration"),
+                .init(.showOnly, .path(".continue/config.json"), "agents.label.configuration"),
+                .init(.showOnly, .path(".continue/.env"), "agents.label.credentials")
+            ],
+            skillDirectories: [".continue/skills"],
+            // mcpServers/ 是多文件、多格式目录，现有编辑器不做不可靠的单项改写。
+            mcpSources: []),
+        AgentDefinition(
             id: "opencode", name: "opencode", owners: ["opencode"],
             detect: [".local/share/opencode", ".config/opencode"], documented: true,
             targets: [
                 .init(.safe, .path(".cache/opencode"), "agents.label.cache"),
                 .init(.safe, .path(".local/share/opencode/log"), "agents.label.logs"),
+                .init(.review, .path(".local/share/opencode/bin"), "agents.label.runtime"),
+                .init(.review, .path(".config/opencode/node_modules"), "agents.label.runtime"),
                 .init(.review, .path(".local/share/opencode/snapshot"), "agents.label.checkpoints"),
                 .init(.review, .path(".local/share/opencode/tool-output"), "agents.label.tempFiles"),
                 .init(.review, .path(".local/share/opencode/plans"), "agents.label.plans"),
-                .init(.showOnly, .path(".local/share/opencode/repos"), "agents.label.worktrees"),
+                .init(.review, .worktrees(root: ".local/share/opencode/repos", maxDepth: 2),
+                      "agents.label.worktrees"),
                 .init(.review, .path(".local/state/opencode"), "agents.label.workspaceState"),
                 // 新版数据库还包含 credential 表，删除会同时丢失 OAuth/API 凭据。
                 .init(.showOnly, .sqlite(dir: ".local/share/opencode", prefix: "opencode", ext: ".db"),
@@ -361,7 +502,8 @@ enum AgentCatalog {
                 .init(.review, .children(".grok/sessions"), "agents.label.sessions"),
                 .init(.showOnly, .sqlite(dir: ".grok", prefix: "worktrees", ext: ".db"),
                       "agents.label.workspaceState"),
-                .init(.showOnly, .path(".grok/worktrees"), "agents.label.worktrees", owners: []),
+                .init(.review, .worktrees(root: ".grok/worktrees", maxDepth: 2),
+                      "agents.label.worktrees", owners: []),
                 .init(.showOnly, .path(".grok/memory"), "agents.label.knowledge"),
                 .init(.showOnly, .path(".grok/memory-v2"), "agents.label.knowledge"),
                 .init(.showOnly, .path(".grok/auth.json"), "agents.label.credentials"),
@@ -420,8 +562,11 @@ enum AgentCatalog {
                 .init(.review, .path(".factory/logs"), "agents.label.logs"),
                 .init(.review, .path(".factory/cache"), "agents.label.cache"),
                 .init(.review, .path(".factory/temp"), "agents.label.tempFiles"),
-                .init(.showOnly, .children(".factory/worktrees"), "agents.label.worktrees"),
+                .init(.review, .worktrees(root: ".factory/worktrees", maxDepth: 2),
+                      "agents.label.worktrees"),
                 .init(.review, .children(".factory/specs"), "agents.label.plans"),
+                .init(.review, .path(".factory/snapshots"), "agents.label.checkpoints"),
+                .init(.review, .path(".factory/history.json"), "agents.label.history"),
                 .init(.showOnly, .path(".factory/settings.json"), "agents.label.configuration"),
                 .init(.showOnly, .path(".factory/settings.local.json"), "agents.label.configuration")
             ],
@@ -433,6 +578,15 @@ enum AgentCatalog {
             targets: [
                 .init(.safe, .leaves(root: appSupport + "Devin", names: electronCacheLeaves),
                       "agents.label.appCache"),
+                .init(.safe, .leaves(root: ".codeium/windsurf/ws-browser-profile", names: electronCacheLeaves),
+                      "agents.label.appCache"),
+                .init(.safe, .leaves(root: ".codeium/windsurf/ws-browser-profile/Default", names: electronCacheLeaves),
+                      "agents.label.appCache"),
+                .init(.safe, .obsoleteExtensions(root: ".devin/extensions"),
+                      "agents.label.obsoleteExtensions"),
+                .init(.review, .path(".codeium/windsurf/ws-browser"), "agents.label.runtime"),
+                .init(.review, .children(".codeium/windsurf/database"), "agents.label.index"),
+                .init(.review, .path(".codeium/windsurf/code_tracker/history"), "agents.label.fileHistory"),
                 .init(.showOnly, .path(appSupport + "Devin/WebStorage"), "agents.label.appData", owners: []),
                 .init(.showOnly, .path(".codeium/windsurf/cascade"), "agents.label.conversations"),
                 .init(.showOnly, .path(".codeium/windsurf/memories"), "agents.label.knowledge")
@@ -445,6 +599,13 @@ enum AgentCatalog {
             targets: [
                 .init(.safe, .leaves(root: appSupport + "Windsurf", names: electronCacheLeaves),
                       "agents.label.appCache"),
+                .init(.safe, .leaves(root: ".codeium/windsurf/ws-browser-profile", names: electronCacheLeaves),
+                      "agents.label.appCache"),
+                .init(.safe, .leaves(root: ".codeium/windsurf/ws-browser-profile/Default", names: electronCacheLeaves),
+                      "agents.label.appCache"),
+                .init(.review, .path(".codeium/windsurf/ws-browser"), "agents.label.runtime"),
+                .init(.review, .children(".codeium/windsurf/database"), "agents.label.index"),
+                .init(.review, .path(".codeium/windsurf/code_tracker/history"), "agents.label.fileHistory"),
                 .init(.showOnly, .path(".codeium/windsurf/cascade"), "agents.label.conversations", owners: []),
                 .init(.showOnly, .path(".codeium/windsurf/memories"), "agents.label.knowledge")
             ],
@@ -453,6 +614,18 @@ enum AgentCatalog {
                 .init(path: ".codeium/windsurf/mcp_config.json", format: .json(keyPath: "mcpServers")),
                 .init(path: ".codeium/mcp_config.json", format: .json(keyPath: "mcpServers"))
             ]),
+        AgentDefinition(
+            id: "playwright", name: "Playwright", owners: [],
+            detect: [".cache/ms-playwright"], documented: true,
+            targets: [
+                .init(.safe, .temporary(root: .userTemp, prefix: "playwright-artifacts-"),
+                      "agents.label.tempFiles", owners: []),
+                .init(.safe, .temporary(root: .userTemp, prefix: "playwright_chromiumdev_profile-"),
+                      "agents.label.tempFiles", owners: []),
+                .init(.safe, .temporary(root: .userTemp, prefix: "playwright-download-"),
+                      "agents.label.tempFiles", owners: []),
+                .init(.review, .children(".cache/ms-playwright"), "agents.label.runtime")
+            ], skillDirectories: [], mcpSources: []),
         AgentDefinition(
             id: "chrome-devtools-mcp", name: "Chrome DevTools MCP",
             owners: ["Google Chrome", "Google Chrome for Testing", "chrome-devtools-mcp"],
@@ -566,6 +739,17 @@ enum AgentCatalog {
         let labelKey: String
         let owners: [String]
         let paths: [String]
+        let temporaryRetention: TimeInterval?
+
+        init(agentID: String, tier: AgentTier, labelKey: String, owners: [String],
+             paths: [String], temporaryRetention: TimeInterval? = nil) {
+            self.agentID = agentID
+            self.tier = tier
+            self.labelKey = labelKey
+            self.owners = owners
+            self.paths = paths
+            self.temporaryRetention = temporaryRetention
+        }
     }
 
     static func hasData(_ agent: AgentDefinition, home: String) -> Bool {
@@ -585,6 +769,10 @@ enum AgentCatalog {
             "copilot": .init(bundleNames: [], commands: ["copilot"], extensionIDs: ["github.copilot", "github.copilot-chat"]),
             "gemini": .init(bundleNames: [], commands: ["gemini"]),
             "antigravity": .init(bundleNames: ["Antigravity"], commands: ["antigravity"]),
+            "aider": .init(bundleNames: [], commands: ["aider"]),
+            "goose": .init(bundleNames: ["Goose"], commands: ["goose"]),
+            "cline": .init(bundleNames: [], commands: ["cline"], extensionIDs: ["saoudrizwan.claude-dev"]),
+            "continue": .init(bundleNames: [], commands: ["cn"], extensionIDs: ["continue.continue"]),
             "opencode": .init(bundleNames: ["OpenCode", "opencode"], commands: ["opencode"]),
             "grok": .init(bundleNames: [], commands: ["grok"]),
             "pi": .init(bundleNames: [], commands: ["pi"]),
@@ -664,6 +852,7 @@ enum AgentCatalog {
             absolute($0, home: home) == URL(fileURLWithPath: home).appendingPathComponent($0).standardizedFileURL.path
         } + agent.skillDirectories + agent.mcpSources.map(\.path)
         for target in agent.targets {
+            if case .temporary = target.kind { continue }
             roots += targetPaths(target, home: home)
         }
         if agent.id == "opencode" { roots += [".local/state/opencode", ".opencode"] }
@@ -764,6 +953,27 @@ enum AgentCatalog {
             searchPath: executableSearchPath(home: home))
     }
 
+    static func temporaryRoots(home: String) -> [AgentTemporaryRoot: String] {
+        let normalizedHome = URL(fileURLWithPath: home).standardizedFileURL.path
+        guard normalizedHome == URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL.path else {
+            // 隔离测试不读取机器真实临时目录；这两个子目录是夹具约定。
+            return [.userTemp: normalizedHome + "/.nori-user-temp",
+                    .systemTmp: normalizedHome + "/.nori-system-tmp"]
+        }
+        var roots: [AgentTemporaryRoot: String] = [.systemTmp: "/private/tmp"]
+        let length = confstr(Int32(_CS_DARWIN_USER_TEMP_DIR), nil, 0)
+        guard length > 1, length < 16_384 else { return roots }
+        var bytes = [CChar](repeating: 0, count: length)
+        guard confstr(Int32(_CS_DARWIN_USER_TEMP_DIR), &bytes, length) > 0 else { return roots }
+        let path = URL(fileURLWithPath: String(cString: bytes))
+            .resolvingSymlinksInPath().standardizedFileURL.path
+        var metadata = stat()
+        guard lstat(path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR,
+              metadata.st_uid == getuid() else { return roots }
+        roots[.userTemp] = path
+        return roots
+    }
+
     /// 目录解析的唯一入口：扫描与执行边界都调用它，保证两边的候选集合相同。
     static func resolve(_ agent: AgentDefinition, home: String,
                         presence context: AgentPresenceContext? = nil) -> [ResolvedTarget] {
@@ -777,12 +987,19 @@ enum AgentCatalog {
             } else {
                 tier = orphaned ? .review : .showOnly
             }
+            let temporaryRetention: TimeInterval?
+            if case .temporary(let root, _) = target.kind {
+                temporaryRetention = root == .userTemp ? 24 * 3600 : 7 * 24 * 3600
+            } else {
+                temporaryRetention = nil
+            }
             return ResolvedTarget(agentID: agent.id,
                                   tier: tier,
                                   labelKey: target.labelKey,
                                   owners: target.tier == .showOnly || target.owners == nil
                                     ? runtimeOwners(for: agent, home: home, presence: context) : target.owners!,
-                                  paths: paths)
+                                  paths: paths,
+                                  temporaryRetention: temporaryRetention)
         }
     }
 
@@ -801,38 +1018,100 @@ enum AgentCatalog {
             let path = root + "/codex-tui.log"
             return isPhysical(path, home: home) && !isDirectory(path) ? [path] : []
         }
-        return resolve(target.kind, home: home)
+        return resolve(target.kind, home: home, environment: environment)
     }
 
-    static func resolve(_ kind: AgentTarget.Kind, home: String) -> [String] {
+    static func resolve(_ kind: AgentTarget.Kind, home: String,
+                        environment: [String: String]? = nil) -> [String] {
+        let environment = environment ?? storageEnvironment(home: home)
         switch kind {
         case .path(let relative):
-            let path = absolute(relative, home: home)
+            let path = absolute(relative, home: home, environment: environment)
             return isPhysical(path, home: home) ? [path] : []
         case .leaves(let root, let names):
-            let base = absolute(root, home: home)
+            let base = absolute(root, home: home, environment: environment)
             guard isPhysical(base, home: home) else { return [] }
             return names.map { base + "/" + $0 }.filter { isPhysical($0, home: home) }
         case .children(let relative):
-            let base = absolute(relative, home: home)
+            let base = absolute(relative, home: home, environment: environment)
             guard isPhysical(base, home: home) else { return [] }
             return childNames(of: base).map { base + "/" + $0 }.filter { isPhysical($0, home: home) }
+        case .childrenExcluding(let root, let names):
+            let excluded = Set(names)
+            return resolve(.children(root), home: home, environment: environment).filter {
+                !excluded.contains(($0 as NSString).lastPathComponent)
+            }
+        case .files(let root, let maxDepth):
+            let base = absolute(root, home: home, environment: environment)
+            guard isPhysical(base, home: home), isDirectory(base) else { return [] }
+            let depthLimit = max(0, min(maxDepth, 4))
+            var pending = [(base, 0)]
+            var paths: [String] = []
+            while let (directory, depth) = pending.popLast() {
+                for name in childNames(of: directory) {
+                    let path = directory + "/" + name
+                    guard isPhysical(path, home: home) else { continue }
+                    if isRegularFile(path) {
+                        paths.append(path)
+                    } else if depth < depthLimit, isDirectory(path) {
+                        pending.append((path, depth + 1))
+                    }
+                }
+            }
+            return paths.sorted()
+        case .prefixed(let dir, let prefix):
+            let base = absolute(dir, home: home, environment: environment)
+            guard isPhysical(base, home: home), isDirectory(base),
+                  let names = try? FileManager.default.contentsOfDirectory(atPath: base) else { return [] }
+            return names.filter { $0.hasPrefix(prefix) }.sorted().map { base + "/" + $0 }
+                .filter { isPhysical($0, home: home) }
+        case .obsoleteExtensions(let root):
+            return obsoleteExtensionDirectories(root: absolute(root, home: home, environment: environment), home: home)
+        case .worktrees(let root, let maxDepth):
+            let base = absolute(root, home: home, environment: environment)
+            guard isPhysical(base, home: home), isDirectory(base) else { return [] }
+            let depthLimit = max(0, min(maxDepth, 4))
+            var pending = [(base, 0)]
+            var paths: [String] = []
+            while let (directory, depth) = pending.popLast() {
+                guard depth > 0 else {
+                    if depth < depthLimit {
+                        pending += childNames(of: directory).map { (directory + "/" + $0, depth + 1) }
+                            .filter { isPhysical($0.0, home: home) && isDirectory($0.0) }
+                    }
+                    continue
+                }
+                if AgentWorktreeInspector.isWorktree(directory) {
+                    paths.append(directory)
+                } else if depth < depthLimit {
+                    pending += childNames(of: directory).map { (directory + "/" + $0, depth + 1) }
+                        .filter { isPhysical($0.0, home: home) && isDirectory($0.0) }
+                }
+            }
+            return paths.sorted()
+        case .temporary(let root, let prefix):
+            guard !prefix.isEmpty, let base = temporaryRoots(home: home)[root],
+                  isPhysicalUnder(base, root: base),
+                  let names = try? FileManager.default.contentsOfDirectory(atPath: base) else { return [] }
+            return names.filter { $0.hasPrefix(prefix) }.sorted().map { base + "/" + $0 }
+                .filter { isPhysicalUnder($0, root: base) }
         case .projectContents(let root, let excluded):
-            let projects = resolve(.children(root), home: home).filter(isDirectory)
+            let projects = resolve(.children(root), home: home, environment: environment).filter(isDirectory)
             return projects.flatMap { project in
                 childNames(of: project).filter { !excluded.contains($0) }
                     .map { project + "/" + $0 }.filter { isPhysical($0, home: home) }
             }
         case .projectLeaves(let root, let names):
-            let projects = resolve(.children(root), home: home).filter(isDirectory)
+            let projects = resolve(.children(root), home: home, environment: environment).filter(isDirectory)
             return projects.flatMap { project in
                 names.map { project + "/" + $0 }.filter { isPhysical($0, home: home) }
             }
         case .versions(let root, let links):
-            return staleVersions(root: absolute(root, home: home),
-                                 links: links.map { absolute($0, home: home) }, home: home)
+            return staleVersions(root: absolute(root, home: home, environment: environment),
+                                 links: links.map { absolute($0, home: home, environment: environment) }, home: home)
         case .sqlite(let dir, let prefix, let ext):
-            let base = dir == ".codex" ? codexSQLiteDirectory(home: home) : absolute(dir, home: home)
+            let base = dir == ".codex" ? codexSQLiteDirectory(home: home, environment: environment)
+                : absolute(dir, home: home, environment: environment)
             guard isPhysical(base, home: home) else { return [] }
             let names = childNames(of: base)
             // 历史版本写过 openCode.db；按大小写不敏感匹配，并纳入主库已消失的伴随文件。
@@ -858,20 +1137,49 @@ enum AgentCatalog {
             }
             return paths
         case .sqliteTree(let root, let prefix, let ext, let maxDepth):
-            let base = absolute(root, home: home)
+            let base = absolute(root, home: home, environment: environment)
             guard isPhysical(base, home: home) else { return [] }
             var pending = [(base, 0)]
             var paths: [String] = []
             var visited = 0
             while let (directory, depth) = pending.popLast(), visited < 4096 {
                 visited += 1
-                paths += resolve(.sqlite(dir: directory, prefix: prefix, ext: ext), home: home)
+                paths += resolve(.sqlite(dir: directory, prefix: prefix, ext: ext), home: home,
+                    environment: environment)
                 guard depth < max(0, min(maxDepth, 4)) else { continue }
                 pending += childNames(of: directory).map { directory + "/" + $0 }
                     .filter { isDirectory($0) && isPhysical($0, home: home) }.map { ($0, depth + 1) }
             }
             return paths.sorted()
         }
+    }
+
+    private static func obsoleteExtensionDirectories(root: String, home: String) -> [String] {
+        let maximumObsoleteBytes = 1_048_576
+        let maximumExtensionsBytes = 2_097_152
+        func read(_ path: String, maximumBytes: Int) -> Data? {
+            guard isPhysical(path, home: home), isRegularFile(path),
+                  let handle = FileHandle(forReadingAtPath: path) else { return nil }
+            defer { try? handle.close() }
+            guard let data = try? handle.read(upToCount: maximumBytes + 1),
+                  data.count <= maximumBytes else { return nil }
+            return data
+        }
+        guard isPhysical(root, home: home), isDirectory(root),
+              let obsoleteData = read(root + "/.obsolete", maximumBytes: maximumObsoleteBytes),
+              let obsolete = (try? JSONSerialization.jsonObject(with: obsoleteData)) as? [String: Any],
+              let extensionsData = read(root + "/extensions.json", maximumBytes: maximumExtensionsBytes),
+              let extensions = (try? JSONSerialization.jsonObject(with: extensionsData)) as? [[String: Any]] else {
+            return []
+        }
+        let installed = Set(extensions.compactMap { ($0["relativeLocation"] as? String)?.lowercased() })
+        return obsolete.compactMap { name, value -> String? in
+            guard !name.isEmpty, !name.contains("/"), name != ".", name != "..",
+                  let value = value as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID(),
+                  value.boolValue, !installed.contains(name.lowercased()) else { return nil }
+            let path = root + "/" + name
+            return isPhysical(path, home: home) && isDirectory(path) ? path : nil
+        }.sorted()
     }
 
     static let sqliteCompanionSuffixes = ["-wal", "-shm", "-journal"]
@@ -1034,6 +1342,24 @@ enum AgentCatalog {
                 .appendingPathComponent(String(relative.dropFirst(".codex/log".count)))
                 .standardizedFileURL.path
         }
+        let gooseRoots = [
+            ".config/goose": "config", ".local/share/goose": "data", ".local/state/goose": "state"
+        ]
+        if let entry = gooseRoots.first(where: { relative == $0.key || relative.hasPrefix($0.key + "/") }),
+           let raw = environment["GOOSE_PATH_ROOT"], let root = explicitDirectory(raw, home: home) {
+            return URL(fileURLWithPath: root).appendingPathComponent(entry.value)
+                .appendingPathComponent(String(relative.dropFirst(entry.key.count)))
+                .standardizedFileURL.path
+        }
+        let hasClineDataRoot = environment["CLINE_DATA_DIR"]
+            .flatMap { explicitDirectory($0, home: home) } != nil
+        if (relative == ".cline/data" || relative.hasPrefix(".cline/data/")),
+           !hasClineDataRoot,
+           let raw = environment["CLINE_DIR"], let root = explicitDirectory(raw, home: home) {
+            return URL(fileURLWithPath: root).appendingPathComponent("data")
+                .appendingPathComponent(String(relative.dropFirst(".cline/data".count)))
+                .standardizedFileURL.path
+        }
         let overrides: [(prefix: String, key: String, suffix: String)] = [
             (".codex", "CODEX_HOME", ""),
             (".claude", "CLAUDE_CONFIG_DIR", ""),
@@ -1052,6 +1378,11 @@ enum AgentCatalog {
             (".local/share/crush", "XDG_DATA_HOME", "crush"),
             (".cache/crush", "XDG_CACHE_HOME", "crush"),
             (".config/devin", "XDG_CONFIG_HOME", "devin"),
+            (".config/goose", "XDG_CONFIG_HOME", "goose"),
+            (".local/share/goose", "XDG_DATA_HOME", "goose"),
+            (".local/state/goose", "XDG_STATE_HOME", "goose"),
+            (".cline/data", "CLINE_DATA_DIR", ""),
+            (".continue", "CONTINUE_GLOBAL_DIR", ""),
             (".local/share/opencode", "XDG_DATA_HOME", "opencode"),
             (".local/state/opencode", "XDG_STATE_HOME", "opencode"),
             (".cache/opencode", "XDG_CACHE_HOME", "opencode"),
@@ -1140,6 +1471,23 @@ enum AgentCatalog {
     static func isDirectory(_ path: String) -> Bool {
         var metadata = stat()
         return lstat(path, &metadata) == 0 && (metadata.st_mode & S_IFMT) == S_IFDIR
+    }
+
+    static func isRegularFile(_ path: String) -> Bool {
+        var metadata = stat()
+        return lstat(path, &metadata) == 0 && (metadata.st_mode & S_IFMT) == S_IFREG
+    }
+
+    private static func isPhysicalUnder(_ path: String, root: String) -> Bool {
+        let root = URL(fileURLWithPath: root).standardizedFileURL.path
+        var current = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard current == root || current.hasPrefix(root + "/") else { return false }
+        while true {
+            var metadata = stat()
+            guard lstat(current, &metadata) == 0, metadata.st_mode & S_IFMT != S_IFLNK else { return false }
+            if current == root { return true }
+            current = (current as NSString).deletingLastPathComponent
+        }
     }
 
     /// 存在、位于 home 内，且从 home 到自身的每一级都不是符号链接。

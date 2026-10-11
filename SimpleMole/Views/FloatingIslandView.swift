@@ -9,6 +9,7 @@ enum IslandLayout {
     static let metricWidth: CGFloat = 84
     static let networkWidth: CGFloat = 112
     static let mascotWidth: CGFloat = 32
+    static let awakeWidth: CGFloat = 68
     static let moreWidth: CGFloat = 28
     static let metricSpacing: CGFloat = 4
 
@@ -16,10 +17,10 @@ enum IslandLayout {
         let metricTotal = items.reduce(CGFloat.zero) { width, item in
             width + (item == .network ? networkWidth : metricWidth)
         }
-        let accessoryCount = hardwareNotch ? 1 : 2
+        let accessoryCount = hardwareNotch ? 2 : 3
         let spacingCount = max(0, items.count + accessoryCount - 1)
         return max(minimumPanelWidth,
-                   metricTotal + moreWidth + (hardwareNotch ? 0 : mascotWidth)
+                   metricTotal + awakeWidth + moreWidth + (hardwareNotch ? 0 : mascotWidth)
                    + CGFloat(spacingCount) * metricSpacing + contentInset * 2)
     }
     static let contentInset: CGFloat = 12
@@ -124,6 +125,30 @@ extension AppState.IslandItem {
         case .cpu: return .cpu
         case .memory: return .memory
         default: return nil
+        }
+    }
+}
+
+private struct AwakeIslandIndicator: View {
+    @ObservedObject var controller: AwakeSessionController
+    @ObservedObject private var l10n = L10n.shared
+    let onOpenMain: () -> Void
+
+    var body: some View {
+        if controller.session != nil {
+            Button(action: onOpenMain) {
+                HStack(spacing: 4) {
+                    Image(systemName: "moon.zzz")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(l10n.t("awake.active"))
+                        .font(.system(size: 10))
+                }
+                .foregroundStyle(Color.moleAccentText)
+                .frame(width: IslandLayout.awakeWidth, height: 36)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(l10n.t("awake.title"))
         }
     }
 }
@@ -589,8 +614,12 @@ struct FloatingIslandView: View {
                                    maxWidth: .infinity,
                                    alignment: .leading)
                     }
-                    if index == 0 { moreControl }
-                    else { Color.clear.frame(width: IslandLayout.moreWidth, height: 1) }
+                    if index == 0 {
+                        AwakeIslandIndicator(controller: state.awake, onOpenMain: onOpenMain)
+                        moreControl
+                    } else {
+                        Color.clear.frame(width: IslandLayout.awakeWidth + IslandLayout.moreWidth, height: 1)
+                    }
                 }
             }
         }

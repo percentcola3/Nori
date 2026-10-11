@@ -258,7 +258,7 @@ for arch in $BUILD_ARCHS; do
         -module-cache-path "$BUILD_TMP/module-cache-$arch" \
         -F "$SPARKLE_DIR" -framework Sparkle \
         -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' \
-        -framework Cocoa -framework SwiftUI -framework CoreServices -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement -lsqlite3 \
+        -framework Cocoa -framework SwiftUI -framework CoreServices -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement -framework UserNotifications -lsqlite3 \
         "$SWIFT_SOURCE_DIR"/*.swift \
         "$SWIFT_SOURCE_DIR"/L10n/*.swift \
         "$SWIFT_SOURCE_DIR"/Services/*.swift \

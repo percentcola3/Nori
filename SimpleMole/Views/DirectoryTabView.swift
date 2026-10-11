@@ -90,7 +90,7 @@ struct DirectoryTabView: View {
                     .frame(minWidth: 120, maxWidth: .infinity)
                 if model.currentDirectoryIsGitRepository, !model.hasSearchQuery {
                     Button { presentGitPanel(model.currentDirectory) } label: {
-                        Image(systemName: "arrow.triangle.branch")
+                        GitRepositoryIcon(size: 16)
                     }
                     .buttonStyle(MoleIconButtonStyle(size: 30))
                     .help(l10n.t("dir.git.actions"))
@@ -213,7 +213,7 @@ struct DirectoryTabView: View {
             }
             HStack(spacing: 12) {
                 Text(l10n.t("dir.column.name")).frame(maxWidth: .infinity, alignment: .leading)
-                Text(l10n.t("dir.column.kind")).frame(width: 76, alignment: .leading)
+                Text(l10n.t("dir.column.kindBranch")).frame(width: 174, alignment: .leading)
                 Text(l10n.t(model.isPathQuery ? "dir.path.match" : "dir.column.modified")).frame(width: 122, alignment: .leading)
                 Text(l10n.t("dir.column.disk")).frame(width: 112, alignment: .trailing)
                 Color.clear.frame(width: 28, height: 1).accessibilityHidden(true)
@@ -225,6 +225,7 @@ struct DirectoryTabView: View {
                 LazyVStack(spacing: 4) {
                     ForEach(model.entries) { entry in
                         DirectoryFileRow(
+                            model: model,
                             entry: entry,
                             selected: model.selectedIDs.contains(entry.id),
                             sizeState: model.sizeStates[entry.id] ?? .pending,
@@ -335,9 +336,7 @@ struct DirectoryTabView: View {
         }
         Button(l10n.t("dir.path.copy")) { focusedField = .files; model.copyPath(entry.url) }
         if entry.isGitRepository {
-            Button { presentGitPanel(entry.url) } label: {
-                Label(l10n.t("dir.git.actions"), systemImage: "arrow.triangle.branch")
-            }
+            Button(l10n.t("dir.git.actions")) { presentGitPanel(entry.url) }
         }
         Divider()
         Button(l10n.t("dir.copy")) { selectForAction(entry); model.copySelection() }
@@ -460,6 +459,7 @@ struct DirectoryTabView: View {
 }
 
 private struct DirectoryFileRow<MenuContent: View>: View {
+    @ObservedObject var model: DirectoryBrowserModel
     let entry: DirectoryEntry
     let selected: Bool
     let sizeState: DirectorySizeState
@@ -486,7 +486,7 @@ private struct DirectoryFileRow<MenuContent: View>: View {
     var body: some View {
         HStack(spacing: 12) {
             Button(action: onSelect) {
-                columns
+                nameColumn
                     .padding(.vertical, showParent ? 10 : 9)
                     .contentShape(Rectangle())
             }
@@ -499,6 +499,23 @@ private struct DirectoryFileRow<MenuContent: View>: View {
             .accessibilityAddTraits(selected ? .isSelected : [])
             .accessibilityAction(named: Text(l10n.t("dir.open")), onOpen)
             .accessibilityIdentifier("directory-entry-" + entry.id)
+
+            if entry.isGitRepository {
+                DirectoryGitRowControls(url: entry.url, model: model)
+                    .frame(width: 174, alignment: .leading)
+            } else {
+                Text(kind).font(.system(size: 10)).foregroundStyle(.secondary)
+                    .lineLimit(1).frame(width: 174, alignment: .leading)
+            }
+
+            Button(action: onSelect) {
+                metadataColumns
+                    .padding(.vertical, showParent ? 10 : 9)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
+            .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen() })
+            .accessibilityHidden(true)
 
             Menu(content: menu) {
                 Image(systemName: "ellipsis")
@@ -525,26 +542,32 @@ private struct DirectoryFileRow<MenuContent: View>: View {
         }
     }
 
-    private var columns: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 9) {
-                Image(systemName: entry.isSymbolicLink ? "arrowshape.turn.up.right" : entry.isGitRepository ? "arrow.triangle.branch" : entry.isDirectory ? "folder.fill" : "doc")
-                    .foregroundStyle(entry.isDirectory ? Color.accentText : Color.secondary)
-                    .font(.system(size: 16)).frame(width: 22)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.name).font(.system(size: 12, weight: selected ? .semibold : .regular))
-                        .foregroundStyle(.primary).lineLimit(1).truncationMode(.middle)
-                    if showParent {
-                        Text(entry.url.deletingLastPathComponent().path)
-                            .font(.system(size: 9)).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.middle)
-                    }
+    private var nameColumn: some View {
+        HStack(spacing: 9) {
+            if entry.isGitRepository {
+                GitRepositoryIcon().frame(width: 22)
+                    .help(l10n.t("dir.git.repository"))
+            } else {
+                Image(systemName: entry.isSymbolicLink ? "arrowshape.turn.up.right" : entry.isDirectory ? "folder.fill" : "doc")
+                .foregroundStyle(entry.isDirectory ? Color.accentText : Color.secondary)
+                .font(.system(size: 16)).frame(width: 22)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.name).font(.system(size: 12, weight: selected ? .semibold : .regular))
+                    .foregroundStyle(.primary).lineLimit(1).truncationMode(.middle)
+                if showParent {
+                    Text(entry.url.deletingLastPathComponent().path)
+                        .font(.system(size: 9)).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(kind).font(.system(size: 10)).foregroundStyle(.secondary)
-                .lineLimit(1).frame(width: 76, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var metadataColumns: some View {
+        HStack(spacing: 12) {
             Group {
                 if let pathMatch {
                     Text(pathMatch == 100 ? l10n.t("dir.path.exact") : l10n.tf("dir.path.similarity", pathMatch))
@@ -559,7 +582,6 @@ private struct DirectoryFileRow<MenuContent: View>: View {
                               updatedAt: sizeUpdatedAt, isPartial: isPartialSize)
                 .frame(width: 112, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity)
     }
 }
 

@@ -13,6 +13,7 @@ enum DirectorySizeState: Equatable {
 final class DirectoryBrowserModel: ObservableObject {
     @Published private(set) var currentDirectory: URL
     @Published private(set) var currentDirectoryIsGitRepository = false
+    @Published private(set) var gitStatusRevision = 0
     @Published private(set) var entries: [DirectoryEntry] = []
     @Published var selectedIDs: Set<String> = []
     @Published var query = "" {
@@ -293,6 +294,7 @@ final class DirectoryBrowserModel: ObservableObject {
     }
 
     func refresh() {
+        gitStatusRevision &+= 1
         reloadDirectory(calibrateSizes: true)
     }
 
@@ -890,6 +892,7 @@ final class DirectoryBrowserModel: ObservableObject {
 
     func finishGitOperation(at repository: URL, error: String?) {
         isWorking = false
+        gitStatusRevision &+= 1
         if isActive { reloadDirectory() }
         errorMessage = error
         statusMessage = error == nil ? L10n.shared.t("dir.git.completed") : nil
