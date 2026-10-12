@@ -378,6 +378,7 @@ final class AppState {
     var confirmation: Confirmation?
     let l10n = L10n.shared
     var agentSelectedSkills = Set<String>()
+    var agentSelectedSkillRegistrations = Set<String>()
     var agentSelectedServers = Set<String>()
     var agentSelectedMCPInstallations = Set<String>()
     var agentSelectedCLIInstallations = Set<String>()
@@ -523,7 +524,7 @@ struct AgentWorkflowTests {
 
     @MainActor private static func attention(_ state: AppState, retry: Bool = true) {
         if state.agentCompletedCount > 0 {
-            precondition(!state.agentApplying && state.agentOutcomeMood == .success && state.agentCelebrating
+            precondition(!state.agentApplying && state.agentOutcomeMood == .success && !state.agentCelebrating
                          && state.agentCleanupHasFeedback && state.agentCleanupProgress == nil
                          && state.agentOutcomeDetails.isEmpty && state.agentFailureApplications.isEmpty
                          && state.taskNotice == nil && state.agentRetryAvailable == retry,
@@ -539,18 +540,14 @@ struct AgentWorkflowTests {
         precondition(state.agentRetryAvailable == retry)
     }
 
-    @MainActor private static func successAndIdle(_ state: AppState, removed: Int) {
+    @MainActor private static func successAndRefreshed(_ state: AppState, removed: Int) {
         precondition(!state.agentApplying && state.agentOutcomeMood == .success
-                     && state.agentCelebrating && state.agentCompletedCount == removed)
+                     && !state.agentCelebrating && state.agentCompletedCount == removed)
         precondition(state.taskNotice == nil && !state.agentRetryAvailable && state.agentCleanupProgress == nil,
-                     "Confirmed success must celebrate once without a result popup")
-        precondition(!state.agentHasScanned && state.agentCategories.isEmpty && state.agentSkills.isEmpty)
-        let feedbackID = state.agentFeedbackID
-        state.finishAgentCelebration(feedbackID: feedbackID - 1)
-        precondition(state.agentCelebrating, "An obsolete timer cannot dismiss a newer success")
-        state.finishAgentCelebration(feedbackID: feedbackID)
-        precondition(!state.agentCelebrating && state.agentOutcomeMood == .success,
-                     "Completed celebration must leave the idle SVG state without the success summary")
+                     "Confirmed success must remain on the current page without a result popup: removed=\(removed), retry=\(state.agentRetryAvailable), scanComplete=\(state.agentScanComplete), progress=\(String(describing: state.agentCleanupProgress))")
+        precondition(state.agentHasScanned && state.agentScanComplete == WorkflowFixture.current.report.complete
+                     && WorkflowFixture.current.scanCount > 0 && state.agentSelectedCount == 0,
+                     "Cleanup must refresh the inventory and clear selection before finishing")
     }
 
     @MainActor static func main() async throws {
@@ -785,7 +782,7 @@ struct AgentWorkflowTests {
                      "Leaf activity may report the actual file but cannot invent completed target units")
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 1)
+        successAndRefreshed(state, removed: 1)
     }
 
     @MainActor private static func mixedCache(runtimeAvailable: Bool, retainedCache: Bool = false,
@@ -818,7 +815,7 @@ struct AgentWorkflowTests {
                      "Retry may reclaim retained/new cache contents but must exclude absent completed targets")
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 1)
+        successAndRefreshed(state, removed: 1)
     }
 
     @MainActor private static func disappearedPendingResource() async throws {
@@ -832,7 +829,7 @@ struct AgentWorkflowTests {
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
         precondition(f.cleanupCount == 1)
-        successAndIdle(state, removed: 1)
+        successAndRefreshed(state, removed: 1)
     }
 
     @MainActor private static func partialReadyCacheRetry() async throws {
@@ -854,7 +851,7 @@ struct AgentWorkflowTests {
                      "Unresolved cache content must remain in the sensitive-resource retry")
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 2)
+        successAndRefreshed(state, removed: 2)
     }
 
     @MainActor private static func blockedFrozenRetry() async throws {
@@ -880,7 +877,7 @@ struct AgentWorkflowTests {
                      "Changing UI selections cannot substitute a different accepted retry scope")
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 1)
+        successAndRefreshed(state, removed: 1)
     }
 
     @MainActor private static func leavePrerequisiteUnresolved() async throws {
@@ -920,7 +917,7 @@ struct AgentWorkflowTests {
             precondition(f.cleanupCount == 1, "Agent reentry duplicated the active data cleanup")
             f.cleanupGate.release()
             try await waitUntil { !state.agentApplying }
-            successAndIdle(state, removed: 1)
+            successAndRefreshed(state, removed: 1)
         }
 
         for kind in ["cleanup", "cli-uninstall", "software-update", "app-uninstall"] {
@@ -992,7 +989,7 @@ struct AgentWorkflowTests {
                      "Data-only retry must keep the completed CLI in the overall progress")
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 1)
+        successAndRefreshed(state, removed: 1)
     }
 
     @MainActor private static func mixedUninstalledData(runtimeAvailable: Bool) async throws {
@@ -1022,7 +1019,7 @@ struct AgentWorkflowTests {
                      && f.submittedServerIDs == ["server"] && f.submittedRemovalID == "fixture")
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 1)
+        successAndRefreshed(state, removed: 1)
     }
 
     @MainActor private static func unknownRuntime(cli: Bool, afterCLI: Bool) async throws {
@@ -1056,10 +1053,23 @@ struct AgentWorkflowTests {
                      && f.submittedServerIDs == ["server"] && f.submittedInstallationIDs == ["installation"])
         state.applyAgentCleanup()
         precondition(f.cleanupCount == 1, "Repeated clicks must not duplicate a busy cleanup")
+        let refreshedCategory = CleanupCategory(name: "Fresh cache", paths: ["\(workflowHome)/new-cache"],
+            bytes: 2, pathIdentities: [:], selected: true, risk: .safe)
+        f.report.categories = [refreshedCategory]
+        f.report.skills = []
+        f.report.servers = []
+        f.report.installations = []
+        f.report.groups = [AgentGroupSummary(id: "fixture", name: "Fixture", documented: true,
+            orphaned: false, categoryIDs: [refreshedCategory.id], skillIDs: [], serverIDs: [], bytes: 2)]
+        state.agentCLIBodySizes["stale-installation"] = .init(bytes: 1, complete: true)
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        precondition(state.resamples == 1 && f.scanCount == 0)
-        successAndIdle(state, removed: 4)
+        precondition(state.resamples == 1 && f.scanCount == 1)
+        precondition(state.agentCategories.map(\.id) == [refreshedCategory.id]
+                     && state.agentSkills.isEmpty && state.agentServers.isEmpty
+                     && state.agentMCPInstallations.isEmpty && state.agentCLIBodySizes["stale-installation"] == nil,
+                     "Automatic refresh must replace removed resources and stale installation measurements")
+        successAndRefreshed(state, removed: 4)
         precondition(state.agentReclaimedBytes == 8192,
                      "Agent cleanup must report worker-confirmed bytes, not selected sizes")
     }
@@ -1089,7 +1099,7 @@ struct AgentWorkflowTests {
                      "Manual orphan selection must carry only its own residual scope and selected paths")
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 1)
+        successAndRefreshed(state, removed: 1)
     }
 
     @MainActor private static func incompleteCleanup(kind: String) async throws {
@@ -1163,7 +1173,7 @@ struct AgentWorkflowTests {
         precondition(!state.cleanupScanComplete && state.progressHistory.contains { $0.phase == .verifying })
         precondition(state.agentReclaimedBytes == 6144,
                      "CLI and data cleanup must merge only their confirmed reclaimed allocation")
-        successAndIdle(state, removed: 2)
+        successAndRefreshed(state, removed: 2)
     }
 
     @MainActor private static func CLIRemovedPathsCountAsCompleted() async throws {
@@ -1194,7 +1204,7 @@ struct AgentWorkflowTests {
                      "All remaining data plus CLI-covered paths must reach real 100% completion")
         f.cleanupCompletionGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 2)
+        successAndRefreshed(state, removed: 2)
     }
 
     @MainActor private static func orphanedDataRetry() async throws {
@@ -1249,7 +1259,7 @@ struct AgentWorkflowTests {
         precondition(state.agentCleanupProgress?.completed == 2 && state.agentCleanupProgress?.total == 7)
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 2)
+        successAndRefreshed(state, removed: 2)
     }
 
     @MainActor private static func CLIResumeAfterLauncherRemoval() async throws {
@@ -1298,7 +1308,7 @@ struct AgentWorkflowTests {
                      "Associated data may run only after the same accepted CLI phase succeeds")
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 3)
+        successAndRefreshed(state, removed: 3)
         precondition(state.agentReclaimedBytes == 5120,
                      "One click must aggregate its CLI and data bytes without recounting an earlier partial pass")
     }
@@ -1349,7 +1359,7 @@ struct AgentWorkflowTests {
         try await waitUntil { f.cleanupCount == 3 }
         f.cleanupGate.release()
         try await waitUntil { !state.agentApplying }
-        successAndIdle(state, removed: 2)
+        successAndRefreshed(state, removed: 2)
         precondition(state.agentReclaimedBytes == 2048,
                      "A successful retry must show only space actually released during its current click")
     }

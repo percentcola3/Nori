@@ -7,6 +7,7 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework SwiftUI \
     "$ROOT_DIR/SimpleMole/Services/AgentIconLoader.swift" \
+    "$ROOT_DIR/SimpleMole/Services/ImageMemoryCache.swift" \
     "$ROOT_DIR/SimpleMole/Views/Theme.swift" \
     "$ROOT_DIR/SimpleMole/Views/AgentIconView.swift" \
     "$ROOT_DIR/script/AgentIconTests.swift" \

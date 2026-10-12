@@ -228,6 +228,7 @@ final class AppState: ObservableObject {
     var agentStorageGeneration = UUID()
     @Published var agentProgramBusyID: String?
     @Published var agentSelectedSkills: Set<String> = []
+    @Published var agentSelectedSkillRegistrations: Set<String> = []
     @Published var agentSelectedServers: Set<String> = []
     @Published var agentSelectedMCPInstallations: Set<String> = []
     @Published var agentSelectedCLIInstallations: Set<String> = []
@@ -441,6 +442,7 @@ final class AppState: ObservableObject {
             analyzeStatus = analysisStatus(for: analyzeMode)
             analysisFileSelection = analysisSelection(for: analyzeMode)
             if inventoryScanMode != analyzeMode { analyzeCurrentPath = "" }
+            restoreAnalysisPageIfVisible()
         }
     }
     @Published var slimSelection: Set<String> = []
@@ -464,6 +466,8 @@ final class AppState: ObservableObject {
     @Published var diskBrowserNavigation = [AnalysisDiskScopes.overviewPath]
     @Published var diskBrowserEntriesByPath: [String: [AnalyzeEntry]] = [:]
     @Published var analysisReportsByMode: [AnalyzeMode: AnalyzeReport] = [:]
+    @Published var analysisSummariesByMode: [AnalyzeMode: AnalysisInventorySummary] = [:]
+    @Published var isRestoringAnalysis = false
     @Published var analysisScanDates: [AnalyzeMode: Date] = [:]
     @Published var analysisStatuses: [AnalyzeMode: String] = [:]
     @Published var analysisDetailsByMode: [AnalyzeMode: [String]] = [:]
@@ -858,19 +862,10 @@ final class AppState: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             let cache = self.analysisInventoryCache
-            let restored = await Task.detached(priority: .utility) { cache.restoreState() }.value
-            guard restored.revision == cache.currentRevision else { return }
-            for (kind, snapshot) in restored.snapshots {
-                let mode = self.analysisMode(for: kind)
-                guard self.analysisScanDates[mode] == nil, self.inventoryScanMode != mode else { continue }
-                self.analysisReportsByMode[mode] = restored.reports[kind]
-                if kind == .disk { self.publishDiskBrowser(restored.diskBrowser) }
-                self.analysisScanDates[mode] = snapshot.scannedAt
-                self.analysisStatuses[mode] = self.l10n.t(snapshot.issueCount > 0 ? "analyze.scan.partial" : "analyze.scan.scope")
-                if snapshot.issueCount > 0, let report = restored.reports[kind] {
-                    self.analysisDetailsByMode[mode] = DiskAnalysisWorker.failureDetails(for: report, using: self.l10n.t)
-                }
-            }
+            let revision = cache.currentRevision
+            let summaries = await Task.detached(priority: .utility) { cache.restoreSummaries() }.value
+            guard revision == cache.currentRevision else { return }
+            self.applyAnalysisSummaries(summaries)
             self.publishAnalysisReports()
             self.runScheduledAnalysisScans()
         }

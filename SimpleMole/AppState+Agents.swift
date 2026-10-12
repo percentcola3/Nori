@@ -244,6 +244,7 @@ extension AppState {
             agentApplications = applications
             agentCLIBodySizes = bodies
             agentSelectedSkills = []
+            agentSelectedSkillRegistrations = []
             agentSelectedServers = []
             agentSelectedMCPInstallations = []
             agentSelectedCLIInstallations = []
@@ -307,7 +308,7 @@ extension AppState {
         agentScanControl?.cancel()
     }
 
-    private func updateAgentInventory(_ report: AgentScanReport, cli: [AgentCLIInstallation]) {
+    func updateAgentInventory(_ report: AgentScanReport, cli: [AgentCLIInstallation]) {
         agentCategories = report.categories
         agentGroups = report.groups
         agentSkills = report.skills
@@ -321,6 +322,7 @@ extension AppState {
     func clearAgentSelection() {
         for index in agentCategories.indices { agentCategories[index].selected = false }
         agentSelectedSkills = []
+        agentSelectedSkillRegistrations = []
         agentSelectedServers = []
         agentSelectedMCPInstallations = []
         agentSelectedCLIInstallations = []
@@ -690,21 +692,36 @@ extension AppState {
         resampleAfterMutation()
         let summary = L10n.shared.tf("cleanup.execution.summary", removed, skipped, failed)
         log(summary)
-        guard skipped > 0 || failed > 0 || pendingAction != nil else {
-            completeAgentMutation(summary: summary, removed: removed, skipped: skipped, failed: failed)
-            return
-        }
         let original = pendingAction?.selection ?? effectiveAgentCleanupSelection
         agentStatus = L10n.shared.t("agents.status.refreshing")
         let home = NSHomeDirectory()
-        let (report, cli, footprints) = await Task.detached(priority: .utility) {
+        let (report, cli, footprints, applications, bodies) = await Task.detached(priority: .utility) {
+            let control = CleanupScanControl(mode: .deep, totalBudget: 180, directoryBudget: 30)
             // A removed CLI can leave data after a later failure. Keep those
             // accepted Agent scopes visible even though installed=false now.
-            let (report, cli) = Self.loadAgentInventory(home: home, includingAgentIDs: original.catalogAgentIDs)
-            return (report, cli, AgentStorageFootprint.build(report: report, cli: cli))
+            let (report, cli) = Self.loadAgentInventory(home: home, includingAgentIDs: original.catalogAgentIDs,
+                                                       control: control)
+            return (report, cli, AgentStorageFootprint.build(report: report, cli: cli),
+                    AgentSoftwareInventory.applications(home: home), Self.measureAgentCLIBodies(cli, control: control))
         }.value
         updateAgentInventory(report, cli: cli)
         agentStorageFootprints = footprints
+        agentApplications = applications
+        agentCLIBodySizes = bodies
+        guard skipped > 0 || failed > 0 || pendingAction != nil else {
+            if report.complete {
+                completeAgentMutation(summary: summary, removed: removed, skipped: skipped, failed: failed)
+            } else {
+                clearAgentSelection()
+                agentRetryAction = nil
+                agentRetryAvailable = false
+                agentStatus = summary
+                recordAgentAttention()
+                agentOutcomeDetails = [L10n.shared.t("log.scanPartial")]
+                noteHeaderReaction(removed > 0 ? .success : .attention)
+            }
+            return
+        }
         let remaining = report.complete ? original.retainingPresentResources(report) : original
         let selectedPaths = Set(remaining.categories.flatMap(\.paths))
         agentCategories = agentCategories.map { $0.selectingPaths(selectedPaths) }
@@ -746,17 +763,9 @@ extension AppState {
         agentFailureApplications = []
         agentFeedbackID += 1
         agentCompletedCount = removed
-        agentCelebrating = removed > 0
-        // 丢弃过期清单；庆祝结束后回闲置，下一次操作从新扫描开始。
+        agentCelebrating = false
+        // 清理期间保留列表，结束后使用刚复核的清单，不重新进入扫描页。
         clearAgentSelection()
-        agentCategories = []
-        agentGroups = []
-        agentSkills = []
-        agentServers = []
-        agentMCPInstallations = []
-        agentCLIInstallations = []
-        agentHasScanned = false
-        agentScanComplete = false
         agentStatus = summary
         agentOutcomeDetails = []
         agentOutcomeMood = NoriCleanupFeedback.mood(removed: removed, skipped: skipped, failed: failed)
@@ -771,7 +780,7 @@ extension AppState {
 
     private func recordAgentAttention(applications: [String] = []) {
         agentCleanupProgress = nil
-        agentCelebrating = agentCompletedCount > 0
+        agentCelebrating = false
         agentOutcomeMood = agentCompletedCount > 0 ? .success : .attention
         agentFailureApplications = agentCompletedCount > 0 ? [] : applications
         if agentCompletedCount > 0 { agentOutcomeDetails = [] }

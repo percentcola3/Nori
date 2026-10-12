@@ -2,6 +2,7 @@ import Foundation
 
 enum L10nAnalysisTables {
     static let en: [String: String] = [
+        "analyze.cache.loading": "Loading saved results…",
         "analyze.section.disk": "Disk analysis",
         "analyze.scan.action.disk": "Scan disk",
         "analyze.scan.detail.disk": "Browse home files, logs, caches, and temporary files by size.",
@@ -63,6 +64,7 @@ enum L10nAnalysisTables {
     ]
 
     static let zhHans: [String: String] = [
+        "analyze.cache.loading": "正在读取已保存的结果…",
         "analyze.section.disk": "磁盘分析",
         "analyze.scan.action.disk": "扫描磁盘",
         "analyze.scan.detail.disk": "按大小浏览主目录、日志、缓存和临时文件。",
@@ -124,6 +126,7 @@ enum L10nAnalysisTables {
     ]
 
     static let zhHant: [String: String] = [
+        "analyze.cache.loading": "正在讀取已儲存的結果…",
         "analyze.section.disk": "磁碟分析",
         "analyze.scan.action.disk": "掃描磁碟",
         "analyze.scan.detail.disk": "依大小瀏覽主目錄、日誌、快取和暫存檔案。",

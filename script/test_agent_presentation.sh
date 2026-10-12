@@ -31,6 +31,7 @@ AGENT_PRESENTATION_SOURCES=(
     "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/TaskFeedbackDiagnostic.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentIconLoader.swift"
+    "$ROOT_DIR/SimpleMole/Services/ImageMemoryCache.swift"
     "$ROOT_DIR/SimpleMole/Views/Theme.swift"
     "$ROOT_DIR/SimpleMole/Views/Components.swift"
     "$ROOT_DIR/SimpleMole/Views/LiquidPresentation.swift"
@@ -42,6 +43,8 @@ AGENT_PRESENTATION_SOURCES=(
     "$ROOT_DIR/SimpleMole/Views/NoriCleanupTaskStage.swift"
     "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift"
     "$ROOT_DIR/SimpleMole/Views/AgentsTabView.swift"
+    "$ROOT_DIR/SimpleMole/Views/AgentManagementView.swift"
+    "$ROOT_DIR/SimpleMole/Services/AgentResourceCatalog.swift"
     "$ROOT_DIR/SimpleMole/Views/AgentStorageSummaryView.swift"
     "$ROOT_DIR/SimpleMole/Views/AgentIconView.swift"
     "$ROOT_DIR/script/CleanupPresentationFixtureState.swift"
@@ -52,4 +55,8 @@ swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -
     -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework SwiftUI -framework WebKit \
     "$TEST_DIR/sources/"*.swift \
     -o "$FIXTURE_APP/Contents/MacOS/AgentPresentationTests"
-"$FIXTURE_APP/Contents/MacOS/AgentPresentationTests"
+if [[ "${NORI_AGENT_PRESENTATION_COMPILE_ONLY:-0}" == 1 ]]; then
+    echo "Agent presentation compiled; application was not launched"
+else
+    "$FIXTURE_APP/Contents/MacOS/AgentPresentationTests"
+fi

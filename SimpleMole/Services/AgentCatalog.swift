@@ -158,8 +158,8 @@ enum AgentCatalog {
             mcpSources: [.init(path: appSupport + "Claude/claude_desktop_config.json",
                                format: .json(keyPath: "mcpServers"))]),
         AgentDefinition(
-            id: "codex", name: "Codex CLI", owners: ["codex", "Codex", "com.openai.codex"],
-            detect: [".codex"], documented: true,
+            id: "codex", name: "Codex", owners: ["codex", "Codex", "com.openai.codex"],
+            detect: [".codex", appSupport + "Codex", "Library/Caches/com.openai.codex"], documented: true,
             targets: [
                 .init(.review, .sqlite(dir: ".codex", prefix: "logs_", ext: ".sqlite"),
                       "agents.label.logDatabase"),
@@ -185,15 +185,8 @@ enum AgentCatalog {
                       "agents.label.stateDatabase"),
                 .init(.showOnly, .path(".codex/history.jsonl"), "agents.label.history", owners: []),
                 .init(.showOnly, .path(".codex/auth.json"), "agents.label.credentials"),
-                .init(.showOnly, .path(".codex/.credentials.json"), "agents.label.credentials")
-            ],
-            skillDirectories: [".codex/skills"],
-            mcpSources: [.init(path: ".codex/config.toml", format: .toml(table: "mcp_servers"))]),
-        AgentDefinition(
-            id: "codex-app", name: "Codex App",
-            owners: ["Codex", "com.openai.codex", "codex"],
-            detect: [appSupport + "Codex", "Library/Caches/com.openai.codex"], documented: true,
-            targets: [
+                .init(.showOnly, .path(".codex/.credentials.json"), "agents.label.credentials"),
+                // 桌面端与独立 CLI 共用 .codex 的 Skill、MCP 和会话数据。
                 .init(.safe, .leaves(root: appSupport + "Codex", names: electronCacheLeaves),
                       "agents.label.appCache"),
                 .init(.safe, .leaves(root: "Library/Caches/Codex/Default",
@@ -220,8 +213,8 @@ enum AgentCatalog {
                 .init(.review, .path(".cache/codex-runtimes/codex-primary-runtime"),
                       "agents.label.runtime")
             ],
-            skillDirectories: [],
-            mcpSources: []),
+            skillDirectories: [".codex/skills"],
+            mcpSources: [.init(path: ".codex/config.toml", format: .toml(table: "mcp_servers"))]),
         AgentDefinition(
             id: "cursor", name: "Cursor",
             owners: ["Cursor", "com.todesktop.230313mzl4w4u92"],
@@ -579,7 +572,6 @@ enum AgentCatalog {
             "claude-desktop": .init(bundleNames: ["Claude"], commands: []),
             // 桌面版使用同一个 .codex 数据根和内置 CLI。
             "codex": .init(bundleNames: ["Codex"], commands: ["codex"]),
-            "codex-app": .init(bundleNames: ["Codex"], commands: []),
             "cursor": .init(bundleNames: ["Cursor"], commands: ["cursor"]),
             "cursor-cli": .init(bundleNames: [], commands: ["cursor-agent"]),
             "copilot": .init(bundleNames: [], commands: ["copilot"], extensionIDs: ["github.copilot", "github.copilot-chat"]),
@@ -607,7 +599,7 @@ enum AgentCatalog {
         if presence.commands.contains(where: {
             resolveExecutable($0, searchPath: context.searchPath, home: home) != nil
         }) { return true }
-        if (agent.id == "codex" || agent.id == "codex-app"),
+        if agent.id == "codex",
            !AgentHostPresence.integratedCodexOwners(context: context).isEmpty { return true }
         if AgentHostPresence.hasExtension(ids: presence.extensionIDs, home: home, context: context) { return true }
         // 某些安装器只放在私有 bin，不写到当前进程的 PATH。
@@ -636,7 +628,7 @@ enum AgentCatalog {
                               presence context: AgentPresenceContext? = nil) -> [String] {
         let extensions = installationPresence(for: agent)?.extensionIDs ?? []
         let context = context ?? defaultPresenceContext(home: home)
-        let integratedOwners = agent.id == "codex" || agent.id == "codex-app"
+        let integratedOwners = agent.id == "codex"
             ? AgentHostPresence.integratedCodexOwners(context: context) : []
         return Array(Set(agent.owners + AgentHostPresence.owners(ids: extensions, home: home,
             context: context) + integratedOwners)).sorted()

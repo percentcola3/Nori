@@ -15,6 +15,9 @@ struct AgentSkill: Identifiable, Equatable, Sendable {
     let linked: Bool
     let linkTarget: String?
     var measurementComplete = true
+    var directUsers: [String] = []
+    var registrations: [AgentSkillConfigEditor.Registration] = []
+    var bodyDeletionSupported = true
 }
 
 struct AgentMCPServer: Identifiable, Equatable, Sendable {
@@ -236,9 +239,8 @@ enum AgentInventory {
                 if var existing = merged[key] {
                     for path in paths {
                         existing.appendPath(path, bytes: sizes[path] ?? 0)
-                        if selectByDefault {
-                            existing.setPathSelected(path, selected: true)
-                        }
+                        // appendPath 会默认勾选 Safe 项；残留类目仍须尊重本次扫描策略。
+                        existing.setPathSelected(path, selected: selectByDefault)
                     }
                     merged[key] = existing
                     if recommended { report.recommendedCleanupCategoryIDs.insert(existing.id) }
@@ -342,7 +344,7 @@ enum AgentInventory {
         let orphanedNames = Set(AgentCatalog.definitions
             .filter { orphanedAgentIDs.contains($0.id) }.map(\.name))
         let codexInstalled = agents.contains { $0.id == "codex" }
-        let codexName = AgentCatalog.definitions.first { $0.id == "codex" }?.name ?? "Codex CLI"
+        let codexName = AgentCatalog.definitions.first { $0.id == "codex" }?.name ?? "Codex"
         let whitelist = NativeCore.shared.loadWhitelist(homeDirectory: home)
         let declarations = session.skillDeclarations ?? (NativeCore.shared.matchesWhitelist(home + "/.codex/config.toml", entries: whitelist)
             ? [] : AgentSkillConfigEditor.scan(home: home))
@@ -390,7 +392,7 @@ enum AgentInventory {
                 let hasLiveLink = (usersByTarget[path] ?? []).contains { idsByAgentName[$0] != nil }
                 let hasLiveDeclaration = codexInstalled && declaredBodies.contains(path)
                 if scoped, directory.globallyManaged, !sharedRequested, !hasLiveLink, !hasLiveDeclaration { continue }
-                if orphanedDirectory && (linked || (!hasLiveLink && !hasLiveDeclaration)) { continue }
+                if orphanedDirectory && !linked && !hasLiveLink && !hasLiveDeclaration { continue }
                 // 悬空链接也要可解除；扫描不跟着链接递归计量。
                 guard linked || AgentCatalog.isDirectory(resolved) else { continue }
                 let manifestPath = resolved + "/SKILL.md"
@@ -405,6 +407,7 @@ enum AgentInventory {
                     identity: DeletionPlan.identity(at: path) ?? "",
                     linked: linked, linkTarget: linked ? resolved : nil)
                 skill.measurementComplete = measurement?.complete ?? true
+                skill.directUsers = linked ? directory.agentNames : liveUsers
                 skills.append(skill)
             }
         }
@@ -414,6 +417,25 @@ enum AgentInventory {
             let explicitUsers = declaredBodies.contains(skills[index].path) ? [codexName] : []
             skills[index].usedBy = Array(Set(skills[index].usedBy).union(users).union(explicitUsers)).sorted()
             if skills[index].usedBy.count > 1 { skills[index].agentID = "shared" }
+        }
+        for declaration in declarations where !scoped || codexInstalled {
+            let body = declaration.resolvedPath.hasSuffix("/SKILL.md")
+                ? (declaration.resolvedPath as NSString).deletingLastPathComponent : declaration.resolvedPath
+            if !skills.contains(where: { !$0.linked && $0.path == body }), AgentCatalog.isDirectory(body),
+               !NativeCore.shared.matchesWhitelist(body, entries: whitelist) {
+                let manifest = readManifest(body + "/SKILL.md")
+                var skill = AgentSkill(path: body, name: manifest.name ?? (body as NSString).lastPathComponent,
+                    summary: manifest.summary ?? "", directory: (body as NSString).deletingLastPathComponent,
+                    usedBy: [codexName], agentID: "shared", bytes: 0,
+                    identity: DeletionPlan.identity(at: body) ?? "", linked: false, linkTarget: nil)
+                skill.bodyDeletionSupported = AgentCatalog.isDeletableSkill(body, home: home)
+                skills.append(skill)
+            }
+        }
+        for index in skills.indices {
+            skills[index].registrations = declarations.filter {
+                skills[index].linked ? $0.declares(skills[index].path, home: home) : $0.references(skills[index].path)
+            }
         }
         return skills
     }

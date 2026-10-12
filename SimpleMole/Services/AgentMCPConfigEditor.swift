@@ -21,6 +21,7 @@ enum AgentMCPConfigEditor {
         var failed = 0
         var messages: [String] = []
         var editedPaths = Set<String>()
+        var writtenFingerprints: [String: String] = [:]
     }
 
     static func apply(_ requests: [Request]) -> Outcome {
@@ -172,6 +173,10 @@ enum AgentMCPConfigEditor {
 
     static func fingerprint(at path: String) -> String? {
         guard let data = FileManager.default.contents(atPath: path) else { return nil }
+        return fingerprint(data: data)
+    }
+
+    static func fingerprint(data: Data) -> String {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
@@ -225,6 +230,7 @@ enum AgentSkillConfigEditor {
         let resolvedPath: String
         let configIdentity: String
         let configFingerprint: String
+        var id: String { configPath + "|" + skillPath }
 
         func references(_ body: String) -> Bool {
             resolvedPath == body || (resolvedPath.hasPrefix(body + "/") && resolvedPath.hasSuffix("/SKILL.md"))
@@ -306,6 +312,7 @@ enum AgentSkillConfigEditor {
                 if let permissions { try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: path) }
                 outcome.removed += matches.count
                 outcome.editedPaths.insert(path)
+                outcome.writtenFingerprints[path] = AgentMCPConfigEditor.fingerprint(data: Data(output.utf8))
             } catch {
                 outcome.failed += matches.count
                 outcome.messages.append("Failed to unlink Skill configuration: " + path)

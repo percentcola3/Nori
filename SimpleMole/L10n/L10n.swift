@@ -163,7 +163,7 @@ final class L10n: ObservableObject {
         }
         let withAgents = withTraffic.merging(L10nAgentsTables.table(for: language)) {
             _, featureValue in featureValue
-        }
+        }.merging(L10nAgentManagementTables.table(for: language)) { _, value in value }
         let withMedia = withAgents.merging(L10nMediaTables.table(for: language)) {
             _, featureValue in featureValue
         }

@@ -22,8 +22,7 @@ S = 程序当前默认可选的缓存/日志/旧版本；R = 有损审查；H = 
 | --- | --- | --- | --- |
 | Claude Code `claude-code` | S 旧版本、统计/更新缓存；R 项目转录、文件快照、计划/任务/附件/备份；H 项目 memory、运行记录、环境、配置/授权 | 技能、`.claude.json` MCP；CLI | [CLI/扩展研究](other-cli-and-extensions.md#1-claude-code)。转录已与 memory 拆开；系统 temp、插件安装记录、Keychain、其他项目注册来源未完整覆盖 |
 | Claude Desktop `claude-desktop` | S Electron 叶子、Caches/ShipIt、MCP 日志；R `vm_bundles` | `claude_desktop_config.json` MCP | [桌面研究](desktop-agents.md#claude-desktop--cowork)。VM 含活动磁盘/会话；未分别识别 immutable 下载、所有 extension 包与凭据；本地删除不清云端会话 |
-| Codex CLI `codex` | S `tmp`、文件日志、模型目录缓存；R 日志库、归档、图片、db-backups；H 会话/state/history/goals/memories/queue 库、Shell 快照、授权 | 技能、TOML MCP；CLI | [Codex](codex.md)。支持可见 `CODEX_HOME`、SQLite 根和 `log_dir`；插件、worktrees、automations 及所有项目覆盖未全量处理 |
-| Codex App `codex-app` | S 桌面 Electron/内置浏览器缓存叶子及日志 | 共享 `.codex` 能力由 CLI 组承载 | [Codex](codex.md)。App 完整客户端未公开；共享数据不能重复计量/在另一端运行时清理 |
+| Codex `codex` | S `tmp`、文件日志、模型目录缓存、桌面 Electron/内置浏览器缓存叶子；R 日志库、归档、图片、db-backups、桌面运行时；H 会话/state/history/goals/memories/queue 库、Shell 快照、授权 | 桌面端与 CLI 共享技能、TOML MCP 和 `.codex` 数据，统一展示；独立 CLI 本体单独检测 | [Codex](codex.md)。支持可见 `CODEX_HOME`、SQLite 根和 `log_dir`；App 完整客户端未公开；插件、worktrees、automations 及所有项目覆盖未全量处理，共享数据不能在另一端运行时清理 |
 | Cursor `cursor` | S Electron/更新/编译缓存、内置旧 CLI 版本；R snapshots；H projects、workspaceStorage、state.vscdb | 原生与兼容共享技能、MCP | [桌面](desktop-agents.md#cursor)。闭源数据库/快照仅部分路径证据，不宣称所有历史布局；项目文件和认证存储未全量覆盖 |
 | Cursor CLI `cursor-cli` | S 旧版本；H chats 限深 `store*.db` 族、worktrees、cli-config | 与桌面共享技能/MCP；CLI | [CLI 研究](other-cli-and-extensions.md#3-cursor-cli)。store.db 来自论坛观察，有限深度扫描；认证文件/Keychain 未证明；项目 CLI 配置未遍历 |
 | Copilot CLI `copilot` | S 旧版本、日志、macOS cache；R session-state、命令历史；H session-store.db、配置、MCP secrets/OAuth、权限/provider、plugin-data | 技能、MCP；CLI | [CLI 研究](other-cli-and-extensions.md#2-github-copilot-cli)。已有宿主扩展 presence；插件本体/登记、额外 Skill、Keychain、全部 cache 覆盖参数未处理 |

@@ -96,8 +96,8 @@ struct AgentSoftwareInventoryTests {
                "Distinct physical installations must survive Bundle ID/name overlap")
         expect(apps["claude-code"]?.first?.path == claude.path && apps["claude-desktop"]?.first?.path == claude.path,
                "Shared catalog application evidence must be available to each Agent")
-        expect(apps["codex"]?.first?.path == integrated.path && apps["codex-app"]?.first?.path == integrated.path,
-               "Integrated hosts use catalog Bundle ID evidence")
+        expect(apps["codex"]?.first?.path == integrated.path && apps["codex-app"] == nil,
+               "Integrated hosts must appear once in the shared Codex group")
         expect(Set(sizer.measuredPaths) == [cursor.path, claude.path, integrated.path, copy.path]
                && sizer.measuredPaths.count == 4,
                "Only matched physical Agent bundles may be measured, once each")

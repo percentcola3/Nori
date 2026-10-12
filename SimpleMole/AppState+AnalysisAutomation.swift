@@ -20,7 +20,7 @@ extension AppState {
         // A restored home-only cache remains immediately usable. Expand it
         // once through the incremental worker rather than waiting for its
         // normal interval; the same attempt clock still limits failed retries.
-        let diskNeedsScopeExpansion = analysisInventoryCache.restore()[.disk].map { snapshot in
+        let diskNeedsScopeExpansion = analysisInventoryCache.snapshot(for: .disk).map { snapshot in
             let required = AnalysisInventoryWorker.defaultRoots(home: snapshot.home, kind: .disk)
             return !Set(snapshot.roots).isSuperset(of: required)
         } ?? false

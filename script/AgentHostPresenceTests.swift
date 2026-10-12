@@ -180,7 +180,9 @@ struct AgentHostPresenceTests {
         // The integrated Codex host is separate from an ordinary ChatGPT app.
         // Presence and activity owners must use only the injected app roots.
         let codex = AgentCatalog.definitions.first { $0.id == "codex" }!
-        let codexApp = AgentCatalog.definitions.first { $0.id == "codex-app" }!
+        expectHostPresence(!AgentCatalog.definitions.contains { $0.id == "codex-app" }
+                           && codex.name == "Codex",
+                           "Shared Codex desktop and CLI data must use one Codex group")
         let chatGPT = applications + "/ChatGPT.app"
         let framework = chatGPT + "/Contents/Frameworks/Codex Framework.framework"
         let version = framework + "/Versions/fixture-version"
@@ -188,7 +190,6 @@ struct AgentHostPresenceTests {
         func codexOwners() -> [String] { AgentHostPresence.integratedCodexOwners(context: context) }
         func integratedInstalled() -> Bool {
             AgentCatalog.isInstalled(codex, home: home, presence: context)
-                && AgentCatalog.isInstalled(codexApp, home: home, presence: context)
         }
         func frameworkPlist(bundleID: String = "com.openai.codex.framework", type: String = "FMWK") throws {
             try write(frameworkInfo, data: PropertyListSerialization.data(
@@ -216,18 +217,16 @@ struct AgentHostPresenceTests {
                 executableName: "Codex (Renderer)")
         expectHostPresence(integratedInstalled()
                            && !AgentCatalog.isOrphaned(codex, home: home, presence: context)
-                           && !AgentCatalog.isOrphaned(codexApp, home: home, presence: context),
+                           && AgentCatalog.resolveExecutable("codex", searchPath: context.searchPath, home: home) == nil,
                            "a validated ChatGPT Codex framework was treated as an uninstalled Agent")
         let integratedOwners: Set<String> = ["ChatGPT", "com.openai.codex", "Codex (Service)",
             "com.openai.codex.helper", "Codex (Renderer)", "com.openai.codex.helper.renderer"]
         expectHostPresence(Set(codexOwners()) == integratedOwners,
                            "the integrated host did not return its actual app and helper owners")
-        for agent in [codex, codexApp] {
-            expectHostPresence(Set(AgentCatalog.runtimeOwners(for: agent, home: home, presence: context))
-                .isSuperset(of: integratedOwners), "Codex shared-data owners lost an integrated host")
-        }
+        expectHostPresence(Set(AgentCatalog.runtimeOwners(for: codex, home: home, presence: context))
+            .isSuperset(of: integratedOwners), "Codex shared-data owners lost an integrated host")
         let emptyContext = AgentPresenceContext(applicationDirs: [], searchPath: [bin])
-        expectHostPresence(!AgentCatalog.isInstalled(codexApp, home: home, presence: emptyContext)
+        expectHostPresence(!AgentCatalog.isInstalled(codex, home: home, presence: emptyContext)
                            && AgentHostPresence.integratedCodexOwners(context: emptyContext).isEmpty,
                            "integrated presence escaped the injected application search scope")
         try app(chatGPT, bundleID: "com.openai.chat", executableName: "ChatGPT")

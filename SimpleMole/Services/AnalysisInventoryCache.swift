@@ -241,6 +241,28 @@ struct AnalysisInventoryCacheState {
     var diskBrowser: AnalysisDiskBrowserInventory? = nil
 }
 
+struct AnalysisInventorySummary: Codable {
+    let kind: AnalysisInventoryKind
+    let scannedAt: Date
+    let roots: [String]
+    let itemCount: Int
+    let report: AnalyzeReport
+
+    init(snapshot: AnalysisInventorySnapshot, report: AnalyzeReport) {
+        kind = snapshot.kind
+        scannedAt = snapshot.scannedAt
+        roots = snapshot.roots
+        itemCount = snapshot.kind == .disk ? report.entries.count : snapshot.kind == .largeFiles
+            ? report.largeFiles?.count ?? 0 : report.media?.count ?? 0
+        var summary = AnalyzeReport(path: report.path, overview: report.overview, entries: [], largeFiles: [],
+            totalSize: report.totalSize, totalFiles: report.totalFiles, isPartial: report.isPartial)
+        summary.scanIssues = report.scanIssues
+        summary.scanIssueCount = report.scanIssueCount
+        summary.mediaSummary = report.mediaSummary
+        self.report = summary
+    }
+}
+
 enum AnalysisInventoryWorker {
     static func defaultRoots(home: String = NSHomeDirectory(), kind: AnalysisInventoryKind = .largeFiles) -> [String] {
         if kind == .disk {
@@ -441,7 +463,10 @@ final class AnalysisInventoryCache: @unchecked Sendable {
     private let lock = NSLock()
     private let directory: URL
     private let home: String
-    private var loaded = false
+    private var loadedKinds = Set<AnalysisInventoryKind>()
+    private var metadataLoaded = false
+    private var safelyPersistedKinds = Set<AnalysisInventoryKind>()
+    private var summaries: [AnalysisInventoryKind: AnalysisInventorySummary] = [:]
     private var revision: UInt64 = 0
     private var snapshots: [AnalysisInventoryKind: AnalysisInventorySnapshot] = [:]
     private var reports: [AnalysisInventoryKind: AnalyzeReport] = [:]
@@ -451,6 +476,11 @@ final class AnalysisInventoryCache: @unchecked Sendable {
     private struct Payload: Codable {
         let version: Int
         let snapshot: AnalysisInventorySnapshot
+    }
+    private struct Metadata: Codable {
+        let version: Int
+        let home: String
+        let summaries: [AnalysisInventorySummary]
     }
 
     init(directory: URL? = nil, home: String = NSHomeDirectory()) {
@@ -472,8 +502,12 @@ final class AnalysisInventoryCache: @unchecked Sendable {
         snapshots = [:]
         reports = [:]
         diskBrowser = nil
+        summaries = [:]
+        safelyPersistedKinds = []
         revision &+= 1
-        loaded = true
+        loadedKinds = Set(AnalysisInventoryKind.allCases)
+        metadataLoaded = true
+        discard("summaries.plist")
         for name in (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
             where name.hasSuffix(".json") || name.hasSuffix(".cache") {
             discard(name)
@@ -493,14 +527,95 @@ final class AnalysisInventoryCache: @unchecked Sendable {
     func restoreState() -> AnalysisInventoryCacheState {
         lock.lock()
         defer { lock.unlock() }
-        loadIfNeeded()
+        loadIfNeeded(kinds: Set(AnalysisInventoryKind.allCases))
+        restoreDiskBrowserIfNeeded()
         return .init(snapshots: snapshots, revision: revision, reports: reports, diskBrowser: diskBrowser)
+    }
+
+    func restoreState(for kind: AnalysisInventoryKind) -> AnalysisInventoryCacheState {
+        lock.lock(); defer { lock.unlock() }
+        loadMetadataIfNeeded()
+        loadIfNeeded(kinds: [kind])
+        if kind == .disk { restoreDiskBrowserIfNeeded() }
+        return .init(snapshots: snapshots[kind].map { [kind: $0] } ?? [:], revision: revision,
+            reports: reports[kind].map { [kind: $0] } ?? [:], diskBrowser: kind == .disk ? diskBrowser : nil)
+    }
+
+    func snapshot(for kind: AnalysisInventoryKind) -> AnalysisInventorySnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        loadMetadataIfNeeded()
+        loadIfNeeded(kinds: [kind])
+        return snapshots[kind]
+    }
+
+    /// Startup reads statistics only. Existing archives get a one-time metadata
+    /// migration, one category at a time, without retaining their payloads.
+    func restoreSummaries() -> [AnalysisInventoryKind: AnalysisInventorySummary] {
+        lock.lock(); defer { lock.unlock() }
+        loadMetadataIfNeeded()
+        for kind in AnalysisInventoryKind.allCases where Self.persists(kind) && summaries[kind] == nil {
+            let wasResident = snapshots[kind] != nil
+            autoreleasepool { loadIfNeeded(kinds: [kind]) }
+            if !wasResident, safelyPersistedKinds.contains(kind) {
+                snapshots.removeValue(forKey: kind)
+                reports.removeValue(forKey: kind)
+                loadedKinds.remove(kind)
+            }
+        }
+        persistMetadata()
+        return summaries
+    }
+
+    private func loadMetadataIfNeeded() {
+        guard !metadataLoaded else { return }
+        metadataLoaded = true
+        if let data = try? Data(contentsOf: directory.appendingPathComponent("summaries.plist")),
+           let metadata = try? PropertyListDecoder().decode(Metadata.self, from: data),
+           metadata.version == Self.version, metadata.home == home {
+            for summary in metadata.summaries where Self.persists(summary.kind)
+                && FileManager.default.fileExists(atPath: fileURL(summary.kind).path) {
+                summaries[summary.kind] = summary
+                safelyPersistedKinds.insert(summary.kind)
+            }
+        }
+    }
+
+    /// Failed persistence keeps the latest in-memory data. The full-disk
+    /// fingerprint index stays session-local; its derived UI tree is releasable.
+    @discardableResult
+    func releaseDetails(except retained: Set<AnalysisInventoryKind> = []) -> Set<AnalysisInventoryKind> {
+        lock.lock(); defer { lock.unlock() }
+        var released = Set<AnalysisInventoryKind>()
+        for kind in Array(snapshots.keys) where !retained.contains(kind) && safelyPersistedKinds.contains(kind) {
+            snapshots.removeValue(forKey: kind)
+            reports.removeValue(forKey: kind)
+            loadedKinds.remove(kind)
+            released.insert(kind)
+        }
+        if !retained.contains(.disk), let summary = summaries[.disk] {
+            diskBrowser = nil
+            reports[.disk] = summary.report
+            released.insert(.disk)
+        }
+        return released
+    }
+
+    var residentKinds: Set<AnalysisInventoryKind> {
+        lock.lock(); defer { lock.unlock() }
+        return Set(snapshots.keys)
+    }
+
+    private func restoreDiskBrowserIfNeeded() {
+        if diskBrowser == nil, let snapshot = snapshots[.disk] {
+            diskBrowser = AnalysisDiskBrowserInventory(snapshot: snapshot)
+            reports[.disk] = diskBrowser?.report(for: snapshot)
+        }
     }
 
     func scan(_ kind: AnalysisInventoryKind, forceFull: Bool = false,
               roots: [String]? = nil, control: CleanupScanControl,
               progress: ((String, UInt64) -> Void)? = nil) -> AnalysisInventoryScanResult {
-        let initial = restoreState()
+        let initial = restoreState(for: kind)
         var result = AnalysisInventoryWorker.scan(kind,
             roots: roots ?? AnalysisInventoryWorker.defaultRoots(home: home, kind: kind), home: home,
             previous: initial.snapshots[kind], forceFull: forceFull, control: control, progress: progress)
@@ -518,7 +633,9 @@ final class AnalysisInventoryCache: @unchecked Sendable {
             reports[kind] = result.report
             if kind == .disk { diskBrowser = result.diskBrowser }
             revision &+= 1
-            persist(result.snapshot)
+            summaries[kind] = .init(snapshot: result.snapshot, report: result.report)
+            persistDetails(result.snapshot)
+            persistMetadata()
         }
         result.cacheRevision = revision
         result.cachedSnapshots = snapshots
@@ -537,7 +654,7 @@ final class AnalysisInventoryCache: @unchecked Sendable {
     func refreshState(removedPaths: Set<String>, changedPaths: Set<String>) -> AnalysisInventoryCacheState {
         lock.lock()
         defer { lock.unlock() }
-        loadIfNeeded()
+        loadIfNeeded(kinds: Set(AnalysisInventoryKind.allCases))
         revision &+= 1
         // Read each confirmed changed file once, shared by all classifications.
         let changedFiles = changedPaths.reduce(into: [String: AnalysisFileFingerprint]()) { result, path in
@@ -584,15 +701,16 @@ final class AnalysisInventoryCache: @unchecked Sendable {
                 reports[kind] = diskBrowser?.report(for: snapshot)
             } else { reports[kind] = snapshot.report }
             snapshots[kind] = snapshot
-            persist(snapshot)
+            summaries[kind] = .init(snapshot: snapshot, report: reports[kind] ?? snapshot.report)
+            persistDetails(snapshot)
         }
+        persistMetadata()
         return .init(snapshots: snapshots, revision: revision, reports: reports, diskBrowser: diskBrowser)
     }
 
-    private func loadIfNeeded() {
-        guard !loaded else { return }
-        loaded = true
-        for kind in AnalysisInventoryKind.allCases {
+    private func loadIfNeeded(kinds: Set<AnalysisInventoryKind>) {
+        for kind in kinds where !loadedKinds.contains(kind) {
+            loadedKinds.insert(kind)
             // 旧版明文 JSON（含全盘逐文件的 disk.json）不再解码，直接移除。
             discard(kind.rawValue + ".json")
             guard Self.persists(kind),
@@ -603,6 +721,8 @@ final class AnalysisInventoryCache: @unchecked Sendable {
                   payload.snapshot.home == home else { continue }
             snapshots[kind] = payload.snapshot
             reports[kind] = payload.snapshot.report
+            summaries[kind] = .init(snapshot: payload.snapshot, report: reports[kind]!)
+            safelyPersistedKinds.insert(kind)
         }
     }
 
@@ -614,12 +734,27 @@ final class AnalysisInventoryCache: @unchecked Sendable {
         directory.appendingPathComponent(kind.rawValue + ".cache")
     }
 
-    private func persist(_ snapshot: AnalysisInventorySnapshot) {
-        guard Self.persists(snapshot.kind),
+    private func persistDetails(_ snapshot: AnalysisInventorySnapshot) {
+        guard Self.persists(snapshot.kind) else { return }
+        safelyPersistedKinds.remove(snapshot.kind)
+        guard
               let data = try? JSONEncoder().encode(Payload(version: Self.version, snapshot: snapshot)),
               let compressed = try? (data as NSData).compressed(using: .lzfse) else { return }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try? (compressed as Data).write(to: fileURL(snapshot.kind), options: .atomic)
+        do {
+            try (compressed as Data).write(to: fileURL(snapshot.kind), options: .atomic)
+            safelyPersistedKinds.insert(snapshot.kind)
+        } catch { /* Keep the current details resident until a later successful write. */ }
+    }
+
+    private func persistMetadata() {
+        let payload = Metadata(version: Self.version, home: home,
+            summaries: summaries.values.filter { safelyPersistedKinds.contains($0.kind) })
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        guard let data = try? encoder.encode(payload) else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? data.write(to: directory.appendingPathComponent("summaries.plist"), options: .atomic)
     }
 }
 

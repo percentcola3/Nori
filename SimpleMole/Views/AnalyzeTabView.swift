@@ -65,6 +65,8 @@ struct AnalyzeTabView: View {
             .padding(EdgeInsets(top: 12, leading: 10, bottom: 12, trailing: 12))
         }
         .frame(maxHeight: .infinity)
+        .onAppear { state.resumeAnalysisPresentation() }
+        .onDisappear { state.pauseAnalysisPresentation() }
         .sheet(isPresented: $state.showSlimSheet) { SlimOptionsSheet(state: state) }
         .quickLookPreview($previewURL)
         .alert(l10n.tf("duplicates.trash.title", state.duplicateSelectedCount),
@@ -101,7 +103,9 @@ struct AnalyzeTabView: View {
     }
 
     @ViewBuilder private var content: some View {
-        if fullScanning {
+        if state.isRestoringAnalysis {
+            NoriScanActivity(text: l10n.t("analyze.cache.loading"), assetName: "nori-disk")
+        } else if fullScanning {
             if mode == .duplicates {
                 DuplicateScanActivity(progress: state.duplicateScanProgress, onCancel: state.cancelDuplicateScan)
             } else {
@@ -274,8 +278,7 @@ struct AnalyzeTabView: View {
         })
     }
     private func resultCount(_ item: AnalyzeMode) -> Int {
-        if item == .disk { return state.diskBrowserEntries(at: state.diskBrowserRootPath).count }
-        return item == .duplicates ? state.duplicateGroups.count : state.analysisFileItems(for: item).count
+        state.analysisResultCount(for: item)
     }
     private func selectAll() {
         if mode == .duplicates { state.selectAllDuplicates() } else { state.selectAllAnalysisFiles() }

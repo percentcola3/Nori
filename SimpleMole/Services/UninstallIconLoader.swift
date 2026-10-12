@@ -8,6 +8,7 @@ enum UninstallIconLoader {
     private static let cache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 256
+        cache.totalCostLimit = 8 * 1024 * 1024
         return cache
     }()
 
@@ -19,8 +20,11 @@ enum UninstallIconLoader {
                     continuation.resume(returning: image)
                     return
                 }
-                let image = NSWorkspace.shared.icon(forFile: path)
-                cache.setObject(image, forKey: key)
+                let image = autoreleasepool {
+                    let original = NSWorkspace.shared.icon(forFile: path)
+                    return ImageMemoryCache.rasterized(original) ?? NSImage(size: NSSize(width: 32, height: 32))
+                }
+                cache.setObject(image, forKey: key, cost: ImageMemoryCache.cost(image))
                 continuation.resume(returning: image)
             }
         }

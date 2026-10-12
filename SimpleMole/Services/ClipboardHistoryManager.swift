@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CryptoKit
 
 /// 剪贴板历史：轮询 NSPasteboard changeCount，记录文本、URL、文件与图片。
 /// 历史保存在 Application Support；文件条目只保存路径索引，不复制原文件。
@@ -16,17 +17,24 @@ final class ClipboardHistoryManager: ObservableObject {
         let text: String?
         let filePaths: [String]
         let imageData: Data?
+        let imageFileName: String?
+        let imageByteCount: Int?
+        let imageDigest: String?
         let date: Date
         var isPinned: Bool
 
         init(id: UUID = UUID(), kind: Kind, text: String? = nil,
              filePaths: [String] = [], imageData: Data? = nil,
-             date: Date = Date(), isPinned: Bool = false) {
+             date: Date = Date(), isPinned: Bool = false,
+             imageFileName: String? = nil, imageByteCount: Int? = nil, imageDigest: String? = nil) {
             self.id = id
             self.kind = kind
             self.text = text
             self.filePaths = filePaths
             self.imageData = imageData
+            self.imageFileName = imageFileName
+            self.imageByteCount = imageByteCount
+            self.imageDigest = imageDigest
             self.date = date
             self.isPinned = isPinned
         }
@@ -34,12 +42,17 @@ final class ClipboardHistoryManager: ObservableObject {
         var byteCount: Int {
             let textBytes = text?.lengthOfBytes(using: .utf8) ?? 0
             let pathBytes = filePaths.reduce(0) { $0 + $1.lengthOfBytes(using: .utf8) }
-            return textBytes + pathBytes + (imageData?.count ?? 0)
+            return textBytes + pathBytes + (imageByteCount ?? imageData?.count ?? 0)
         }
 
         func hasSameContent(as other: Entry) -> Bool {
-            kind == other.kind && text == other.text &&
-                filePaths == other.filePaths && imageData == other.imageData
+            guard kind == other.kind else { return false }
+            if kind == .image {
+                let own = imageDigest ?? imageData.map(ClipboardHistoryManager.digest)
+                let theirs = other.imageDigest ?? other.imageData.map(ClipboardHistoryManager.digest)
+                return own != nil && own == theirs
+            }
+            return text == other.text && filePaths == other.filePaths
         }
     }
 
@@ -72,6 +85,10 @@ final class ClipboardHistoryManager: ObservableObject {
         entries = loadPersistedEntries()
         sortEntries()
         trimToLimits()
+        if entries.contains(where: { $0.imageData != nil }) {
+            entries = entries.map(storeImage)
+            persistEntries()
+        }
     }
 
     var pinnedCount: Int { entries.lazy.filter(\.isPinned).count }
@@ -171,15 +188,19 @@ final class ClipboardHistoryManager: ObservableObject {
 
     /// 统一入口：去重、保留置顶状态，再执行容量与内存限制。
     func record(_ candidate: Entry) {
-        let existing = entries.first { $0.hasSameContent(as: candidate) }
-        entries.removeAll { $0.hasSameContent(as: candidate) }
+        guard candidate.byteCount <= maxEntryBytes else { return }
+        let stored = storeImage(candidate)
+        let existing = entries.first { $0.hasSameContent(as: stored) }
+        entries.removeAll { $0.hasSameContent(as: stored) }
         entries.append(Entry(id: existing?.id ?? candidate.id,
                              kind: candidate.kind,
                              text: candidate.text,
                              filePaths: candidate.filePaths,
-                             imageData: candidate.imageData,
+                             imageData: stored.imageData,
                              date: candidate.date,
-                             isPinned: existing?.isPinned ?? false))
+                             isPinned: existing?.isPinned ?? candidate.isPinned,
+                             imageFileName: stored.imageFileName, imageByteCount: stored.imageByteCount,
+                             imageDigest: stored.imageDigest))
         sortEntries()
         trimToLimits()
         persistEntries()
@@ -232,8 +253,10 @@ final class ClipboardHistoryManager: ObservableObject {
     }
 
     /// 把历史条目按原始类型写回剪贴板。
-    func copyToPasteboard(_ entry: Entry) {
-        let pasteboard = NSPasteboard.general
+    @discardableResult
+    func copyToPasteboard(_ entry: Entry, to pasteboard: NSPasteboard = .general) -> Bool {
+        let image = entry.kind == .image ? imageData(for: entry) : nil
+        guard entry.kind != .image || image != nil else { return false }
         pasteboard.clearContents()
         switch entry.kind {
         case .text:
@@ -245,12 +268,81 @@ final class ClipboardHistoryManager: ObservableObject {
         case .file:
             pasteboard.writeObjects(entry.filePaths.map { NSURL(fileURLWithPath: $0) })
         case .image:
-            if let data = entry.imageData {
-                pasteboard.setData(data, forType: .tiff)
+            if let data = image {
+                guard pasteboard.setData(data, forType: .tiff) else { return false }
             }
         }
         // 写回历史不应再次被轮询器当作一条新记录。
-        lastChangeCount = pasteboard.changeCount
+        if pasteboard === NSPasteboard.general { lastChangeCount = pasteboard.changeCount }
+        return true
+    }
+
+    nonisolated private static func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private var imagesURL: URL {
+        historyURL.deletingLastPathComponent()
+            .appendingPathComponent(historyURL.deletingPathExtension().lastPathComponent + "-images", isDirectory: true)
+    }
+
+    /// Metadata points only to an immutable, content-addressed file owned by
+    /// this archive. Failed writes retain the inline payload for a later retry.
+    private func storeImage(_ entry: Entry) -> Entry {
+        guard entry.kind == .image, let data = entry.imageData else { return entry }
+        let hash = Self.digest(data)
+        let name = hash + ".tiff"
+        do {
+            let fm = FileManager.default
+            try fm.createDirectory(at: imagesURL, withIntermediateDirectories: true,
+                                   attributes: [.posixPermissions: 0o700])
+            guard (try fm.attributesOfItem(atPath: imagesURL.path)[.type] as? FileAttributeType) == .typeDirectory else { return entry }
+            try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: imagesURL.path)
+            let url = imagesURL.appendingPathComponent(name)
+            if let attributes = try? fm.attributesOfItem(atPath: url.path),
+               attributes[.type] as? FileAttributeType == .typeSymbolicLink { return entry }
+            if (try? Data(contentsOf: url, options: .mappedIfSafe)) != data {
+                try data.write(to: url, options: .atomic)
+            }
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            return Entry(id: entry.id, kind: entry.kind, text: entry.text, filePaths: entry.filePaths,
+                date: entry.date, isPinned: entry.isPinned, imageFileName: name,
+                imageByteCount: data.count, imageDigest: hash)
+        } catch { return entry }
+    }
+
+    func imageURL(for entry: Entry) -> URL? {
+        guard let name = entry.imageFileName, Self.validImageName(name),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: imagesURL.path),
+              attributes[.type] as? FileAttributeType == .typeDirectory else { return nil }
+        let url = imagesURL.appendingPathComponent(name)
+        guard let file = try? FileManager.default.attributesOfItem(atPath: url.path),
+              file[.type] as? FileAttributeType == .typeRegular,
+              (file[.size] as? NSNumber)?.intValue == entry.imageByteCount else { return nil }
+        return url
+    }
+
+    func imageData(for entry: Entry) -> Data? {
+        if let data = entry.imageData { return data }
+        guard let url = imageURL(for: entry), let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+              Self.digest(data) == entry.imageDigest else { return nil }
+        return data
+    }
+
+    nonisolated private static func validImageName(_ name: String) -> Bool {
+        name.hasSuffix(".tiff") && name.count == 69 && name.dropLast(5).allSatisfy { $0.isASCII && $0.isHexDigit && !$0.isUppercase }
+    }
+
+    private func pruneImages() {
+        // Only collect our immutable copies after their history references
+        // have been successfully removed from the persisted metadata archive.
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: imagesURL.path),
+              attributes[.type] as? FileAttributeType == .typeDirectory else { return }
+        let retained = Set(entries.compactMap(\.imageFileName))
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: imagesURL.path)) ?? []
+            where Self.validImageName(name) && !retained.contains(name) {
+            try? FileManager.default.removeItem(at: imagesURL.appendingPathComponent(name))
+        }
     }
 
     private static var defaultHistoryURL: URL {
@@ -283,6 +375,7 @@ final class ClipboardHistoryManager: ObservableObject {
             try data.write(to: historyURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600],
                                                   ofItemAtPath: historyURL.path)
+            pruneImages()
         } catch {
             // 历史记录失败不应影响剪贴板监听；下次变更会再次尝试写入。
         }

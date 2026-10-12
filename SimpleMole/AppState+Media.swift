@@ -224,7 +224,7 @@ extension AppState {
         let sourceMode = mode ?? analyzeMode
         let inventoryKind: AnalysisInventoryKind = sourceMode == .disk ? .disk
             : sourceMode == .images ? .images : sourceMode == .videos ? .videos : .largeFiles
-        let snapshot = analysisInventoryCache.restore()[inventoryKind]
+        let snapshot = analysisInventoryCache.snapshot(for: inventoryKind)
         let scanFingerprints = snapshot.map { inventory in
             Set(paths).reduce(into: [String: AnalysisFileFingerprint]()) { fingerprints, path in
                 fingerprints[path] = inventory.files[path] ?? inventory.directories[path]?.fingerprint
@@ -285,7 +285,7 @@ extension AppState {
         let targets = slimSelectedCandidates
         guard !isAnalysisTaskBusy, !targets.isEmpty else { return }
         let options = slimOptions
-        let scanFingerprints = analysisInventoryCache.restore()[.images]?.files
+        let scanFingerprints = analysisInventoryCache.snapshot(for: .images)?.files
         isSlimming = true
         log(L10n.shared.tf("slim.log.start", targets.count))
         slimTask = Task { [weak self] in

@@ -103,22 +103,23 @@ struct AgentPresentationTests {
             state.agentRetryAvailable = true
             render("total-failure")
             state.agentOutcomeMood = .success
-            state.agentCelebrating = true
+            state.agentCelebrating = false
             state.agentCompletedCount = 3
             state.agentReclaimedBytes = 8 * 1024 * 1024
             state.agentOutcomeDetails = []
             state.agentFeedbackID += 1
             render("partial-success")
             let token = state.agentFeedbackID
-            RunLoop.main.run(until: Date().addingTimeInterval(NoriMotion.successFeedbackDuration + 0.5))
             precondition(!state.agentCelebrating && state.agentFeedbackID == token,
-                         "Agent success must return to idle after its feedback animation")
+                         "Agent feedback must stay on the inventory page")
+            precondition(state.agentHasScanned && !state.agentGroups.isEmpty && !state.agentCategories.isEmpty,
+                         "Working and result feedback must retain the current inventory")
             render("dismissed-success")
             precondition(state.scanRequests == 0 && state.cleanupRequests == 0 && state.retryRequests == 0
                          && state.programRemovalRequests == 0 && state.associatedDataRequests == 0,
                          "Rendering must never start real cleanup or scan actions")
             window.close()
         }
-        print("Agent presentation: actual view rendered at normal and constrained sizes; success returned to idle, failure remained inline")
+        print("Agent presentation: actual view rendered at normal and constrained sizes; working and results retained the inventory")
     }
 }

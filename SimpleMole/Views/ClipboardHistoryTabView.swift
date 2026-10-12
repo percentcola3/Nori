@@ -153,6 +153,7 @@ struct ClipboardHistoryTabView: View {
                         ForEach(filteredEntries) { entry in
                             ClipboardHistoryCard(
                                 entry: entry,
+                                imageURL: manager.imageURL(for: entry),
                                 onCopy: { manager.copyToPasteboard(entry) },
                                 onTogglePin: { manager.togglePinned(entry.id) },
                                 onDelete: { manager.remove(entry.id) }
@@ -165,6 +166,38 @@ struct ClipboardHistoryTabView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
+        .onDisappear { ClipboardImageThumbnailLoader.clear() }
+    }
+}
+
+private struct ClipboardImagePreview: View {
+    let url: URL?
+    let fallbackData: Data?
+    @Environment(\.displayScale) private var displayScale
+    @ObservedObject private var l10n = L10n.shared
+    @State private var image: NSImage?
+    @State private var loaded = false
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image).resizable().interpolation(.high).scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else if loaded {
+                Text(l10n.t("clip.imageUnavailable")).foregroundStyle(.tertiary)
+            } else { ProgressView().controlSize(.small) }
+        }
+        .task(id: url) {
+            image = nil
+            loaded = false
+            let thumbnail = await ClipboardImageThumbnailLoader.image(url: url, fallbackData: fallbackData,
+                maximumPixelSize: Int(min(512, 260 * displayScale)))
+            guard !Task.isCancelled else { return }
+            image = thumbnail
+            loaded = true
+        }
+        .onDisappear { image = nil }
     }
 }
 
@@ -192,7 +225,8 @@ private struct ClipboardFilterButtonStyle: ButtonStyle {
 
 private struct ClipboardHistoryCard: View {
     let entry: ClipboardHistoryManager.Entry
-    let onCopy: () -> Void
+    let imageURL: URL?
+    let onCopy: () -> Bool
     let onTogglePin: () -> Void
     let onDelete: () -> Void
 
@@ -237,8 +271,7 @@ private struct ClipboardHistoryCard: View {
             Spacer(minLength: 6)
 
             Button {
-                onCopy()
-                copied = true
+                copied = onCopy()
             } label: {
                 Image(systemName: copied ? "checkmark" : "doc.on.doc")
             }
@@ -279,17 +312,7 @@ private struct ClipboardHistoryCard: View {
     private var content: some View {
         switch entry.kind {
         case .image:
-            if let data = entry.imageData, let image = NSImage(data: data) {
-                Image(nsImage: image)
-                    .resizable()
-                    .interpolation(.high)
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            } else {
-                Text(l10n.t("clip.imageUnavailable"))
-                    .foregroundStyle(.tertiary)
-            }
+            ClipboardImagePreview(url: imageURL, fallbackData: entry.imageData)
         case .file:
             VStack(alignment: .leading, spacing: 5) {
                 Text(entry.filePaths.map { URL(fileURLWithPath: $0).lastPathComponent }

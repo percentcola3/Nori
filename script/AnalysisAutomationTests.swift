@@ -18,6 +18,7 @@ struct AnalysisFixtureSnapshot {
 final class AnalysisFixtureCache {
     var snapshots: [AnalysisInventoryKind: AnalysisFixtureSnapshot] = [:]
     func restore() -> [AnalysisInventoryKind: AnalysisFixtureSnapshot] { snapshots }
+    func snapshot(for kind: AnalysisInventoryKind) -> AnalysisFixtureSnapshot? { snapshots[kind] }
 }
 enum AnalysisInventoryWorker {
     static func defaultRoots(home: String, kind: AnalysisInventoryKind) -> [String] {

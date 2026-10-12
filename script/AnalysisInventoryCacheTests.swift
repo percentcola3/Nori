@@ -131,6 +131,32 @@ struct AnalysisInventoryCacheTests {
         expect(outputRepair[.images]?.report.media?.map(\.path) == [output.path],
                "new compression output must join every applicable cached section")
 
+        let lazy = AnalysisInventoryCache(directory: cacheDirectory, home: home.path)
+        let summaries = lazy.restoreSummaries()
+        expect(summaries.count == 3 && lazy.residentKinds.isEmpty,
+               "Startup summary restoration must not retain any category's detail inventory")
+        let metadata = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: cacheDirectory.appendingPathComponent("summaries.plist")), format: nil) as! [String: Any]
+        expect((metadata["summaries"] as? [[String: Any]])?.count == 3,
+               "Reading lightweight metadata must not erase summaries of nonresident categories")
+        let onlyImages = lazy.restoreState(for: .images)
+        expect(Set(onlyImages.snapshots.keys) == [.images] && lazy.residentKinds == [.images]
+               && onlyImages.reports[.images]?.media?.map(\.path) == [output.path],
+               "Opening one category must load that category only")
+        expect(lazy.releaseDetails() == [.images] && lazy.residentKinds.isEmpty
+               && lazy.restoreSummaries()[.images]?.scannedAt == summaries[.images]?.scannedAt
+               && lazy.restoreSummaries()[.images]?.itemCount == 1,
+               "Idle release must preserve dates and totals without retaining detail records")
+        let reopened = lazy.restoreState(for: .images)
+        expect(reopened.snapshots[.images]?.files[output.path] != nil && lazy.residentKinds == [.images],
+               "Released details must remain reusable from disk without a filesystem scan")
+        let blockedStorage = fixture.appendingPathComponent("blocked-cache")
+        try Data("not a directory".utf8).write(to: blockedStorage)
+        let unpersisted = AnalysisInventoryCache(directory: blockedStorage, home: home.path)
+        _ = unpersisted.scan(.images, roots: [home.path], control: CleanupScanControl(mode: .deep))
+        expect(unpersisted.releaseDetails().isEmpty && unpersisted.residentKinds == [.images],
+               "Failed disk persistence must retain usable details instead of losing the current result")
+
         let restored = AnalysisInventoryCache(directory: cacheDirectory, home: home.path).restore()
         expect(restored.keys.count == 3 && restored[.images]?.report.media?.map(\.path) == [output.path],
                "persistent caches must restore independently after relaunch")

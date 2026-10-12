@@ -38,6 +38,9 @@ final class AppState: ObservableObject {
     @Published var agentCLIBodySizes: [String: AgentInstallationSize] = [:]
     @Published var agentProgramBusyID: String?
     @Published var agentSelectedCLIInstallations = Set<String>()
+    @Published var agentSelectedSkills = Set<String>()
+    @Published var agentSelectedServers = Set<String>()
+    @Published var agentSelectedSkillRegistrations = Set<String>()
     @Published var agentSelectedMCPInstallations = Set<String>()
     @Published var agentScanCurrentPath = ""
     @Published var agentScanning = false
@@ -78,6 +81,7 @@ final class AppState: ObservableObject {
     var isAutoCleanupScanning = false
     var isAutoCleanupMutationActive = false
     var isAnalyzing = false
+    var isRestoringAnalysis = false
     var isScanningDuplicates = false
     var isSlimming = false
     var isDeletingDuplicates = false
@@ -127,6 +131,11 @@ final class AppState: ObservableObject {
     func toggleAgentMCPInstallation(_ installation: AgentMCPInstallation) {}
     func toggleAgentSkill(_ skill: AgentSkill) {}
     func toggleAgentServer(_ server: AgentMCPServer) {}
+    var selectedAgentUnbindings: AgentResourceChanges { .init() }
+    func isAgentSkillBindingSelected(_ binding: AgentResourceCatalog.SkillBinding) -> Bool { false }
+    func toggleAgentSkillBinding(_ binding: AgentResourceCatalog.SkillBinding) {}
+    func toggleAgentSkillBindings(_ bindings: [AgentResourceCatalog.SkillBinding]) {}
+    func requestAgentResourceChanges(_ changes: AgentResourceChanges) { cleanupRequests += 1 }
     func scanAgents() { scanRequests += 1 }
     func applyAgentCleanup() { cleanupRequests += 1 }
     func retryFailedAgentCleanup() { retryRequests += 1 }
@@ -220,7 +229,7 @@ struct AgentCLIInstallation: Identifiable {
     let managedPaths: [String]
     var executablePaths: [String] = []
 }
-struct AgentSkill: Identifiable {
+struct AgentSkill: Identifiable, Sendable {
     let id: String
     let name: String
     let agentID: String
@@ -231,8 +240,11 @@ struct AgentSkill: Identifiable {
     let linkTarget: String?
     let usedBy: [String]
     let bytes: UInt64
+    var directUsers: [String] = []
+    var registrations: [AgentSkillConfigEditor.Registration] = []
+    var bodyDeletionSupported = true
 }
-struct AgentMCPServer: Identifiable {
+struct AgentMCPServer: Identifiable, Sendable {
     enum Issue: Hashable { case commandMissing(String), plaintextSecret(String, String), unreadableConfig }
     let id: String
     let agentID: String
@@ -244,8 +256,9 @@ struct AgentMCPServer: Identifiable {
     let configPath: String
     let endpoint: String
     let scope: String?
+    var installationID: String? = nil
 }
-struct AgentMCPInstallation: Identifiable {
+struct AgentMCPInstallation: Identifiable, Sendable {
     let id: String
     let name: String
     let path: String
@@ -256,4 +269,11 @@ struct AgentMCPInstallation: Identifiable {
 enum AgentCatalog {
     struct Definition { let id: String; let name: String }
     static let definitions = [Definition(id: "codex", name: "Codex")]
+}
+enum AgentSkillConfigEditor {
+    struct Registration: Equatable, Sendable {
+        let configPath: String
+        let skillPath: String
+        var id: String { configPath + "|" + skillPath }
+    }
 }

@@ -57,6 +57,10 @@ SimpleMole/Services/DeveloperShellProfiler.swift)
             [[ "$2" == 'try? FileManager.default.removeItem(at: cacheURL)' ]] && return 0 ;;
         SimpleMole/Services/AnalysisInventoryCache.swift)
             [[ "$2" == 'try? FileManager.default.removeItem(at: directory.appendingPathComponent(name))' ]] && return 0 ;;
+        # Only expired clipboard copies under this archive's private image
+        # directory, after its metadata was persisted. Never original files.
+        SimpleMole/Services/ClipboardHistoryManager.swift)
+            [[ "$2" == 'try? FileManager.default.removeItem(at: imagesURL.appendingPathComponent(name))' ]] && return 0 ;;
         SimpleMole/Services/DuplicateScanWorkspace.swift)
             [[ "$2" == 'queue.sync { try? FileManager.default.removeItem(at: fileURL) }' ]] && return 0 ;;
         SimpleMole/AppState+NoriSelfCleanup.swift)
@@ -78,6 +82,17 @@ done < <(grep -rnE 'removeItem\(|trashItem\(|unlinkat\(|unlink\(|rmdir\(' \
     "$ROOT_DIR/SimpleMole" --include='*.swift' || true)
 
 directory_service="$ROOT_DIR/SimpleMole/Services/DirectoryFileService.swift"
+clipboard_service="$ROOT_DIR/SimpleMole/Services/ClipboardHistoryManager.swift"
+for contract in \
+    '.appendingPathComponent(historyURL.deletingPathExtension().lastPathComponent + "-images", isDirectory: true)' \
+    'where Self.validImageName(name) && !retained.contains(name)' \
+    'let retained = Set(entries.compactMap(\.imageFileName))' \
+    'try data.write(to: historyURL, options: .atomic)' \
+    'attributes[.type] as? FileAttributeType == .typeDirectory else { return }'; do
+    grep -Fq "$contract" "$clipboard_service" || fail 'Clipboard image cleanup lost its owned-directory or retained-history boundary'
+done
+[[ "$(grep -Fc 'pruneImages()' "$clipboard_service")" -eq 2 ]] || \
+    fail 'Clipboard image pruning must have only its declaration and post-persistence call'
 for contract in \
     'let staging = directory.appendingPathComponent(".nori-copy-" + UUID().uuidString)' \
     'try FileManager.default.copyItem(at: source, to: staging)' \

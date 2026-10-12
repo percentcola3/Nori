@@ -470,6 +470,7 @@ struct CategoryRowView: View {
     @Binding var category: CleanupCategory
     let selectionEnabled: Bool
     var highlightsSensitiveData = false
+    var selectsOnRowClick = false
     var coveredPaths: Set<String> = []
     var onAutoClean: (() -> Void)? = nil
     @ObservedObject private var l10n = L10n.shared
@@ -491,14 +492,21 @@ struct CategoryRowView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Toggle("", isOn: categorySelection)
-                    .toggleStyle(.checkbox)
-                    .controlSize(.mini)
-                    .labelsHidden()
-                    .fixedSize()
-                    .disabled(!category.canSelect || !selectionEnabled)
-                Button(action: toggleExpanded) {
-                    HStack(spacing: 6) {
+                if !selectsOnRowClick {
+                    Toggle("", isOn: categorySelection)
+                        .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
+                        .disabled(!category.canSelect || !selectionEnabled)
+                }
+                Button {
+                    if selectsOnRowClick { categorySelection.wrappedValue.toggle() }
+                    else { toggleExpanded() }
+                } label: {
+                    HStack(spacing: 8) {
+                        if selectsOnRowClick {
+                            Toggle("", isOn: .constant(category.allSelected))
+                                .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
+                                .allowsHitTesting(false).accessibilityHidden(true)
+                        }
                         Text(L10nLocalizationAuditTables.categoryName(category.name, isAppLeftover: category.source == .appLeftover))
                             .font(.system(size: 12, weight: .medium))
                             .lineLimit(1)
@@ -508,27 +516,31 @@ struct CategoryRowView: View {
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(Color.danger)
                         } else { RiskBadge(risk: category.risk) }
+                        Spacer(minLength: 8)
+                        SizeBadge(text: ByteFormat.format(category.partiallySelected ? category.selectedPathBytes : category.bytes),
+                                  prominent: category.selected)
+                        if !coveredPaths.isEmpty {
+                            HStack(spacing: 3) {
+                                Image(systemName: "clock.fill")
+                                    .font(.system(size: 8, weight: .semibold))
+                                Text(scheduledBadgeText)
+                                    .font(.system(size: 9, weight: .semibold))
+                            }
+                            .foregroundStyle(Color.moleAccentText)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(Color.moleAccent.opacity(0.12)))
+                            .help(l10n.t("auto.mark.covered"))
+                            .accessibilityLabel(l10n.t("auto.mark.covered"))
+                        }
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.leading, selectsOnRowClick ? 12 : 0)
+                    .padding(.vertical, selectsOnRowClick ? 8 : 0)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(MolePlainButtonStyle(pressedScale: 0.99))
-                Spacer()
-                SizeBadge(text: ByteFormat.format(category.partiallySelected ? category.selectedPathBytes : category.bytes),
-                          prominent: category.selected)
-                if !coveredPaths.isEmpty {
-                    HStack(spacing: 3) {
-                        Image(systemName: "clock.fill")
-                            .font(.system(size: 8, weight: .semibold))
-                        Text(scheduledBadgeText)
-                            .font(.system(size: 9, weight: .semibold))
-                    }
-                    .foregroundStyle(Color.moleAccentText)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.moleAccent.opacity(0.12)))
-                    .help(l10n.t("auto.mark.covered"))
-                    .accessibilityLabel(l10n.t("auto.mark.covered"))
-                }
+                .disabled(selectsOnRowClick && (!category.canSelect || !selectionEnabled))
+                .accessibilityAddTraits(selectsOnRowClick && category.allSelected ? .isSelected : [])
                 if let onAutoClean {
                     Button(action: onAutoClean) {
                         Image(systemName: "clock.arrow.circlepath")
@@ -545,9 +557,10 @@ struct CategoryRowView: View {
                         .rotationEffect(.degrees(category.expanded ? 180 : 0))
                 }
                 .buttonStyle(MoleIconButtonStyle(size: 22))
+                .padding(.trailing, selectsOnRowClick ? 12 : 0)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, selectsOnRowClick ? 0 : 12)
+            .padding(.vertical, selectsOnRowClick ? 0 : 8)
             if category.expanded {
                 LazyVStack(alignment: .leading, spacing: 3) {
                     Label(l10n.t(category.reasonKey), systemImage: riskSymbol)

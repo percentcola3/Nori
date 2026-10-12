@@ -61,6 +61,12 @@ extension AppState {
         }
         if touches(support + "/Analysis") {
             analysisInventoryCache.reset()
+            resetAnalysisPresentationCache()
+            analysisReportsByMode = [:]
+            analysisScanDates = [:]
+            analyzeLargeFiles = []
+            analyzeMedia = []
+            diskBrowserEntriesByPath = [:]
             duplicateWorkspaceStore.discardPendingWrites()
             // 连同 AppState+Duplicates 的展示态一起清空：缓存文件已删除，
             // 内存里的结果不应再指向不存在的清单。

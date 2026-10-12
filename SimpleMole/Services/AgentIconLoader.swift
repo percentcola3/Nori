@@ -63,6 +63,7 @@ enum AgentIconLoader {
     private static let cache: NSCache<NSString, NSImage> = {
         let cache = NSCache<NSString, NSImage>()
         cache.countLimit = 64
+        cache.totalCostLimit = 2 * 1024 * 1024
         return cache
     }()
 
@@ -83,9 +84,9 @@ enum AgentIconLoader {
                         continuation.resume(returning: .init(image: image, isTemplate: false))
                         return
                     }
-                    let image = NSWorkspace.shared.icon(forFile: app.path)
-                    cache.setObject(image, forKey: key)
-                    continuation.resume(returning: .init(image: image, isTemplate: false))
+                    let image = autoreleasepool { ImageMemoryCache.rasterized(NSWorkspace.shared.icon(forFile: app.path)) }
+                    if let image { cache.setObject(image, forKey: key, cost: ImageMemoryCache.cost(image)) }
+                    continuation.resume(returning: image.map { .init(image: $0, isTemplate: false) })
                     return
                 }
                 guard let asset = assetURL(for: descriptor, resourceRoot: Bundle.main.resourceURL) else {
@@ -93,8 +94,10 @@ enum AgentIconLoader {
                     return
                 }
                 let key = "asset:\(asset.path)" as NSString
-                let image = cache.object(forKey: key) ?? NSImage(contentsOf: asset)
-                if let image { cache.setObject(image, forKey: key) }
+                let image = cache.object(forKey: key) ?? autoreleasepool {
+                    NSImage(contentsOf: asset).flatMap { ImageMemoryCache.rasterized($0) }
+                }
+                if let image { cache.setObject(image, forKey: key, cost: ImageMemoryCache.cost(image)) }
                 continuation.resume(returning: image.map {
                     AgentIconImage(image: $0, isTemplate: descriptor.templateAsset)
                 })

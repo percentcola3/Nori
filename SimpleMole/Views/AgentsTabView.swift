@@ -2,18 +2,15 @@ import AppKit
 import SwiftUI
 
 /// 手动扫描后统一展示 Agent、全局 Skill 与 MCP 类目；关联项只解除关联。
-struct AgentsTabView: View {
+struct AgentInventoryView: View {
     @ObservedObject var state: AppState
+    var onManageSkills: () -> Void = {}
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var collapsed: Set<String> = []
     @State private var expandedCLIInstallations: Set<String> = []
 
     private var presentationPhase: Int {
-        if state.agentApplying { return 3 }
-        if state.agentCelebrating { return 4 }
-        if state.agentCleanupHasFeedback && state.agentOutcomeMood == .success { return 6 }
-        if showsCleanupFailure { return 5 }
         if state.agentScanning { return 1 }
         return state.agentHasScanned ? 2 : 0
     }
@@ -25,20 +22,7 @@ struct AgentsTabView: View {
     var body: some View {
         NoriPageTransition(phase: presentationPhase) {
             VStack(spacing: 0) {
-                if state.agentApplying {
-                    NoriCleanupTaskStage(phase: .working,
-                        progress: state.agentCleanupProgress, statusText: state.agentStatus,
-                        feedbackID: state.agentFeedbackID)
-                } else if state.agentCelebrating {
-                    cleanupSuccess
-                } else if state.agentCleanupHasFeedback && state.agentOutcomeMood == .success {
-                    NoriPlaceholderStage { size in
-                        NoriIdlePlaceholder(state: state, size: size)
-                        scanButton
-                    }
-                } else if showsCleanupFailure {
-                    cleanupFailure
-                } else if state.agentScanning {
+                if state.agentScanning {
                     NoriPlaceholderStage { size in
                         NoriStatusAnimation(mood: .working, size: size, assetName: "nori-agent")
                         NoriCurrentFileView(path: state.agentScanCurrentPath)
@@ -51,7 +35,7 @@ struct AgentsTabView: View {
                 } else if !state.agentHasScanned {
                     emptyState
                 } else {
-                    if !state.agentApplying && (state.agentOutcomeMood == .attention || !state.agentScanComplete) {
+                    if !state.isAgentTaskBusy && (showsCleanupFailure || !state.agentScanComplete || state.agentRetryAvailable || !state.agentOutcomeDetails.isEmpty) {
                         statusRow
                     }
                     resourceList
@@ -67,28 +51,6 @@ struct AgentsTabView: View {
                 expandedCLIInstallations.removeAll()
             }
         }
-    }
-
-    private var cleanupSuccess: some View {
-        let feedbackID = state.agentFeedbackID
-        return NoriCleanupTaskStage(phase: .success,
-            completedCount: state.agentCompletedCount, reclaimedBytes: state.agentReclaimedBytes,
-            feedbackID: state.agentFeedbackID)
-            .task(id: feedbackID) {
-                do { try await Task.sleep(nanoseconds: UInt64(NoriMotion.successFeedbackDuration * 1_000_000_000)) }
-                catch { return }
-                state.finishAgentCelebration(feedbackID: feedbackID)
-            }
-    }
-
-    private var cleanupFailure: some View {
-        return NoriCleanupTaskStage(phase: .attention,
-            statusText: state.agentStatus,
-            details: TaskFeedbackDiagnostic.localized(state.agentOutcomeDetails),
-            applications: state.agentFailureApplications,
-            completedCount: state.agentCompletedCount, feedbackID: state.agentFeedbackID,
-            scanSource: .agents, scanDisabled: state.isAgentTaskBusy,
-            onScan: { state.requestScanAccess(.aiScan) })
     }
 
     private var scanButton: some View {
@@ -116,6 +78,10 @@ struct AgentsTabView: View {
         VStack(alignment: .leading, spacing: 6) {
             Label(state.agentStatus, systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(Color.warning)
+            if !state.agentFailureApplications.isEmpty {
+                Text(state.agentFailureApplications.joined(separator: "、"))
+                    .foregroundStyle(.secondary)
+            }
             if !state.agentOutcomeDetails.isEmpty {
                 DisclosureGroup(l10n.t("agents.result.details")) {
                     ScrollView {
@@ -134,7 +100,8 @@ struct AgentsTabView: View {
     }
 
     private var resourceList: some View {
-        ScrollView {
+        let skills = AgentResourceCatalog.skills(state.agentSkills)
+        return ScrollView {
             LazyVStack(spacing: 12) {
                 let snapshots = state.agentGroups.compactMap { state.agentStorageFootprints[$0.id] }
                 if !snapshots.isEmpty {
@@ -149,7 +116,7 @@ struct AgentsTabView: View {
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 let groups = state.agentGroups.filter {
-                    $0.id != "shared-mcp" && $0.id != "chrome-devtools-mcp"
+                    $0.id != "shared" && $0.id != "shared-mcp" && $0.id != "chrome-devtools-mcp"
                 }
                 if groups.isEmpty && state.agentMCPInstallations.isEmpty &&
                     !state.agentGroups.contains(where: { $0.id == "chrome-devtools-mcp" }) { emptyResult }
@@ -157,12 +124,7 @@ struct AgentsTabView: View {
                     VStack(spacing: 8) {
                         groupHeader(group)
                         if !collapsed.contains(group.id) {
-                            if group.id == "shared" {
-                                Text(l10n.t("agents.notice.skills"))
-                                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            LazyVStack(spacing: 8) { groupContents(group) }
+                            LazyVStack(spacing: 8) { groupContents(group, resources: skills) }
                                 .padding(.leading, 14)
                                 .transition(.molePanelReveal)
                         }
@@ -170,21 +132,12 @@ struct AgentsTabView: View {
                     .clipped()
 
                 }
-                ForEach(state.agentGroups.filter { $0.id == "shared-mcp" || $0.id == "chrome-devtools-mcp" }) { group in
+                ForEach(state.agentGroups.filter { $0.id == "chrome-devtools-mcp" }) { group in
                     VStack(spacing: 8) {
                         groupHeader(group)
                         if !collapsed.contains(group.id) {
                             VStack(spacing: 8) {
-                                if group.id == "shared-mcp" {
-                                    Text(l10n.t("agents.notice.mcp"))
-                                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                    ForEach(state.agentMCPInstallations) { installation in
-                                        installationRow(installation)
-                                    }
-                                } else {
-                                    groupContents(group)
-                                }
+                                groupContents(group, resources: skills)
                             }.padding(.leading, 14)
                             .transition(.molePanelReveal)
                         }
@@ -250,7 +203,7 @@ struct AgentsTabView: View {
         .modifier(ListRowSurface(emphasis: .header))
     }
 
-    @ViewBuilder private func groupContents(_ group: AgentGroupSummary) -> some View {
+    @ViewBuilder private func groupContents(_ group: AgentGroupSummary, resources: [AgentResourceCatalog.Skill]) -> some View {
         ForEach(state.agentApplications[group.id] ?? []) { app in
             HStack(spacing: 8) {
                 Image(systemName: "app").foregroundStyle(Color.moleAccentText)
@@ -280,18 +233,36 @@ struct AgentsTabView: View {
             if let category = state.agentCategories.first(where: { $0.id == id }) {
                 CategoryRowView(category: categoryBinding(for: category),
                     selectionEnabled: !state.isAgentTaskBusy && !state.agentCLISelectedAgentIDs.contains(group.id),
-                    highlightsSensitiveData: true)
+                    highlightsSensitiveData: true, selectsOnRowClick: true)
             }
         }
-        let skills = state.agentSkills.filter { $0.agentID == group.id }
+        let skills = resources.filter { $0.bindings.contains { $0.agentIDs.contains(group.id) } }
         if !skills.isEmpty {
             subsectionHeader(l10n.t("agents.subsection.skills"), count: skills.count)
-            ForEach(skills) { skill in skillRow(skill) }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 135, maximum: 190), spacing: 8)], spacing: 8) {
+                ForEach(skills) { skill in
+                    let bindings = skill.bindings.filter { $0.agentIDs.contains(group.id) }
+                    let removable = bindings.filter(\.removable)
+                    AgentCompactResourceCard(title: skill.name,
+                        subtitle: removable.isEmpty ? l10n.t("agents.manage.implicit") : l10n.t("agents.skills.unlink"),
+                        symbol: "sparkles", selected: !removable.isEmpty && removable.allSatisfy(state.isAgentSkillBindingSelected),
+                        enabled: !state.isAgentTaskBusy, action: {
+                            if removable.isEmpty { onManageSkills() } else { state.toggleAgentSkillBindings(removable) }
+                        }).help(skill.id)
+                }
+            }
         }
         let servers = state.agentServers.filter { $0.agentID == group.id }
         if !servers.isEmpty {
             subsectionHeader(l10n.t("agents.subsection.mcp"), count: servers.count)
-            ForEach(servers) { server in serverRow(server) }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 135, maximum: 190), spacing: 8)], spacing: 8) {
+                ForEach(servers) { server in
+                    AgentCompactResourceCard(title: server.name, subtitle: l10n.t("agents.mcp.unlink"), symbol: "server.rack",
+                        selected: state.isAgentServerSelected(server),
+                        enabled: !state.isAgentTaskBusy && !server.issues.contains(.unreadableConfig),
+                        action: { state.toggleAgentServer(server) }).help(server.endpoint)
+                }
+            }
         }
     }
 
@@ -380,133 +351,41 @@ struct AgentsTabView: View {
         .foregroundStyle(.secondary).padding(.horizontal, 4).padding(.top, 2)
     }
 
-    private func skillRow(_ skill: AgentSkill) -> some View {
-        let selected = state.isAgentSkillSelected(skill)
-        return HStack(alignment: .top, spacing: 8) {
-            Toggle("", isOn: Binding(get: { selected }, set: { _ in state.toggleAgentSkill(skill) }))
-                .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
-                .disabled(skill.identity.isEmpty || state.isAgentTaskBusy || state.agentCLISelectedAgentIDs.contains(skill.agentID))
-                .accessibilityLabel(skill.name)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(skill.name).font(.system(size: 12, weight: .medium)).lineLimit(1)
-                    AgentRiskTag(text: l10n.t(skill.linked ? "agents.skills.unlink" : "agents.skills.deleteBody"),
-                                 high: !skill.linked)
-                }
-                if !skill.summary.isEmpty {
-                    Text(skill.summary).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
-                }
-                Text(abbreviate(skill.path)).font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
-                if let target = skill.linkTarget {
-                    Text("→ " + abbreviate(target)).font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
-                }
-                if !skill.usedBy.isEmpty {
-                    Text(l10n.tf("agents.resource.usedBy", skill.usedBy.joined(separator: "、")))
-                        .font(.system(size: 9)).foregroundStyle(.secondary)
-                }
-            }
-            Spacer(minLength: 8)
-            if skill.bytes > 0 { SizeBadge(text: ByteFormat.format(skill.bytes), prominent: selected) }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .modifier(ListRowSurface(selected: selected))
-    }
-
-    private func serverRow(_ server: AgentMCPServer) -> some View {
-        let selected = state.isAgentServerSelected(server)
-        let unreadable = server.issues.contains(.unreadableConfig)
-        let issues = server.issues.reduce(into: [AgentMCPServer.Issue]()) { result, issue in
-            if !result.contains(issue) { result.append(issue) }
-        }
-        return HStack(alignment: .top, spacing: 8) {
-            Toggle("", isOn: Binding(get: { selected }, set: { _ in state.toggleAgentServer(server) }))
-                .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
-                .disabled(state.isAgentTaskBusy || state.agentCLISelectedAgentIDs.contains(server.agentID))
-                .accessibilityLabel(server.name)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Image(systemName: server.remote ? "globe" : "terminal").foregroundStyle(.secondary)
-                    Text(server.name).font(.system(size: 12, weight: .medium))
-                    AgentRiskTag(text: l10n.t(unreadable ? "agents.mcp.deleteConfig" : "agents.mcp.unlink"), high: unreadable)
-                    Text(server.agentName).font(.system(size: 9)).foregroundStyle(.secondary)
-                    if server.disabled { Text(l10n.t("agents.mcp.disabled")).font(.system(size: 9)) }
-                    Spacer()
-                    Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: server.configPath)]) } label: {
-                        Image(systemName: "folder").font(.system(size: 10))
-                    }
-                    .buttonStyle(MoleIconButtonStyle(size: 20))
-                }
-                if !server.endpoint.isEmpty {
-                    Text(server.endpoint).font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                }
-                if let scope = server.scope {
-                    Text(abbreviate(scope)).font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
-                }
-                ForEach(issues, id: \.self) { issue in
-                    Label(issueText(issue), systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 10)).foregroundStyle(Color.warning)
-                }
-            }
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .modifier(ListRowSurface(selected: selected))
-    }
-
-    private func installationRow(_ installation: AgentMCPInstallation) -> some View {
-        let selected = state.agentSelectedMCPInstallations.contains(installation.id)
-        return VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 8) {
-                Toggle("", isOn: Binding(get: { selected }, set: { _ in state.toggleAgentMCPInstallation(installation) }))
-                    .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
-                    .disabled(state.isAgentTaskBusy || installation.identity.isEmpty)
-                    .accessibilityLabel(installation.name)
-                Text(installation.name).font(.system(size: 12, weight: .medium))
-                AgentRiskTag(text: l10n.t("agents.mcp.deleteBody"), high: true)
-                Spacer()
-                SizeBadge(text: ByteFormat.format(installation.bytes), prominent: selected)
-            }
-            Text(abbreviate(installation.path)).font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-            let agentIDs = Set(installation.serverIDs.compactMap { $0.split(separator: "|").first.map(String.init) })
-            let names = AgentCatalog.definitions.filter { agentIDs.contains($0.id) }.map(\.name)
-            Text(l10n.tf("agents.resource.usedBy", Array(Set(names)).sorted().joined(separator: "、")))
-                .font(.system(size: 10)).foregroundStyle(.secondary)
-            Text(l10n.t("agents.mcp.bodyImpact")).font(.system(size: 10)).foregroundStyle(Color.warning)
-        }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .modifier(ListRowSurface(selected: selected))
-    }
-
-    private func issueText(_ issue: AgentMCPServer.Issue) -> String {
-        switch issue {
-        case .commandMissing(let command): return l10n.tf("agents.mcp.issue.command", command)
-        case .plaintextSecret(let key, let masked): return l10n.tf("agents.mcp.issue.secret", key, masked)
-        case .unreadableConfig: return l10n.t("agents.mcp.issue.unreadable")
-        }
-    }
-
     private var actions: some View {
         HStack(spacing: 8) {
-            if state.agentApplying {
-                ProgressView().controlSize(.small)
-                Text(state.agentStatus)
+            if state.isAgentTaskBusy {
+                NoriStatusAnimation(mood: .working, size: 32)
+                Text(state.agentApplying ? state.agentStatus : l10n.t("agents.apply.working"))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
                     .accessibilityAddTraits(.updatesFrequently)
             } else {
                 Button { state.requestScanAccess(.aiScan) } label: {
                     Label(l10n.t("agents.rescan"), systemImage: "arrow.clockwise")
                 }
                     .buttonStyle(SecondaryButtonStyle()).disabled(state.isAgentTaskBusy)
+                if state.agentCleanupHasFeedback && state.agentOutcomeMood == .success {
+                    Text(state.agentStatus).font(.system(size: 11)).foregroundStyle(Color.success).lineLimit(1)
+                }
+                if state.agentRetryAvailable {
+                    Button(action: state.retryFailedAgentCleanup) {
+                        Label(l10n.t("cleanup.task.retry"), systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(SecondaryButtonStyle()).disabled(state.isAgentTaskBusy)
+                }
             }
             Spacer()
+            let unbindings = state.selectedAgentUnbindings
+            if unbindings.count > 0 {
+                Button { state.requestAgentResourceChanges(unbindings) } label: {
+                    Text(l10n.t("agents.manage.unlink") + " (\(unbindings.count))")
+                }.buttonStyle(PrimaryButtonStyle()).disabled(state.isAgentTaskBusy)
+            }
             Button { state.applyAgentCleanup() } label: {
                 Label(state.agentApplying ? l10n.t("agents.apply.working") : (state.agentSelectedCount > 0
                       ? l10n.tf("agents.apply.withCount", state.agentSelectedCount, ByteFormat.format(state.agentSelectedBytes))
-                      : l10n.t("agents.apply")), systemImage: "sparkles")
+                      : l10n.t("agents.manage.cleanData")), systemImage: "sparkles")
             }
             .buttonStyle(PrimaryButtonStyle())
             .disabled(state.agentSelectedCount == 0 || state.isAgentTaskBusy
