@@ -128,7 +128,59 @@ private final class AgentProgressDelivery: @unchecked Sendable {
 @MainActor
 extension AppState {
     var agentSelectedCount: Int {
-        effectiveAgentCleanupSelection.count
+        agentSelectionSummary.count
+    }
+
+    func setAgentRetention(_ rule: AgentRetentionRule, for retentionClass: AgentRetentionClass, agentID: String) {
+        guard !isAgentTaskBusy, retentionClass != .temporary,
+              let group = agentGroups.first(where: { $0.id == agentID }) else { return }
+        agentRetentionPreferences.set(rule, for: retentionClass, agentID: agentID)
+        agentRetentionPreferences.save()
+        let categoryIDs = Set(group.categoryIDs)
+        for index in agentCategories.indices
+        where agentCategories[index].retentionClass == retentionClass
+            && categoryIDs.contains(agentCategories[index].id) {
+            let category = agentCategories[index]
+            if !group.orphaned && group.documented {
+                let expired = category.paths.filter {
+                    !category.pathRetentionBlocked.contains($0)
+                    && agentRetentionPreferences.isExpired(retentionClass, agentID: agentID,
+                        modified: category.pathActivity[$0])
+                }
+                agentCategories[index] = category.selectingPaths(expired)
+            }
+            agentCategories[index].retention = agentRetentionPreferences.retention(for: retentionClass, agentID: agentID)
+        }
+    }
+
+    func setCodexThreadStoreCompression(_ enabled: Bool) {
+        guard !isAgentTaskBusy, agentCodexThreadStoreCompression != .unknown else { return }
+        agentProgramBusyID = "codex-compression"
+        let home = NSHomeDirectory()
+        Task {
+            let failure = await Task.detached(priority: .utility) { () -> String? in
+                switch AgentCodexFeatureEditor.setThreadStoreCompression(enabled, home: home) {
+                case .success: return nil
+                case .failure(let error): return error.localizedDescription
+                }
+            }.value
+            agentProgramBusyID = nil
+            if let failure {
+                let message = l10n.tf("agents.codex.compression.failed", failure)
+                agentOutcomeMood = .attention
+                agentOutcomeDetails = [message]
+                agentCleanupHasFeedback = true
+                agentStatus = message
+                recordAgentAttention()
+            } else {
+                agentCodexThreadStoreCompression = enabled ? .enabled : .disabled
+                agentOutcomeMood = nil
+                agentOutcomeDetails = []
+                agentCleanupHasFeedback = false
+                agentStatus = l10n.tf("agents.codex.compression.applied",
+                    l10n.t(enabled ? "agents.codex.compression.on" : "agents.codex.compression.off"))
+            }
+        }
     }
 
     var agentCLISelectedAgentIDs: Set<String> {
@@ -183,11 +235,68 @@ extension AppState {
     }
 
     var agentSelectedBytes: UInt64 {
-        let paths = effectiveAgentCleanupSelection.categories.flatMap { category in
+        agentSelectionSummary.bytes
+    }
+
+    private var agentSelectionSummary: (count: Int, bytes: UInt64) {
+        if let cached = agentSelectionSummaryCache { return cached }
+        // Freeze the effective selection only once. In particular, do not
+        // copy every category's path metadata for each read of the button label.
+        let selection = effectiveAgentCleanupSelection
+        let entries = selection.categories.flatMap { category in
             category.paths.map { ($0, category.pathBytes[$0] ?? 0) }
-        } + agentSkills.filter(isAgentSkillSelected).map { ($0.path, $0.bytes) }
-            + agentMCPInstallations.filter { agentSelectedMCPInstallations.contains($0.id) }.map { ($0.path, $0.bytes) }
-        return Self.uniqueAgentBytes(paths)
+        } + selection.skills.map { ($0.path, $0.bytes) }
+            + selection.installations.map { ($0.path, $0.bytes) }
+        let sizes = Dictionary(entries, uniquingKeysWith: max)
+        let paths = DeletionPlan.nonOverlappingPaths(Array(sizes.keys))
+        let summary = (count: paths.count + Set(selection.servers.map(\.id)).count
+            + Set(selection.cliInstallations.map(\.id)).count,
+            bytes: paths.reduce(UInt64(0)) { $0 &+ (sizes[$1] ?? 0) })
+        agentSelectionSummaryCache = summary
+        return summary
+    }
+
+    /// Nil identifies the page overview; Agent IDs identify individual groups.
+    /// These totals can contain tens of thousands of paths, so views reuse them.
+    func agentStorageTotals(for agentID: String? = nil) -> AgentStorageFootprint.Totals? {
+        // Software rows cache an empty/loading total for missing snapshots;
+        // the Agent page still needs nil to show its resource-size fallback.
+        if let agentID {
+            guard agentStorageFootprints[agentID] != nil else { return nil }
+        } else {
+            guard agentGroups.contains(where: { agentStorageFootprints[$0.id] != nil }) else { return nil }
+        }
+        let key = agentID ?? ""
+        if let cached = agentStorageTotalsCache[key] { return cached }
+        let footprints: [AgentStorageFootprint]
+        if let agentID {
+            footprints = agentStorageFootprints[agentID].map { [$0] } ?? []
+        } else {
+            footprints = agentGroups.compactMap { agentStorageFootprints[$0.id] }
+        }
+        guard !footprints.isEmpty else { return nil }
+        let totals = AgentStorageFootprint.totals(footprints)
+        agentStorageTotalsCache[key] = totals
+        return totals
+    }
+
+    /// Software rows may represent several Agent IDs. Share single-Agent
+    /// totals with the Agent page and cache each combined set once as well.
+    func agentStorageTotals(for agentIDs: Set<String>) -> AgentStorageFootprint.Totals {
+        guard !agentIDs.isEmpty else { return AgentStorageFootprint.totals([]) }
+        let ids = agentIDs.sorted()
+        let key = ids.joined(separator: "\0")
+        if let cached = agentStorageTotalsCache[key] { return cached }
+        let totals = AgentStorageFootprint.totals(ids.compactMap { agentStorageFootprints[$0] })
+        agentStorageTotalsCache[key] = totals
+        return totals
+    }
+
+    nonisolated private static func prepareAgentStorageTotals(_ footprints: [String: AgentStorageFootprint])
+        -> [String: AgentStorageFootprint.Totals] {
+        var totals = footprints.mapValues { AgentStorageFootprint.totals([$0]) }
+        if !footprints.isEmpty { totals[""] = AgentStorageFootprint.totals(Array(footprints.values)) }
+        return totals
     }
 
     nonisolated static func uniqueAgentBytes(_ entries: [(String, UInt64)]) -> UInt64 {
@@ -220,6 +329,7 @@ extension AppState {
         agentStatus = L10n.shared.t("agents.status.scanning")
         agentScanCurrentPath = NSHomeDirectory()
         let generation = agentTaskGeneration
+        let retention = agentRetentionPreferences
         let delivery = AgentProgressDelivery()
         let control = CleanupScanControl(mode: .deep, totalBudget: 180, directoryBudget: 30,
             onDirectory: { [weak self] path in
@@ -233,14 +343,17 @@ extension AppState {
         Task {
             defer { agentScanControl = nil }
             let home = NSHomeDirectory()
-            let (report, cli, footprints, applications, bodies) = await Task.detached(priority: .utility) {
-                let (report, cli) = Self.loadAgentInventory(home: home, control: control)
-                return (report, cli, AgentStorageFootprint.build(report: report, cli: cli),
+            let (report, cli, footprints, storageTotals, applications, bodies) = await Task.detached(priority: .utility) {
+                let (report, cli) = Self.loadAgentInventory(home: home, control: control,
+                    retention: retention)
+                let footprints = AgentStorageFootprint.build(report: report, cli: cli)
+                return (report, cli, footprints, Self.prepareAgentStorageTotals(footprints),
                         AgentSoftwareInventory.applications(home: home),
                         Self.measureAgentCLIBodies(cli, control: control))
             }.value
             updateAgentInventory(report, cli: cli)
             agentStorageFootprints = footprints
+            agentStorageTotalsCache = storageTotals
             agentApplications = applications
             agentCLIBodySizes = bodies
             agentSelectedSkills = []
@@ -273,9 +386,10 @@ extension AppState {
                 agentCleanupHasFeedback = true
                 recordAgentAttention()
             }
-            let totals = AgentStorageFootprint.totals(Array(footprints.values))
+            let totals = storageTotals[""] ?? AgentStorageFootprint.totals([])
             let agentCount = report.groups.filter {
-                $0.id != "shared" && $0.id != "shared-mcp" && $0.id != "chrome-devtools-mcp"
+                $0.id != "shared" && $0.id != "shared-mcp"
+                    && $0.id != "chrome-devtools-mcp" && $0.id != "playwright"
             }.count
             agentStatus = completionStatus ?? (report.groups.isEmpty
                 ? L10n.shared.t("agents.status.empty")
@@ -287,11 +401,13 @@ extension AppState {
 
     nonisolated static func loadAgentInventory(home: String, includingAgentIDs: Set<String> = [],
         onlyAgentIDs: Set<String>? = nil,
-        control: CleanupScanControl = CleanupScanControl(mode: .deep, totalBudget: 180, directoryBudget: 30))
+        control: CleanupScanControl = CleanupScanControl(mode: .deep, totalBudget: 180, directoryBudget: 30),
+        retention: AgentRetentionPreferences = .load())
         -> (AgentScanReport, [AgentCLIInstallation]) {
         var report = AgentInventory.scan(home: home, control: control, localize: { L10n.shared.t($0) },
                                          includingAgentIDs: includingAgentIDs,
-                                         excludingGlobalCleanupCaches: true, onlyAgentIDs: onlyAgentIDs)
+                                         excludingGlobalCleanupCaches: true, onlyAgentIDs: onlyAgentIDs,
+                                         retention: retention)
         let definitions = AgentCatalog.definitions.filter { onlyAgentIDs?.contains($0.id) ?? true }
         let cli = definitions.flatMap { AgentCLIService.installations(for: $0, home: home) }
         for agent in AgentCatalog.definitions where cli.contains(where: { $0.agentID == agent.id }) {
@@ -310,6 +426,7 @@ extension AppState {
 
     func updateAgentInventory(_ report: AgentScanReport, cli: [AgentCLIInstallation]) {
         agentCategories = report.categories
+        agentCodexThreadStoreCompression = report.codexThreadStoreCompression
         agentGroups = report.groups
         agentSkills = report.skills
         agentServers = report.servers
@@ -384,10 +501,11 @@ extension AppState {
               confirmation == nil, taskNotice == nil else { return }
         agentProgramBusyID = "data:" + agentIDs.sorted().joined(separator: ",")
         let home = NSHomeDirectory()
+        let retention = agentRetentionPreferences
         Task { [self] in
             let (report, cli, footprints) = await Task.detached(priority: .utility) {
                 let (report, cli) = Self.loadAgentInventory(home: home,
-                    includingAgentIDs: agentIDs, onlyAgentIDs: agentIDs)
+                    includingAgentIDs: agentIDs, onlyAgentIDs: agentIDs, retention: retention)
                 return (report, cli, AgentStorageFootprint.build(report: report, cli: cli))
             }.value
             agentStorageFootprints.merge(footprints, uniquingKeysWith: { _, fresh in fresh })
@@ -550,7 +668,7 @@ extension AppState {
                     completedOffset: action.progress.completedCLIUnits,
                     total: action.progress.totalUnits)
                 let outcome = await Task.detached(priority: .utility) {
-                    AgentCleanupExecutor.execute(ready.categories, running: snapshot, home: home, permanent: true,
+                    AgentCleanupExecutor.execute(ready.categories, running: snapshot, home: home,
                         skills: ready.skills, installations: ready.installations, servers: ready.servers,
                         removingAgentIDs: selection.removedAgentIDs, onProgress: onProgress)
                 }.value
@@ -664,7 +782,7 @@ extension AppState {
         let onProgress = agentExecutionProgress(selection,
             completedOffset: progress.completedCLIUnits, total: progress.totalUnits)
         let outcome = await Task.detached(priority: .utility) {
-            AgentCleanupExecutor.execute(selection.categories, running: snapshot, home: home, permanent: true,
+            AgentCleanupExecutor.execute(selection.categories, running: snapshot, home: home,
                 skills: selection.skills, installations: selection.installations, servers: selection.servers,
                 removingAgentIDs: selection.removedAgentIDs, onProgress: onProgress)
         }.value

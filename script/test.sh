@@ -879,6 +879,8 @@ test_process_sampler() {
         -module-cache-path "$TEST_ROOT/process-module-cache" \
         -framework AppKit -framework IOKit \
         "$ROOT_DIR/SimpleMole/Models.swift" \
+        "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
+        "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
@@ -995,6 +997,8 @@ test_runtime_store_aggregation() {
         -module-cache-path "$module_cache" \
         -framework AppKit -framework IOKit \
         "$ROOT_DIR/SimpleMole/Models.swift" \
+        "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
+        "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
@@ -1739,6 +1743,8 @@ test_uninstall_space_breakdown() {
         swiftc -target "$arch-apple-macos13.0" \
             -module-cache-path "$module_cache" \
             "$ROOT_DIR/SimpleMole/Models.swift" \
+            "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
+            "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
             "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
             "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
             "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
@@ -1831,6 +1837,8 @@ test_uninstall_queue() {
         swiftc -target "$arch-apple-macos13.0" \
             -module-cache-path "$module_cache" \
             "$ROOT_DIR/SimpleMole/Models.swift" \
+            "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
+            "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
             "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
             "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
             "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
@@ -2339,6 +2347,8 @@ test_auto_cleanup_planner() {
     swiftc -target "$arch-apple-macos13.0" \
         -module-cache-path "$module_cache" \
         "$ROOT_DIR/SimpleMole/Models.swift" \
+        "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
+        "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
@@ -2368,12 +2378,13 @@ test_cleanup_risk_policy() {
     swiftc -target "$arch-apple-macos13.0" \
         -module-cache-path "$module_cache" \
         "$ROOT_DIR/SimpleMole/Models.swift" \
+        "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
+        "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
         "$ROOT_DIR/SimpleMole/Services/Parsers.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupCache.swift" \
-        "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
         "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
         "$ROOT_DIR/script/CleanupRiskPolicyTests.swift" \
@@ -2510,6 +2521,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_analysis_automation.sh" || fail "automatic incremental analysis scheduling tests"
     bash "$ROOT_DIR/script/test_system_disk_metrics.sh" || fail "macOS available disk capacity tests"
     bash "$ROOT_DIR/script/test_agents.sh" || fail "agent cleanup catalog, skills and MCP tests"
+    bash "$ROOT_DIR/script/test_awake_session.sh" || fail "keep-awake assertion lifecycle tests"
     bash "$ROOT_DIR/script/test_agent_scan_performance.sh" || fail "bounded Agent scan, metadata reuse and cancellation"
     bash "$ROOT_DIR/script/test_agent_storage_footprint.sh" || fail "shared Agent/software capacity and garbage classification"
     bash "$ROOT_DIR/script/test_agent_software_inventory.sh" || fail "selected Agent application and CLI inventory"
@@ -2520,10 +2532,11 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_agent_icons.sh" || fail "agent icon tests"
     bash "$ROOT_DIR/script/test_task_feedback.sh" || fail "task feedback queue tests"
     bash "$ROOT_DIR/script/test_task_feedback_localization.sh" || fail "multilingual task feedback tests"
-    # Ordinary Agent garbage cleanup executes its captured selection directly;
+    # Ordinary Agent cleanup executes its captured selection directly. The
+    # executor routes safe caches to permanent deletion and user data to Trash;
     # installation removal and associated user-data cleanup have separate consent.
-    /usr/bin/grep -Eq 'AgentCleanupExecutor\.execute\([^,]+, running: snapshot, home: home, permanent: true[,)]' \
-        "$ROOT_DIR/SimpleMole/AppState+Agents.swift" || fail "agent cleanup no longer deletes permanently"
+    /usr/bin/grep -Eq 'AgentCleanupExecutor\.execute\([^,]+, running: snapshot, home: home[,)]' \
+        "$ROOT_DIR/SimpleMole/AppState+Agents.swift" || fail "agent cleanup no longer executes its captured selection"
     /usr/bin/grep -Fq '    func applyAgentCleanup() {' "$ROOT_DIR/SimpleMole/AppState+Agents.swift" || \
         fail "ordinary Agent cleanup action is missing"
     if sed -n '/^    func applyAgentCleanup() {$/,/^    }$/p' "$ROOT_DIR/SimpleMole/AppState+Agents.swift" \

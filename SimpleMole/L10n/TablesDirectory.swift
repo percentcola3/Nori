@@ -13,7 +13,12 @@ enum L10nDirectoryTables {
 
     static let en: [String: String] = [
         "dir.git.repository": "Git repository",
-        "dir.git.actions": "Git branches and pull",
+        "dir.git.statusUnavailable": "Git status unavailable",
+        "dir.git.cachedStatus": "Compared with the last fetched upstream state.",
+        "dir.git.syncCounts": "%d ahead · %d behind",
+        "dir.git.sync": "Sync",
+        "dir.column.kindBranch": "Type / branch",
+        "dir.git.actions": "Git repository details",
         "dir.git.close": "Close Git repository",
         "dir.git.loading": "Reading repository...",
         "dir.git.refresh": "Refresh Git status",
@@ -152,7 +157,12 @@ enum L10nDirectoryTables {
 
     static let zhHans: [String: String] = [
         "dir.git.repository": "Git 仓库",
-        "dir.git.actions": "Git 分支与拉取",
+        "dir.git.statusUnavailable": "Git 状态不可用",
+        "dir.git.cachedStatus": "与最近一次抓取的上游状态比较。",
+        "dir.git.syncCounts": "领先 %d · 落后 %d",
+        "dir.git.sync": "同步",
+        "dir.column.kindBranch": "类型 / 分支",
+        "dir.git.actions": "Git 仓库详情",
         "dir.git.close": "关闭 Git 仓库",
         "dir.git.loading": "正在读取仓库...",
         "dir.git.refresh": "刷新 Git 状态",
@@ -291,7 +301,12 @@ enum L10nDirectoryTables {
 
     static let zhHant: [String: String] = [
         "dir.git.repository": "Git 儲存庫",
-        "dir.git.actions": "Git 分支與拉取",
+        "dir.git.statusUnavailable": "Git 狀態無法使用",
+        "dir.git.cachedStatus": "與最近一次擷取的上游狀態比較。",
+        "dir.git.syncCounts": "領先 %d · 落後 %d",
+        "dir.git.sync": "同步",
+        "dir.column.kindBranch": "類型 / 分支",
+        "dir.git.actions": "Git 儲存庫詳細資料",
         "dir.git.close": "關閉 Git 儲存庫",
         "dir.git.loading": "正在讀取儲存庫...",
         "dir.git.refresh": "重新整理 Git 狀態",

@@ -1,6 +1,82 @@
 import AppKit
 import SwiftUI
 
+struct AgentRetentionControls: View {
+    @ObservedObject var state: AppState
+    let agentID: String
+    @ObservedObject private var l10n = L10n.shared
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) {
+                retentionTitle
+                Spacer(minLength: 8)
+                inlineRetentionPicker("agents.retention.conversations", retentionClass: .conversations)
+                inlineRetentionPicker("agents.retention.artifacts", retentionClass: .artifacts)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                retentionTitle
+                retentionRow("agents.retention.conversations", retentionClass: .conversations)
+                retentionRow("agents.retention.artifacts", retentionClass: .artifacts)
+            }
+        }
+        .help(l10n.t("agents.retention.hint"))
+        .accessibilityHint(l10n.t("agents.retention.hint"))
+        .disabled(state.isAgentTaskBusy)
+    }
+
+    private var retentionTitle: some View {
+        Text(l10n.t("agents.retention.title"))
+            .font(.system(size: 11, weight: .medium))
+    }
+
+    private func inlineRetentionPicker(_ labelKey: String,
+                                       retentionClass: AgentRetentionClass) -> some View {
+        HStack(spacing: 6) {
+            Text(l10n.t(labelKey))
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+            retentionPicker(labelKey, retentionClass: retentionClass)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func retentionRow(_ labelKey: String,
+                              retentionClass: AgentRetentionClass) -> some View {
+        HStack(spacing: 8) {
+            Text(l10n.t(labelKey))
+                .font(.system(size: 10.5))
+            Spacer(minLength: 8)
+            retentionPicker(labelKey, retentionClass: retentionClass)
+        }
+    }
+
+    private func retentionPicker(_ labelKey: String,
+                                 retentionClass: AgentRetentionClass) -> some View {
+        Picker(l10n.t(labelKey), selection: selection(for: retentionClass)) {
+            Text(l10n.t("agents.retention.never")).tag(0)
+            ForEach(AgentRetentionPreferences.presetDays, id: \.self) { days in
+                Text(l10n.tf("agents.retention.days", days)).tag(days)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .controlSize(.mini)
+        .accessibilityIdentifier("agent-retention-\(agentID)-\(retentionClass.rawValue)")
+    }
+
+    private func selection(for retentionClass: AgentRetentionClass) -> Binding<Int> {
+        Binding(get: {
+            switch state.agentRetentionPreferences.rule(for: retentionClass, agentID: agentID) {
+            case .never: return 0
+            case .days(let days): return days
+            }
+        }, set: { days in
+            state.setAgentRetention(days == 0 ? .never : .days(days), for: retentionClass, agentID: agentID)
+        })
+    }
+}
+
 /// 手动扫描后统一展示 Agent、全局 Skill 与 MCP 类目；关联项只解除关联。
 struct AgentInventoryView: View {
     @ObservedObject var state: AppState
@@ -103,23 +179,16 @@ struct AgentInventoryView: View {
         let skills = AgentResourceCatalog.skills(state.agentSkills)
         return ScrollView {
             LazyVStack(spacing: 12) {
-                let snapshots = state.agentGroups.compactMap { state.agentStorageFootprints[$0.id] }
-                if !snapshots.isEmpty {
-                    HStack {
-                        Text(l10n.t("agents.storage.summary")).font(.system(size: 11, weight: .medium))
-                        Spacer()
-                        AgentStorageSummaryView(storage: AgentStorageFootprint.totals(snapshots))
-                    }
-                    .padding(10).modifier(ListRowSurface(emphasis: .header))
-                }
                 Text(l10n.t("agents.notice.installed"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 let groups = state.agentGroups.filter {
-                    $0.id != "shared" && $0.id != "shared-mcp" && $0.id != "chrome-devtools-mcp"
+                    $0.id != "shared" && $0.id != "shared-mcp" && $0.id != "chrome-devtools-mcp" && $0.id != "playwright"
                 }
                 if groups.isEmpty && state.agentMCPInstallations.isEmpty &&
-                    !state.agentGroups.contains(where: { $0.id == "chrome-devtools-mcp" }) { emptyResult }
+                    !state.agentGroups.contains(where: {
+                        $0.id == "chrome-devtools-mcp" || $0.id == "playwright"
+                    }) { emptyResult }
                 ForEach(groups) { group in
                     VStack(spacing: 8) {
                         groupHeader(group)
@@ -132,7 +201,9 @@ struct AgentInventoryView: View {
                     .clipped()
 
                 }
-                ForEach(state.agentGroups.filter { $0.id == "chrome-devtools-mcp" }) { group in
+                ForEach(state.agentGroups.filter {
+                    $0.id == "chrome-devtools-mcp" || $0.id == "playwright"
+                }) { group in
                     VStack(spacing: 8) {
                         groupHeader(group)
                         if !collapsed.contains(group.id) {
@@ -175,9 +246,13 @@ struct AgentInventoryView: View {
                     }
                     Text(group.name).font(.system(size: 12, weight: .semibold))
                     if !group.documented { AgentRiskTag(text: l10n.t("agents.badge.review"), high: true) }
+                    if group.unused, let lastActivity = group.lastActivity {
+                        AgentRiskTag(text: l10n.tf("agents.badge.unused",
+                            Int(max(0, Date().timeIntervalSince(lastActivity)) / (24 * 3600))), high: false)
+                    }
                     Spacer()
-                    if let footprint = state.agentStorageFootprints[group.id] {
-                        AgentStorageSummaryView(storage: AgentStorageFootprint.totals([footprint]))
+                    if let totals = state.agentStorageTotals(for: group.id) {
+                        AgentStorageSummaryView(storage: totals)
                     } else {
                         Text(l10n.tf("agents.storage.resource", ByteFormat.format(group.id == "shared-mcp"
                             ? AppState.uniqueAgentBytes(state.agentMCPInstallations.map { ($0.path, $0.bytes) })
@@ -204,6 +279,12 @@ struct AgentInventoryView: View {
     }
 
     @ViewBuilder private func groupContents(_ group: AgentGroupSummary, resources: [AgentResourceCatalog.Skill]) -> some View {
+        if group.id != "shared" && group.id != "shared-mcp" {
+            AgentRetentionControls(state: state, agentID: group.id)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .modifier(ListRowSurface())
+        }
         ForEach(state.agentApplications[group.id] ?? []) { app in
             HStack(spacing: 8) {
                 Image(systemName: "app").foregroundStyle(Color.moleAccentText)
@@ -228,6 +309,9 @@ struct AgentInventoryView: View {
             ForEach(cliInstallations) { installation in
                 cliInstallationRow(installation)
             }
+        }
+        if group.id == "codex", let compression = state.agentCodexThreadStoreCompression {
+            codexCompressionRow(compression)
         }
         ForEach(group.categoryIDs, id: \.self) { id in
             if let category = state.agentCategories.first(where: { $0.id == id }) {
@@ -264,6 +348,47 @@ struct AgentInventoryView: View {
                 }
             }
         }
+    }
+
+    private func codexCompressionRow(_ compression: AgentCodexFeatureEditor.State) -> some View {
+        let configPath = AgentCatalog.absolute(".codex/config.toml", home: NSHomeDirectory())
+        return HStack(alignment: .top, spacing: 8) {
+            Toggle("", isOn: Binding(get: { compression == .enabled }, set: {
+                state.setCodexThreadStoreCompression($0)
+            }))
+                .toggleStyle(.checkbox)
+                .controlSize(.mini)
+                .labelsHidden()
+                .fixedSize()
+                .disabled(compression == .unknown || state.isAgentTaskBusy)
+                .accessibilityLabel(l10n.t("agents.codex.compression.title"))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(l10n.t("agents.codex.compression.title"))
+                    .font(.system(size: 12, weight: .medium))
+                Text(l10n.t("agents.codex.compression.detail"))
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if compression == .unknown {
+                    Text(l10n.t("agents.codex.compression.unknown"))
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(Color.warning)
+                }
+            }
+            Spacer(minLength: 8)
+            Button {
+                let url = URL(fileURLWithPath: configPath)
+                NSWorkspace.shared.activateFileViewerSelecting([
+                    FileManager.default.fileExists(atPath: configPath) ? url : url.deletingLastPathComponent()
+                ])
+            } label: {
+                Image(systemName: "folder").font(.system(size: 10))
+            }
+            .buttonStyle(MoleIconButtonStyle(size: 22))
+            .disabled(state.isAgentTaskBusy)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .modifier(ListRowSurface())
     }
 
     private func categoryBinding(for snapshot: CleanupCategory) -> Binding<CleanupCategory> {

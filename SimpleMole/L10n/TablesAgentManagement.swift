@@ -5,7 +5,7 @@ enum L10nAgentManagementTables {
         let en = [
             "agents.manage.delete": "Delete source", "agents.manage.unlink": "Unlink selected",
             "agents.manage.deleteTitle": "Delete selected resources?", "agents.manage.unlinkTitle": "Unlink selected bindings?",
-            "agents.manage.deleteImpact": "Permanently delete the selected local sources and remove their known bindings from every Agent. Running, protected or changed resources are kept.",
+            "agents.manage.deleteImpact": "Move the selected local sources to Trash and remove their known bindings from every Agent. Running, protected or changed resources are kept.",
             "agents.manage.unlinkImpact": "Remove only the selected links or configuration registrations. Resource sources and other Agent bindings remain. Configuration files are backed up before editing.",
             "agents.manage.implicit": "Auto-discovered", "agents.manage.implicitReason": "This Agent reads the shared directory automatically. There is no separate registration to unlink.",
             "agents.manage.linkBinding": "Directory link", "agents.manage.configBinding": "Configuration registration",
@@ -17,9 +17,9 @@ enum L10nAgentManagementTables {
             "agents.manage.empty": "No matching resources", "agents.manage.scope": "Scope: %@"
         ]
         let zh = [
-            "agents.manage.delete": "彻底删除本体", "agents.manage.unlink": "解绑所选",
-            "agents.manage.deleteTitle": "彻底删除所选资源？", "agents.manage.unlinkTitle": "解除所选绑定？",
-            "agents.manage.deleteImpact": "永久删除所选本地本体，并移除所有 Agent 中已识别的绑定。运行中、受保护或已变化的资源会保留。",
+            "agents.manage.delete": "删除本体", "agents.manage.unlink": "解绑所选",
+            "agents.manage.deleteTitle": "删除所选资源？", "agents.manage.unlinkTitle": "解除所选绑定？",
+            "agents.manage.deleteImpact": "将所选本地本体移至废纸篓，并移除所有 Agent 中已识别的绑定。运行中、受保护或已变化的资源会保留。",
             "agents.manage.unlinkImpact": "仅移除所选链接或配置注册，保留资源本体和其它 Agent 的绑定。修改配置前会自动备份。",
             "agents.manage.implicit": "自动发现", "agents.manage.implicitReason": "该 Agent 自动读取共享目录，没有独立注册可供单独解绑。",
             "agents.manage.linkBinding": "目录链接", "agents.manage.configBinding": "配置注册",

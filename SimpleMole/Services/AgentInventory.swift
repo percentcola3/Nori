@@ -66,6 +66,8 @@ struct AgentGroupSummary: Identifiable, Equatable, Sendable {
     let skillIDs: [String]
     let serverIDs: [String]
     let bytes: UInt64
+    var lastActivity: Date? = nil
+    var unused: Bool = false
 }
 
 struct AgentScanReport: Sendable {
@@ -77,6 +79,7 @@ struct AgentScanReport: Sendable {
     /// Catalog recommendations are independent of the user's current selection
     /// and the unselected presentation of an uninstalled Agent's retained data.
     var recommendedCleanupCategoryIDs = Set<UUID>()
+    var codexThreadStoreCompression: AgentCodexFeatureEditor.State? = nil
     var complete = true
 }
 
@@ -117,14 +120,26 @@ enum AgentInventory {
                      presence context: AgentPresenceContext? = nil,
                      includingAgentIDs: Set<String> = [],
                      excludingGlobalCleanupCaches: Bool = false,
-                     onlyAgentIDs: Set<String>? = nil) -> AgentScanReport {
+                     onlyAgentIDs: Set<String>? = nil,
+                     retention: AgentRetentionPreferences = .load(),
+                     now: Date = Date()) -> AgentScanReport {
         var report = AgentScanReport()
         let session = ScanSession(control: control)
         let context = context ?? AgentCatalog.defaultPresenceContext(home: home)
         let whitelist = NativeCore.shared.loadWhitelist(homeDirectory: home)
         let definitions = AgentCatalog.definitions.filter { onlyAgentIDs?.contains($0.id) ?? true }
-        let installed = definitions.filter {
-            AgentCatalog.hasData($0, home: home) || AgentCatalog.isInstalled($0, home: home, presence: context)
+        let installed = definitions.filter { agent in
+            AgentCatalog.hasData(agent, home: home)
+                || AgentCatalog.isInstalled(agent, home: home, presence: context)
+                || AgentCatalog.installationPresence(for: agent) == nil && agent.targets.contains { target in
+                    if case .temporary = target.kind {
+                        return !AgentCatalog.targetPaths(target, home: home).isEmpty
+                    }
+                    return false
+                }
+        }
+        if installed.contains(where: { $0.id == "codex" }) {
+            report.codexThreadStoreCompression = AgentCodexFeatureEditor.threadStoreCompression(home: home)
         }
         let orphanedIDs = Set(installed.filter { AgentCatalog.isOrphaned($0, home: home, presence: context) }
             .map(\.id))
@@ -135,12 +150,13 @@ enum AgentInventory {
             (agent, AgentCatalog.resolve(agent, home: home, presence: context).compactMap { target -> AgentCatalog.ResolvedTarget? in
                 let paths = target.paths.filter {
                     !NativeCore.shared.matchesWhitelist($0, entries: whitelist)
-                        && !(excludingGlobalCleanupCaches && target.tier == .safe
+                        && !(excludingGlobalCleanupCaches && target.tier == .safe && target.temporaryRetention == nil
                              && CleanupRiskPolicy.isCoveredByGlobalCleanup($0, homeDirectory: home))
                 }
                 guard !paths.isEmpty else { return nil }
                 return AgentCatalog.ResolvedTarget(agentID: target.agentID, tier: target.tier,
-                    labelKey: target.labelKey, owners: target.owners, paths: paths)
+                    labelKey: target.labelKey, owners: target.owners, paths: paths,
+                    temporaryRetention: target.temporaryRetention)
             })
         }
         let allRegistrations = scanMCP(agents: AgentCatalog.definitions, home: home, presence: context)
@@ -154,7 +170,8 @@ enum AgentInventory {
         var cacheInputs: [CleanupCategory] = []
         var cacheInputIDs: [String: UUID] = [:]
         for (agentIndex, entry) in discoveredResolved.enumerated() {
-            for (targetIndex, target) in entry.1.enumerated() where target.tier == .safe {
+            for (targetIndex, target) in entry.1.enumerated()
+            where target.tier == .safe && target.temporaryRetention == nil {
                 let input = CleanupCategory(name: target.labelKey, paths: target.paths, bytes: 0,
                     selected: true, source: .aiCache, risk: .safe, disposal: .permanentDelete,
                     applyRoute: .aiTrash, activityGuard: .aiAgent, reasonKey: "agents.reason.rebuildable")
@@ -171,13 +188,17 @@ enum AgentInventory {
         let cacheSizes = (cacheScan?.categories ?? []).reduce(into: [String: UInt64]()) {
             $0.merge($1.pathBytes, uniquingKeysWith: { first, _ in first })
         }
+        var pathActivity = (cacheScan?.categories ?? []).reduce(into: [String: Date]()) {
+            $0.merge($1.pathActivity, uniquingKeysWith: max)
+        }
         let rawResolved = discoveredResolved.enumerated().map { agentIndex, entry in
             (entry.0, entry.1.enumerated().compactMap { targetIndex, target -> AgentCatalog.ResolvedTarget? in
-                guard target.tier == .safe else { return target }
+                guard target.tier == .safe, target.temporaryRetention == nil else { return target }
                 guard let id = cacheInputIDs["\(agentIndex):\(targetIndex)"],
                       let category = cacheCategories[id], !category.paths.isEmpty else { return nil }
                 return AgentCatalog.ResolvedTarget(agentID: target.agentID, tier: target.tier,
-                    labelKey: target.labelKey, owners: target.owners, paths: category.paths)
+                    labelKey: target.labelKey, owners: target.owners, paths: category.paths,
+                    temporaryRetention: target.temporaryRetention)
             })
         }
         // 同一实体只在一个组产生操作项，但守卫保留所有消费者。
@@ -200,7 +221,8 @@ enum AgentInventory {
                 let tier = paths.compactMap { pathTiers[$0] }.max { severity($0) < severity($1) } ?? target.tier
                 let owners = Set(paths.flatMap { Array(pathOwners[$0] ?? []) }).sorted()
                 return AgentCatalog.ResolvedTarget(agentID: target.agentID, tier: tier,
-                    labelKey: target.labelKey, owners: owners, paths: paths)
+                    labelKey: target.labelKey, owners: owners, paths: paths,
+                    temporaryRetention: target.temporaryRetention)
             })
         }
         let allPaths = Array(Set(resolved.flatMap { $0.1.flatMap(\.paths) }).subtracting(cacheSizes.keys)).sorted()
@@ -212,6 +234,7 @@ enum AgentInventory {
         for (path, measurement) in zip(allPaths, measurements) {
             session.remember(path, measurement: measurement, identity: measurementIdentities[path])
             sizes[path] = measurement.bytes
+            if let modified = measurement.newestModified { pathActivity[path] = modified }
             if !measurement.complete { report.complete = false }
         }
 
@@ -230,20 +253,58 @@ enum AgentInventory {
             var merged: [String: CleanupCategory] = [:]
             var order: [String] = []
             for target in targets {
-                let recommended = isDefaultCleanupSelection(target, documented: agent.documented)
-                let selectByDefault = recommended && (!orphanedIDs.contains(agent.id)
-                    || includingAgentIDs.contains(agent.id))
                 let paths = target.paths.filter { (sizes[$0] ?? 0) > 0 }
                 guard !paths.isEmpty else { continue }
+                let retentionClass: AgentRetentionClass?
+                if target.temporaryRetention != nil {
+                    retentionClass = .temporary
+                } else {
+                    retentionClass = target.tier == .review
+                        ? AgentRetentionPolicy.retentionClass(forLabelKey: target.labelKey) : nil
+                }
+                let worktreeStates = target.labelKey == "agents.label.worktrees"
+                    ? Dictionary(uniqueKeysWithValues: paths.map { path in
+                        (path, control.shouldStop ? AgentWorktreeState.unknown
+                            : AgentWorktreeInspector.inspect(path).state)
+                    }) : [:]
+                let retentionBlocked = Set(worktreeStates.compactMap { path, state in
+                    state == .clean || state == .orphaned ? nil : path
+                })
+                let recommendedPaths = defaultCleanupPaths(target, paths: paths,
+                    documented: agent.documented, retentionClass: retentionClass,
+                    retention: retention, agentID: agent.id, activity: pathActivity,
+                    worktreeStates: worktreeStates, now: now)
+                let selectByDefault = orphanedIDs.contains(agent.id)
+                    && !includingAgentIDs.contains(agent.id) ? Set<String>() : recommendedPaths
+                let activity = Dictionary(uniqueKeysWithValues: paths.compactMap { path in
+                    pathActivity[path].map { (path, $0) }
+                })
+                let notes: [String: String]
+                if target.labelKey == "agents.label.worktrees" {
+                    notes = Dictionary(uniqueKeysWithValues: paths.map { path in
+                        let status = localize(worktreeStateKey(worktreeStates[path] ?? .unknown))
+                        let age = activity[path].map { ageNote(modified: $0, now: now, localize: localize) }
+                        return (path, [age, status].compactMap { $0 }.joined(separator: " · "))
+                    })
+                } else if retentionClass != nil {
+                    notes = Dictionary(uniqueKeysWithValues: activity.map { path, date in
+                        (path, ageNote(modified: date, now: now, localize: localize))
+                    })
+                } else {
+                    notes = [:]
+                }
                 let key = target.labelKey + "|" + target.tier.rawValue
+                    + (target.temporaryRetention.map { "|temporary|\(Int($0))" } ?? "")
                 if var existing = merged[key] {
                     for path in paths {
                         existing.appendPath(path, bytes: sizes[path] ?? 0)
-                        // appendPath 会默认勾选 Safe 项；残留类目仍须尊重本次扫描策略。
-                        existing.setPathSelected(path, selected: selectByDefault)
+                        existing.setPathSelected(path, selected: selectByDefault.contains(path))
                     }
+                    existing.pathActivity.merge(activity, uniquingKeysWith: max)
+                    existing.pathNotes.merge(notes, uniquingKeysWith: { first, _ in first })
+                    existing.pathRetentionBlocked.formUnion(retentionBlocked)
                     merged[key] = existing
-                    if recommended { report.recommendedCleanupCategoryIDs.insert(existing.id) }
+                    if !recommendedPaths.isEmpty { report.recommendedCleanupCategoryIDs.insert(existing.id) }
                     continue
                 }
                 order.append(key)
@@ -252,15 +313,20 @@ enum AgentInventory {
                     paths: paths,
                     bytes: paths.reduce(0) { $0 &+ (sizes[$1] ?? 0) },
                     pathBytes: Dictionary(uniqueKeysWithValues: paths.map { ($0, sizes[$0] ?? 0) }),
-                    selected: selectByDefault,
+                    retentionClass: retentionClass, pathActivity: activity, pathNotes: notes,
+                    pathRetentionBlocked: retentionBlocked,
+                    selected: false,
                     source: target.tier == .safe ? .aiCache : .aiSession,
                     risk: risk(for: target.tier),
                     disposal: .permanentDelete,
                     applyRoute: .aiTrash,
                     activityGuard: .aiAgent,
+                    retention: target.temporaryRetention
+                        ?? retentionClass.map { retention.retention(for: $0, agentID: agent.id) } ?? 0,
                     reasonKey: reasonKey(for: target, documented: agent.documented))
+                category = category.selectingPaths(selectByDefault)
                 category.activityOwners = target.owners
-                if recommended { report.recommendedCleanupCategoryIDs.insert(category.id) }
+                if !recommendedPaths.isEmpty { report.recommendedCleanupCategoryIDs.insert(category.id) }
                 merged[key] = category
             }
             let categories = order.compactMap { merged[$0] }.sorted(by: CleanupCategory.sizeDescending)
@@ -268,12 +334,18 @@ enum AgentInventory {
             let serverIDs = report.servers.filter { $0.agentID == agent.id }.map(\.id)
             guard !categories.isEmpty || !skillIDs.isEmpty || !serverIDs.isEmpty else { continue }
             report.categories.append(contentsOf: categories)
+            let lastActivity = categories.flatMap { $0.pathActivity.values }.max()
+            let orphaned = orphanedIDs.contains(agent.id)
             report.groups.append(AgentGroupSummary(
                 id: agent.id, name: agent.name, documented: agent.documented,
-                orphaned: orphanedIDs.contains(agent.id),
+                orphaned: orphaned,
                 categoryIDs: categories.map(\.id),
                 skillIDs: skillIDs, serverIDs: serverIDs,
-                bytes: categories.reduce(0) { $0 &+ $1.bytes }))
+                bytes: categories.reduce(0) { $0 &+ $1.bytes },
+                lastActivity: lastActivity,
+                unused: !orphaned && lastActivity.map {
+                    now.timeIntervalSince($0) >= AgentRetentionPreferences.unusedToolThreshold
+                } == true))
         }
         let sharedSkills = report.skills.filter { $0.agentID == "shared" }
         if !sharedSkills.isEmpty, !report.groups.contains(where: { $0.id == "shared" }) {
@@ -302,15 +374,50 @@ enum AgentInventory {
     }
 
     /// Default selection is a cleanup recommendation, not a lower risk tier.
-    /// Checkpoints and reviewed logs/cache still retain their owner and identity
-    /// guards. Live conversations, state, credentials and installations are
-    /// left for an explicit selection.
-    private static func isDefaultCleanupSelection(_ target: AgentCatalog.ResolvedTarget,
-                                                   documented: Bool) -> Bool {
-        if target.tier == .safe { return true }
-        guard documented, target.tier == .review else { return false }
-        return ["agents.label.cache", "agents.label.logs", "agents.label.logDatabase",
-                "agents.label.tempFiles", "agents.label.checkpoints"].contains(target.labelKey)
+    /// Retention-managed history and reviewed logs/cache still retain their owner
+    /// and identity guards. State, credentials and installations are left for an
+    /// explicit selection.
+    private static func defaultCleanupPaths(_ target: AgentCatalog.ResolvedTarget,
+                                            paths: [String], documented: Bool,
+                                            retentionClass: AgentRetentionClass?,
+                                            retention: AgentRetentionPreferences,
+                                            agentID: String,
+                                            activity: [String: Date],
+                                            worktreeStates: [String: AgentWorktreeState],
+                                            now: Date) -> Set<String> {
+        if target.tier == .safe {
+            guard let temporaryRetention = target.temporaryRetention else { return Set(paths) }
+            return Set(paths.filter {
+                CleanupAgePolicy.isStale(activity[$0], now: now, retention: temporaryRetention)
+            })
+        }
+        guard documented, target.tier == .review else { return [] }
+        if target.labelKey == "agents.label.worktrees", let retentionClass {
+            return Set(paths.filter {
+                let state = worktreeStates[$0] ?? .unknown
+                return (state == .clean || state == .orphaned)
+                    && retention.isExpired(retentionClass, agentID: agentID, modified: activity[$0], now: now)
+            })
+        }
+        if let retentionClass {
+            return Set(paths.filter {
+                retention.isExpired(retentionClass, agentID: agentID, modified: activity[$0], now: now)
+            })
+        }
+        guard ["agents.label.cache", "agents.label.logs", "agents.label.logDatabase",
+               "agents.label.tempFiles", "agents.label.checkpoints"].contains(target.labelKey) else { return [] }
+        return Set(paths)
+    }
+
+    private static func ageNote(modified: Date, now: Date,
+                                localize: (String) -> String) -> String {
+        let days = Int(max(0, now.timeIntervalSince(modified)) / (24 * 3600))
+        return days < 1 ? localize("agents.note.today")
+            : String(format: localize("agents.note.age"), days)
+    }
+
+    private static func worktreeStateKey(_ state: AgentWorktreeState) -> String {
+        "agents.worktree." + state.rawValue
     }
 
     private static func reasonKey(for target: AgentCatalog.ResolvedTarget,
@@ -318,10 +425,15 @@ enum AgentInventory {
         guard documented else { return "agents.reason.undocumented" }
         switch target.tier {
         case .safe:
+            if target.temporaryRetention != nil { return "agents.reason.temporary" }
             return target.labelKey == "agents.label.oldVersions"
                 || target.labelKey == "agents.label.embeddedAgentVersions"
+                || target.labelKey == "agents.label.obsoleteExtensions"
                 ? "agents.reason.oldVersion" : "agents.reason.rebuildable"
-        case .review: return "agents.reason.review"
+        case .review:
+            if target.labelKey == "agents.label.worktrees" { return "agents.reason.worktree" }
+            return AgentRetentionPolicy.retentionClass(forLabelKey: target.labelKey) == nil
+                ? "agents.reason.review" : "agents.reason.retention"
         case .showOnly: return "agents.reason.showOnly"
         }
     }

@@ -67,6 +67,7 @@ struct SettingsTabView: View {
             VStack(alignment: .leading, spacing: 18) {
                 pagesSection
                 islandSection
+                awakeSection
                 maintenanceSection
                 generalSection
                 UpdateSettingsView(updater: .shared)
@@ -265,6 +266,51 @@ struct SettingsTabView: View {
         }
         .buttonStyle(.plain)
         .disabled(isLastRemaining)
+    }
+
+    private var awakeSection: some View {
+        SettingsSection(title: l10n.t("awake.title")) {
+            SettingsRow(divider: true) {
+                AwakeSessionRow(state: state)
+            }
+            SettingsRow(divider: true) {
+                Toggle(l10n.t("awake.settings.display"), isOn: Binding(
+                    get: { state.awakePreferences.defaultMode == .systemAndDisplay },
+                    set: { state.setAwakeDefaultMode($0 ? .systemAndDisplay : .systemOnly) }))
+                    .toggleStyle(MoleSwitchToggleStyle())
+                    .controlSize(.small)
+                    .tint(Color.moleAccentText)
+                    .font(.system(size: 12))
+                    .help(l10n.t("awake.settings.display.hint"))
+            }
+            SettingsRow(divider: true) {
+                HStack(spacing: 8) {
+                    Text(l10n.t("awake.settings.batteryFloor"))
+                        .font(.system(size: 12))
+                    Spacer(minLength: 8)
+                    Picker(l10n.t("awake.settings.batteryFloor"), selection: Binding(
+                        get: { state.awakePreferences.batteryFloorPercent },
+                        set: { state.setAwakeBatteryFloor($0) })) {
+                        Text(l10n.t("awake.settings.off")).tag(0)
+                        ForEach([5, 10, 15, 20, 30], id: \.self) { percent in
+                            Text("\(percent)%").tag(percent)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .controlSize(.small)
+                }
+            }
+            SettingsRow {
+                Toggle(l10n.t("awake.settings.thermal"), isOn: Binding(
+                    get: { state.awakePreferences.endAtCriticalThermal },
+                    set: { state.setAwakeThermalProtection($0) }))
+                    .toggleStyle(MoleSwitchToggleStyle())
+                    .controlSize(.small)
+                    .tint(Color.moleAccentText)
+                    .font(.system(size: 12))
+            }
+        }
     }
 
     // MARK: 截图

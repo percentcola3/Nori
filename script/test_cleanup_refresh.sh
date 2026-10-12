@@ -5,6 +5,7 @@ TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-refresh-tests.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 swiftc -module-cache-path "$TEST_DIR/cache" \
     "$ROOT_DIR/SimpleMole/Models.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \

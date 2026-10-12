@@ -988,7 +988,7 @@ extension AppState {
                 let agentOutcome = agentLeftovers.isEmpty
                     ? AgentCleanupExecutor.Outcome(summary: .init(removed: 0, skipped: 0, failed: 0, messages: []), refused: 0)
                     : AgentCleanupExecutor.execute(agentLeftovers, running: agentSnapshot,
-                                                   home: home, permanent: permanently,
+                                                   home: home,
                                                    onProgress: { done, _, path in
                                                        onProgress?(done, routeUnits, path)
                                                    })

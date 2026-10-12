@@ -587,6 +587,11 @@ struct CategoryRowView: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                             Spacer(minLength: 8)
+                            if let note = category.pathNotes[path] {
+                                Text(note)
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.tertiary)
+                            }
                             if let bytes = category.pathBytes[path], bytes > 0 {
                                 Text(ByteFormat.format(bytes))
                                     .font(.system(size: 9).monospacedDigit())

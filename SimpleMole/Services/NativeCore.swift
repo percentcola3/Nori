@@ -442,8 +442,11 @@ final class NativeCore: @unchecked Sendable {
                 let sizes = Dictionary(uniqueKeysWithValues: indices.map {
                     (candidates[$0].path, measurements[$0].bytes)
                 })
+                let activity = Dictionary(uniqueKeysWithValues: indices.compactMap { index in
+                    measurements[index].newestModified.map { (candidates[index].path, $0) }
+                })
                 var category = CleanupCategory(name: first.name, paths: indices.map { candidates[$0].path },
-                    bytes: sizes.values.reduce(0, &+), pathBytes: sizes,
+                    bytes: sizes.values.reduce(0, &+), pathBytes: sizes, pathActivity: activity,
                     selected: first.policy.risk == .safe
                         && !CleanupCategory.reviewOnlyReasonKeys.contains(first.policy.reasonKey),
                     source: first.policy.source, risk: first.policy.risk,
@@ -872,9 +875,12 @@ final class NativeCore: @unchecked Sendable {
             guard !entries.isEmpty else { continue }
             let sizes = Dictionary(entries.map { ($0.path, $0.measurement.bytes) },
                                    uniquingKeysWith: { first, _ in first })
+            let activity = Dictionary(entries.compactMap { entry in
+                entry.measurement.newestModified.map { (entry.path, $0) }
+            }, uniquingKeysWith: max)
             var refreshed = CleanupCategory(id: category.id, name: category.name,
                 paths: entries.map(\.path), bytes: sizes.values.reduce(0, &+), pathBytes: sizes,
-                selected: false, expanded: category.expanded, source: category.source,
+                pathActivity: activity, selected: false, expanded: category.expanded, source: category.source,
                 risk: category.risk, disposal: category.disposal, applyRoute: category.applyRoute,
                 activityGuard: category.activityGuard, retention: category.retention,
                 reasonKey: category.reasonKey)

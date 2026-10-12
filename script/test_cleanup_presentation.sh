@@ -21,6 +21,7 @@ mkdir -p "$TEST_DIR/sources"
 CLEANUP_PRESENTATION_SOURCES=(
     "$ROOT_DIR"/SimpleMole/L10n/*.swift
     "$ROOT_DIR/SimpleMole/Models.swift"
+    "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift"
     "$ROOT_DIR/SimpleMole/AppState+TaskActivity.swift"
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift"
@@ -28,6 +29,7 @@ CLEANUP_PRESENTATION_SOURCES=(
     "$ROOT_DIR/SimpleMole/Services/CleanupTaskProgress.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift"
+    "$ROOT_DIR/SimpleMole/Services/AwakeSessionController.swift"
     "$ROOT_DIR/SimpleMole/Views/Theme.swift"
     "$ROOT_DIR/SimpleMole/Views/Components.swift"
     "$ROOT_DIR/SimpleMole/Views/LiquidPresentation.swift"
@@ -43,7 +45,7 @@ CLEANUP_PRESENTATION_SOURCES=(
 )
 cp "${CLEANUP_PRESENTATION_SOURCES[@]}" "$TEST_DIR/sources/"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework SwiftUI -framework WebKit \
+    -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework SwiftUI -framework WebKit -framework IOKit \
     "$TEST_DIR/sources/"*.swift \
     -o "$FIXTURE_APP/Contents/MacOS/CleanupPresentationTests"
 "$FIXTURE_APP/Contents/MacOS/CleanupPresentationTests"

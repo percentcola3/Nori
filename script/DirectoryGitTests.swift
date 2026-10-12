@@ -172,9 +172,13 @@ struct DirectoryGitTests {
         try await git(["config", "rebase.autoStash", "true"], at: repository)
         try await git(["config", "merge.autoStash", "true"], at: repository)
         try await git(["config", "--", "branch.main.mergeOptions", "--squash"], at: repository)
+        try await git(["fetch", "origin"], at: repository)
+        let behind = try await service.snapshot(at: repository)
+        try expect(behind.aheadCount == 0 && behind.behindCount == 1, "Report fetched upstream divergence")
         try await service.pull(at: repository)
         let fastForward = try await service.snapshot(at: repository)
         try expect(fastForward.upstream == "origin/main" && !fastForward.isDirty, "Fast-forward follows upstream")
+        try expect(fastForward.aheadCount == 0 && fastForward.behindCount == 0, "Sync resets upstream divergence")
         try expect(fastForward.head == (try await git(["rev-parse", "HEAD"], at: writer)), "Fast-forward receives remote commit")
         try expect(try await git(["diff", "--cached", "--name-only"], at: repository) == "", "Squash configuration cannot leave staged changes instead of advancing HEAD")
         try expect(try await git(["stash", "list"], at: repository) == "", "No automatic stash")
@@ -229,6 +233,8 @@ struct DirectoryGitTests {
         try expect(try await git(["rev-parse", "HEAD"], at: repository) == beforeDivergence, "Divergence preserves local commit")
         try expect(try String(contentsOf: repository.appendingPathComponent("remote.txt"), encoding: .utf8) == "remote update\n", "Divergence preserves files")
         try expect(try await git(["status", "--porcelain"], at: repository) == "", "Divergence leaves worktree clean")
+        let divergence = try await service.snapshot(at: repository)
+        try expect(divergence.aheadCount == 1 && divergence.behindCount == 1, "Report both sides of upstream divergence")
         try expect(!fm.fileExists(atPath: gitDirectory.appendingPathComponent("MERGE_HEAD").path), "Divergence starts no merge")
 
         let hooks = fixture.appendingPathComponent("hooks")
@@ -276,6 +282,24 @@ struct DirectoryGitTests {
         try await Task.sleep(nanoseconds: 100_000_000)
         task.cancel()
         try await fail(.cancelled) { _ = try await task.value }
+
+        let readQueue = DirectoryGitReadQueue(maximumReads: 1)
+        let runningRead = Task {
+            try await readQueue.snapshot(at: repository,
+                using: DirectoryGitService(executable: sleeper.path, environment: environment))
+        }
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let queuedRead = Task { try await readQueue.snapshot(at: repository, using: service) }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        queuedRead.cancel()
+        do {
+            _ = try await queuedRead.value
+            throw TestFailure(description: "Cancelled queued read must not execute")
+        } catch is CancellationError { checks += 1 }
+        runningRead.cancel()
+        try await fail(.cancelled) { _ = try await runningRead.value }
+        let afterCancellation = try await readQueue.snapshot(at: repository, using: service)
+        try expect(afterCancellation.root.path == repository.path, "Cancelled reads release the shared read slot")
 
         let childSource = fixture.appendingPathComponent("child-source")
         let parentRepository = fixture.appendingPathComponent("parent-repository")

@@ -139,6 +139,29 @@ enum AgentCleanupExecutor {
                     messages.append("Kept Agent resource because Skill registrations could not be verified: " + path)
                     continue
                 }
+                if category.reasonKey == "agents.reason.worktree" {
+                    let status = AgentWorktreeInspector.inspect(path)
+                    guard status.state == .clean || status.state == .orphaned else {
+                        refused += 1
+                        messages.append("Kept worktree because it has uncommitted or unmerged work: " + path)
+                        continue
+                    }
+                }
+                if category.retention > 0, category.retentionClass != nil {
+                    let measurement = CleanupScanWorker.measure(path, control: CleanupScanControl(
+                        mode: .deep, totalBudget: 10, directoryBudget: 10))
+                    guard measurement.complete else {
+                        refused += 1
+                        messages.append("Kept Agent resource because its activity could not be re-verified: " + path)
+                        continue
+                    }
+                    guard CleanupAgePolicy.isStale(measurement.newestModified,
+                                                   retention: category.retention) else {
+                        refused += 1
+                        messages.append("Kept Agent resource because it became active again after the scan: " + path)
+                        continue
+                    }
+                }
                 let owners = category.activityOwners + freshTargets.filter { $0.paths.contains(path) }.flatMap(\.owners)
                 let dependencies = categoryDependencies(paths: [path], owners: owners,
                     links: links, declarations: skillScan.registrations, servers: servers,
@@ -201,8 +224,8 @@ enum AgentCleanupExecutor {
     static func execute(_ requested: [CleanupCategory],
                         running snapshot: RunningApplicationSnapshot,
                         home: String,
-                        permanent: Bool = false,
                         presence context: AgentPresenceContext? = nil,
+                        trashHandler: ((URL) throws -> Void)? = nil,
                         skills: [AgentSkill] = [],
                         installations: [AgentMCPInstallation] = [],
                         servers: [AgentMCPServer] = [],
@@ -332,14 +355,25 @@ enum AgentCleanupExecutor {
             progress.complete(path: path)
         }
         var summaries: [NativeCore.ApplySummary] = []
-        if !plan.items.isEmpty {
+        let permanentPaths = Set(categories.filter { $0.risk == .safe }.flatMap { category in
+            category.paths.filter(category.isPathSelected)
+        })
+        let permanentItems = plan.items.filter { permanentPaths.contains($0.record) }
+        let trashItems = plan.items.filter { !permanentPaths.contains($0.record) }
+        func apply(_ items: [DeletionPlan.Item], permanent: Bool) {
+            guard !items.isEmpty else { return }
+            let records = Set(items.map(\.record))
+            let families = plan.families.filter { !$0.allSatisfy { !records.contains($0) } }
             summaries.append(NativeCore.shared.applyCleanup(
-                items: plan.items, permanent: permanent, homeDirectory: home,
-                verifiedTargets: plan.verified, atomicFamilies: plan.families,
-                liveCleanupTargets: plan.liveTargets, onProgress: { completed, _, path in
+                items: items, permanent: permanent, homeDirectory: home,
+                verifiedTargets: plan.verified.intersection(records), atomicFamilies: families,
+                liveCleanupTargets: permanent ? plan.liveTargets.intersection(records) : [],
+                trashHandler: permanent ? nil : trashHandler, onProgress: { completed, _, path in
                     if completed > 0 { progress.complete(path: path) }
                 }, onCurrentFile: { progress.current(path: $0) }))
         }
+        apply(permanentItems, permanent: true)
+        apply(trashItems, permanent: false)
         var removedPaths = summaries.reduce(into: Set<String>()) { $0.formUnion($1.removedPaths) }
         var removedInstallationIDs = Set(knownInstallations.filter { body in
             removedPaths.contains { body == $0 || body.hasPrefix($0 + "/") }
@@ -380,8 +414,9 @@ enum AgentCleanupExecutor {
             let launchers = launchersByInstallation[installation.path] ?? []
             let summary = NativeCore.shared.applyCleanup(
                 items: [.init(record: installation.path, identity: installation.identity)],
-                permanent: permanent, homeDirectory: home, allowedRoots: [installation.path],
-                verifiedTargets: [installation.path], onCurrentFile: { progress.current(path: $0) })
+                permanent: false, homeDirectory: home, allowedRoots: [installation.path],
+                verifiedTargets: [installation.path], trashHandler: trashHandler,
+                onCurrentFile: { progress.current(path: $0) })
             summaries.append(summary)
             if summary.removedPaths.contains(installation.path) {
                 removedPaths.insert(installation.path)
@@ -458,8 +493,9 @@ enum AgentCleanupExecutor {
             }
             summaries.append(NativeCore.shared.applyCleanup(
                 items: [.init(record: server.configPath, identity: server.configIdentity)],
-                permanent: permanent, homeDirectory: home, verifiedTargets: [server.configPath],
-                finalValidation: { AgentMCPConfigEditor.fingerprint(at: $0) == server.configFingerprint }))
+                permanent: false, homeDirectory: home, verifiedTargets: [server.configPath],
+                finalValidation: { AgentMCPConfigEditor.fingerprint(at: $0) == server.configFingerprint },
+                trashHandler: trashHandler))
         }
         let editable = registrations.filter { !resetConfigs.contains($0.configPath) }
         let requests = editable.compactMap { server -> AgentMCPConfigEditor.Request? in

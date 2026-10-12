@@ -26,6 +26,7 @@ trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 mkdir -p "$TEST_DIR/sources"
 AGENT_CLI_SOURCES=(
     "$ROOT_DIR/SimpleMole/Models.swift"
+    "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift"
@@ -40,11 +41,13 @@ AGENT_CLI_SOURCES=(
     "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
     "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift"
+    "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentProjectStorage.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentCLIService.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentInventory.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentMCPConfigEditor.swift"
+    "$ROOT_DIR/SimpleMole/Services/AgentCodexFeatureEditor.swift"
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift"
     "$CLI_TEST_SOURCE"
 )

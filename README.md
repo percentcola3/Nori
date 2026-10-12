@@ -76,12 +76,13 @@ AI tools leave more than caches behind. Nori groups each tool's local data so yo
 
 - **Storage breakdown**: installation bodies are separate from associated data; data is split into garbage and preserved usage. Agent and Software pages share these measurements, count shared paths once, and mark partial results. Selected data shows its own deletion amount.
 - **Rebuildable caches**: old CLI versions, desktop/update/compile caches, selected by default.
-- **Persistent data**: sessions, history, memories, worktrees, VM data and credentials require manual selection with risk notes. Other review items follow their displayed recommendations.
+- **Per-Agent retention**: each Agent has independent conversation and artifact policies, with 90 days as the default or an option to never clean. Expired items are recommended for review; changing a policy does not delete files. Worktrees are checked for uncommitted and unmerged work.
+- **Persistent data**: sessions and history move to Trash when cleaned; safe rebuildable caches are permanently deleted. Memories, VM data, credentials and unknown data require manual selection with risk notes.
 - **Shared resources**: Skills and MCP registrations distinguish unlinking from deleting shared files.
 
 Uninstall a selected CLI or desktop installation directly on the Agent page. Its identified Agent data is offered separately after successful removal; running consumers require confirmation before closing. Leftovers from uninstalled Agents remain visible and unselected.
 
-Supports Claude Code, Cursor, Codex, GitHub Copilot CLI, Gemini CLI, OpenCode, Grok CLI, Devin, Windsurf, Zed, Warp, and more.
+Supports 29 Agent and service definitions, including Claude Code, Cursor, Codex, GitHub Copilot CLI, Gemini CLI, OpenCode, Grok CLI, Devin, Windsurf, Zed, Warp, Aider, Goose, Cline, Continue, and Playwright. Codex's experimental thread-store compression can be configured locally with a backed-up config edit.
 
 ![AI agent cleanup](docs/screenshots/en/agents.png)
 
@@ -100,6 +101,11 @@ The Directory tab is a Finder-plus entry point:
 - Hidden files shown by default, with per-folder display state remembered.
 - Create, copy, cut, paste, rename, move to Trash, drag-and-drop, and open in Finder.
 - Filter current folder or search the global Spotlight filename index; a local index adds dotfiles and other chosen directories.
+- Git repository rows show the current branch, ahead/behind counts, and a sync button. Click the branch name to switch local branches; sync pulls from upstream using fast-forward updates. Counts reflect the last fetch, and unsafe operations are blocked.
+
+## Keep awake
+
+Enable continuous keep-awake in Settings, with an option to keep the display on. It runs until switched off, Nori exits, or the configured low-battery or critical-temperature protection stops it. Closing the lid still allows sleep.
 
 ## Clipboard history
 

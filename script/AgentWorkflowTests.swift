@@ -1,5 +1,27 @@
 import Foundation
 
+// Production preference writes stay in memory in this workflow executable.
+final class UserDefaults: @unchecked Sendable {
+    static let standard = UserDefaults()
+    private let lock = NSLock()
+    private var values: [String: Data] = [:]
+    func data(forKey key: String) -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        return values[key]
+    }
+    func set(_ value: Any?, forKey key: String) {
+        lock.lock(); defer { lock.unlock() }
+        values[key] = value as? Data
+    }
+}
+
+enum AgentCodexFeatureEditor {
+    enum State: Equatable, Sendable { case enabled, disabled, unknown }
+    static func setThreadStoreCompression(_ enabled: Bool, home: String) -> Result<Void, Error> {
+        .success(())
+    }
+}
+
 // Override the imported Foundation convenience function for this executable.
 // Every service below additionally rejects any other home, including the real one.
 private let workflowHome = "/nori-agent-workflow-in-memory"
@@ -80,14 +102,23 @@ struct AgentScanReport {
     var skills: [AgentSkill] = []
     var servers: [AgentMCPServer] = []
     var installations: [AgentMCPInstallation] = []
+    var codexThreadStoreCompression: AgentCodexFeatureEditor.State? = nil
     var complete = true
 }
 
 // New read-only presentation dependencies have their own production service
 // tests. This legacy lifecycle fixture injects their results without linking
 // application enumeration or storage inspection against the user's computer.
+private final class AgentPresentationProbe: @unchecked Sendable {
+    static let shared = AgentPresentationProbe()
+    private let lock = NSLock()
+    private var builds = 0
+    func builtStorageTotals() { lock.lock(); builds += 1; lock.unlock() }
+    var storageTotalBuilds: Int { lock.lock(); defer { lock.unlock() }; return builds }
+}
+
 struct AgentStorageFootprint: Equatable, Sendable {
-    struct Totals {
+    struct Totals: Sendable {
         let identifiedDataBytes: UInt64
         let reclaimableBytes: UInt64
         let preservedBytes: UInt64
@@ -95,7 +126,8 @@ struct AgentStorageFootprint: Equatable, Sendable {
 
     static func build(report: AgentScanReport, cli: [AgentCLIInstallation]) -> [String: Self] { [:] }
     static func totals(_ footprints: [Self]) -> Totals {
-        .init(identifiedDataBytes: 0, reclaimableBytes: 0, preservedBytes: 0)
+        AgentPresentationProbe.shared.builtStorageTotals()
+        return .init(identifiedDataBytes: 0, reclaimableBytes: 0, preservedBytes: 0)
     }
 }
 struct AgentInstallationSize: Sendable {
@@ -274,11 +306,12 @@ enum AgentCleanupExecutor {
             owners: paths.isEmpty && skills.isEmpty && installations.isEmpty && servers.isEmpty ? [] : owners)
     }
     static func execute(_ categories: [CleanupCategory], running: RunningApplicationSnapshot,
-                        home: String, permanent: Bool, skills: [AgentSkill] = [],
+                        home: String, trashHandler: ((URL) throws -> Void)? = nil,
+                        skills: [AgentSkill] = [],
                         installations: [AgentMCPInstallation] = [], servers: [AgentMCPServer] = [],
                         removingAgentID: String? = nil, removingAgentIDs: Set<String> = [],
                         onProgress: ((Int, Int, String) -> Void)? = nil) -> Outcome {
-        precondition(home == workflowHome && permanent)
+        precondition(home == workflowHome)
         let fixture = WorkflowFixture.current
         fixture.recordCleanup(categories, skills: skills, servers: servers,
                               installations: installations, removingAgentID: removingAgentID ?? removingAgentIDs.sorted().first)
@@ -321,7 +354,9 @@ enum AgentInventory {
     static func scan(home: String, control: CleanupScanControl, localize: (String) -> String,
                      includingAgentIDs: Set<String> = [],
                      excludingGlobalCleanupCaches: Bool = false,
-                     onlyAgentIDs: Set<String>? = nil) -> AgentScanReport {
+                     onlyAgentIDs: Set<String>? = nil,
+                     retention: AgentRetentionPreferences = .load(),
+                     now: Date = Date()) -> AgentScanReport {
         precondition(home == workflowHome, "Workflow test attempted to scan a real home")
         let fixture = WorkflowFixture.current
         fixture.recordScan(includingAgentIDs)
@@ -365,23 +400,49 @@ final class AppState {
         let onConfirm: () -> Void
     }
 
-    var agentCategories: [CleanupCategory] = []
-    var agentGroups: [AgentGroupSummary] = []
-    var agentSkills: [AgentSkill] = []
-    var agentServers: [AgentMCPServer] = []
-    var agentMCPInstallations: [AgentMCPInstallation] = []
-    var agentCLIInstallations: [AgentCLIInstallation] = []
-    var agentStorageFootprints: [String: AgentStorageFootprint] = [:]
+    var agentCategories: [CleanupCategory] = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    var agentRetentionPreferences = AgentRetentionPreferences()
+    var agentCodexThreadStoreCompression: AgentCodexFeatureEditor.State?
+    var agentGroups: [AgentGroupSummary] = [] {
+        didSet { agentSelectionSummaryCache = nil; agentStorageTotalsCache = [:] }
+    }
+    var agentSkills: [AgentSkill] = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    var agentServers: [AgentMCPServer] = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    var agentMCPInstallations: [AgentMCPInstallation] = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    var agentCLIInstallations: [AgentCLIInstallation] = [] {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    var agentStorageFootprints: [String: AgentStorageFootprint] = [:] {
+        didSet { agentStorageTotalsCache = [:] }
+    }
+    var agentSelectionSummaryCache: (count: Int, bytes: UInt64)?
+    var agentStorageTotalsCache: [String: AgentStorageFootprint.Totals] = [:]
     var agentCLIBodySizes: [String: AgentInstallationSize] = [:]
     var agentApplications: [String: [UninstallApp]] = [:]
     var agentProgramBusyID: String?
     var confirmation: Confirmation?
     let l10n = L10n.shared
-    var agentSelectedSkills = Set<String>()
+    var agentSelectedSkills = Set<String>() {
+        didSet { agentSelectionSummaryCache = nil }
+    }
     var agentSelectedSkillRegistrations = Set<String>()
-    var agentSelectedServers = Set<String>()
-    var agentSelectedMCPInstallations = Set<String>()
-    var agentSelectedCLIInstallations = Set<String>()
+    var agentSelectedServers = Set<String>() {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    var agentSelectedMCPInstallations = Set<String>() {
+        didSet { agentSelectionSummaryCache = nil }
+    }
+    var agentSelectedCLIInstallations = Set<String>() {
+        didSet { agentSelectionSummaryCache = nil }
+    }
     var agentScanning = false
     var agentScanCurrentPath = ""
     var agentScanControl: CleanupScanControl?
@@ -551,6 +612,9 @@ struct AgentWorkflowTests {
     }
 
     @MainActor static func main() async throws {
+        perAgentRetentionStaysScoped()
+        presentationSummariesStayCurrent()
+        largeInventoryPresentationReusesSummaries()
         try await scanKeepsInventoryRecommendations(complete: true)
         try await scanKeepsInventoryRecommendations(complete: false)
         try await cancelledScan(emptyReport: false)
@@ -591,6 +655,149 @@ struct AgentWorkflowTests {
         try await associatedDataMutationPreflight(kind: "idle")
         try await associatedDataMutationGuards()
         print("Agent workflow: inline prerequisites/errors, frozen and proven CLI retries, owner/runtime guards, partial refresh, CLI + data progress, per-attempt reclaimed bytes, success without popups passed")
+    }
+
+    @MainActor private static func perAgentRetentionStaysScoped() {
+        let state = AppState()
+        let old = Date().addingTimeInterval(-100 * 24 * 3600)
+        let recent = Date().addingTimeInterval(-10 * 24 * 3600)
+        let future = Date().addingTimeInterval(3600)
+        func history(_ name: String) -> CleanupCategory {
+            CleanupCategory(name: name, paths: [name + "/old", name + "/recent", name + "/future"],
+                bytes: 3, pathIdentities: [:], retentionClass: .conversations,
+                pathActivity: [name + "/old": old, name + "/recent": recent, name + "/future": future],
+                selected: false, risk: .warning, retention: 90 * 24 * 3600)
+                .selectingPaths([name + "/old"])
+        }
+        let codex = history("codex"), cursor = history("cursor")
+        let orphan = history("orphan").selectingPaths([])
+        let worktrees = CleanupCategory(name: "worktrees", paths: ["clean", "dirty"], bytes: 2,
+            pathIdentities: [:], retentionClass: .artifacts, pathActivity: ["clean": recent, "dirty": old],
+            pathRetentionBlocked: ["dirty"], selected: false, risk: .warning,
+            retention: 90 * 24 * 3600, reasonKey: "agents.reason.worktree")
+        func group(_ id: String, categories: [CleanupCategory], orphaned: Bool = false) -> AgentGroupSummary {
+            .init(id: id, name: id, documented: true, orphaned: orphaned,
+                categoryIDs: categories.map(\.id), skillIDs: [], serverIDs: [], bytes: 0)
+        }
+        state.agentCategories = [codex, cursor, worktrees, orphan]
+        state.agentGroups = [group("codex", categories: [codex, worktrees]),
+                             group("cursor", categories: [cursor]),
+                             group("orphan", categories: [orphan], orphaned: true)]
+        precondition(state.agentSelectedCount == 2)
+        state.setAgentRetention(.days(7), for: .conversations, agentID: "codex")
+        precondition(state.agentCategories[0].isPathSelected("codex/old")
+                     && state.agentCategories[0].isPathSelected("codex/recent")
+                     && !state.agentCategories[0].isPathSelected("codex/future")
+                     && state.agentCategories[0].retention == 7 * 24 * 3600
+                     && state.agentCategories[1] == cursor && state.agentCategories[2] == worktrees
+                     && state.agentCategories[3] == orphan && state.agentSelectedCount == 3,
+                     "Per-Agent policy changed another Agent/class or lost selection cache invalidation")
+        state.setAgentRetention(.never, for: .conversations, agentID: "codex")
+        precondition(state.agentCategories[0].selectedPathCount == 0
+                     && state.agentCategories[0].retention == 0 && state.agentCategories[1] == cursor,
+                     "Never-clean affected another Agent's history")
+        state.setAgentRetention(.days(7), for: .artifacts, agentID: "codex")
+        precondition(state.agentCategories[2].isPathSelected("clean")
+                     && !state.agentCategories[2].isPathSelected("dirty"),
+                     "Policy change bypassed the scanned worktree guard")
+        state.setAgentRetention(.days(7), for: .conversations, agentID: "orphan")
+        precondition(state.agentCategories[3].selectedPathCount == 0
+                     && state.agentCategories[3].retention == 7 * 24 * 3600,
+                     "Policy change automatically selected orphaned data")
+        let saved = AgentRetentionPreferences.load()
+        precondition(saved == state.agentRetentionPreferences
+                     && saved.rule(for: .conversations, agentID: "codex") == .never
+                     && saved.rule(for: .conversations, agentID: "cursor") == .days(90)
+                     && saved.rule(for: .artifacts, agentID: "codex") == .days(7),
+                     "Per-Agent changes were not persisted independently")
+        let beforeBusy = state.agentCategories
+        state.agentScanning = true
+        state.setAgentRetention(.days(365), for: .conversations, agentID: "codex")
+        precondition(state.agentCategories == beforeBusy && state.agentRetentionPreferences == saved,
+                     "Policy changed during a scan and invalidated its frozen preferences")
+    }
+
+    @MainActor private static func presentationSummariesStayCurrent() {
+        let (state, _) = prepare()
+        func expect(_ count: Int, _ bytes: UInt64) {
+            precondition(state.agentSelectedCount == count && state.agentSelectedBytes == bytes,
+                         "Selection presentation became stale after changing a dependency")
+        }
+        expect(4, 3)
+        state.agentSelectedSkills = []
+        expect(3, 2)
+        state.agentSkills[0] = AgentSkill(path: "\(workflowHome)/skill", name: "Skill", agentID: "fixture",
+            bytes: 9, identity: "fixture-identity", linked: false)
+        state.agentSelectedSkills = [state.agentSkills[0].path]
+        expect(4, 11)
+        state.agentSelectedServers = []
+        expect(3, 11)
+        state.agentSelectedServers = ["server"]
+        state.agentServers = []
+        expect(3, 11)
+        state.agentSelectedMCPInstallations = []
+        expect(2, 10)
+        state.agentSelectedMCPInstallations = ["installation"]
+        state.agentMCPInstallations[0] = AgentMCPInstallation(id: "installation", name: "MCP body",
+            path: "\(workflowHome)/mcp", bytes: 7, identity: "fixture-identity")
+        expect(3, 17)
+        state.agentCategories[0].setPathSelected("\(workflowHome)/untouched", selected: true)
+        expect(4, 18)
+        state.agentSelectedCLIInstallations = ["cli"]
+        expect(5, 18)
+        // CLI scope supplies categories and skills even when manual checks are empty.
+        state.agentCategories[0].selected = false
+        state.agentSelectedSkills = []
+        expect(5, 18)
+        state.agentGroups = []
+        expect(3, 16)
+        state.agentCLIInstallations = []
+        expect(1, 7)
+        state.agentMCPInstallations = []
+        expect(0, 0)
+    }
+
+    @MainActor private static func largeInventoryPresentationReusesSummaries() {
+        let (state, _) = prepare()
+        let paths = (0..<30_000).map { "\(workflowHome)/large-inventory/\($0)/history.json" }
+        state.agentCategories = [CleanupCategory(name: "Large fixture", paths: paths, bytes: 30_000,
+            pathBytes: Dictionary(uniqueKeysWithValues: paths.map { ($0, UInt64(1)) }),
+            pathIdentities: [:], selected: true, risk: .safe)]
+        state.agentStorageFootprints = ["fixture": AgentStorageFootprint()]
+        precondition(state.agentSelectedCount == 30_003 && state.agentSelectedBytes == 30_002)
+        let probe = AgentPresentationProbe.shared
+        let before = probe.storageTotalBuilds
+        precondition(state.agentStorageTotals() != nil && state.agentStorageTotals(for: "fixture") != nil)
+        let start = ProcessInfo.processInfo.systemUptime
+        for tick in 0..<100 {
+            state.agentStatus = "Unrelated update \(tick)"
+            precondition(state.agentSelectedCount == 30_003 && state.agentSelectedBytes == 30_002)
+            precondition(state.agentStorageTotals() != nil && state.agentStorageTotals(for: "fixture") != nil)
+        }
+        let elapsed = ProcessInfo.processInfo.systemUptime - start
+        precondition(elapsed < 0.25, "Repeated presentation reads must not traverse the 30,000-path inventory")
+        precondition(probe.storageTotalBuilds == before + 2,
+                     "Navigation and unrelated state changes must reuse the measured storage totals")
+        state.agentStorageFootprints["fixture"] = AgentStorageFootprint()
+        precondition(state.agentStorageTotals() != nil && state.agentStorageTotals(for: "fixture") != nil)
+        precondition(probe.storageTotalBuilds == before + 4, "A replaced footprint must rebuild its totals")
+        let combinedBefore = probe.storageTotalBuilds
+        for _ in 0..<100 {
+            _ = state.agentStorageTotals(for: Set(["fixture"]))
+            _ = state.agentStorageTotals(for: Set(["fixture", "another-agent"]))
+        }
+        precondition(probe.storageTotalBuilds == combinedBefore + 1,
+                     "Software rows must share group totals and build their combined scope only once")
+        state.agentStorageFootprints["another-agent"] = AgentStorageFootprint()
+        _ = state.agentStorageTotals(for: Set(["fixture", "another-agent"]))
+        precondition(probe.storageTotalBuilds == combinedBefore + 2,
+                     "A newly measured Agent must invalidate combined software totals")
+        state.agentStorageFootprints = [:]
+        _ = state.agentStorageTotals(for: Set(["fixture"]))
+        precondition(state.agentStorageTotals() == nil && state.agentStorageTotals(for: "fixture") == nil)
+        state.clearAgentSelection()
+        precondition(state.agentSelectedCount == 0 && state.agentSelectedBytes == 0)
+        print(String(format: "Agent presentation: 100 reads of 30,000 paths took %.3f ms; storage totals built once per snapshot", elapsed * 1000))
     }
 
     @MainActor private static func associatedDataMutationGuards() async throws {

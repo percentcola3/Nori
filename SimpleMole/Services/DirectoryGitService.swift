@@ -9,6 +9,8 @@ struct DirectoryGitSnapshot: Equatable, Sendable {
     let upstream: String?
     let isDirty: Bool
     let operationInProgress: Bool
+    let aheadCount: Int
+    let behindCount: Int
 }
 
 actor DirectoryGitService {
@@ -196,6 +198,7 @@ actor DirectoryGitService {
                                    at: root, context: context)
         var branch: String?, upstream: String?, head: String?
         var dirty = false
+        var ahead = 0, behind = 0
         var isRenameSource = false
         for field in status.split(separator: "\0") {
             if isRenameSource { isRenameSource = false; continue }
@@ -206,6 +209,12 @@ actor DirectoryGitService {
                 head = String(field.dropFirst("# branch.oid ".count))
             } else if field.hasPrefix("# branch.upstream ") {
                 upstream = String(field.dropFirst("# branch.upstream ".count))
+            } else if field.hasPrefix("# branch.ab ") {
+                let counts = field.dropFirst("# branch.ab ".count).split(separator: " ")
+                if counts.count == 2 {
+                    ahead = max(0, Int(counts[0]) ?? 0)
+                    behind = max(0, -(Int(counts[1]) ?? 0))
+                }
             } else if !field.hasPrefix("# ") {
                 dirty = true
                 isRenameSource = field.hasPrefix("2 ")
@@ -233,7 +242,8 @@ actor DirectoryGitService {
         let markers = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer", "BISECT_LOG"]
         let inProgress = markers.contains { FileManager.default.fileExists(atPath: gitDirectory.appendingPathComponent($0).path) }
         return .init(root: root, branch: branch, head: head, branches: branches, occupiedBranches: occupied,
-                     upstream: upstream, isDirty: dirty, operationInProgress: inProgress)
+                     upstream: upstream, isDirty: dirty, operationInProgress: inProgress,
+                     aheadCount: ahead, behindCount: behind)
     }
 
     private func requireClean(_ snapshot: DirectoryGitSnapshot) throws {
@@ -258,5 +268,52 @@ actor DirectoryGitService {
                 .trimmingCharacters(in: .whitespacesAndNewlines).suffix(4096)))
         }
         return result.output
+    }
+}
+
+/// Visible rows share a small read queue instead of launching Git for every
+/// repository at once. Navigating away cancels queued and running inspections.
+actor DirectoryGitReadQueue {
+    static let shared = DirectoryGitReadQueue()
+    private let maximumReads: Int
+    private var activeReads = 0
+    private var waiters: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
+
+    init(maximumReads: Int = 2) { self.maximumReads = max(1, maximumReads) }
+
+    func snapshot(at url: URL, using reader: DirectoryGitService = DirectoryGitService()) async throws -> DirectoryGitSnapshot {
+        try await acquire()
+        defer { release() }
+        try Task.checkCancellation()
+        return try await withTaskCancellationHandler {
+            try await reader.snapshot(at: url)
+        } onCancel: { reader.cancel() }
+    }
+
+    private func acquire() async throws {
+        try Task.checkCancellation()
+        if activeReads < maximumReads {
+            activeReads += 1
+            return
+        }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+                else { waiters.append((id, continuation)) }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
+        }
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: index).continuation.resume(throwing: CancellationError())
+    }
+
+    private func release() {
+        if waiters.isEmpty { activeReads -= 1 }
+        else { waiters.removeFirst().continuation.resume() }
     }
 }

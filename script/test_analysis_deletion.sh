@@ -12,11 +12,13 @@ source "$ROOT_DIR/script/test_developer_toolchain.sh"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
     -module-cache-path "$WORK/module-cache" -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/AnalysisFileDeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" \
     "$ROOT_DIR/SimpleMole/Services/AnalysisInventoryCache.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentProjectStorage.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \

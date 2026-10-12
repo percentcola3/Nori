@@ -32,7 +32,9 @@ Nori 受到 [Mole](https://github.com/tw93/Mole) 启发。核心清理、磁盘�
 | 系统优化 | 刷新 DNS、Quick Look、LaunchServices，清理 30 天以前的保存状态，并只读检查 Spotlight 状态；每项独立显示 applied/unchanged/unavailable/failed | `NativeCore.runOptimize` |
 | 状态监控 | 菜单栏和主窗口实时显示 CPU、内存、磁盘容量与读写、网络速率；可读取电池电量/健康/循环次数，灵动岛的内存榜也走原生进程快照 | `SystemMetrics.sample` + IOKit / Mach / sysctl / statfs / getifaddrs |
 | 开发环境 | 识别 nvm 版本（默认/使用中锁定，可勾选清理旧版本）；fnm/Volta/asdf/pyenv/rbenv/rustup/Homebrew/JDK 版本及 Bun/Deno 等工具只读展示，版本移除交给各自管理器 | `app_env_scan.sh` + `app_apply.sh` |
-| AI Agent 专清 | 分组识别 Agent 缓存、历史、配置与安装实例；默认只选择可丢弃项，历史/凭据/未知内容需手动选择；Skills、MCP 登记和安装本体分开管理；执行所选文件删除为永久删除 | `AgentCatalog` + `AgentInventory` + `AgentCleanupExecutor` + `AgentCLIService` + `AgentMCPConfigEditor` |
+| AI Agent 专清 | 分组识别 29 种 Agent/服务（含 Aider、Goose、Cline、Continue、Playwright）的缓存、历史、配置、临时产物与安装实例；每个 Agent 独立配置对话历史及检查点/产物的保留策略，支持“永不清理”或 N 天（默认 90 天），会话逐项按 mtime 判过期，Agent 临时产物按用户 T 根 24 小时、`/private/tmp` 7 天，90 天未活动的工具显示标记；worktree 结合 Git 未提交/合并状态复核。可再生缓存永久删除，会话、历史等用户数据移入废纸篓；支持只编辑 config.toml 的 Codex 实验性会话压缩开关，不运行 Codex；Skills、MCP 登记和安装本体分开管理 | `AgentCatalog` + `AgentInventory` + `AgentRetentionPolicy` + `AgentWorktreeInspector` + `AgentCodexFeatureEditor` + `AgentCleanupExecutor` + `AgentCLIService` + `AgentMCPConfigEditor` |
+| 保持唤醒 | 在设置中通过开关持续防止系统睡眠，可选择同时防息屏，无时限；手动关闭或进程退出时释放，合盖仍会睡眠。支持低电量和严重温度自动停止及通知，灵动岛显示唤醒状态 | `AwakeSessionController` + IOPMAssertion + `SystemMetrics` + UserNotifications |
+| 目录浏览 | 文件列表中直接显示 Git 当前分支及同步按钮，点击分支名切换本地分支；同步从上游仅快进拉取，保留未提交更改、工作树占用及合并/变基保护。领先/落后数量基于最近一次抓取；可见仓库状态最多并行读取两项，离开页面取消读取 | `DirectoryBrowserModel` + `DirectoryGitService` + `DirectoryGitRowControls` |
 | 进程/端口 | NSWorkspace 应用级管理、高级 PID 模式、lsof 监听端口 | 原生 + `app_runtime.sh` |
 | 流量监控 | 通用应用流量排行（总量 / 下载 / 上传）、实时速率、当前连接、物理接口与隧道独立计数；无需代理客户端配置 | `TrafficMonitorStore` + `app_netmon.sh` |
 | 图片瘦身 | 图片清单、压缩（副本/替换）；精确重复和相似图片走独立原生扫描 | `MediaSlimmer` + `DuplicateScanner` + `SimilarImageScanner` |
@@ -190,7 +192,7 @@ bash script/test.sh
 - 卸载同时绑定应用绝对路径、Bundle ID、应用目录身份和 `Info.plist` 身份；预览与执行都重新扫描并要求精确匹配，拒绝同名应用或中途替换。
 - 卸载队列为每个已确认任务独立保存应用身份与预览快照，实际卸载保持串行并与其他磁盘清理互斥。等待项可取消，执行中的任务不可通过单项取消中断；退出会停止队列，重启不会自动继续删除。
 - 白名单在扫描与执行两侧同时生效（`is_path_whitelisted`），预览与清理结果一致。
-- 硬盘清理先确认容量估算，只接受 Safe 垃圾并明确提示“永久删除、不可恢复”；卸载、磁盘分析与自动目录规则默认使用废纸篓保护。Agent 专清直接执行所选动作，没有第二次确认弹窗，其中选中文件通过 `permanent: true` 永久删除；历史、凭据、未知数据及资源移除保持手动选择和风险提示。
+- 硬盘清理先确认容量估算，只接受 Safe 垃圾并明确提示“永久删除、不可恢复”；卸载、磁盘分析与自动目录规则默认使用废纸篓保护。Agent 专清直接执行所选动作，没有第二次确认弹窗：Safe 可再生缓存永久删除，会话、历史、凭据、未知数据及资源本体移入废纸篓，并保持保留策略、手动选择和风险提示。
 - 自动目录规则创建即启用并立即检查，手选目录在创建时确认用途；只处理用户选择目录的第一层子项；容量策略保护最近一小时仍有写入的内容，父规则也不会移走另一个已配置规则的目录。执行侧重新验证规则根目录、直接父子关系、扫描时文件身份和白名单，再移入废纸篓。
 - 原生卸载只自动处理已确认身份的应用本体与用户目录数据；LaunchAgent、LaunchDaemon、PrivilegedHelper 和诊断报告等系统位置只展示为人工复核项，不自动提权删除。
 - 系统清理选择清单使用 NUL 编码、SHA-256、私有权限和执行侧白名单复验，拒绝被替换、软链接或权限过宽的清单。

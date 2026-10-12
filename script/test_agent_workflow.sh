@@ -12,6 +12,7 @@ source "$ROOT_DIR/script/test_developer_toolchain.sh"
 mkdir "$WORKFLOW_TEST_DIR/sources"
 WORKFLOW_SOURCES=(
     "$ROOT_DIR/SimpleMole/Models.swift"
+    "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupTaskProgress.swift"

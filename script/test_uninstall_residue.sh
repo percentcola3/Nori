@@ -7,8 +7,10 @@ trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 swiftc -target "$(uname -m)-apple-macos13.0" \
     -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentProjectStorage.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \

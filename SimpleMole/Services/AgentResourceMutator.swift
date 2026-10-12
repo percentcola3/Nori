@@ -2,7 +2,8 @@ import Foundation
 
 enum AgentResourceMutator {
     static func execute(_ changes: AgentResourceChanges, running: RunningApplicationSnapshot,
-                        home: String, presence: AgentPresenceContext? = nil) -> AgentCleanupExecutor.Outcome {
+                        home: String, presence: AgentPresenceContext? = nil,
+                        trashHandler: ((URL) throws -> Void)? = nil) -> AgentCleanupExecutor.Outcome {
         var accepted: [AgentSkillConfigEditor.Registration] = []
         var messages: [String] = []
         var refused = 0
@@ -36,8 +37,9 @@ enum AgentResourceMutator {
             servers[index].configIdentity = DeletionPlan.identity(at: servers[index].configPath) ?? ""
             servers[index].configFingerprint = written
         }
-        var result = AgentCleanupExecutor.execute([], running: running, home: home, permanent: true,
-            presence: presence, skills: changes.skills, installations: changes.installations, servers: servers)
+        var result = AgentCleanupExecutor.execute([], running: running, home: home,
+            presence: presence, trashHandler: trashHandler,
+            skills: changes.skills, installations: changes.installations, servers: servers)
         let original = result.summary
         result.summary = .init(removed: original.removed + config.removed,
             skipped: original.skipped + config.missing, failed: original.failed + config.failed,

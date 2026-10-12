@@ -118,10 +118,12 @@ patch("Views/DeveloperNetworkToolsPanel.swift", [
 
 # The real root workspace makes these read-only refreshes on entry. A fixture
 # capture must never start real audits, subprocesses, or filesystem inventories.
-patch("AppState.swift", [
+patch("AppState+Development.swift", [
     ("    func runConfigAudits(force:", "        return"),
     ("    func scanDevEnv(announce:", "        return"),
     ("    func scanGc(force:", "        return"),
+])
+patch("AppState+Processes.swift", [
     ("    func refreshPorts() {", "        return"),
 ])
 
