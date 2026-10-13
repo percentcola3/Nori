@@ -2,14 +2,16 @@ import AppKit
 import SwiftUI
 
 private enum AgentManagementSection: String, CaseIterable, Identifiable {
-    case agents = "Agent", skills = "Skill", mcp = "MCP"
+    case agents = "Agent", history = "History", skills = "Skill", mcp = "MCP"
     var id: String { rawValue }
-    var symbol: String { self == .agents ? "cpu" : self == .skills ? "sparkles" : "server.rack" }
+    var symbol: String { self == .agents ? "cpu" : self == .history ? "clock.arrow.circlepath" : self == .skills ? "sparkles" : "server.rack" }
 }
 
 struct AgentsTabView: View {
     @ObservedObject var state: AppState
     @State private var section = AgentManagementSection.agents
+    @StateObject private var historyStore = AgentHistoryStore()
+    @ObservedObject private var l10n = L10n.shared
     @Namespace private var namespace
 
     var body: some View {
@@ -18,7 +20,7 @@ struct AgentsTabView: View {
                 VStack(spacing: 3) {
                     ForEach(AgentManagementSection.allCases) { item in
                         Button { section = item } label: {
-                            Label(item.rawValue, systemImage: item.symbol)
+                            Label(item == .history ? l10n.t("agents.section.history") : item.rawValue, systemImage: item.symbol)
                                 .font(.system(size: 12, weight: section == item ? .semibold : .medium))
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 8).padding(.vertical, 10)
@@ -35,6 +37,7 @@ struct AgentsTabView: View {
             Group {
                 switch section {
                 case .agents: AgentInventoryView(state: state, onManageSkills: { section = .skills })
+                case .history: AgentHistoryView(state: state, store: historyStore)
                 case .skills: AgentResourceManagementView(state: state, skills: true)
                 case .mcp: AgentResourceManagementView(state: state, skills: false)
                 }

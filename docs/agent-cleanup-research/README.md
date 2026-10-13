@@ -7,6 +7,9 @@
 | 文档 | 范围与主要证据 |
 | --- | --- |
 | [codex.md](codex.md) | Codex CLI/App；固定 CLI 源码、配置参考；会话与状态库、目标/记忆/队列、备份、日志和自定义根 |
+| [official-session-apis.md](official-session-apis.md) | 官方会话删除 API、原生命令、保留策略与云端/桌面范围；按产品核对可接入能力 |
+| [history-adapters.md](history-adapters.md) | 首批 OpenCode/Copilot/Gemini 适配代码与后续校验事项；当前入口关闭 |
+| [validation-handoff.md](validation-handoff.md) | 其他机器的验证顺序、现有脚本、启用前缺口及回传要求 |
 | [open-source-cli.md](open-source-cli.md) | OpenCode、Gemini CLI、两代 Kimi、pi、Crush；固定源码，含凭据/数据库 schema 与项目 registry |
 | [other-cli-and-extensions.md](other-cli-and-extensions.md) | Claude Code、Copilot、Cursor CLI、Grok Build、Factory、Amp、Cline、Continue，以及尚未支持的 Roo；固定源码/文档、安装器和版本化现场证据 |
 | [desktop-agents.md](desktop-agents.md) | Cursor、Windsurf/Devin、Zed、Warp、Qoder、Kiro、Trae、Antigravity、Claude Desktop、Chrome DevTools MCP；固定开源实现、官方文档与闭源软件证据边界 |
@@ -16,13 +19,13 @@
 
 ## 当前 Catalog 覆盖矩阵
 
-S = 程序当前默认可选的缓存/日志/旧版本；R = 有损审查；H = 配置、凭据、持久状态或未知内容的高风险手动清理。档位描述当前安装状态下的分类，不额外保证所有版本均已取证。代码中的历史名称 `showOnly` 现在映射为 warning，**允许手动选择**。表中“技能/MCP”只表示已有的目录/配置源，不保证发现全部项目、插件和自定义路径；“CLI”表示安装实例识别后可卸载，不保证所有发行布局可识别。
+S = 默认可选的缓存/日志/旧版本；R = 需要审查的产物；H = 配置、凭据、持久状态或未知内容，只展示，不按文件清理。2026-10-13 起，会话/转录/归档、相关历史或状态库、文件快照、工作树、VM 状态及所有 `showOnly` 目标统一受保护，覆盖表中旧 R 档位及年龄策略，也覆盖卸载残留。历史需要原应用的会话接口；接口或关联状态未确认时停用历史清理。档位不保证所有版本均已取证。表中“技能/MCP”表示已有的独立资源管理入口，不保证发现全部项目、插件和自定义路径；“CLI”表示安装实例识别后可卸载。
 
 | Agent（catalog id） | 已实施的主要数据规则 | 资源关联 / CLI | 证据与仍需注意的边界 |
 | --- | --- | --- | --- |
 | Claude Code `claude-code` | S 旧版本、统计/更新缓存；R 项目转录、文件快照、计划/任务/附件/备份；H 项目 memory、运行记录、环境、配置/授权 | 技能、`.claude.json` MCP；CLI | [CLI/扩展研究](other-cli-and-extensions.md#1-claude-code)。转录已与 memory 拆开；系统 temp、插件安装记录、Keychain、其他项目注册来源未完整覆盖 |
 | Claude Desktop `claude-desktop` | S Electron 叶子、Caches/ShipIt、MCP 日志；R `vm_bundles` | `claude_desktop_config.json` MCP | [桌面研究](desktop-agents.md#claude-desktop--cowork)。VM 含活动磁盘/会话；未分别识别 immutable 下载、所有 extension 包与凭据；本地删除不清云端会话 |
-| Codex `codex` | S `tmp`、系统/用户临时根前缀产物、文件日志、模型目录缓存、原子写残留、桌面缓存与日志；R 按文件会话/归档、computer-use 会话、附件、图片、db/config 备份；H state/history/goals/memories/queue 库、Shell 快照、授权 | 桌面与 CLI 共享技能、TOML MCP 和 .codex 数据，统一展示；独立 CLI 本体单独检测；可切换实验性 thread-store 压缩 | [Codex](codex.md)。支持可见 `CODEX_HOME`、SQLite 根和 `log_dir`；会话按 mtime 保留，压缩开关只改 config.toml、不运行 Codex；插件、worktrees、automations 仍未全量处理 |
+| Codex `codex` | S 精确缓存、临时文件、文件日志；R 日志库与配置备份；H 会话/归档、索引和状态库、附件/图片、恢复备份、配置/授权、记忆和工作树 | 桌面与 CLI 共享技能、TOML MCP 和 .codex 数据；独立 CLI 本体单独检测；可切换实验性 thread-store 压缩 | [Codex](codex.md)。本机 schema 有 thread/list、archive、delete；关联保护及恢复契约未确认前，历史清理停用。支持可见 CODEX_HOME、SQLite 根和 log_dir；不按会话文件年龄删除 |
 | Cursor `cursor` | S Electron/更新/编译/statsig 缓存、淘汰扩展、内置旧 CLI 版本；R snapshots、Nori 配置备份；H projects、workspaceStorage、state.vscdb | 原生与兼容共享技能、MCP | [桌面](desktop-agents.md#cursor)。闭源数据库/快照仅部分路径证据，不宣称所有历史布局；项目文件和认证存储未全量覆盖 |
 | Cursor CLI `cursor-cli` | S 旧版本；R 经 Git 状态核验的 worktrees；H chats 限深 `store*.db` 族、cli-config | 与桌面共享技能/MCP；CLI | [CLI 研究](other-cli-and-extensions.md#3-cursor-cli)。worktree 仅在已合并/孤儿且过期时推荐；store.db 来自论坛观察，认证文件/Keychain 未证明 |
 | Copilot CLI `copilot` | S 旧版本、日志、macOS cache；R session-state、命令历史；H session-store.db、配置、MCP secrets/OAuth、权限/provider、plugin-data | 技能、MCP；CLI | [CLI 研究](other-cli-and-extensions.md#2-github-copilot-cli)。已有宿主扩展 presence；插件本体/登记、额外 Skill、Keychain、全部 cache 覆盖参数未处理 |
@@ -62,14 +65,14 @@ Roo Code 的文件偶然出现在共享技能目录，并不代表其专属扫�
 
 ## 清理原则与实施边界
 
-1. **风险是删除影响。** S 默认可选；R/H、Skill、MCP、卸载由用户明确选择。体积大、Agent 生成、目录名含 cache/tmp、软件已卸载，都不独立证明无损。[OpenCode 数据库含凭据](https://github.com/anomalyco/opencode/blob/0112a92c416f5ad833d96e7a8308441f0a875d94/packages/core/src/credential/sql.ts)、[Goose 用户 app 持久化](https://github.com/aaif-goose/goose/blob/bab8ff641039c9cd3331121cd84a5c6045f365ca/crates/goose/src/goose_apps/cache.rs#L145) 是具体反例。
+1. **风险是删除影响。** S 默认可选；R、Skill、MCP、卸载由用户明确选择，H 只展示并由原应用管理。体积大、Agent 生成、目录名含 cache/tmp、软件已卸载，都不独立证明无损。[OpenCode 数据库含凭据](https://github.com/anomalyco/opencode/blob/0112a92c416f5ad833d96e7a8308441f0a875d94/packages/core/src/credential/sql.ts)、[Goose 用户 app 持久化](https://github.com/aaif-goose/goose/blob/bab8ff641039c9cd3331121cd84a5c6045f365ca/crates/goose/src/goose_apps/cache.rs#L145) 是具体反例。
 2. **数据存在与安装存在分开。** 当前检查 app、CLI/已知宿主扩展，不启动外部 Agent 探测；已卸载资料进入清理 Tab 的残留项，执行时重验安装状态。共享客户端/CLI/Preview/插件不能仅因一端不存在就孤儿化。当前检测仍受搜索范围和已知宿主清单限制。[旧 Kimi 入口会运行迁移器](https://github.com/MoonshotAI/kimi-cli/blob/9ab1286b8fe4e6bcd116949a27ce5e0ac3389c82/src/kimi_cli/__main__.py#L28) 说明不能靠执行命令查询版本来探测。
 3. **技能链接、本体、调用登记分开。** unlink 保留目标；删除共享本体联动可核对的链接/登记，展示已知消费者。MCP 单项解绑与本体卸载分别管理；[Gemini extension 安装/卸载](https://github.com/google-gemini/gemini-cli/blob/c6bccb7ecbf6d8368d995455dd725ed34466faad/packages/cli/src/config/extension-manager.ts#L548) 和 [Claude MCPB](https://github.com/anthropics/mcpb) 说明 MCP 不统一等于全局 npm 包。当前级联只覆盖可解析源，不宣称所有插件 manifest、YAML/TS 和外部登记已清净。
 4. **数据库、产物、工作树分别说明后果。** SQLite 主文件和 sidecars 合组，运行/打开文件/文件身份在执行边界重验；用户计划、录像、VM、memory 和未提交代码保持有损提示。[Zed threads.db](https://github.com/zed-industries/zed/blob/74c134a3c12418cc095122fff938ef1c2504ae06/crates/agent/src/db.rs#L443)、[Warp GUI/TUI 分库](https://github.com/warpdotdev/warp/blob/40b791c351377c4b30c48179a568326144113726/crates/warp_core/src/paths.rs#L297) 是具体例子；文件清理不等于原生数据库内业务删除或所有索引/附件同步。
 5. **仅扫描明确归属的根。** 当前支持一部分产品 env/XDG 覆盖和 Codex SQLite/log 配置；Crush 只读官方 registry 的专用项目 data_dir，不遍历任意源码树。GUI 可见环境不等于用户所有 shell 运行环境，外部盘、CLI flags、项目覆盖、系统配置和每个版本未全覆盖。[Crush registry](https://github.com/charmbracelet/crush/blob/76cc5c574e15072b15aaed0f4f843a5711fae0d9/internal/projects/projects.go#L14) 为受控入口来源。
 6. **清理计划去重、备份并重校验。** 当前物理路径按父子关系去重计量；MCP 配置修改备份并校验内容，CLI 先识别原生/包管理器所有权再卸载。未知 executable 最多解除已确认入口，不能递归删除共享解释器或未证明安装根。[执行器](../../SimpleMole/Services/AgentCleanupExecutor.swift)、[配置编辑器](../../SimpleMole/Services/AgentMCPConfigEditor.swift)、[CLI 服务](../../SimpleMole/Services/AgentCLIService.swift) 是实施入口。
 
-保留策略只对 review 类的对话历史与检查点/产物生效，只用 mtime 判断单项是否过期；Agent 启动时批量读取历史会刷新 atime，因此不把它当用户活动。删除历史移入废纸篓，但 Agent 本地索引可能暂时保留失效条目。Git worktree 还要在扫描与执行时分别复核状态：仅无改动且已被其他 ref 包含、或主仓库已不存在的过期树可推荐；Nori 不运行 `git worktree prune`、不写仓库登记。系统临时目录只认已审计根下的直接子项前缀，并同时要求对应保留期（用户 T 根 24 小时、`/private/tmp` 7 天）的 mtime、当前 uid 与打开文件复核；临时根不参与 Agent 安装/残留判定。
+保留策略只对仍可清理的产物生效；会话历史、索引、状态、记忆和工作树保留，年龄、退出应用或卸载都不能授权直接删除它们。会话删除需要原应用的正式 API/CLI，在版本、数据根、活动/关联状态和恢复方式可核对后才启用；首批 OpenCode/Copilot/Gemini 适配代码已写入，但入口仍关闭，尚未编译及运行验证。[官方接口研究](official-session-apis.md) 区分公开接口、原生保留策略、内部服务和云端作用域。系统临时目录只认已审计根下的直接子项前缀，并同时要求对应保留期（用户 T 根 24 小时、`/private/tmp` 7 天）的 mtime、当前 uid 与打开文件复核；临时根不参与 Agent 安装/残留判定。
 
 普通文件清理不撤销服务端 token，不清 Keychain，也不删除云端会话。当前没有覆盖所有 Agent 产物、第三方插件持久数据、原生 session 删除 API、索引更新或 Git worktree 注册修复；这些属于后续能力，不能用“扫描完成”表达成全盘无残留。
 

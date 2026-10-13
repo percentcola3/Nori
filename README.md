@@ -76,8 +76,8 @@ AI tools leave more than caches behind. Nori groups each tool's local data so yo
 
 - **Storage breakdown**: installation bodies are separate from associated data; data is split into garbage and preserved usage. Agent and Software pages share these measurements, count shared paths once, and mark partial results. Selected data shows its own deletion amount.
 - **Rebuildable caches**: old CLI versions, desktop/update/compile caches, selected by default.
-- **Per-Agent retention**: each Agent has independent conversation and artifact policies, with 90 days as the default or an option to never clean. Expired items are recommended for review; changing a policy does not delete files. Worktrees are checked for uncommitted and unmerged work.
-- **Persistent data**: sessions and history move to Trash when cleaned; safe rebuildable caches are permanently deleted. Memories, VM data, credentials and unknown data require manual selection with risk notes.
+- **Per-Agent retention**: each Agent has an independent artifact policy, with 90 days as the default or an option to never clean. Expired eligible artifacts are recommended for review; conversation history and worktrees stay protected regardless of age.
+- **Persistent data**: sessions, history, indexes, credentials, configuration, memories and worktrees are retained and managed in the owning app. Nori blocks direct history-file deletion, including uninstall leftovers; safe rebuildable caches remain cleanable. Skills and MCP resources have separate management actions.
 - **Shared resources**: Skills and MCP registrations distinguish unlinking from deleting shared files.
 
 Uninstall a selected CLI or desktop installation directly on the Agent page. Its identified Agent data is offered separately after successful removal; running consumers require confirmation before closing. Leftovers from uninstalled Agents remain visible and unselected.

@@ -91,6 +91,7 @@ enum TaskFeedbackDiagnostic {
         .init(prefix: "Skipped path protected by whitelist: ", key: "task.reason.protected"),
         .init(prefix: "Skipped content that requires administrator access or cannot be deleted: ", key: "task.reason.remove"),
         .init(prefix: "Kept Agent resource because its cleanup policy does not allow the operation: ", key: "task.reason.protected"),
+        .init(prefix: "Kept Agent history or state; manage it through the owning application: ", key: "task.reason.protected"),
         .init(prefix: "Skipped changed or unavailable path: ", key: "task.reason.changed"),
         .init(prefix: "Skipped changed or unrecognized Agent link: ", key: "task.reason.changed"),
         .init(prefix: "Configuration changed or is a symbolic link: ", key: "task.reason.changed"),

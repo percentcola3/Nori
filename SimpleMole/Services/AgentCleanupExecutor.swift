@@ -60,6 +60,7 @@ enum AgentCleanupExecutor {
         let freshTargets = currentTargets(home: home, presence: context, removingAgentIDs: removalIDs)
         let rebuildablePaths = rebuildablePaths(in: freshTargets)
         var result = BlockingResources()
+        let protectedPaths = AgentCatalog.managedCleanupPaths(home: home)
         var owners = Set<String>()
         func isBlocked(_ resourceOwners: [String]) -> Bool {
             let matching = resourceOwners.filter {
@@ -73,6 +74,7 @@ enum AgentCleanupExecutor {
                 leftoverPaths: leftoverPaths, rebuildablePaths: rebuildablePaths, home: home)
             guard !paths.isEmpty else { continue }
             for path in paths {
+                if AgentCatalog.isManagedCleanupPath(path, protectedPaths: protectedPaths) { continue }
                 let freshOwners = freshTargets.filter { $0.paths.contains(path) }.flatMap(\.owners)
                 let dependencies = categoryDependencies(paths: [path],
                     owners: category.activityOwners + freshOwners, links: links,
@@ -123,10 +125,16 @@ enum AgentCleanupExecutor {
         var refused = 0
         var messages: [String] = []
         var liveTargets = Set<String>()
+        let protectedPaths = AgentCatalog.managedCleanupPaths(home: home)
         for requestedCategory in requested {
             let category = requestedCategory
             let candidates = category.paths.filter(category.isPathSelected)
             for path in candidates {
+                if AgentCatalog.isManagedCleanupPath(path, protectedPaths: protectedPaths) {
+                    refused += 1
+                    messages.append("Kept Agent history or state; manage it through the owning application: " + path)
+                    continue
+                }
                 if resourceIsWhitelisted(path, home: home) {
                     refused += 1
                     messages.append("Kept Agent resource protected by whitelist: " + path)
@@ -253,6 +261,7 @@ enum AgentCleanupExecutor {
         let leftoverPaths = agentLeftoverPaths(for: requested, home: home, presence: context)
         let freshTargets = currentTargets(home: home, presence: context, removingAgentIDs: removalIDs)
         let rebuildablePaths = rebuildablePaths(in: freshTargets)
+        let protectedPaths = AgentCatalog.managedCleanupPaths(home: home)
         // 整个 Agent 根目录里也可能放着被其它 Agent 挂靠的 Skill 本体。
         // 根目录清理同样要计入这些使用者，不能绕过共享 Skill 的运行态复核。
         for index in categories.indices {
@@ -261,6 +270,11 @@ enum AgentCleanupExecutor {
             guard !selectedPaths.isEmpty else { continue }
             var readyPaths: [String] = []
             for path in selectedPaths {
+                if AgentCatalog.isManagedCleanupPath(path, protectedPaths: protectedPaths) {
+                    refused += 1
+                    preflightMessages.append("Kept Agent history or state; manage it through the owning application: " + path)
+                    continue
+                }
                 let owners = categories[index].activityOwners
                     + freshTargets.filter { $0.paths.contains(path) }.flatMap(\.owners)
                 let dependencies = categoryDependencies(paths: [path], owners: owners, links: relatedLinks,

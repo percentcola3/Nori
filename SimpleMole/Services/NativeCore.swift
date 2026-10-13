@@ -2133,6 +2133,7 @@ final class NativeCore: @unchecked Sendable {
         let home = CleanupRiskPolicy.normalizedPathLiteral(homeDirectory)
         let whitelist = loadWhitelist(homeDirectory: homeDirectory)
         let normalizedRoots = allowedRoots.map { CleanupRiskPolicy.normalizedPathLiteral($0) }
+        let managedAgentPaths = AgentCatalog.managedCleanupPaths(home: home)
         var removed = 0
         var skipped = 0
         var failed = 0
@@ -2251,6 +2252,13 @@ final class NativeCore: @unchecked Sendable {
             guard !isCleanupLockItem(path) else {
                 outcome.skipped += coveredCount
                 outcome.messages.append("Skipped lock file: \(path)")
+                return
+            }
+            // Catalog verification, an old selection and uninstall scope must
+            // never bypass the owning application's history/index lifecycle.
+            guard !AgentCatalog.isManagedCleanupPath(path, protectedPaths: managedAgentPaths) else {
+                outcome.skipped += coveredCount
+                outcome.messages.append("Kept Agent history or state; manage it through the owning application: \(path)")
                 return
             }
             guard verifiedTargets.contains(rawPath)

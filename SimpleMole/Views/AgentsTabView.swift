@@ -11,12 +11,12 @@ struct AgentRetentionControls: View {
             HStack(spacing: 16) {
                 retentionTitle
                 Spacer(minLength: 8)
-                inlineRetentionPicker("agents.retention.conversations", retentionClass: .conversations)
+                historyNotice
                 inlineRetentionPicker("agents.retention.artifacts", retentionClass: .artifacts)
             }
             VStack(alignment: .leading, spacing: 6) {
                 retentionTitle
-                retentionRow("agents.retention.conversations", retentionClass: .conversations)
+                historyNotice
                 retentionRow("agents.retention.artifacts", retentionClass: .artifacts)
             }
         }
@@ -28,6 +28,13 @@ struct AgentRetentionControls: View {
     private var retentionTitle: some View {
         Text(l10n.t("agents.retention.title"))
             .font(.system(size: 11, weight: .medium))
+    }
+
+    private var historyNotice: some View {
+        Text(l10n.t("agents.history.managed"))
+            .font(.system(size: 10.5))
+            .foregroundStyle(.secondary)
+            .help(l10n.t("agents.reason.managedHistory"))
     }
 
     private func inlineRetentionPicker(_ labelKey: String,

@@ -284,9 +284,52 @@ struct AgentCatalogTests {
         expect(removedTemporary.summary.removed == 1 && !fm.fileExists(atPath: oldCodexTemp),
                "expired Agent temporary file was not permanently removed: \(removedTemporary.summary.messages)")
         let allowedCodex = AgentCatalog.deletablePaths(home: home, presence: sandboxPresence)
-        expect(allowedCodex.contains(home + "/.codex/sessions/2026/03/05/rollout-a.jsonl")
-               && allowedCodex.contains(home + "/.codex/state_5.sqlite"),
-               "Codex history/state cannot be explicitly cleared")
+        // A selection made by an older Nori must not delete a rollout while
+        // leaving its independent Codex index behind.
+        let rolloutPath = home + "/.codex/sessions/2026/03/05/rollout-a.jsonl"
+        var legacyHistory = CleanupCategory(name: "Legacy history selection", paths: [rolloutPath],
+            bytes: 4096, selected: true, source: .aiSession, risk: .warning,
+            disposal: .permanentDelete, applyRoute: .aiTrash, activityGuard: .aiAgent,
+            reasonKey: "agents.reason.review")
+        legacyHistory.pathIdentities[rolloutPath] = DeletionPlan.identity(at: rolloutPath)
+        let historyRemoval = AgentCleanupExecutor.execute([legacyHistory],
+            running: RunningApplicationSnapshot(), home: home, presence: sandboxPresence,
+            trashHandler: trashHandler)
+        expect(historyRemoval.summary.removed == 0 && historyRemoval.refused == 1
+               && fm.fileExists(atPath: rolloutPath)
+               && fm.fileExists(atPath: home + "/.codex/state_5.sqlite"),
+               "filesystem history cleanup removed the rollout while leaving the Codex index")
+        expect(!allowedCodex.contains(home + "/.codex/sessions/2026/03/05/rollout-a.jsonl")
+               && !allowedCodex.contains(home + "/.codex/state_5.sqlite"),
+               "Codex history/state entered the filesystem cleanup allowlist")
+
+        // Forged Safe categories and explicit uninstall scope must also keep
+        // archived history, secondary indexes, attachments and app bindings.
+        for relative in [".codex/archived_sessions/archived.jsonl",
+                         ".codex/thread_history_1.sqlite", ".codex/attachments/retained.bin",
+                         ".codex/automations/fixture/automation.toml",
+                         ".codex/worktrees/fixture/source.swift", ".codex/db-backups/state.sqlite"] {
+            try write(relative)
+            let retainedPath = home + "/" + relative
+            let stale = CleanupCategory(name: "Legacy Safe selection", paths: [retainedPath],
+                bytes: 4096, pathIdentities: [retainedPath: DeletionPlan.identity(at: retainedPath)!],
+                selected: true, source: .aiCache, risk: .safe, disposal: .permanentDelete,
+                applyRoute: .aiTrash, activityGuard: .aiAgent, reasonKey: "agents.reason.review")
+            let denied = AgentCleanupExecutor.plan([stale], running: RunningApplicationSnapshot(),
+                home: home, presence: sandboxPresence, removingAgentIDs: ["codex"])
+            expect(denied.items.isEmpty && denied.refused == 1 && fm.fileExists(atPath: retainedPath),
+                   "Safe/uninstall scope bypassed retained Codex data: " + relative)
+        }
+        // The generic deletion boundary cannot bypass the guard by claiming a
+        // verified catalog target, including a parent containing other data.
+        for protectedPath in [rolloutPath, home + "/.codex"] {
+            let bypass = NativeCore.shared.applyCleanup(
+                items: [.init(record: protectedPath, identity: DeletionPlan.identity(at: protectedPath)!)],
+                permanent: true, homeDirectory: home, verifiedTargets: [protectedPath])
+            expect(bypass.removed == 0 && fm.fileExists(atPath: protectedPath)
+                   && bypass.messages.contains { $0.contains("owning application") },
+                   "verified generic deletion bypassed managed history protection")
+        }
 
         // opencode 对话库可由用户选择清理，但必须带伴随文件和进程守卫。
         try write(".local/share/opencode/opencode.db")
@@ -314,9 +357,9 @@ struct AgentCatalogTests {
         expect(historicalDB?.paths.count == 2
                && historicalDB?.paths.contains(home + "/.local/share/opencode/openCode.db") == true,
                "historical openCode.db spelling or companion was missed")
-        expect(AgentCatalog.deletablePaths(home: home, presence: sandboxPresence)
+        expect(!AgentCatalog.deletablePaths(home: home, presence: sandboxPresence)
             .contains(home + "/.local/share/opencode/auth.json"),
-               "opencode credentials cannot be explicitly reset")
+               "opencode credentials entered the filesystem cleanup allowlist")
 
         // 持久 memory 与可单独删除的转录拆开，不能删除“转录”时隐式删记忆。
         try write(".claude/projects/project/session.jsonl")
@@ -413,8 +456,9 @@ struct AgentCatalogTests {
                 if key == "agents.worktree.dirty" { return "uncommitted changes" }
                 return key
             }, presence: sandboxPresence, onlyAgentIDs: ["cursor-cli"])
-            let worktrees = worktreeReport.categories.first { $0.reasonKey == "agents.reason.worktree" }!
-            expect(worktrees.isPathSelected(cleanWorktree) && !worktrees.isPathSelected(dirtyWorktree)
+            let worktrees = worktreeReport.categories.first { $0.paths.contains(cleanWorktree) }!
+            expect(worktrees.risk == .protected && !worktrees.canSelect
+                   && !worktrees.isPathSelected(cleanWorktree) && !worktrees.isPathSelected(dirtyWorktree)
                    && worktrees.pathNotes[cleanWorktree]?.contains("clean, merged") == true
                    && worktrees.pathNotes[dirtyWorktree]?.contains("uncommitted changes") == true
                    && worktrees.pathRetentionBlocked.contains(dirtyWorktree)
@@ -423,9 +467,7 @@ struct AgentCatalogTests {
             try Data("changed".utf8).write(to: URL(fileURLWithPath: cleanWorktree + "/after-scan.txt"))
             let guarded = AgentCleanupExecutor.plan([worktrees.selectingPaths([cleanWorktree])],
                 running: RunningApplicationSnapshot(), home: home, presence: sandboxPresence)
-            expect(guarded.items.isEmpty && guarded.messages.contains {
-                $0.contains("Kept worktree because it has uncommitted or unmerged work")
-            }, "worktree changed after scanning was not refused before deletion")
+            expect(guarded.items.isEmpty, "worktree reached file deletion after scanning")
         } else {
             print("Agent worktree tests: skipped (git unavailable)")
         }
@@ -467,12 +509,12 @@ struct AgentCatalogTests {
         let absentPresence = AgentPresenceContext(applicationDirs: [], searchPath: [])
         let customOrphans = AgentCatalog.orphanedDataRoots(codex, home: home, presence: absentPresence)
         expect(customOrphans.contains(home + "/Documents/codex-tui.log")
-               && customOrphans.contains(home + "/Documents/state_5.sqlite")
+               && !customOrphans.contains(home + "/Documents/state_5.sqlite")
                && !customOrphans.contains(home + "/Documents")
                && !customOrphans.contains(home + "/Documents/keep.txt"),
                "custom Codex orphan roots exceeded exact owned files")
         expect(CleanupRiskPolicy.uninstalledAgentLeftover(path: home + "/Documents/state_5.sqlite",
-                   homeDirectory: home, verifiedPaths: Set(customOrphans)).risk == .warning
+                   homeDirectory: home, verifiedPaths: Set(customOrphans)).risk == .protected
                && CleanupRiskPolicy.uninstalledAgentLeftover(path: home + "/Documents/keep.txt",
                    homeDirectory: home, verifiedPaths: Set(customOrphans)).risk == .protected,
                "verified orphan policy widened beyond exact candidates")
@@ -589,8 +631,8 @@ struct AgentCatalogTests {
         let cursorOnly = AgentPresenceContext(applicationDirs: sandboxPresence.applicationDirs, searchPath: [])
         let sharedLeftovers = AgentCatalog.orphanedDataRoots(claude, home: home, presence: cursorOnly)
         expect(!sharedLeftovers.contains { $0 == home + "/.claude" || $0.hasPrefix(home + "/.claude/skills") }
-               && sharedLeftovers.contains(home + "/.claude/projects"),
-               "implicit Cursor Skill consumer did not preserve Skills and expose unrelated leftovers")
+               && !sharedLeftovers.contains(home + "/.claude/projects"),
+               "orphaned Claude cleanup exposed Skills or retained conversation history")
 
         // 两个已安装客户端共用实体：分类和勾选只出现一次，守卫保留两方。
         try write("Applications/Devin.app/Contents/Info.plist")
@@ -621,10 +663,10 @@ struct AgentCatalogTests {
         memoryCategory.selected = true
         let runningCode = RunningApplicationSnapshot(processNames: ["Code"])
         expect(AgentCleanupExecutor.blockingOwners([memoryCategory], running: runningCode,
-                   home: home, presence: ideOnly) == ["Code"]
+                   home: home, presence: ideOnly).isEmpty
                && AgentCleanupExecutor.blockingOwners([memoryCategory.clearingSelection()],
                    running: runningCode, home: home, presence: ideOnly).isEmpty,
-               "Agent owner preflight missed a live host IDE or included unselected data")
+               "protected Agent memory requested an unnecessary application close")
         expect(AgentCleanupExecutor.plan([memoryCategory], running: runningCode, home: home,
                    presence: ideOnly).items.isEmpty,
                "a running IDE could lose Agent persistent memory")
@@ -699,8 +741,8 @@ struct AgentCatalogTests {
         let kiroReport = AgentInventory.scan(home: home, presence: sandboxPresence)
         expect(kiroReport.groups.contains { $0.id == "kiro" }
                && kiroReport.categories.filter { $0.paths.contains(home + "/Library/Application Support/Kiro") }
-                   .allSatisfy { $0.canSelect && $0.risk == .warning && !$0.selected },
-               "installed undocumented tool has protected/unselectable data")
+                   .allSatisfy { !$0.canSelect && $0.risk == .protected && !$0.selected },
+               "installed undocumented tool exposed unknown state to filesystem deletion")
         try? fm.removeItem(atPath: home + "/Applications/Kiro.app")
 
         // --- 扫描报告：清理建议默认勾选，当前会话和状态数据仍须手动选择。
@@ -726,8 +768,8 @@ struct AgentCatalogTests {
         let checkpoints = report.categories.first {
             $0.paths.contains(home + "/Library/Application Support/Cursor/snapshots")
         }
-        expect(checkpoints?.selected == false && checkpoints?.risk == .warning
-               && checkpoints?.retentionClass == .artifacts
+        expect(checkpoints?.selected == false && checkpoints?.risk == .protected
+               && checkpoints?.retentionClass == nil
                && checkpoints?.activityOwners == ["Cursor", "com.todesktop.230313mzl4w4u92"],
                "recent checkpoints ignored retention or lost their risk/owner guard")
         let oldSession = home + "/.codex/sessions/2026/03/05/rollout-a.jsonl"
@@ -735,11 +777,11 @@ struct AgentCatalogTests {
         let futureSession = home + "/.codex/sessions/2026/06/02/rollout-future.jsonl"
         let sessions = report.categories.first { $0.paths.contains(oldSession) }!
         expect(sessions.paths.contains(recentSession) && sessions.paths.contains(futureSession)
-               && sessions.isPathSelected(oldSession) && !sessions.isPathSelected(recentSession)
+               && !sessions.isPathSelected(oldSession) && !sessions.isPathSelected(recentSession)
                && !sessions.isPathSelected(futureSession) && sessions.pathNotes[oldSession] != nil
-               && sessions.pathNotes[recentSession] != nil && sessions.retentionClass == .conversations
-               && sessions.retention == 90 * 24 * 3600,
-               "session retention did not preserve, annotate and selectively recommend dated files")
+               && sessions.pathNotes[recentSession] != nil && sessions.retentionClass == nil
+               && sessions.retention == 0 && sessions.risk == .protected && !sessions.canSelect,
+               "session retention exposed history files to cleanup")
         var neverRetention = AgentRetentionPreferences()
         neverRetention.conversations = .never
         let neverSessions = AgentInventory.scan(home: home, presence: sandboxPresence,
@@ -754,9 +796,8 @@ struct AgentCatalogTests {
             onlyAgentIDs: ["codex"], retention: sevenDayRetention).categories.first {
                 $0.paths.contains(oldSession)
             }!
-        expect(sevenDaySessions.isPathSelected(oldSession) && sevenDaySessions.isPathSelected(recentSession)
-               && !sevenDaySessions.isPathSelected(futureSession),
-               "seven-day retention did not select both expired sessions or selected future evidence")
+        expect(!sevenDaySessions.selected && !sevenDaySessions.canSelect,
+               "seven-day retention bypassed managed history protection")
         let policyHome = fixture.appendingPathComponent("per-agent-retention-home").path
         for agent in ["codex", "grok"] {
             try fm.createDirectory(atPath: policyHome + "/.local/bin", withIntermediateDirectories: true)
@@ -780,8 +821,9 @@ struct AgentCatalogTests {
         let keptHistory = scopedReport.categories.first { $0.paths.contains(policyHome + "/.codex/sessions/old.jsonl") }!
         let expiredHistory = scopedReport.categories.first { $0.paths.contains(policyHome + "/.grok/sessions/old.jsonl") }!
         expect(!keptHistory.selected && keptHistory.retention == 0
-               && expiredHistory.selected && expiredHistory.retention == 7 * 24 * 3600,
-               "inventory scan applied one Agent's retention to another Agent")
+               && !expiredHistory.selected && expiredHistory.retention == 0
+               && keptHistory.risk == .protected && expiredHistory.risk == .protected,
+               "another Agent's retention bypassed managed history protection")
 
         let activityHome = fixture.appendingPathComponent("activity-home").path
         let activityPresence = AgentPresenceContext(applicationDirs: [activityHome + "/Applications"],
@@ -810,18 +852,18 @@ struct AgentCatalogTests {
                && report.categories.first { $0.paths.contains(home + "/.claude/debug") }?.allSelected == true,
                "reviewed Agent caches/logs were discarded from default cleanup selection")
         let projects = report.categories.first { $0.paths.contains(home + "/.claude/projects/-Users-me-repo/session.jsonl") }
-        expect(projects?.risk == .warning && projects?.selected == false
+        expect(projects?.risk == .protected && projects?.selected == false
                && projects?.activityOwners == ["claude"], "review item preselected or unguarded")
         let state = report.categories.first { $0.paths.contains(home + "/.codex/state_5.sqlite") }
-        expect(state?.risk == .warning && state?.canSelect == true && state?.selected == false,
-               "state database must remain selectable with an explicit warning")
+        expect(state?.risk == .protected && state?.canSelect == false && state?.selected == false,
+               "state database must remain read-only")
         let warpDatabase = report.categories.first { $0.paths.contains(home + "/" + warpRelatives[0]) }!
-        expect(warpDatabase.risk == .warning && warpDatabase.canSelect && !warpDatabase.selected
-               && warpDatabase.reasonKey == "agents.reason.showOnly" && Set(warpDatabase.paths) == warpPaths,
-               "Warp database must allow manual selection without defaulting high-risk data to cleanup")
+        expect(warpDatabase.risk == .protected && !warpDatabase.canSelect && !warpDatabase.selected
+               && warpDatabase.reasonKey == "agents.reason.managedHistory" && Set(warpDatabase.paths) == warpPaths,
+               "Warp database must remain read-only")
         let selectedWarp = warpDatabase.selectingPaths(warpDatabase.paths)
-        expect(selectedWarp.allSelected && selectedWarp.selectedPathCount == 3,
-               "manual selection did not include the complete Warp SQLite family")
+        expect(!selectedWarp.selected,
+               "protected Warp database accepted a manual selection")
         expect(report.categories.allSatisfy { $0.activityGuard == .aiAgent }, "agent category lost its guard")
         let writer = report.skills.first { $0.path == home + "/.claude/skills/writer" }
         expect(writer?.name == "writer" && writer?.summary == "Writes docs" && writer?.linked == false,
@@ -835,14 +877,13 @@ struct AgentCatalogTests {
         let idle = RunningApplicationSnapshot(processNames: ["Finder"])
         let staleSession = sessions.selectingPaths([oldSession])
         expect(AgentCleanupExecutor.plan([staleSession], running: idle, home: home,
-                   presence: sandboxPresence).items.map(\.record) == [oldSession],
-               "an unchanged expired session did not enter the execution plan")
+                   presence: sandboxPresence).items.isEmpty,
+               "an expired session entered the filesystem execution plan")
         try touch(".codex/sessions/2026/03/05/rollout-a.jsonl", secondsAgo: 0)
         let reactivatedSession = AgentCleanupExecutor.plan([staleSession], running: idle,
             home: home, presence: sandboxPresence)
-        expect(reactivatedSession.items.isEmpty && reactivatedSession.refused == 1
-               && reactivatedSession.messages.contains { $0.contains("became active again") },
-               "a session used after scanning was not refused by the execution plan")
+        expect(reactivatedSession.items.isEmpty,
+               "a session used after scanning entered the execution plan")
         try touch(".codex/sessions/2026/03/05/rollout-a.jsonl", secondsAgo: 100 * 24 * 3600)
 
         try write(".codex/models_cache.json")
@@ -862,16 +903,16 @@ struct AgentCatalogTests {
                 try fm.createDirectory(at: mixedTrashRoot, withIntermediateDirectories: true)
                 try fm.moveItem(at: url, to: mixedTrashRoot.appendingPathComponent(url.lastPathComponent))
             })
-        expect(mixedDisposal.summary.removed == 2
+        expect(mixedDisposal.summary.removed == 1
                && !fm.fileExists(atPath: home + "/.codex/models_cache.json")
                && !fm.fileExists(atPath: mixedTrashRoot.appendingPathComponent("models_cache.json").path)
-               && fm.fileExists(atPath: mixedTrashRoot.appendingPathComponent("mixed-review.bin").path),
-               "mixed cleanup did not permanently remove safe cache and trash review data: \(mixedDisposal.summary.messages)")
+               && fm.fileExists(atPath: home + "/.codex/attachments/mixed-review.bin"),
+               "mixed cleanup did not preserve history attachments beside disposable cache: \(mixedDisposal.summary.messages)")
         let busy = RunningApplicationSnapshot(processNames: ["claude"])
         var selectedReview = review
         selectedReview.selected = true
-        expect(CleanupRiskPolicy.isEligible(selectedReview, mode: .manual, running: idle),
-               "idle agent review item is not executable")
+        expect(!CleanupRiskPolicy.isEligible(selectedReview, mode: .manual, running: idle),
+               "idle agent history became executable")
         expect(!CleanupRiskPolicy.isEligible(selectedReview, mode: .manual, running: busy),
                "review item executable while its agent runs")
         expect(!CleanupRiskPolicy.isEligible(selectedReview, mode: .manual, running: .unavailable),
@@ -888,8 +929,8 @@ struct AgentCatalogTests {
         var selectedState = state!
         selectedState.selected = true
         expect(AgentCleanupExecutor.plan([selectedState], running: idle, home: home,
-            presence: sandboxPresence).items.contains { $0.record == home + "/.codex/state_5.sqlite" },
-               "a manually selected sensitive state database cannot reach the deletion plan")
+            presence: sandboxPresence).items.isEmpty,
+               "a manually selected state database reached the deletion plan")
         expect(AgentCleanupExecutor.plan([selectedState], running: RunningApplicationSnapshot(processNames: ["codex"]),
             home: home, presence: sandboxPresence).items.isEmpty,
                "sensitive state deletion ignored a running owner")
@@ -900,11 +941,11 @@ struct AgentCatalogTests {
                    "Warp database deletion must wait until its owner is verified idle")
         }
         expect(Set(AgentCleanupExecutor.blockingResources([selectedWarp], running: runningWarp,
-            home: home, presence: sandboxPresence).paths) == warpPaths,
-               "Warp's active database must report every blocked family member")
+            home: home, presence: sandboxPresence).paths).isEmpty,
+               "protected Warp database requested an unnecessary application close")
         expect(Set(AgentCleanupExecutor.plan([selectedWarp], running: idle, home: home,
-            presence: sandboxPresence).items.map(\.record)) == warpPaths,
-               "explicitly selected idle Warp data did not reach the deletion plan")
+            presence: sandboxPresence).items.map(\.record)).isEmpty,
+               "idle Warp data reached the deletion plan")
 
         // 卸载后父节点清理：CLI 消失仍可清理已确认的精确目录，不能扩大到其它 Agent。
         let noCLI = AgentPresenceContext(applicationDirs: [], searchPath: [])
@@ -912,8 +953,8 @@ struct AgentCatalogTests {
             presence: noCLI).items.isEmpty, "ordinary cleanup accepted an absent agent")
         let removalPlan = AgentCleanupExecutor.plan([selectedState], running: idle, home: home,
             presence: noCLI, removingAgentID: "codex")
-        expect(removalPlan.items.contains { $0.record == home + "/.codex/state_5.sqlite" },
-               "confirmed cleanup stopped recognizing data after CLI uninstall")
+        expect(removalPlan.items.isEmpty,
+               "CLI uninstall authorized deletion of retained Codex state")
         var expandedRemoval = selectedState
         expandedRemoval.appendPath(home + "/.claude/projects/-Users-me-repo/session.jsonl", bytes: 1)
         expandedRemoval.selected = true
@@ -927,12 +968,15 @@ struct AgentCatalogTests {
 
         // --- 执行计划：目录不再认领的路径与伪造的 Skill 被拒绝。
         var forged = review
+        forged.risk = .warning
+        forged.disposal = .permanentDelete
+        forged.applyRoute = .aiTrash
         forged.retention = 0
         forged.appendPath(home + "/.claude/skills/writer", bytes: 1)
         forged.selected = true
         let plan = AgentCleanupExecutor.plan([forged], running: idle, home: home, presence: sandboxPresence)
-        expect(Set(plan.items.map(\.record)) == Set(review.paths) && plan.refused == 1,
-               "catalog revalidation admitted a path outside the review target")
+        expect(plan.items.isEmpty && plan.refused == forged.paths.count,
+               "catalog revalidation admitted history or a path outside the review target")
         let bogusSkill = CleanupCategory(
             name: "Skills", paths: [home + "/.claude/projects/-Users-me-repo"], bytes: 1,
             selected: true, source: .aiSession, risk: .warning, disposal: .permanentDelete,
@@ -1046,7 +1090,7 @@ struct AgentCatalogTests {
         }
         let unknownRuntime = AgentCleanupExecutor.blockingResources([cacheCategory, selectedState],
             running: .unavailable, home: home, presence: sandboxPresence)
-        expect(unknownRuntime.paths == [home + "/.codex/state_5.sqlite"] && unknownRuntime.owners.isEmpty
+        expect(unknownRuntime.paths.isEmpty && unknownRuntime.owners.isEmpty
                && AgentCleanupExecutor.plan([cacheCategory], running: .unavailable,
                    home: home, presence: sandboxPresence).liveTargets == Set(cacheCategory.paths),
                "unknown runtime blocks unused caches or permits persistent Agent data")
@@ -1101,7 +1145,7 @@ struct AgentCatalogTests {
         let unknownResources = AgentCleanupExecutor.blockingResources([registeredCacheCategory, selectedState],
             skills: [writer!], installations: [registeredCacheInstallation], servers: [registeredCacheServer],
             running: .unavailable, home: home, presence: sandboxPresence)
-        expect(unknownResources.paths == [cursorCache, home + "/.codex/state_5.sqlite"]
+        expect(unknownResources.paths == [cursorCache]
                && unknownResources.skillPaths == [writer!.path]
                && unknownResources.installationIDs == [registeredCacheInstallation.id]
                && unknownResources.serverIDs == [registeredCacheServer.id] && unknownResources.owners.isEmpty,
@@ -1175,8 +1219,8 @@ struct AgentCatalogTests {
                "selecting only Warp's WAL must preserve the entire database")
         let completeWarp = AgentCleanupExecutor.execute([selectedWarp],
             running: idle, home: home, presence: sandboxPresence, trashHandler: trashHandler)
-        expect(completeWarp.summary.removed == 3 && warpPaths.allSatisfy { !fm.fileExists(atPath: $0) },
-               "explicit full-family cleanup did not remove idle Warp database fixtures: \(completeWarp.summary.messages)")
+        expect(completeWarp.summary.removed == 0 && warpPaths.allSatisfy { fm.fileExists(atPath: $0) },
+               "full-family cleanup deleted retained Warp history: \(completeWarp.summary.messages)")
         try fm.removeItem(atPath: home + "/Applications/Warp.app")
         for path in warpRelatives { try write(path) }
         try write(warpRoot + "/keep.json")
@@ -1184,18 +1228,18 @@ struct AgentCatalogTests {
         expect(orphanedWarpReport.groups.first?.orphaned == true,
                "Warp data must be recognized as residuals after its application is removed")
         var orphanedWarpDatabase = orphanedWarpReport.categories.first { $0.paths.contains(home + "/" + warpRelatives[0]) }!
-        expect(orphanedWarpDatabase.canSelect && !orphanedWarpDatabase.selected,
-               "Uninstalled Warp data must remain a manual selection")
+        expect(!orphanedWarpDatabase.canSelect && !orphanedWarpDatabase.selected,
+               "Uninstalled Warp history must remain protected")
         orphanedWarpDatabase.selected = true
         let orphanedWarpPlan = AgentCleanupExecutor.plan([orphanedWarpDatabase], running: idle,
             home: home, presence: sandboxPresence, removingAgentIDs: ["warp"])
-        expect(Set(orphanedWarpPlan.items.map(\.record)) == warpPaths,
-               "Manually selected Warp residuals were rejected by the installed-application filter")
+        expect(orphanedWarpPlan.items.isEmpty,
+               "Uninstall scope authorized file deletion of retained Warp history")
         let orphanedWarpCleanup = AgentCleanupExecutor.execute([orphanedWarpDatabase], running: idle,
             home: home, presence: sandboxPresence, trashHandler: trashHandler, removingAgentIDs: ["warp"])
-        expect(orphanedWarpCleanup.summary.removed == 3 && warpPaths.allSatisfy { !fm.fileExists(atPath: $0) }
+        expect(orphanedWarpCleanup.summary.removed == 0 && warpPaths.allSatisfy { fm.fileExists(atPath: $0) }
                && fm.fileExists(atPath: home + "/" + warpRoot + "/keep.json"),
-               "Warp residual cleanup must delete only the selected database family: \(orphanedWarpCleanup.summary.messages)")
+               "Warp residual cleanup touched retained history: \(orphanedWarpCleanup.summary.messages)")
 
         // --- Skill 链接和共享本体是不同操作：解除单个关联保留本体，删除本体清掉全部关联。
         // Explicit declarations through a link must also be detached. A direct
@@ -1449,7 +1493,7 @@ struct AgentCatalogTests {
         expect(fm.fileExists(atPath: home + "/.gemini/settings.json.nori-backup"),
                "automatic MCP deregistration was not backed up")
 
-        // 不可解析配置允许明确重置；原字节必须在删除前备份。
+        // 不可解析配置仍保留原字节；不能用整文件重置绕过配置保护。
         try write(".config/opencode/opencode.json")
         let malformed = Data("{bad-json,\"private\":\"fixture-only\"".utf8)
         try malformed.write(to: URL(fileURLWithPath: home + "/.config/opencode/opencode.json"))
@@ -1457,9 +1501,10 @@ struct AgentCatalogTests {
             .first { $0.configPath == home + "/.config/opencode/opencode.json" }!
         expect(rawServer.issues == [.unreadableConfig], "malformed MCP configuration was not identified")
         let rawReset = AgentCleanupExecutor.execute([], running: idle, home: home, presence: sandboxPresence, trashHandler: trashHandler, servers: [rawServer])
-        expect(rawReset.summary.removed == 1 && !AgentCatalog.exists(rawServer.configPath)
+        expect(rawReset.summary.removed == 0 && AgentCatalog.exists(rawServer.configPath)
+               && fm.contents(atPath: rawServer.configPath) == malformed
                && fm.contents(atPath: rawServer.configPath + ".nori-backup") == malformed,
-               "unreadable MCP configuration reset lost its backup")
+               "unreadable MCP configuration was deleted or its backup was lost")
 
         // npx 全局包需要 package.json 名称和 bin 证明，卸载不触碰 npm/node 运行时。
         let packageRoot = home + "/.npm-global/lib/node_modules/@nori/test-mcp"
@@ -1503,12 +1548,15 @@ struct AgentCatalogTests {
             .write(toFile: home + "/.codex/config.toml", atomically: true, encoding: .utf8)
         var rootCategory = AgentInventory.scan(home: home, presence: sandboxPresence).categories
             .first { $0.paths.contains(kiroRoot) }!
+        rootCategory.risk = .warning
+        rootCategory.disposal = .permanentDelete
+        rootCategory.applyRoute = .aiTrash
         rootCategory.selected = true
         expect(AgentCleanupExecutor.blockingOwners([rootCategory],
                    running: RunningApplicationSnapshot(bundleIdentifiers: ["com.openai.codex"],
                        processNames: ["claude", "Cursor"]), home: home, presence: sandboxPresence)
-                   == ["claude", "com.openai.codex"],
-               "parent-root preflight missed shared MCP/Skill consumers or included an unrelated app")
+                   .isEmpty,
+               "protected parent root requested an unnecessary application close")
         let containedLink = kiroRoot + "/skills/external-shared"
         try fm.createSymbolicLink(atPath: containedLink,
             withDestinationPath: home + "/.agents/skills/global")
@@ -1516,8 +1564,8 @@ struct AgentCatalogTests {
             .write(toFile: home + "/.codex/config.toml", atomically: true, encoding: .utf8)
         expect(AgentCleanupExecutor.blockingOwners([rootCategory],
                    running: RunningApplicationSnapshot(bundleIdentifiers: ["com.openai.codex"]),
-                   home: home, presence: sandboxPresence) == ["com.openai.codex"],
-               "parent-root preflight missed a declaration through a contained Skill link")
+                   home: home, presence: sandboxPresence).isEmpty,
+               "protected parent root requested a close for a contained Skill link")
         try fm.removeItem(atPath: containedLink)
         try (existingTOML + "\n[[skills.config]]\npath = \"\(containedSkill)\"\nenabled = true\n")
             .write(toFile: home + "/.codex/config.toml", atomically: true, encoding: .utf8)
@@ -1537,13 +1585,13 @@ struct AgentCatalogTests {
         try fm.removeItem(atPath: blockedExternalBackup)
         let rootRemoval = AgentCleanupExecutor.execute([rootCategory], running: idle, home: home,
             presence: sandboxPresence, trashHandler: trashHandler)
-        expect(rootRemoval.summary.removed >= 1 && !AgentCatalog.exists(kiroRoot)
+        expect(rootRemoval.summary.removed == 0 && AgentCatalog.exists(kiroRoot)
                && AgentInventory.scanMCP(agents: AgentCatalog.definitions, home: home)
-                   .allSatisfy { $0.name != "contained" },
-               "whole root cleanup left an external MCP registration: \(rootRemoval.summary.messages)")
+                   .contains { $0.name == "contained" },
+               "protected root cleanup deleted data or detached an external MCP registration: \(rootRemoval.summary.messages)")
         let rootSkillConfig = try String(contentsOfFile: home + "/.codex/config.toml", encoding: .utf8)
-        expect(!rootSkillConfig.contains(containedSkill) && rootSkillConfig.contains("model = \"gpt\""),
-               "whole root cleanup left a Skill path registration or damaged unrelated config")
+        expect(rootSkillConfig.contains(containedSkill) && rootSkillConfig.contains("model = \"gpt\""),
+               "protected root cleanup detached a Skill or damaged unrelated config")
 
         // Data-only Agents remain visible as unselected leftovers; retained
         // configuration still cannot count as an installed application.
@@ -1562,8 +1610,9 @@ struct AgentCatalogTests {
         for agent in AgentCatalog.definitions where removedIDs.contains(agent.id) {
             expect(AgentCatalog.isOrphaned(agent, home: home, presence: sandboxPresence),
                    "\(agent.id) data was not classified as an uninstall leftover")
-            expect(!AgentCatalog.orphanedDataRoots(agent, home: home, presence: sandboxPresence).isEmpty,
-                   "\(agent.id) leftovers cannot reach the cleanup tab")
+            expect(AgentCatalog.orphanedDataRoots(agent, home: home, presence: sandboxPresence).allSatisfy {
+                !AgentCatalog.isManagedCleanupPath($0, protectedPaths: AgentCatalog.managedCleanupPaths(home: home))
+            }, "\(agent.id) orphaned cleanup exposed retained history or state")
         }
         expect(!AgentCatalog.deletablePaths(home: home, presence: sandboxPresence)
             .contains(home + "/.local/share/opencode/openCode.db"),
@@ -1587,8 +1636,8 @@ struct AgentCatalogTests {
         selectedLeftover.selected = true
         expect(AgentCleanupExecutor.blockingOwners([selectedLeftover],
                    running: RunningApplicationSnapshot(processNames: ["opencode"]),
-                   home: home, presence: sandboxPresence) == ["opencode"],
-               "Agent leftover preflight missed its running CLI owner")
+                   home: home, presence: sandboxPresence).isEmpty,
+               "protected Agent leftover requested an unnecessary application close")
         expect(selectedLeftover.activityOwners == ["opencode"]
                && CleanupRiskPolicy.isEligible(selectedLeftover, mode: .manual, running: idle, homeDirectory: home)
                && !CleanupRiskPolicy.isEligible(selectedLeftover, mode: .quickClean, running: idle, homeDirectory: home)
@@ -1600,8 +1649,8 @@ struct AgentCatalogTests {
                && CleanupCategory.manualCleanupCandidates(from: [plainWarning]).isEmpty,
                "explicit Agent leftovers were preselected or widened the safe junk funnel")
         expect(Set(AgentCleanupExecutor.plan([selectedLeftover], running: idle, home: home,
-            presence: sandboxPresence).items.map(\.record)) == Set(selectedLeftover.paths),
-               "cleanup-tab Agent leftovers cannot reach the Agent resource cascade")
+            presence: sandboxPresence).items.map(\.record)).isEmpty,
+               "cleanup-tab Agent leftovers exposed retained history to deletion")
         let smallWarnings = (0..<3).map { index -> CleanupCategory in
             var item = CleanupCategory(name: "agent residual \(index)",
                 paths: [home + "/.codex/residual-\(index)"], bytes: 4096, selected: false,

@@ -127,6 +127,7 @@ enum AgentInventory {
         let session = ScanSession(control: control)
         let context = context ?? AgentCatalog.defaultPresenceContext(home: home)
         let whitelist = NativeCore.shared.loadWhitelist(homeDirectory: home)
+        let protectedPaths = AgentCatalog.managedCleanupPaths(home: home)
         let definitions = AgentCatalog.definitions.filter { onlyAgentIDs?.contains($0.id) ?? true }
         let installed = definitions.filter { agent in
             AgentCatalog.hasData(agent, home: home)
@@ -255,8 +256,11 @@ enum AgentInventory {
             for target in targets {
                 let paths = target.paths.filter { (sizes[$0] ?? 0) > 0 }
                 guard !paths.isEmpty else { continue }
+                let managed = paths.contains { AgentCatalog.isManagedCleanupPath($0, protectedPaths: protectedPaths) }
                 let retentionClass: AgentRetentionClass?
-                if target.temporaryRetention != nil {
+                if managed {
+                    retentionClass = nil
+                } else if target.temporaryRetention != nil {
                     retentionClass = .temporary
                 } else {
                     retentionClass = target.tier == .review
@@ -270,7 +274,7 @@ enum AgentInventory {
                 let retentionBlocked = Set(worktreeStates.compactMap { path, state in
                     state == .clean || state == .orphaned ? nil : path
                 })
-                let recommendedPaths = defaultCleanupPaths(target, paths: paths,
+                let recommendedPaths = managed ? Set<String>() : defaultCleanupPaths(target, paths: paths,
                     documented: agent.documented, retentionClass: retentionClass,
                     retention: retention, agentID: agent.id, activity: pathActivity,
                     worktreeStates: worktreeStates, now: now)
@@ -286,7 +290,7 @@ enum AgentInventory {
                         let age = activity[path].map { ageNote(modified: $0, now: now, localize: localize) }
                         return (path, [age, status].compactMap { $0 }.joined(separator: " · "))
                     })
-                } else if retentionClass != nil {
+                } else if retentionClass != nil || managed {
                     notes = Dictionary(uniqueKeysWithValues: activity.map { path, date in
                         (path, ageNote(modified: date, now: now, localize: localize))
                     })
@@ -317,13 +321,13 @@ enum AgentInventory {
                     pathRetentionBlocked: retentionBlocked,
                     selected: false,
                     source: target.tier == .safe ? .aiCache : .aiSession,
-                    risk: risk(for: target.tier),
-                    disposal: .permanentDelete,
-                    applyRoute: .aiTrash,
+                    risk: managed ? .protected : risk(for: target.tier),
+                    disposal: managed ? .none : .permanentDelete,
+                    applyRoute: managed ? .none : .aiTrash,
                     activityGuard: .aiAgent,
                     retention: target.temporaryRetention
                         ?? retentionClass.map { retention.retention(for: $0, agentID: agent.id) } ?? 0,
-                    reasonKey: reasonKey(for: target, documented: agent.documented))
+                    reasonKey: managed ? "agents.reason.managedHistory" : reasonKey(for: target, documented: agent.documented))
                 category = category.selectingPaths(selectByDefault)
                 category.activityOwners = target.owners
                 if !recommendedPaths.isEmpty { report.recommendedCleanupCategoryIDs.insert(category.id) }
@@ -369,14 +373,13 @@ enum AgentInventory {
         switch tier {
         case .safe: return .safe
         case .review: return .warning
-        case .showOnly: return .warning
+        case .showOnly: return .protected
         }
     }
 
     /// Default selection is a cleanup recommendation, not a lower risk tier.
-    /// Retention-managed history and reviewed logs/cache still retain their owner
-    /// and identity guards. State, credentials and installations are left for an
-    /// explicit selection.
+    /// Reviewed artifacts and logs/cache retain their owner and identity guards.
+    /// History and state are removed from recommendations before this function.
     private static func defaultCleanupPaths(_ target: AgentCatalog.ResolvedTarget,
                                             paths: [String], documented: Bool,
                                             retentionClass: AgentRetentionClass?,

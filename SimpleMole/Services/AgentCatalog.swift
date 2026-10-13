@@ -3,8 +3,8 @@ import Foundation
 
 /// Agent 专清的三档目录：
 /// - `safe`：可再生缓存/旧安装包或可丢弃诊断日志，默认勾选；日志删除会失去排障资料；
-/// - `review`：会话、检查点、日志库等用户数据，删除后丢历史但不影响工具运行，交给用户选择；
-/// - `showOnly`：敏感数据与未公开结构的数据，手动清理前明确提醒影响。
+/// - `review`：产物、日志库等需要用户选择的数据；会话历史仍受独立保护；
+/// - `showOnly`：敏感数据与未公开结构的数据，只展示，不按文件清理。
 enum AgentTier: String, Sendable {
     case safe, review, showOnly
 }
@@ -72,7 +72,7 @@ struct AgentMCPSource: Sendable {
 }
 
 /// 安装本体的存在性线索：App bundle 名与 PATH 上的命令。
-/// 两者都找不到时，其数据目录视为已卸载应用的残留，升级为可清理。
+/// 两者都找不到时，列为卸载残留；只有已知可清理叶子进入删除流程。
 struct AgentPresence: Sendable {
     let bundleNames: [String]
     let commands: [String]
@@ -880,12 +880,19 @@ enum AgentCatalog {
            isInstalled(codex, home: home, presence: context) {
             sharedSkillTargets.formUnion(configuredSkillTargets(home: home))
         }
-        let roots = dataRoots(for: agent, home: home).filter { isPhysical($0, home: home) }
+        // Uninstall does not turn unknown files into cache. Only the same
+        // explicit targets used while installed may become residual candidates.
+        let roots = Array(Set((agent.targets + AgentProjectStorage.targets(for: agent.id, home: home))
+            .filter { $0.tier != .showOnly }
+            .flatMap { targetPaths($0, home: home) })).filter { isPhysical($0, home: home) }
+        let retained = managedCleanupPaths(home: home)
+            + definitions.flatMap { $0.skillDirectories.map { absolute($0, home: home) } }
         func unsharedParts(_ path: String) -> [String] {
             if liveRoots.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) { return [] }
             if sharedSkillTargets.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) { return [] }
-            guard (Array(sharedSkillTargets) + liveRoots).contains(where: { $0.hasPrefix(path + "/") }) else { return [path] }
-            // 只在含共享实体的祖先上拆分，保留本体和祖先目录，其他数据仍进入清理。
+            if retained.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) { return [] }
+            guard (Array(sharedSkillTargets) + liveRoots + retained).contains(where: { $0.hasPrefix(path + "/") }) else { return [path] }
+            // 只拆分已知目标，保留历史/状态和共享实体，不能扩展到未知兄弟文件。
             let names = ((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).sorted()
             return names.flatMap { name -> [String] in
                 let child = path + "/" + name
@@ -1198,13 +1205,54 @@ enum AgentCatalog {
         return candidates.filter { !active.contains($0) }.sorted()
     }
 
-    /// 执行边界复核：只返回当前目录仍解析为 safe/review 的路径。
-    /// 已卸载工具的残留走清理页；敏感数据与未公开结构的数据允许手动清理。
+    /// 会话与相关索引只能由宿主应用管理；退出或卸载应用也不授权删文件。
+    /// 返回精确根目录/数据库族，支持 CODEX_HOME 与独立 sqlite_home。
+    /// 不依赖文件年龄、已安装状态或旧扫描结果的风险标记。
+    static func managedCleanupPaths(home: String) -> [String] {
+        let historyLabels: Set<String> = [
+            "agents.label.sessions", "agents.label.transcripts", "agents.label.archivedSessions",
+            "agents.label.history", "agents.label.conversations", "agents.label.conversationDatabase",
+            "agents.label.stateDatabase", "agents.label.historyDatabase", "agents.label.workspaceState",
+            "agents.label.worktrees", "agents.label.checkpoints", "agents.label.fileHistory",
+            "agents.label.vmBundles", "agents.label.shellSnapshots"
+        ]
+        var result = definitions.flatMap { agent in
+            (agent.targets + AgentProjectStorage.targets(for: agent.id, home: home)).filter {
+                $0.tier == .showOnly || historyLabels.contains($0.labelKey)
+            }.flatMap { target -> [String] in
+                switch target.kind {
+                case .path(let root), .children(let root), .files(let root, _),
+                     .childrenExcluding(let root, _), .projectContents(let root, _),
+                     .projectLeaves(let root, _), .worktrees(let root, _), .sqliteTree(let root, _, _, _):
+                    return [absolute(root, home: home)]
+                case .leaves(let root, let names):
+                    return names.map { absolute(root, home: home) + "/" + $0 }
+                default:
+                    return targetPaths(target, home: home)
+                }
+            } + agent.mcpSources.map { absolute($0.path, home: home) }
+        }
+        result += [".codex/config.toml", ".codex/.codex-global-state.json", ".codex/session_index.jsonl",
+                   ".codex/memories", ".codex/automations", ".codex/worktrees", ".codex/db-backups",
+                   ".codex/attachments", ".codex/generated_images",
+                   "Library/Application Support/Nori/agent-history-backups"].map { absolute($0, home: home) }
+        return Array(Set(result)).sorted()
+    }
+
+    static func isManagedCleanupPath(_ path: String, protectedPaths: [String]) -> Bool {
+        let normalized = URL(fileURLWithPath: path).standardizedFileURL.path
+        return protectedPaths.contains {
+            normalized == $0 || normalized.hasPrefix($0 + "/") || $0.hasPrefix(normalized + "/")
+        }
+    }
+
+    /// 执行边界复核：只返回当前仍可按文件清理的路径。
     static func deletablePaths(home: String, presence context: AgentPresenceContext? = nil) -> Set<String> {
         var result = Set<String>()
+        let protectedPaths = managedCleanupPaths(home: home)
         for agent in definitions where isInstalled(agent, home: home, presence: context) {
             for target in resolve(agent, home: home, presence: context) {
-                result.formUnion(target.paths)
+                result.formUnion(target.paths.filter { !isManagedCleanupPath($0, protectedPaths: protectedPaths) })
             }
         }
         return result
