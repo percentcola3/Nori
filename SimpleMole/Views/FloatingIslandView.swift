@@ -117,6 +117,7 @@ extension AppState.IslandItem {
         case .thermal: return "thermometer.medium"
         case .power: return "bolt"
         case .bluetooth: return "headphones"
+        case .collection: return "square.stack.3d.up"
         }
     }
     var labelKey: String { "island.item.\(rawValue)" }
@@ -174,6 +175,9 @@ struct FloatingIslandView: View {
     @Environment(\.layoutDirection) private var layoutDirection
     @FocusState private var focusedResource: IslandResource?
     @State private var expanded = false
+    @State private var networkPresented = false
+    @State private var collectionPresented = false
+    @State private var collectionHovered = false
     @State private var selectedResource: IslandResource?
     @State private var hoveredResource: IslandResource?
     @State private var hoverDebounce: Task<Void, Never>?
@@ -277,7 +281,13 @@ struct FloatingIslandView: View {
                 releaseFeedbackAfterDelay()
             }
         }
+        .onChange(of: state.islandItems) { items in
+            if !items.contains(.collection) { collectionPresented = false; collectionHovered = false }
+            if !items.contains(.network) { state.islandNetworkProbe.cancel(); networkPresented = false }
+        }
         .onDisappear {
+            state.islandNetworkProbe.cancel()
+            networkPresented = false
             hoverDebounce?.cancel()
             resourceDebounce?.cancel()
             resourceHoverDebounce?.cancel()
@@ -292,6 +302,8 @@ struct FloatingIslandView: View {
             onDetailHitFrameChange(nil)
             expanded = false
             selectedResource = nil
+            collectionPresented = false
+            collectionHovered = false
             hoveredResource = nil
             onExpandedChange(false)
         }
@@ -372,6 +384,8 @@ struct FloatingIslandView: View {
         }
         .animation(motion, value: expanded)
         .animation(detailMotion, value: selectedResource)
+        .animation(detailMotion, value: collectionPresented)
+        .animation(detailMotion, value: networkPresented)
         .animation(detailMotion, value: expandedHeight)
         .padding(.horizontal, IslandLayout.windowMargin)
         .padding(.bottom, IslandLayout.windowMargin)
@@ -394,6 +408,8 @@ struct FloatingIslandView: View {
         .environment(\.layoutDirection, .leftToRight)
         .animation(motion, value: expanded)
         .animation(detailMotion, value: selectedResource)
+        .animation(detailMotion, value: collectionPresented)
+        .animation(detailMotion, value: networkPresented)
         .animation(detailMotion, value: sideDetailHeight)
         .onPreferenceChange(IslandSideDetailFrameKey.self) { frame in
             onDetailHitFrameChange(frame)
@@ -495,9 +511,13 @@ struct FloatingIslandView: View {
 
     private var sideDetailSlot: some View {
         ZStack {
-            if expanded, let resource = selectedResource {
+            if expanded, selectedResource != nil || collectionPresented || networkPresented {
                 ScrollView(.vertical) {
-                    resourcePanel(resource)
+                    Group {
+                        if networkPresented { networkProbePanel }
+                        else if collectionPresented { collectionDrawer }
+                        else if let resource = selectedResource { resourcePanel(resource) }
+                    }
                         .frame(width: IslandLayout.sideDetailWidth)
                         .fixedSize(horizontal: false, vertical: true)
                         .background {
@@ -544,7 +564,19 @@ struct FloatingIslandView: View {
     private var expandedPanel: some View {
         VStack(spacing: 0) {
             headerRow
-            if selectedResource != nil {
+            if collectionPresented || networkPresented {
+                Rectangle().fill(Color.hairline).frame(height: 1).padding(.horizontal, IslandLayout.contentInset + 10)
+                Group {
+                    if networkPresented { networkProbePanel }
+                    else { collectionDrawer }
+                }
+                    .onHover { hovering in
+                        detailHovered = hovering
+                        if hovering { resourceDebounce?.cancel() }
+                        else { scheduleResourceDismissal() }
+                    }
+                    .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
+            } else if selectedResource != nil {
                 Rectangle()
                     .fill(Color.hairline)
                     .frame(height: 1)
@@ -663,8 +695,19 @@ struct FloatingIslandView: View {
 
     @ViewBuilder
     private func metric(_ item: AppState.IslandItem) -> some View {
-        if item == .network {
+        if item == .collection {
+            IslandMenuBarCollectionPreview(controller: state.menuBarCollection,
+                onOpen: { selectCollection() }, onHoverChange: { hovering in
+                    collectionHovered = hovering
+                    if hovering { selectCollection() }
+                    else { scheduleResourceDismissal() }
+                })
+        } else if item == .network {
             networkMeter
+                .allowsHitTesting(false).accessibilityHidden(true)
+                .overlay {
+                    IslandActionTarget(label: l10n.t("island.network.open"), accessibilityValue: networkValue, isEnabled: expanded) { openNetworkProbe() }
+                }
         } else if let resource = item.resource {
             Button { beginCleanup(resource) } label: { ring(item) }
                 .buttonStyle(IslandResourceButtonStyle())
@@ -693,7 +736,7 @@ struct FloatingIslandView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(l10n.t(item.labelKey))
                 .accessibilityValue(valueText(item))
-                .onHover { if $0 { selectResource(nil) } }
+                .onHover { if $0 && !networkPresented { selectResource(nil) } }
         }
     }
 
@@ -791,7 +834,7 @@ struct FloatingIslandView: View {
         case .cpu: return metricsStore.metrics.cpuPercent / 100
         case .memory: return metricsStore.metrics.memoryPercent / 100
         case .disk: return metricsStore.metrics.diskUsedPercent / 100
-        case .network: return 0
+        case .network, .collection: return 0
         case .gpu: return (metricsStore.metrics.gpuPercent ?? 0) / 100
         case .thermal:
             if let temperature = metricsStore.metrics.cpuTemperature { return min(1, temperature / 100) }
@@ -824,7 +867,7 @@ struct FloatingIslandView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(l10n.t("island.item.network"))
             .accessibilityValue(networkValue)
-            .onHover { if $0 { selectResource(nil) } }
+            .onHover { if $0 && !networkPresented { selectResource(nil) } }
         }
     }
 
@@ -848,7 +891,7 @@ struct FloatingIslandView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(l10n.t("island.item.network"))
         .accessibilityValue(networkValue)
-        .onHover { if $0 { selectResource(nil) } }
+        .onHover { if $0 && !networkPresented { selectResource(nil) } }
     }
 
     private func rateLine(symbol: String, text: String, tint: Color) -> some View {
@@ -899,7 +942,7 @@ struct FloatingIslandView: View {
         case .cpu: return String(format: "%.0f%%", metricsStore.metrics.cpuPercent)
         case .memory: return String(format: "%.0f%%", metricsStore.metrics.memoryPercent)
         case .disk: return ByteFormat.short(metricsStore.metrics.diskFreeBytes)
-        case .network: return ""
+        case .network, .collection: return ""
         case .gpu: return metricsStore.metrics.gpuPercent.map { String(format: "%.0f%%", $0) } ?? "—"
         case .thermal:
             if let temperature = metricsStore.metrics.cpuTemperature { return String(format: "%.0f°", temperature) }
@@ -922,7 +965,7 @@ struct FloatingIslandView: View {
         case .bluetooth:
             return metricsStore.metrics.bluetoothBatteries.isEmpty ? l10n.t("island.bluetooth.none")
                 : metricsStore.metrics.bluetoothBatteries.map { "\($0.name) \($0.percent)%" }.joined(separator: ", ")
-        case .cpu, .gpu, .power: return primaryValue(item)
+        case .cpu, .gpu, .power, .collection: return primaryValue(item)
         }
     }
 
@@ -991,24 +1034,70 @@ struct FloatingIslandView: View {
         .contentShape(Rectangle())
     }
 
-    private func selectResource(_ resource: IslandResource?) {
+    private var networkProbePanel: some View {
+        IslandNetworkProbeView(controller: state.islandNetworkProbe) {
+            state.islandNetworkProbe.cancel()
+            withAnimation(detailMotion) { networkPresented = false }
+            if !islandHovered { scheduleHoverTransition(false) }
+        }
+    }
+
+    private func openNetworkProbe() {
         guard state.islandCleaningResource == nil else { return }
+        hoverDebounce?.cancel()
+        resourceDebounce?.cancel()
+        resourceHoverDebounce?.cancel()
+        hoveredResource = nil
+        collectionHovered = false
+        withAnimation(detailMotion) {
+            selectedResource = nil
+            collectionPresented = false
+            networkPresented = true
+        }
+    }
+
+    private var collectionDrawer: some View {
+        IslandMenuBarCollectionDrawer(controller: state.menuBarCollection,
+            onNativeAction: { icon, secondary in
+                setExpanded(false)
+                state.menuBarCollection.activate(icon, secondary: secondary)
+            }, onSettings: {
+                setExpanded(false)
+                state.menuBarCollection.openSettings()
+            })
+    }
+
+    private func selectCollection() {
+        guard state.islandCleaningResource == nil, !feedbackPinned, state.islandNetworkProbe.running == nil else { return }
+        networkPresented = false
+        resourceDebounce?.cancel()
+        resourceHoverDebounce?.cancel()
+        hoveredResource = nil
+        withAnimation(detailMotion) {
+            selectedResource = nil
+            collectionPresented = true
+        }
+    }
+
+    private func selectResource(_ resource: IslandResource?) {
+        guard state.islandCleaningResource == nil, state.islandNetworkProbe.running == nil else { return }
+        if resource != nil { networkPresented = false }
         if feedbackPinned, resource == nil { return }
         resourceDebounce?.cancel()
         resourceHoverDebounce?.cancel()
-        guard selectedResource != resource else { return }
-        withAnimation(detailMotion) { selectedResource = resource }
-        if resource != nil { state.refreshIslandProcesses() }
+        guard selectedResource != resource || collectionPresented else { return }
+        withAnimation(detailMotion) { selectedResource = resource; collectionPresented = false }
+        if resource != nil { collectionPresented = false; state.refreshIslandProcesses() }
     }
 
     private func scheduleResourceDismissal() {
         resourceDebounce?.cancel()
         resourceDebounce = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled, state.islandCleaningResource == nil,
-                  state.islandClosingPIDs.isEmpty, hoveredResource == nil, !moreHovered, !feedbackPinned,
+            guard !Task.isCancelled, !networkPresented, state.islandCleaningResource == nil,
+                  state.islandClosingPIDs.isEmpty, hoveredResource == nil, !collectionHovered, !moreHovered, !feedbackPinned,
                   !detailHovered, !sideDragging, edge == .top || focusedResource == nil else { return }
-            withAnimation(detailMotion) { selectedResource = nil }
+            withAnimation(detailMotion) { selectedResource = nil; collectionPresented = false }
         }
     }
 
@@ -1027,7 +1116,7 @@ struct FloatingIslandView: View {
         hoverDebounce = Task { @MainActor in
             try? await Task.sleep(nanoseconds: hovering ? 220_000_000 : 400_000_000)
             guard !Task.isCancelled, !sideDragging else { return }
-            if !hovering, feedbackPinned || state.islandCleaningResource != nil
+            if !hovering, networkPresented || feedbackPinned || state.islandCleaningResource != nil
                 || (edge != .top && focusedResource != nil) { return }
             setExpanded(hovering)
         }
@@ -1035,12 +1124,15 @@ struct FloatingIslandView: View {
 
     private func beginCleanup(_ resource: IslandResource) {
         guard state.islandCleaningResource == nil else { return }
+        state.islandNetworkProbe.cancel()
+        networkPresented = false
         ringReplay?.cancel()
         resetRingReveal(to: 1)
         hoverDebounce?.cancel()
         resourceDebounce?.cancel()
         feedbackDismissal?.cancel()
         resourceHoverDebounce?.cancel()
+        collectionPresented = false
         withAnimation(detailMotion) { selectedResource = resource }
         feedbackPinned = true
         state.cleanIslandResource(resource)
@@ -1088,11 +1180,15 @@ struct FloatingIslandView: View {
         withAnimation(islandMotion(expanding: value)) {
             expanded = value
             if !value {
+                state.islandNetworkProbe.cancel()
+                networkPresented = false
                 ringReplay?.cancel()
                 resetRingReveal(to: 1)
                 resourceDebounce?.cancel()
                 resourceHoverDebounce?.cancel()
                 selectedResource = nil
+                collectionPresented = false
+                collectionHovered = false
                 hoveredResource = nil
             }
         }

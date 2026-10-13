@@ -5,6 +5,14 @@ import SwiftUI
 /// test script. Product sources and the installed app's preferences stay intact.
 @MainActor
 enum IslandPresentationFixture {
+    static var network = false
+    static var collection = false
+    static let icons: [CollectedMenuBarIcon] = ["bolt", "waveform", "cloud", "paperplane", "headphones", "network"].enumerated().map { index, symbol in
+        CollectedMenuBarIcon(id: "fixture-\(index)", bundleIdentifier: "fixture-\(index)", pid: 0,
+            name: "Icon \(index + 1)", title: "Fixture icon \(index + 1)", ordinal: 0, ownerCount: 1,
+            nativeIdentifier: nil, frame: CGRect(x: 0, y: 0, width: 24, height: 24),
+            image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)!, isNativePreview: true)
+    }
     static var expanded = false
     static var resource: IslandResource?
     static var reduceTransparency = false
@@ -37,7 +45,12 @@ struct IslandSidePresentationTests {
 
     static func capture(_ state: AppState, edge: AppState.IslandEdge, expanded: Bool,
                         resource: IslandResource?, name: String, output: URL,
-                        hardwareNotch: Bool = false, reduceTransparency: Bool = false) throws {
+                        hardwareNotch: Bool = false, reduceTransparency: Bool = false, collection: Bool = false, network: Bool = false, networkRunning: Bool = false, networkFailure: Bool = false) throws {
+        state.islandNetworkProbe.running = networkRunning ? .bandwidth : nil
+        state.islandNetworkProbe.errorKey = networkFailure ? "island.network.failed" : nil
+        state.islandNetworkProbe.stopped = false
+        IslandPresentationFixture.network = network
+        IslandPresentationFixture.collection = collection
         IslandPresentationFixture.expanded = expanded
         IslandPresentationFixture.resource = resource
         IslandPresentationFixture.reduceTransparency = reduceTransparency
@@ -148,7 +161,7 @@ struct IslandSidePresentationTests {
             } else {
                 check(approximately(rail.width, IslandLayout.sideRailWidth),
                       "\(name): vertical metric rail width changed")
-                if resource == nil {
+                if resource == nil && !collection && !network {
                     check(regions.detail == nil, "\(name): sidebar without a resource must not expose a detail target")
                 } else {
                     guard let detail = regions.detail else {
@@ -176,6 +189,15 @@ struct IslandSidePresentationTests {
             }
         }
 
+        if collection {
+            func secondaryLeaves(in view: NSView) -> [IslandActionButton] {
+                if let button = view as? IslandActionButton, button.onSecondaryAction != nil { return [button] }
+                return view.subviews.flatMap { secondaryLeaves(in: $0) }
+            }
+            check(secondaryLeaves(in: host).count == IslandPresentationFixture.icons.count,
+                  "\(name): every collected icon must expose native primary and right-click targets")
+        }
+
         let path = output.appendingPathComponent(name + ".png")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -185,6 +207,31 @@ struct IslandSidePresentationTests {
         check(process.terminationStatus == 0 && NSImage(contentsOf: path) != nil,
               "\(name): native own-window capture must succeed")
         print("Passed \(name): rail=\(rail), detail=\(String(describing: regions.detail)); \(path.path)")
+    }
+
+    static func captureSettings(_ state: AppState, name: String, output: URL) throws {
+        state.jump(to: .settings)
+        let size = NSSize(width: 940, height: 900)
+        let host = NSHostingView(rootView: MainWindowView(state: state).environment(\.colorScheme, .dark))
+        host.sizingOptions = []
+        let window = NoriMainWindow(contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.isOpaque = false
+        window.backgroundColor = .clear
+        window.contentView = host
+        window.center()
+        window.orderFrontRegardless()
+        defer { window.orderOut(nil); window.close() }
+        settle()
+        check(host.bounds.size == size, "\(name): settings must retain the fixed viewport")
+        let path = output.appendingPathComponent(name + ".png")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        process.arguments = ["-x", "-o", "-l", String(window.windowNumber), path.path]
+        try process.run(); process.waitUntilExit()
+        check(process.terminationStatus == 0, "\(name): settings capture must succeed")
+        print("Passed \(name): \(path.path)")
     }
 
     static func checkScreenFit() {
@@ -239,11 +286,35 @@ struct IslandSidePresentationTests {
                                 name: "\(locale)-\(edge.rawValue)-\(resource.rawValue)", output: output)
                 }
             }
+            for edge in [AppState.IslandEdge.top, .left, .right] {
+                try capture(state, edge: edge, expanded: true, resource: nil,
+                            name: "\(locale)-\(edge.rawValue)-network-probe", output: output, network: true)
+            }
+            state.islandItems.insert(.collection)
+            for edge in [AppState.IslandEdge.top, .left, .right] {
+                try capture(state, edge: edge, expanded: true, resource: nil,
+                            name: "\(locale)-\(edge.rawValue)-collection-preview", output: output)
+                try capture(state, edge: edge, expanded: true, resource: nil,
+                            name: "\(locale)-\(edge.rawValue)-collection-drawer", output: output, collection: true)
+            }
             state.islandItems = Set(AppState.IslandItem.allCases)
             for edge in [AppState.IslandEdge.left, .right] {
                 try capture(state, edge: edge, expanded: true, resource: nil,
                             name: "\(locale)-\(edge.rawValue)-all-metrics", output: output)
             }
+        }
+        for language in [AppLanguage.en, .zhHans, .zhHant] {
+            L10n.shared.setLanguage(language)
+            let reviewState = ReadmeFixture.makeState()
+            reviewState.islandItems.insert(.collection)
+            let locale = language.rawValue
+            try capture(reviewState, edge: .top, expanded: true, resource: nil,
+                name: "\(locale)-notch-collection", output: output, hardwareNotch: true, collection: true)
+            try capture(reviewState, edge: .top, expanded: true, resource: nil,
+                name: "\(locale)-notch-network-running", output: output, hardwareNotch: true, network: true, networkRunning: true)
+            try capture(reviewState, edge: .right, expanded: true, resource: nil,
+                name: "\(locale)-network-failure-fallback", output: output, reduceTransparency: true, network: true, networkFailure: true)
+            try captureSettings(reviewState, name: "\(locale)-settings-collection", output: output)
         }
         L10n.shared.setLanguage(.zhHans)
         let state = ReadmeFixture.makeState()

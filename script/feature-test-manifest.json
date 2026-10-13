@@ -157,6 +157,16 @@
         "test_agent_presentation.sh",
         "test.sh"
       ]
+    },
+    {
+      "name": "灵动岛图标收纳与网络检测",
+      "suites": [
+        "test_island_network_probe.sh",
+        "test_menu_bar_collection.sh",
+        "test_menu_bar_controller.sh",
+        "test_island_window.sh",
+        "test_island_side_presentation.sh"
+      ]
     }
   ],
   "suites": [

@@ -254,8 +254,13 @@ for arch in $BUILD_ARCHS; do
     mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Frameworks" "$RESOURCES"
 
     echo "==> Compiling Swift app ($arch)"
+    xcrun clang -fobjc-arc -isysroot "$SWIFT_SDKROOT" -target "$arch-apple-macos13.0" \
+        -c "$SWIFT_SOURCE_DIR/Support/MenuBarCollection/NoriMenuBarVisibility.m" \
+        -o "$BUILD_TMP/menu-bar-$arch.o"
     SDKROOT="$SWIFT_SDKROOT" swiftc -O -whole-module-optimization -target "$arch-apple-macos13.0" \
         -module-cache-path "$BUILD_TMP/module-cache-$arch" \
+        -import-objc-header "$SWIFT_SOURCE_DIR/Support/MenuBarCollection/NoriMenuBarVisibility.h" \
+        "$BUILD_TMP/menu-bar-$arch.o" \
         -F "$SPARKLE_DIR" -framework Sparkle \
         -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' \
         -framework Cocoa -framework SwiftUI -framework CoreServices -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement -framework UserNotifications -lsqlite3 \

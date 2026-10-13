@@ -45,10 +45,12 @@ final class AgentHistoryGemini: AgentHistoryBackend, @unchecked Sendable {
             let data = try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys])
             var protection = AgentHistorySession.protection(in: metadata, project: context.project)
             if line[stateRange].contains("current") { protection = "agents.history.protected.active" }
+            let modified = try URL(fileURLWithPath: file)
+                .resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             sessions.append(.init(provider: .gemini, sessionID: id, title: String(line[titleRange]),
                 project: context.project,
                 updatedAt: (metadata["lastUpdated"] as? String).flatMap(Self.date)
-                    ?? (try URL(fileURLWithPath: file).resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate),
+                    ?? modified,
                 fingerprint: try AgentHistoryBackup.hashFile(URL(fileURLWithPath: file)),
                 metadata: data, protection: protection, transcript: file, artifactRoot: root))
         }

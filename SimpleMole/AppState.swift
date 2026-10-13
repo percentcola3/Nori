@@ -103,7 +103,7 @@ final class AppState: ObservableObject {
 
     /// 灵动岛展开时显示的快捷指标。
     enum IslandItem: String, CaseIterable, Identifiable {
-        case cpu, memory, gpu, thermal, power, disk, network, bluetooth
+        case cpu, memory, gpu, thermal, power, disk, network, bluetooth, collection
         var id: String { rawValue }
     }
 
@@ -127,6 +127,8 @@ final class AppState: ObservableObject {
     @Published var islandEnabled = true
     /// 菜单栏状态图标开关。灵动岛始终保留，菜单栏图标可以单独关闭。
     @Published var menuBarIconVisible = true
+    let menuBarCollection = MenuBarCollectionController()
+    let islandNetworkProbe = IslandNetworkProbe()
     /// 至少保留一项；这里控制刘海中的常驻指标。
     @Published var islandItems: Set<IslandItem> = [.cpu, .memory, .network]
     /// 灵动岛停靠的位置：顶部居中、屏幕左侧或屏幕右侧。
@@ -136,6 +138,7 @@ final class AppState: ObservableObject {
     @Published var islandRightPosition: Double = 0.5
 
     func setIslandEnabled(_ enabled: Bool) {
+        if !enabled { menuBarCollection.stop(); islandNetworkProbe.cancel() }
         if !enabled && !menuBarIconVisible { setMenuBarIconVisible(true) }
         islandEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "SMIslandEnabled")

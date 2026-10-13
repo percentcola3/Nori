@@ -72,7 +72,7 @@ struct PermissionCenterView: View {
             diskAccessCard
             screenRecordingCard
 
-            Label(l10n.t("permissions.noAccessibility"), systemImage: "checkmark.shield")
+            Label(l10n.t("menubar.permission.scope"), systemImage: "checkmark.shield")
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -262,7 +262,7 @@ struct PermissionCenterView: View {
         return PermissionCard(
             icon: "rectangle.inset.filled.and.person.filled",
             title: l10n.t("permissions.screen.title"),
-            detail: l10n.t("permissions.screen.detail"),
+            detail: l10n.t("menubar.capture.scope"),
             chip: chip(for: phase, optional: true),
             primary: phase == .granted
                 ? CardAction(title: l10n.t("permissions.openSettings"), icon: "gearshape",

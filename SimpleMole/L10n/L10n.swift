@@ -187,7 +187,7 @@ final class L10n: ObservableObject {
         for feature in [L10nDeveloperShellTables.table(for: language), L10nDeveloperNetworkTables.table(for: language),
                         L10nDeveloperExistingTables.table(for: language), L10nDeveloperWorkspaceTables.table(for: language),
                         L10nDeveloperSSHGitTables.table(for: language), L10nLocalizationAuditTables.table(for: language),
-                        L10nDirectoryTables.table(for: language)] {
+                        L10nDirectoryTables.table(for: language), L10nMenuBarCollectionTables.table(for: language), L10nIslandNetworkTables.table(for: language)] {
             result.merge(feature) { _, value in value }
         }
         return result

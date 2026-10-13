@@ -125,11 +125,16 @@ while IFS= read -r source; do
     esac
 done < <(find "$CAPTURE_SOURCE/SimpleMole" -name '*.swift' -type f | sort)
 
+xcrun clang -fobjc-arc -isysroot "$CAPTURE_SDK" -target "$(uname -m)-apple-macos13.0" \
+    -c "$ROOT_DIR/SimpleMole/Support/MenuBarCollection/NoriMenuBarVisibility.m" \
+    -o "$CAPTURE_TMP/menu-bar.o"
 echo "Compiling the isolated native README renderer…"
 cp "$ROOT_DIR/script/ReadmeScreenshots.swift" "$CAPTURE_TMP/ReadmeScreenshots.swift"
 SDKROOT="$CAPTURE_SDK" swiftc -Onone -whole-module-optimization \
     -target "$(uname -m)-apple-macos13.0" \
     -module-cache-path "$CAPTURE_TMP/module-cache" \
+    -import-objc-header "$ROOT_DIR/SimpleMole/Support/MenuBarCollection/NoriMenuBarVisibility.h" \
+    "$CAPTURE_TMP/menu-bar.o" \
     -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit \
     -framework IOKit -framework ServiceManagement -framework UserNotifications \
     "${SOURCES[@]}" "$CAPTURE_TMP/AppState.swift" "$CAPTURE_TMP/PermissionCenter.swift" \

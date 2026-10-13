@@ -2483,6 +2483,7 @@ test_swift() {
         done
     fi
     SDKROOT="$typecheck_sdkroot" swiftc -typecheck -target "$arch-apple-macos13.0" \
+        -import-objc-header "$ROOT_DIR/SimpleMole/Support/MenuBarCollection/NoriMenuBarVisibility.h" \
         -module-cache-path "$TEST_ROOT/swift-module-cache" \
         -F "$sparkle_dir" -framework Sparkle \
         -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement \

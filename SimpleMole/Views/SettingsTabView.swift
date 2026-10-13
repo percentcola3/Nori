@@ -67,6 +67,7 @@ struct SettingsTabView: View {
             VStack(alignment: .leading, spacing: 18) {
                 pagesSection
                 islandSection
+                menuBarCollectionSection
                 awakeSection
                 maintenanceSection
                 generalSection
@@ -235,6 +236,14 @@ struct SettingsTabView: View {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    private var menuBarCollectionSection: some View {
+        SettingsSection(title: l10n.t("menubar.title")) {
+            SettingsRow(vertical: 12) {
+                MenuBarCollectionSettingsView(controller: state.menuBarCollection)
             }
         }
     }

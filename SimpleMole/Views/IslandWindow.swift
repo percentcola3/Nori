@@ -157,8 +157,10 @@ final class IslandHostingView<Content: View>: NSHostingView<Content> {
 /// acceptance on NSHostingView alone does not cover hosted SwiftUI controls.
 struct IslandActionTarget: NSViewRepresentable {
     let label: String
+    var accessibilityValue: String? = nil
     var isEnabled = true
     var onPressChange: (Bool) -> Void = { _ in }
+    var onSecondaryAction: (() -> Void)? = nil
     let action: () -> Void
 
     func makeNSView(context: Context) -> IslandActionButton {
@@ -167,15 +169,18 @@ struct IslandActionTarget: NSViewRepresentable {
 
     func updateNSView(_ button: IslandActionButton, context: Context) {
         button.setAccessibilityLabel(label)
+        button.setAccessibilityValue(accessibilityValue)
         button.toolTip = label
         button.isEnabled = isEnabled
         button.onPressChange = onPressChange
         button.onActivate = action
+        button.onSecondaryAction = onSecondaryAction
     }
 }
 
 final class IslandActionButton: NSButton {
     var onActivate: () -> Void = {}
+    var onSecondaryAction: (() -> Void)?
     var onPressChange: (Bool) -> Void = { _ in }
 
     init() {
@@ -199,6 +204,11 @@ final class IslandActionButton: NSButton {
     override func highlight(_ flag: Bool) {
         super.highlight(flag)
         onPressChange(flag)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if isEnabled, let onSecondaryAction { onSecondaryAction() }
+        else { super.rightMouseDown(with: event) }
     }
 
     @objc private func activate() { onActivate() }

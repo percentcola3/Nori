@@ -68,7 +68,30 @@ island = island.replace("@State private var expanded = false",
     "@State private var expanded = IslandPresentationFixture.expanded")
 island = island.replace("@State private var selectedResource: IslandResource?",
     "@State private var selectedResource: IslandResource? = IslandPresentationFixture.resource")
+island = island.replace("@State private var collectionPresented = false",
+    "@State private var collectionPresented = IslandPresentationFixture.collection")
+island = island.replace("@State private var networkPresented = false",
+    "@State private var networkPresented = IslandPresentationFixture.network")
 island_path.write_text(island)
+network_path = root / "SimpleMole/Services/IslandNetworkProbe.swift"
+network = network_path.read_text().replace("var pingResult: IslandPingResult?",
+    "var pingResult: IslandPingResult? = IslandPingResult(sent: 4, received: 4, lossPercent: 0, averageMilliseconds: 24.6, jitterMilliseconds: 1)")
+network = network.replace("var bandwidthResult: IslandBandwidthResult?",
+    "var bandwidthResult: IslandBandwidthResult? = IslandBandwidthResult(downloadMbps: 185, uploadMbps: 32.4, idleMilliseconds: 23)")
+network = network.replace("@Published private(set) var", "@Published var")
+network_path.write_text(network)
+controller_path = root / "SimpleMole/Services/MenuBarCollectionController.swift"
+controller = controller_path.read_text().replace("        super.init()",
+    "        super.init()\n        enabled = true\n        icons = IslandPresentationFixture.icons", 1)
+controller = replace_body(controller, "    func refreshCandidates(clearError:", '''
+        candidates = IslandPresentationFixture.icons.enumerated().map { index, icon in
+            Candidate(id: icon.bundleIdentifier, name: index == 0 ? "A long application name with multiple menu bar icons" : icon.name,
+                      pid: 0, icon: icon.image)
+        }
+        selected = Set(candidates.prefix(4).map(\.id))
+        icons = IslandPresentationFixture.icons
+    ''')
+controller_path.write_text(controller)
 
 # Accessibility environment values are system-owned read-only inputs. Freeze
 # their reads in these fixture copies instead of changing the Mac's settings.
@@ -104,9 +127,14 @@ while IFS= read -r source; do
     case "$source" in */main.swift) ;; *) SOURCES+=("$source") ;; esac
 done < <(find "$TEST_DIR/source/SimpleMole" -name '*.swift' -type f | sort)
 
+xcrun clang -fobjc-arc -isysroot "$SDKROOT" -target "$(uname -m)-apple-macos13.0" \
+    -c "$ROOT_DIR/SimpleMole/Support/MenuBarCollection/NoriMenuBarVisibility.m" \
+    -o "$TEST_DIR/menu-bar.o"
 echo "Compiling isolated real-view island presentation checks…"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -module-cache-path "$TEST_DIR/module-cache" \
+    -import-objc-header "$ROOT_DIR/SimpleMole/Support/MenuBarCollection/NoriMenuBarVisibility.h" \
+    "$TEST_DIR/menu-bar.o" \
     -F "$SPARKLE_DIR" -framework Sparkle -Xlinker -rpath -Xlinker "$SPARKLE_DIR" \
     -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit \
     -framework IOKit -framework ServiceManagement -framework UserNotifications -framework WebKit \

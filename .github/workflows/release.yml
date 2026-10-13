@@ -60,6 +60,9 @@ jobs:
           SM_TEST_BUILD: '0'
         run: |
           bash script/test.sh
+          bash script/test_island_network_probe.sh
+          bash script/test_menu_bar_collection.sh
+          bash script/test_menu_bar_controller.sh
           bash script/test_release_version.sh
           bash script/test_install_update.sh
           bash script/test_app_updates.sh

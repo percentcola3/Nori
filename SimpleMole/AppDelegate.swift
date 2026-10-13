@@ -33,6 +33,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var islandSideDragSession: IslandSideDragSession?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        appState.menuBarCollection.onOpenSettings = { [weak self] in
+            self?.appState.jump(to: .settings)
+            self?.showMainWindow()
+        }
         setupMenu()
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
@@ -144,6 +148,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        appState.menuBarCollection.stop()
+        appState.islandNetworkProbe.cancel()
         cancelIslandSideDragTracking()
         appState.directoryBrowser.stopSizeBackgroundWork()
         AppUpdateController.shared.stop()
@@ -431,6 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 设置切换和屏幕重排结束当前拖动，按新屏幕与持久化位置重新布局。
         cancelIslandSideDragTracking()
         guard appState.islandEnabled && !appState.mainWindowVisible else {
+            appState.islandNetworkProbe.cancel()
             islandExpanded = false
             dismissLiquidPanel(islandPanel)
             return

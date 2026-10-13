@@ -232,6 +232,17 @@ struct IslandWindowTests {
         precondition(IslandWindowGeometry.origin(size: topSize, screenFrame: screen, visibleFrame: visible,
                                                  attachment: .top, positionFraction: 1) == topOrigin,
                      "Side position preferences must not change the top notch location")
+        var secondaryActivations = 0
+        let secondaryButton = IslandActionButton()
+        secondaryButton.onSecondaryAction = { secondaryActivations += 1 }
+        let secondaryEvent = NSEvent.mouseEvent(with: .rightMouseDown, location: .zero,
+            modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        secondaryButton.rightMouseDown(with: secondaryEvent)
+        precondition(secondaryActivations == 1, "Right click must invoke the secondary icon action")
+        secondaryButton.isEnabled = false
+        secondaryButton.rightMouseDown(with: secondaryEvent)
+        precondition(secondaryActivations == 1, "Disabled icons must not forward right click")
+
         print("Island window: draggable side bounds and restoration, hit routing, native actions and first-click behavior passed")
     }
 }

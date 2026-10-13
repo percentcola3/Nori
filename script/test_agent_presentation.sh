@@ -18,6 +18,8 @@ cat > "$FIXTURE_APP/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 # Compile a frozen copy of the explicit sources; test workers only touch fixtures.
+# The provider service remains disabled, matching this release's history policy.
+/usr/bin/grep -Fq 'static let interfacesEnabled = false' "$ROOT_DIR/SimpleMole/Services/AgentHistoryService.swift"
 mkdir -p "$TEST_DIR/sources"
 AGENT_PRESENTATION_SOURCES=(
     "$ROOT_DIR"/SimpleMole/L10n/*.swift
@@ -46,6 +48,10 @@ AGENT_PRESENTATION_SOURCES=(
     "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift"
     "$ROOT_DIR/SimpleMole/Views/AgentsTabView.swift"
     "$ROOT_DIR/SimpleMole/Views/AgentManagementView.swift"
+    "$ROOT_DIR/SimpleMole/Services/AgentHistoryModels.swift"
+    "$ROOT_DIR/SimpleMole/Views/AgentHistoryStore.swift"
+    "$ROOT_DIR/SimpleMole/Views/AgentHistoryView.swift"
+    "$ROOT_DIR/script/AgentHistoryPresentationSupport.swift"
     "$ROOT_DIR/SimpleMole/Services/AgentResourceCatalog.swift"
     "$ROOT_DIR/SimpleMole/Views/AwakeSessionRow.swift"
     "$ROOT_DIR/SimpleMole/Views/AgentStorageSummaryView.swift"

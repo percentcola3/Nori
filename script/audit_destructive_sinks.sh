@@ -31,6 +31,10 @@ SimpleMole/Services/CleanupCache.swift|SimpleMole/Services/MediaSlimmer.swift) r
                 'unlinkat(directory, name, 0)'|\
                 'defer { try? FileManager.default.removeItem(at: temporary) }') return 0 ;;
             esac ;;
+        SimpleMole/Services/AgentHistoryGemini.swift)
+            [[ "$2" == 'defer { try? FileManager.default.removeItem(at: invocation) }' ]] && return 0 ;;
+        SimpleMole/Services/AgentHistoryOpenCode.swift)
+            [[ "$2" == 'defer { try? FileManager.default.removeItem(at: file) }' ]] && return 0 ;;
         SimpleMole/Services/AgentCLIService.swift)
             [[ "$2" == 'defer { try? handle.close(); try? FileManager.default.removeItem(at: output) }' ]] && return 0 ;;
         SimpleMole/Services/AdministratorCleanupService.swift|\
@@ -100,6 +104,21 @@ for contract in \
     'guard source.path != "/" else { throw DirectoryFileError.protectedRoot }'; do
     grep -Fq "$contract" "$directory_service" || fail 'Directory Trash or owned copy-staging contract changed'
 done
+
+# History adapters may remove only their own invocation settings and the
+# URLSession-owned download, never a provider history path.
+gemini_history="$ROOT_DIR/SimpleMole/Services/AgentHistoryGemini.swift"
+opencode_history="$ROOT_DIR/SimpleMole/Services/AgentHistoryOpenCode.swift"
+for contract in \
+    '.appendingPathComponent("Library/Application Support/Nori/agent-history-invocations")' \
+    'let invocation = root.appendingPathComponent(UUID().uuidString)' \
+    'createDirectory(at: invocation, withIntermediateDirectories: false,' \
+    'root.resolvingSymlinksInPath().path == root.path' \
+    'retention["enabled"] = false'; do
+    grep -Fq "$contract" "$gemini_history" || fail 'Gemini invocation cleanup lost its owned-path or disabled-retention boundary'
+done
+grep -Fq 'do { (file, response) = try await http.download(for: request) }' "$opencode_history" || \
+    fail 'OpenCode temporary cleanup lost the URLSession download ownership boundary'
 
 # The exact statement exemptions above remain valid only with owned, exclusive
 # temporary names and the Shell profile's identity/byte comparison in place.

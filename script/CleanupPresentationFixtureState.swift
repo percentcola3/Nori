@@ -298,6 +298,10 @@ struct AgentMCPInstallation: Identifiable, Sendable {
 enum AgentCatalog {
     struct Definition { let id: String; let name: String }
     static let definitions = [Definition(id: "codex", name: "Codex")]
+    static func executableSearchPath(home: String) -> [String] { [] }
+    static func isDirectory(_ path: String) -> Bool { false }
+    static func isRegularFile(_ path: String) -> Bool { false }
+    static func resolveExecutable(_ name: String, searchPath: [String], home: String) -> String? { nil }
     static func absolute(_ relative: String, home: String) -> String {
         URL(fileURLWithPath: home).appendingPathComponent(relative).standardizedFileURL.path
     }
