@@ -84,6 +84,19 @@ enum AgentCLIService {
                     return resolved == root || resolved.hasPrefix(root + "/")
                 }) { candidates.insert(path) }
         }
+        // Grok keeps native release executables separately from its command
+        // entry. A removed entry must not hide an otherwise removable program.
+        if agent.id == "grok" {
+            let root = AgentCatalog.absolute(".grok/downloads", home: home)
+            if safeAncestors(root), !AgentCatalog.isSymlink(root) {
+                for name in AgentCatalog.childNames(of: root) where isGrokReleaseName(name) {
+                    let path = root + "/" + name
+                    if !AgentCatalog.isSymlink(path), AgentCatalog.isExecutableCommandFile(path) {
+                        candidates.insert(path)
+                    }
+                }
+            }
+        }
 
         var byID: [String: AgentCLIInstallation] = [:]
         for path in candidates.sorted() {
@@ -101,6 +114,29 @@ enum AgentCLIService {
                     package: record.packageName, idRoot: record.id, explicitID: true)
             } else {
                 byID[record.id] = record
+            }
+        }
+        if agent.id == "grok" {
+            let downloadRoot = AgentCatalog.absolute(".grok/downloads", home: home)
+            let binRoot = AgentCatalog.absolute(".grok/bin", home: home)
+            let aliases = (AgentCatalog.nativeLaunchers(for: agent) + [".local/bin/agent"]).compactMap { relative -> String? in
+                let path = AgentCatalog.absolute(relative, home: home)
+                guard safeAncestors(path), AgentCatalog.isSymlink(path),
+                      let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: path) else { return nil }
+                let target = URL(fileURLWithPath: (destination as NSString).isAbsolutePath
+                    ? destination : (path as NSString).deletingLastPathComponent + "/" + destination).standardizedFileURL.path
+                guard safeAncestors(target), target == binRoot + "/agent" || target == binRoot + "/grok"
+                    || (target as NSString).deletingLastPathComponent == downloadRoot
+                        && isGrokReleaseName((target as NSString).lastPathComponent) else { return nil }
+                return path
+            }
+            // Include owned dangling links only after a native program has
+            // been found. A broken link alone is not an installed program.
+            for record in Array(byID.values) where record.manager == .native
+                && record.managedPaths.contains(where: { $0 == downloadRoot || $0 == binRoot }) {
+                byID[record.id] = make(agent: agent,
+                    launchers: Array(Set(record.executablePaths + aliases)).sorted(), paths: record.managedPaths,
+                    manager: .native, managerExecutable: nil, package: nil, idRoot: record.id, explicitID: true)
             }
         }
         return byID.values.sorted { $0.id < $1.id }
@@ -349,9 +385,20 @@ enum AgentCLIService {
                            home + "/.local/share/pnpm", "/usr/local/bin", "/opt/homebrew/bin"]
         // 无可识别包结构的 PATH 命令允许解除入口；其指向的未知实体不被递归删除。
         guard !roots.isEmpty || allowedBins.contains(parent) else { return nil }
+        if agent.id == "grok", !roots.isEmpty {
+            let paths = nativeRoots[agent.id, default: []].map { AgentCatalog.absolute($0, home: home) }
+                .filter { safeAncestors($0) && !AgentCatalog.isSymlink($0) && AgentCatalog.isDirectory($0) }
+            return make(agent: agent, launchers: [launcher], paths: paths, manager: .native,
+                        managerExecutable: nil, package: nil, idRoot: AgentCatalog.absolute(".grok", home: home))
+        }
         let paths = roots.isEmpty ? [launcher] : roots
         return make(agent: agent, launchers: [launcher], paths: paths, manager: .native,
                     managerExecutable: nil, package: nil, idRoot: roots.first ?? launcher)
+    }
+
+    private static func isGrokReleaseName(_ name: String) -> Bool {
+        name.range(of: "^grok-[0-9][0-9A-Za-z.+_-]*-macos-(aarch64|arm64|x86_64|amd64)$",
+                   options: .regularExpression) != nil
     }
 
     private static func make(agent: AgentDefinition, launchers: [String], paths: [String],

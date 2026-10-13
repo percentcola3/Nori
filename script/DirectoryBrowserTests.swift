@@ -55,17 +55,42 @@ struct DirectoryBrowserTests {
         precondition(model.entries.count == 2, "Hidden toggle did not filter current directory")
         model.navigate(to: second)
         precondition(model.entries.isEmpty, "New breadcrumb retained the previous directory's actionable rows")
-        try await settle { !model.isLoading && model.entries.count == 1 }
-        precondition(model.showHidden, "Every unvisited directory must show hidden files by default")
+        try await settle { !model.isLoading }
+        precondition(!model.showHidden && model.entries.isEmpty, "New directories must retain the global hidden-file setting")
         model.goBack()
         try await settle { !model.isLoading && model.entries.count == 2 }
-        precondition(!model.showHidden, "Per-directory visibility was not restored")
+        precondition(!model.showHidden, "Back navigation changed the global hidden-file setting")
         precondition(model.canGoForward)
         model.goForward()
         try await settle { !model.isLoading }
+        model.showHidden = true
+        precondition(model.entries.contains { $0.name == ".nested" })
+        model.goBack()
+        try await settle { !model.isLoading }
+        precondition(model.showHidden && model.entries.contains { $0.name == ".secret" },
+                     "Showing hidden files must apply to previously visited directories too")
+        model.goForward()
+        try await settle { !model.isLoading }
+        precondition(model.showHidden, "Forward navigation changed the global hidden-file setting")
+        model.showHidden = false
         model.navigate(to: first)
         try await settle { !model.isLoading && model.entries.count == 2 }
         precondition(!model.canGoForward, "New navigation retained abandoned forward history")
+        let reopened = DirectoryBrowserModel(defaults: defaults, homeDirectory: root, initialDirectory: second,
+            indexDatabaseURL: root.appendingPathComponent("reopened-index/files.sqlite"), pasteboard: clipboard,
+            sizeCacheURL: root.appendingPathComponent("reopened-cache/sizes.json"))
+        precondition(!reopened.showHidden, "A restarted model in another directory must restore the global preference")
+
+        let migrationSuite = "nori-hidden-migration-\(UUID())"
+        let migrationDefaults = UserDefaults(suiteName: migrationSuite)!
+        defer { migrationDefaults.removePersistentDomain(forName: migrationSuite) }
+        migrationDefaults.set([first.path: false, second.path: true], forKey: "NoriDirectoryHiddenVisibility")
+        let migrated = DirectoryBrowserModel(defaults: migrationDefaults, homeDirectory: root, initialDirectory: first,
+            indexDatabaseURL: root.appendingPathComponent("migration-index/files.sqlite"), pasteboard: clipboard,
+            sizeCacheURL: root.appendingPathComponent("migration-cache/sizes.json"))
+        precondition(!migrated.showHidden && !migrationDefaults.bool(forKey: "NoriDirectoryShowHidden")
+                     && migrationDefaults.object(forKey: "NoriDirectoryHiddenVisibility") == nil,
+                     "Upgrade must migrate the current choice and discard per-directory overrides")
 
         let exactPath = first.appendingPathComponent("Alpha.txt")
         let pathQuery = DirectoryPathQuery(exactPath.path)!

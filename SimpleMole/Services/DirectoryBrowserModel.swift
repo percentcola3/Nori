@@ -11,6 +11,7 @@ enum DirectorySizeState: Equatable {
 /// navigation, search generations and clipboard ownership stay on it.
 @MainActor
 final class DirectoryBrowserModel: ObservableObject {
+    private static let showHiddenKey = "NoriDirectoryShowHidden"
     @Published private(set) var currentDirectory: URL
     @Published private(set) var currentDirectoryIsGitRepository = false
     @Published private(set) var gitStatusRevision = 0
@@ -26,8 +27,7 @@ final class DirectoryBrowserModel: ObservableObject {
     @Published var showHidden: Bool {
         didSet {
             guard showHidden != oldValue else { return }
-            hiddenVisibility[currentDirectory.path] = showHidden
-            defaults.set(hiddenVisibility, forKey: "NoriDirectoryHiddenVisibility")
+            defaults.set(showHidden, forKey: Self.showHiddenKey)
             selectedIDs.removeAll()
             updateSearch()
         }
@@ -58,7 +58,6 @@ final class DirectoryBrowserModel: ObservableObject {
     private let defaults: UserDefaults
     private let homeDirectory: URL
     private let pasteboard: NSPasteboard
-    private var hiddenVisibility: [String: Bool]
     private var folderEntries: [DirectoryEntry] = []
     private var index: DirectorySearchIndex?
     private let spotlight = DirectorySpotlightSearch()
@@ -117,10 +116,16 @@ final class DirectoryBrowserModel: ObservableObject {
         let saved = defaults.string(forKey: "NoriDirectoryLastPath").map { URL(fileURLWithPath: $0) }
         let initial = initialDirectory ?? saved ?? homeDirectory
         let directory = initial.standardizedFileURL
-        let visibility = defaults.dictionary(forKey: "NoriDirectoryHiddenVisibility") as? [String: Bool] ?? [:]
+        let savedVisibility = defaults.object(forKey: Self.showHiddenKey) as? Bool
+        let legacyVisibility = defaults.dictionary(forKey: "NoriDirectoryHiddenVisibility") as? [String: Bool]
         currentDirectory = directory
-        hiddenVisibility = visibility
-        showHidden = visibility[directory.path] ?? true
+        showHidden = savedVisibility ?? legacyVisibility?[directory.path] ?? true
+        // Preserve the current folder's old choice when upgrading to the
+        // global preference. Navigation no longer restores per-folder values.
+        if savedVisibility == nil, legacyVisibility != nil {
+            defaults.set(showHidden, forKey: Self.showHiddenKey)
+        }
+        defaults.removeObject(forKey: "NoriDirectoryHiddenVisibility")
         history = [directory]
         do { index = try DirectorySearchIndex(databaseURL: indexDatabaseURL) }
         catch { errorMessage = L10n.shared.tf("dir.index.failed", error.localizedDescription) }
@@ -245,7 +250,6 @@ final class DirectoryBrowserModel: ObservableObject {
         currentDirectory = url
         currentDirectoryIsGitRepository = false
         query = ""
-        showHidden = hiddenVisibility[url.path] ?? true
         selectedIDs.removeAll()
         selectionAnchor = nil
         defaults.set(url.path, forKey: "NoriDirectoryLastPath")

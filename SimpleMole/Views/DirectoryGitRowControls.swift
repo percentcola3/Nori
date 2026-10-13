@@ -8,7 +8,7 @@ struct GitRepositoryIcon: View {
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: size * 0.08)
-                .fill(Color(red: 0.94, green: 0.31, blue: 0.20))
+                .fill(Color.accentText)
                 .frame(width: size * 0.72, height: size * 0.72)
                 .rotationEffect(.degrees(45))
             Path { path in
@@ -17,14 +17,14 @@ struct GitRepositoryIcon: View {
                 path.move(to: CGPoint(x: size * 0.41, y: size * 0.28))
                 path.addLine(to: CGPoint(x: size * 0.41, y: size * 0.73))
             }
-            .stroke(.white, style: StrokeStyle(lineWidth: size * 0.07, lineCap: .round, lineJoin: .round))
+            .stroke(Color.onAccent, style: StrokeStyle(lineWidth: size * 0.07, lineCap: .round, lineJoin: .round))
             Path { path in
                 for point in [CGPoint(x: 0.41, y: 0.28), CGPoint(x: 0.64, y: 0.51), CGPoint(x: 0.41, y: 0.73)] {
                     path.addEllipse(in: CGRect(x: size * (point.x - 0.075), y: size * (point.y - 0.075),
                         width: size * 0.15, height: size * 0.15))
                 }
             }
-            .fill(.white)
+            .fill(Color.onAccent)
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
