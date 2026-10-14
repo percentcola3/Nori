@@ -424,6 +424,7 @@ final class AppState {
         didSet { agentStorageTotalsCache = [:] }
     }
     var agentSelectionSummaryCache: (count: Int, bytes: UInt64)?
+    var agentSelectionPathIndex = DeletionPlan.PathCoverageIndex()
     var agentStorageTotalsCache: [String: AgentStorageFootprint.Totals] = [:]
     var agentCLIBodySizes: [String: AgentInstallationSize] = [:]
     var agentApplications: [String: [UninstallApp]] = [:]
@@ -612,8 +613,13 @@ struct AgentWorkflowTests {
     }
 
     @MainActor static func main() async throws {
+        if ProcessInfo.processInfo.environment["NORI_AGENT_SELECTION_BENCHMARK"] == "1" {
+            benchmarkSelectionChanges()
+            return
+        }
         perAgentRetentionStaysScoped()
         presentationSummariesStayCurrent()
+        cachedPathCoverageMatchesDeletionRules()
         largeInventoryPresentationReusesSummaries()
         try await scanKeepsInventoryRecommendations(complete: true)
         try await scanKeepsInventoryRecommendations(complete: false)
@@ -755,6 +761,69 @@ struct AgentWorkflowTests {
         expect(1, 7)
         state.agentMCPInstallations = []
         expect(0, 0)
+    }
+
+    @MainActor private static func benchmarkSelectionChanges() {
+        let (state, _) = prepare()
+        let paths = (0..<50_000).map {
+            "\(workflowHome)/selection-performance/Library/Application Support/Agent/cache/storage/session/\($0)/download.bin"
+        }
+        state.agentCategories = [CleanupCategory(name: "Downloads", paths: paths, bytes: 50_000,
+            pathBytes: Dictionary(uniqueKeysWithValues: paths.map { ($0, UInt64(1)) }),
+            pathIdentities: Dictionary(uniqueKeysWithValues: paths.map { ($0, "fixture") }),
+            pathNotes: Dictionary(uniqueKeysWithValues: paths.map { ($0, "fixture note") }),
+            selected: false, risk: .safe)]
+        let group = AgentGroupSummary(id: "fixture", name: "Fixture", documented: true, orphaned: false,
+                                      categoryIDs: [state.agentCategories[0].id], skillIDs: [], serverIDs: [], bytes: 50_001)
+        state.agentGroups = [group]
+        _ = state.agentSelectedCount
+        precondition(state.agentGroupBytes(group) == 50_001)
+        for turn in 0..<4 {
+            let start = ProcessInfo.processInfo.systemUptime
+            state.agentCategories[0].selected.toggle()
+            let count = state.agentSelectedCount
+            let bytes = state.agentSelectedBytes
+            precondition(state.agentGroupBytes(group) == 50_001,
+                         "Group storage must stay independent of checkbox selection")
+            let elapsed = ProcessInfo.processInfo.systemUptime - start
+            precondition(count == (turn % 2 == 0 ? 50_003 : 3) && bytes == (turn % 2 == 0 ? 50_002 : 2))
+            precondition(elapsed < 0.25, "Selection changes must not block feedback for a 50,000-path inventory")
+            print(String(format: "Selection change %d (50,000 paths): %.3f ms", turn, elapsed * 1000))
+        }
+    }
+
+    private static func cachedPathCoverageMatchesDeletionRules() {
+        var index = DeletionPlan.PathCoverageIndex()
+        let cases = [
+            ["/fixture/cache/a", "/fixture/cache", "/fixture/cache/b"],
+            ["/fixture//cache/", "/fixture/cache", "/fixture/cache/item"],
+            ["/fixture/cache/../other", "/fixture/other", "relative/path"],
+            ["/", "/fixture/a", "/fixture/ab", "/fixture/a/item"],
+            ["/fixture/cache\nunsafe", "/fixture/cache\nunsafe", "/fixture/cache/safe"],
+            ["/fixture/é", "/fixture/e\u{301}/child", "/fixture/x/\u{301}child", "/fixture/x"],
+        ]
+        index.prepare(sources: cases)
+        for paths in cases {
+            for selection in [paths, Array(paths.reversed()), Array(paths.dropFirst()), Array(paths.prefix(1)), []] {
+                precondition(index.nonOverlappingPaths(selection) == DeletionPlan.nonOverlappingPaths(selection),
+                             "Cached presentation must preserve normalization, unsafe-path, duplicate and parent coverage rules")
+            }
+        }
+        let replacement = ["/fixture/new/root/child", "/fixture/new/root"]
+        index.prepare(sources: [replacement])
+        precondition(index.nonOverlappingPaths(replacement) == ["/fixture/new/root"],
+                     "Changed inventory must build relationships for new paths")
+        var category = CleanupCategory(name: "Fixture", paths: ["/fixture/a", "/fixture/b"], bytes: 2,
+            pathBytes: ["/fixture/a": 1, "/fixture/b": 1], selected: false, risk: .safe)
+        var reviewed = category
+        reviewed.selected = true
+        category.paths = ["/fixture/b", "/fixture/c"]
+        category.updateSelection(from: reviewed)
+        precondition(category.selectedPaths == ["/fixture/b"], "A replaced inventory must not inherit unknown selected paths")
+        category.risk = .protected
+        category.updateSelection(from: reviewed)
+        precondition(!category.selected, "Row updates must preserve protected-data guards")
+        print("Cached selection path coverage: parent/alias/unsafe/Unicode/replaced-inventory and protected-selection rules passed")
     }
 
     @MainActor private static func largeInventoryPresentationReusesSummaries() {

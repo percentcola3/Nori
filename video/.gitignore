@@ -1,0 +1,11 @@
+node_modules/
+.browsers/
+.build/
+dist/
+renders/
+evidence/
+# Generated audio mixes; keep score sources and reusable sound effects.
+**/assets/master.wav
+**/assets/music.wav
+**/assets/music-ducked.wav
+**/assets/sfx-stem.wav

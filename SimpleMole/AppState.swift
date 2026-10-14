@@ -249,6 +249,7 @@ final class AppState: ObservableObject {
     // Derived presentation values are invalidated only by their inputs, never
     // by navigation, metrics ticks or unrelated AppState publications.
     var agentSelectionSummaryCache: (count: Int, bytes: UInt64)?
+    var agentSelectionPathIndex = DeletionPlan.PathCoverageIndex()
     var agentStorageTotalsCache: [String: AgentStorageFootprint.Totals] = [:]
     @Published var agentCLIBodySizes: [String: AgentInstallationSize] = [:]
     @Published var agentStorageCheckingIDs = Set<String>()

@@ -488,68 +488,78 @@ private struct UninstallFileDrawer: View {
     var body: some View {
         LazyVStack(spacing: 4) {
             if !dataPaths.isEmpty {
-                HStack(spacing: 8) {
-                    Toggle(isOn: Binding(
-                        get: { !dataPaths.isEmpty && dataPaths.allSatisfy(selection.contains) },
-                        set: { selection = $0 ? Set(dataPaths) : [] })) {
+                Toggle(isOn: Binding(
+                    get: { !dataPaths.isEmpty && dataPaths.allSatisfy(selection.contains) },
+                    set: { selection = $0 ? Set(dataPaths) : [] })) {
+                    HStack(spacing: 8) {
                         Text(L10n.shared.t("uninstall.data.includeAll"))
                             .font(.system(size: 10, weight: .semibold))
+                        Spacer()
+                        Text(L10n.shared.t("uninstall.data.hint"))
+                            .font(.system(size: 9))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
                     }
-                    .toggleStyle(.checkbox)
-                    .controlSize(.mini)
-                    .disabled(!selectable)
-                    Spacer()
-                    Text(L10n.shared.t("uninstall.data.hint"))
-                        .font(.system(size: 9))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
                 }
-                .padding(.horizontal, 9)
+                .toggleStyle(MoleRowSelectionToggleStyle(
+                    partiallySelected: dataPaths.contains(where: selection.contains)
+                        && !dataPaths.allSatisfy(selection.contains),
+                    horizontalPadding: 9, minHeight: 32))
+                .disabled(!selectable)
                 .padding(.bottom, 2)
             }
             ForEach(files) { file in
                 let chosen = file.isOptionalData && selection.contains(file.path)
-                HStack(spacing: 8) {
+                Group {
                     if file.isOptionalData {
-                        Toggle("", isOn: Binding(
+                        Toggle(isOn: Binding(
                             get: { selection.contains(file.path) },
-                            set: { if $0 { selection.insert(file.path) } else { selection.remove(file.path) } }))
-                            .toggleStyle(.checkbox)
-                            .controlSize(.mini)
-                            .labelsHidden()
-                            .disabled(!selectable)
+                            set: { if $0 { selection.insert(file.path) } else { selection.remove(file.path) } })) {
+                            fileLabel(file, chosen: chosen)
+                        }
+                        .toggleStyle(MoleRowSelectionToggleStyle(horizontalPadding: 9, minHeight: 40))
+                        .disabled(!selectable)
+                        .accessibilityLabel(file.path)
+                        .accessibilityIdentifier("uninstall-data-select-" + file.path)
+                    } else {
+                        fileLabel(file, chosen: chosen)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
                     }
-                    Image(systemName: symbol(for: file))
-                        .font(.system(size: 10))
-                        .foregroundStyle(file.informational
-                            ? Color.secondary
-                            : (file.isCache ? Color.moleAccentText : Color.moleAccent))
-                        .frame(width: 16)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text((file.path as NSString).lastPathComponent)
-                            .font(.system(size: 10, weight: file.isAppBundle ? .semibold : .regular))
-                            .lineLimit(1)
-                        Text(file.path)
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer()
-                    Text(file.informational && !chosen
-                         ? (file.isOptionalData
-                            ? ByteFormat.format(file.bytes) + " · " + L10n.shared.t("uninstall.notDeleted")
-                            : L10n.shared.t("uninstall.notDeleted"))
-                         : ByteFormat.format(file.bytes))
-                        .font(.system(size: 9).monospacedDigit())
-                        .foregroundStyle(file.informational && !chosen ? .tertiary : .secondary)
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
                 .background(RoundedRectangle(cornerRadius: 7)
-                    .fill(Color.surface1.opacity(file.informational && !chosen ? 0.6 : 1)))
+                    .fill(chosen ? Color.selectionFill : Color.surface1.opacity(file.informational ? 0.6 : 1)))
                 .opacity(file.informational && !chosen ? 0.7 : 1)
             }
+        }
+    }
+
+    private func fileLabel(_ file: UninstallFile, chosen: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol(for: file))
+                .font(.system(size: 10))
+                .foregroundStyle(file.informational
+                    ? Color.secondary
+                    : (file.isCache ? Color.moleAccentText : Color.moleAccent))
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text((file.path as NSString).lastPathComponent)
+                    .font(.system(size: 10, weight: file.isAppBundle ? .semibold : .regular))
+                    .lineLimit(1)
+                Text(file.path)
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Text(file.informational && !chosen
+                 ? (file.isOptionalData
+                    ? ByteFormat.format(file.bytes) + " · " + L10n.shared.t("uninstall.notDeleted")
+                    : L10n.shared.t("uninstall.notDeleted"))
+                 : ByteFormat.format(file.bytes))
+                .font(.system(size: 9).monospacedDigit())
+                .foregroundStyle(file.informational && !chosen ? .tertiary : .secondary)
         }
     }
 

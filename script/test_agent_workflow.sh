@@ -26,7 +26,11 @@ WORKFLOW_SOURCES=(
     "$ROOT_DIR/script/AgentWorkflowTests.swift"
 )
 cp "${WORKFLOW_SOURCES[@]}" "$WORKFLOW_TEST_DIR/sources/"
-swiftc -target "$(uname -m)-apple-macos13.0" \
+WORKFLOW_COMPILER_FLAGS=()
+if [[ "${NORI_AGENT_SELECTION_BENCHMARK:-0}" == 1 ]]; then
+    WORKFLOW_COMPILER_FLAGS=(-O)
+fi
+swiftc ${WORKFLOW_COMPILER_FLAGS[@]+"${WORKFLOW_COMPILER_FLAGS[@]}"} -target "$(uname -m)-apple-macos13.0" \
     -sdk "$SDKROOT" \
     -module-cache-path "$WORKFLOW_TEST_DIR/module-cache" \
     "$WORKFLOW_TEST_DIR/sources/"*.swift \

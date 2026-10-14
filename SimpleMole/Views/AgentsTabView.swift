@@ -294,7 +294,7 @@ struct AgentInventoryView: View {
         }
         ForEach(state.agentApplications[group.id] ?? []) { app in
             HStack(spacing: 8) {
-                Image(systemName: "app").foregroundStyle(Color.moleAccentText)
+                Image(systemName: "app.fill").foregroundStyle(Color.moleAccentText)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(l10n.tf("agents.program.desktop", app.name)).font(.system(size: 12, weight: .medium))
                     Text(abbreviate(app.path)).font(.system(size: 9, design: .monospaced))
@@ -324,7 +324,7 @@ struct AgentInventoryView: View {
             if let category = state.agentCategories.first(where: { $0.id == id }) {
                 CategoryRowView(category: categoryBinding(for: category),
                     selectionEnabled: !state.isAgentTaskBusy && !state.agentCLISelectedAgentIDs.contains(group.id),
-                    highlightsSensitiveData: true, selectsOnRowClick: true)
+                    highlightsSensitiveData: true)
             }
         }
         let skills = resources.filter { $0.bindings.contains { $0.agentIDs.contains(group.id) } }
@@ -410,7 +410,7 @@ struct AgentInventoryView: View {
             // Expanding an implicitly selected row must not turn its derived
             // checkmarks into explicit data selections when the CLI is undone.
             if !includedByCLI && !state.isAgentTaskBusy {
-                category = category.selectingPaths(update.selectedPaths)
+                category.updateSelection(from: update)
             }
             category.expanded = update.expanded
             state.agentCategories[index] = category

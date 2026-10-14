@@ -152,4 +152,67 @@ struct DeletionPlan {
             return record
         }
     }
+
+    /// Presentation-only index. Path relationships depend on the literal, not
+    /// on checkbox state; cache them across selection changes. Execution still
+    /// builds and validates a fresh DeletionPlan with current file identities.
+    struct PathCoverageIndex {
+        private struct Entry {
+            let normalized: Int?
+            let parents: [Int]
+        }
+        private var entries: [String: Entry] = [:]
+        private var pathIDs: [String: Int] = [:]
+        private var preparedSources: [[String]] = []
+
+        mutating func prepare(sources: [[String]]) {
+            // Inventory arrays share storage across checkbox edits.
+            guard sources != preparedSources else { return }
+            for paths in sources { for path in paths { _ = entry(for: path) } }
+            preparedSources = sources
+        }
+
+        private mutating func id(for path: String) -> Int {
+            if let cached = pathIDs[path] { return cached }
+            let next = pathIDs.count
+            pathIDs[path] = next
+            return next
+        }
+
+        private mutating func entry(for record: String) -> Entry {
+            if let cached = entries[record] { return cached }
+            let normalized = DeletionPlan.isLexicallySafePath(record)
+                ? DeletionPlan.normalizedPathLiteral(record) : nil
+            var parents: [Int] = []
+            var normalizedID: Int?
+            if let normalized {
+                normalizedID = id(for: normalized)
+                var parent = (normalized as NSString).deletingLastPathComponent
+                while !parent.isEmpty && parent != "/" {
+                    parents.append(id(for: parent))
+                    parent = (parent as NSString).deletingLastPathComponent
+                }
+            }
+            let entry = Entry(normalized: normalizedID, parents: parents)
+            entries[record] = entry
+            return entry
+        }
+
+        mutating func nonOverlappingPaths(_ paths: [String]) -> [String] {
+            let indexed = paths.map { entry(for: $0) }
+            let allPaths = Set(indexed.compactMap(\.normalized))
+            var seen = Set<Int>()
+            var unsafeSeen = Set<String>()
+            return paths.indices.compactMap { index in
+                let record = paths[index]
+                let entry = indexed[index]
+                guard let normalized = entry.normalized else {
+                    return unsafeSeen.insert(record).inserted ? record : nil
+                }
+                guard seen.insert(normalized).inserted,
+                      !entry.parents.contains(where: allPaths.contains) else { return nil }
+                return record
+            }
+        }
+    }
 }

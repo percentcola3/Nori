@@ -12,6 +12,19 @@ private struct AgentPresentationRoot: View {
 
 @main
 struct AgentPresentationTests {
+    @MainActor private static func click(at point: CGPoint, in window: NSWindow) {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            NSApp.postEvent(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!, atStart: false)
+        }
+        while let event = NSApp.nextEvent(matching: [.leftMouseDown, .leftMouseUp],
+                                          until: Date(), inMode: .default, dequeue: true) {
+            NSApp.sendEvent(event)
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    }
+
     @MainActor static func main() {
         _ = NSApplication.shared
         NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -66,6 +79,39 @@ struct AgentPresentationTests {
             state.agentCategories = [category]
             state.agentGroups = [.init(id: "codex", name: "Codex", documented: true, categoryIDs: [category.id])]
             render("results")
+            if size.width == 940 {
+                let rowY = window.contentLayoutRect.maxY - 143
+                state.isCleanupScanning = true
+                click(at: CGPoint(x: 500, y: rowY), in: window)
+                precondition(!state.agentCategories[0].selected,
+                             "Agent row blank-space click must deselect through its derived binding, even during unrelated cleanup scans")
+                click(at: CGPoint(x: 500, y: rowY), in: window)
+                precondition(state.agentCategories[0].allSelected,
+                             "Agent row must select again on a second mouse click")
+                click(at: CGPoint(x: size.width - 51, y: rowY), in: window)
+                precondition(state.agentCategories[0].expanded && state.agentCategories[0].allSelected,
+                             "Agent expand button must expand without changing selection")
+                click(at: CGPoint(x: size.width - 51, y: rowY), in: window)
+                precondition(!state.agentCategories[0].expanded && state.agentCategories[0].allSelected,
+                             "Agent collapse button must preserve selection")
+                state.isCleanupScanning = false
+                print("Agent full-page mouse interaction: row selection, repeated clicks, independent expansion and unrelated cleanup scanning passed")
+                state.agentCategories[0].risk = .protected
+                state.agentCategories[0].selected = false
+                state.agentCategories[0].reasonKey = "agents.reason.showOnly"
+                render("readonly-collapsed")
+                click(at: CGPoint(x: 500, y: rowY), in: window)
+                precondition(state.agentCategories[0].expanded && !state.agentCategories[0].selected,
+                             "Read-only Agent rows must respond by opening details without selecting data")
+                render("readonly-expanded")
+                click(at: CGPoint(x: 500, y: rowY - 49), in: window)
+                precondition(!state.agentCategories[0].selected,
+                             "Protected Agent path rows must remain read-only")
+                click(at: CGPoint(x: 500, y: rowY), in: window)
+                precondition(!state.agentCategories[0].expanded && !state.agentCategories[0].selected,
+                             "Read-only row must collapse on a second click without selecting data")
+                state.agentCategories = [category]
+            }
             let cursorCategory = CleanupCategory(name: "对话历史", paths: ["/fixture/cursor/history"], bytes: 8192,
                 pathIdentities: [:], retentionClass: .conversations, selected: false, risk: .warning)
             state.agentCategories = [category, cursorCategory]

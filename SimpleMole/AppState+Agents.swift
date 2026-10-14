@@ -240,17 +240,31 @@ extension AppState {
 
     private var agentSelectionSummary: (count: Int, bytes: UInt64) {
         if let cached = agentSelectionSummaryCache { return cached }
-        // Freeze the effective selection only once. In particular, do not
-        // copy every category's path metadata for each read of the button label.
-        let selection = effectiveAgentCleanupSelection
-        let entries = selection.categories.flatMap { category in
-            category.paths.map { ($0, category.pathBytes[$0] ?? 0) }
-        } + selection.skills.map { ($0.path, $0.bytes) }
-            + selection.installations.map { ($0.path, $0.bytes) }
+        // Summarizing a checkbox change needs paths/sizes only. Freeze deletion
+        // metadata when applying, rather than copying it during view updates.
+        let cliAgentIDs = agentCLISelectedAgentIDs
+        let included = agentCLIIncludedCategoryIDs
+        // Warm initially unchecked rows too: their first click must be fast.
+        agentSelectionPathIndex.prepare(sources: agentCategories.filter(\.canSelect).map(\.paths)
+            + [agentSkills.map(\.path), agentMCPInstallations.map(\.path)])
+        var entries: [(String, UInt64)] = []
+        for category in agentCategories where category.canSelect {
+            let includedByCLI = included.contains(category.id)
+            guard includedByCLI || category.selected else { continue }
+            for path in category.paths where includedByCLI || category.isPathSelected(path) {
+                entries.append((path, category.pathBytes[path] ?? 0))
+            }
+        }
+        entries += agentSkills.filter { agentSelectedSkills.contains($0.path) || cliAgentIDs.contains($0.agentID) }
+            .map { ($0.path, $0.bytes) }
+        entries += agentMCPInstallations.filter { agentSelectedMCPInstallations.contains($0.id) }
+            .map { ($0.path, $0.bytes) }
         let sizes = Dictionary(entries, uniquingKeysWith: max)
-        let paths = DeletionPlan.nonOverlappingPaths(Array(sizes.keys))
-        let summary = (count: paths.count + Set(selection.servers.map(\.id)).count
-            + Set(selection.cliInstallations.map(\.id)).count,
+        let paths = agentSelectionPathIndex.nonOverlappingPaths(Array(sizes.keys))
+        let summary = (count: paths.count + Set(agentServers.filter {
+            agentSelectedServers.contains($0.id) || cliAgentIDs.contains($0.agentID)
+        }.map(\.id)).count
+            + Set(agentCLIInstallations.filter { agentSelectedCLIInstallations.contains($0.id) }.map(\.id)).count,
             bytes: paths.reduce(UInt64(0)) { $0 &+ (sizes[$1] ?? 0) })
         agentSelectionSummaryCache = summary
         return summary
@@ -308,7 +322,9 @@ extension AppState {
         let paths = agentCategories.filter { group.categoryIDs.contains($0.id) }.flatMap { category in
             category.paths.map { ($0, category.pathBytes[$0] ?? 0) }
         } + agentSkills.filter { $0.agentID == group.id }.map { ($0.path, $0.bytes) }
-        return Self.uniqueAgentBytes(paths)
+        let sizes = Dictionary(paths, uniquingKeysWith: max)
+        return agentSelectionPathIndex.nonOverlappingPaths(Array(sizes.keys))
+            .reduce(UInt64(0)) { $0 &+ (sizes[$1] ?? 0) }
     }
 
     func scanAgents(completionStatus: String? = nil) {
@@ -425,6 +441,7 @@ extension AppState {
     }
 
     func updateAgentInventory(_ report: AgentScanReport, cli: [AgentCLIInstallation]) {
+        agentSelectionPathIndex = DeletionPlan.PathCoverageIndex()
         agentCategories = report.categories
         agentCodexThreadStoreCompression = report.codexThreadStoreCompression
         agentGroups = report.groups

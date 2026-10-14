@@ -304,6 +304,15 @@ struct CleanupCategory: Identifiable, Equatable {
         return copy
     }
 
+    /// A row edits selection only. Reuse its Set when the inventory is still
+    /// identical; intersect against current paths if a scan replaced it.
+    mutating func updateSelection(from snapshot: CleanupCategory) {
+        guard id == snapshot.id else { return }
+        guard canSelect else { selectedPaths = []; return }
+        selectedPaths = paths == snapshot.paths ? snapshot.selectedPaths
+            : snapshot.selectedPaths.intersection(paths)
+    }
+
     /// Select one item while iterating this captured inventory. Its array index
     /// proves membership without intersecting every path on each iteration.
     func selectingPath(at index: Int) -> CleanupCategory {

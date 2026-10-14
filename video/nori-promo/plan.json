@@ -1,0 +1,956 @@
+{
+  "demo": false,
+  "product": "Nori · 产品介绍",
+  "style": "repo",
+  "width": 1920,
+  "height": 1080,
+  "fps": 30,
+  "duration": 59.52,
+  "repo": "/Users/congbai/Code/sweep",
+  "scope": {
+    "versions": "Nori 1.0.2（产品全貌）",
+    "platforms": [
+      "macos-desktop"
+    ]
+  },
+  "audioRequired": true,
+  "sfxRequired": true,
+  "typography": {
+    "mode": "bilingual",
+    "zhFont": "PingFang SC",
+    "enFont": "SF Pro Display (-apple-system)",
+    "zhStyle": "sans-serif"
+  },
+  "audio": {
+    "beatGrid": {
+      "bpm": 125,
+      "offset": 0
+    },
+    "ducking": {
+      "enabled": true
+    },
+    "music": {
+      "file": "assets/music.wav",
+      "gain": 0.52
+    },
+    "cues": [
+      {
+        "at": 0.239,
+        "actionId": "hook-fill",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 2.0,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 0.479,
+        "actionId": "hook-seg2",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 1.5,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 0.719,
+        "actionId": "hook-seg3",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 1.6,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 0.959,
+        "actionId": "hook-seg4",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 1.5,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 1.199,
+        "actionId": "hook-seg5",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 1.7,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 1.439,
+        "actionId": "hook-seg6",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 2.398,
+        "actionId": "hook-warn",
+        "file": "assets/sfx/error.wav",
+        "syncOffset": 0.002,
+        "gain": 1.1,
+        "role": "sfx",
+        "kind": "error"
+      },
+      {
+        "at": 3.638,
+        "actionId": "brand-wipe",
+        "file": "assets/sfx/whoosh.wav",
+        "syncOffset": 0.202,
+        "gain": 4.0,
+        "role": "sfx",
+        "kind": "whoosh"
+      },
+      {
+        "at": 4.797,
+        "actionId": "brand-title",
+        "file": "assets/sfx/resolve.wav",
+        "syncOffset": 0.003,
+        "gain": 1.6,
+        "role": "sfx",
+        "kind": "resolve"
+      },
+      {
+        "at": 7.779,
+        "actionId": "agents-wall",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 10.559,
+        "actionId": "agents-tick1",
+        "file": "assets/sfx/toggle.wav",
+        "syncOffset": 0.001,
+        "gain": 4.0,
+        "role": "sfx",
+        "kind": "toggle"
+      },
+      {
+        "at": 11.039,
+        "actionId": "agents-tick2",
+        "file": "assets/sfx/toggle.wav",
+        "syncOffset": 0.001,
+        "gain": 3.4,
+        "role": "sfx",
+        "kind": "toggle"
+      },
+      {
+        "at": 11.519,
+        "actionId": "agents-tick3",
+        "file": "assets/sfx/toggle.wav",
+        "syncOffset": 0.001,
+        "gain": 3.4,
+        "role": "sfx",
+        "kind": "toggle"
+      },
+      {
+        "at": 12.238,
+        "actionId": "agents-warn",
+        "file": "assets/sfx/ding-dong.wav",
+        "syncOffset": 0.002,
+        "gain": 1.2,
+        "role": "sfx",
+        "kind": "ding-dong"
+      },
+      {
+        "at": 15.459,
+        "actionId": "dev-wall",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 20.159,
+        "actionId": "dev-click",
+        "file": "assets/sfx/click.wav",
+        "syncOffset": 0.001,
+        "gain": 3.6,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 20.457,
+        "actionId": "dev-success",
+        "file": "assets/sfx/success.wav",
+        "syncOffset": 0.003,
+        "gain": 2.0,
+        "role": "sfx",
+        "kind": "success"
+      },
+      {
+        "at": 22.838,
+        "actionId": "devenv-wipe",
+        "file": "assets/sfx/whoosh.wav",
+        "syncOffset": 0.202,
+        "gain": 4.0,
+        "role": "sfx",
+        "kind": "whoosh"
+      },
+      {
+        "at": 24.479,
+        "actionId": "devenv-shell",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 2.0,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 25.439,
+        "actionId": "devenv-hosts",
+        "file": "assets/sfx/click-alt.wav",
+        "syncOffset": 0.001,
+        "gain": 3.6,
+        "role": "sfx",
+        "kind": "click-alt"
+      },
+      {
+        "at": 26.399,
+        "actionId": "devenv-runtime",
+        "file": "assets/sfx/click.wav",
+        "syncOffset": 0.001,
+        "gain": 3.4,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 27.359,
+        "actionId": "devenv-path",
+        "file": "assets/sfx/toggle.wav",
+        "syncOffset": 0.001,
+        "gain": 3.4,
+        "role": "sfx",
+        "kind": "toggle"
+      },
+      {
+        "at": 29.999,
+        "actionId": "ports-click",
+        "file": "assets/sfx/click.wav",
+        "syncOffset": 0.001,
+        "gain": 3.6,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 30.719,
+        "actionId": "ports-confirm",
+        "file": "assets/sfx/click-alt.wav",
+        "syncOffset": 0.001,
+        "gain": 3.8,
+        "role": "sfx",
+        "kind": "click-alt"
+      },
+      {
+        "at": 32.438,
+        "actionId": "shot-wipe",
+        "file": "assets/sfx/whoosh.wav",
+        "syncOffset": 0.202,
+        "gain": 4.0,
+        "role": "sfx",
+        "kind": "whoosh"
+      },
+      {
+        "at": 33.359,
+        "actionId": "shot-rect",
+        "file": "assets/sfx/click-alt.wav",
+        "syncOffset": 0.001,
+        "gain": 3.2,
+        "role": "sfx",
+        "kind": "click-alt"
+      },
+      {
+        "at": 33.839,
+        "actionId": "shot-arrow",
+        "file": "assets/sfx/click-alt.wav",
+        "syncOffset": 0.001,
+        "gain": 3.0,
+        "role": "sfx",
+        "kind": "click-alt"
+      },
+      {
+        "at": 34.319,
+        "actionId": "shot-mosaic",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 2.0,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 35.039,
+        "actionId": "shot-preset1",
+        "file": "assets/sfx/click.wav",
+        "syncOffset": 0.001,
+        "gain": 3.4,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 35.999,
+        "actionId": "shot-preset2",
+        "file": "assets/sfx/click.wav",
+        "syncOffset": 0.001,
+        "gain": 3.0,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 36.959,
+        "actionId": "shot-preset3",
+        "file": "assets/sfx/click.wav",
+        "syncOffset": 0.001,
+        "gain": 3.0,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 38.599,
+        "actionId": "clip-cards",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 40.319,
+        "actionId": "clip-filter1",
+        "file": "assets/sfx/click.wav",
+        "syncOffset": 0.001,
+        "gain": 3.4,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 41.279,
+        "actionId": "clip-filter2",
+        "file": "assets/sfx/click.wav",
+        "syncOffset": 0.001,
+        "gain": 3.0,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 42.239,
+        "actionId": "clip-filter3",
+        "file": "assets/sfx/click.wav",
+        "syncOffset": 0.001,
+        "gain": 3.0,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 42.959,
+        "actionId": "clip-pin",
+        "file": "assets/sfx/toggle.wav",
+        "syncOffset": 0.001,
+        "gain": 3.6,
+        "role": "sfx",
+        "kind": "toggle"
+      },
+      {
+        "at": 45.119,
+        "actionId": "sched-preview",
+        "file": "assets/sfx/click.wav",
+        "syncOffset": 0.001,
+        "gain": 3.6,
+        "role": "sfx",
+        "kind": "click"
+      },
+      {
+        "at": 46.559,
+        "actionId": "sched-on",
+        "file": "assets/sfx/toggle.wav",
+        "syncOffset": 0.001,
+        "gain": 4.0,
+        "role": "sfx",
+        "kind": "toggle"
+      },
+      {
+        "at": 48.099,
+        "actionId": "dup-scan",
+        "file": "assets/sfx/click-alt.wav",
+        "syncOffset": 0.001,
+        "gain": 3.0,
+        "role": "sfx",
+        "kind": "click-alt"
+      },
+      {
+        "at": 49.199,
+        "actionId": "dup-found",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 2.0,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 50.399,
+        "actionId": "dup-tick1",
+        "file": "assets/sfx/toggle.wav",
+        "syncOffset": 0.001,
+        "gain": 3.6,
+        "role": "sfx",
+        "kind": "toggle"
+      },
+      {
+        "at": 50.879,
+        "actionId": "dup-tick2",
+        "file": "assets/sfx/toggle.wav",
+        "syncOffset": 0.001,
+        "gain": 3.2,
+        "role": "sfx",
+        "kind": "toggle"
+      },
+      {
+        "at": 51.839,
+        "actionId": "montage-in",
+        "file": "assets/sfx/pop.wav",
+        "syncOffset": 0.001,
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "pop"
+      },
+      {
+        "at": 55.545,
+        "actionId": "close-converge",
+        "file": "assets/sfx/sweep.wav",
+        "syncOffset": 0.135,
+        "gain": 3.6,
+        "role": "sfx",
+        "kind": "sweep"
+      },
+      {
+        "at": 56.638,
+        "actionId": "close-title",
+        "file": "assets/sfx/ding-dong.wav",
+        "syncOffset": 0.002,
+        "gain": 1.8,
+        "role": "sfx",
+        "kind": "ding-dong"
+      }
+    ]
+  },
+  "shots": [
+    {
+      "id": "hook",
+      "start": 0.0,
+      "end": 3.84,
+      "type": "title",
+      "headlineEn": "Your disk is full. Again.",
+      "headline": "磁盘又满了？",
+      "description": "开发缓存和 AI Agent 数据，悄悄把磁盘填满。",
+      "plainExplanation": "开发者的 Mac 上，构建缓存和 Agent 数据会悄悄占满磁盘。",
+      "descriptionAt": 1.2,
+      "claim": false,
+      "source": [],
+      "component": null,
+      "actions": [
+        {
+          "id": "hook-fill",
+          "at": 0.24,
+          "action": "Xcode 缓存塞进磁盘条",
+          "soundRequired": true
+        },
+        {
+          "id": "hook-seg2",
+          "at": 0.48,
+          "action": "Claude Code 数据塞进磁盘条",
+          "soundRequired": false
+        },
+        {
+          "id": "hook-seg3",
+          "at": 0.72,
+          "action": "npm 缓存塞进磁盘条",
+          "soundRequired": false
+        },
+        {
+          "id": "hook-seg4",
+          "at": 0.96,
+          "action": "Codex 数据塞进磁盘条",
+          "soundRequired": false
+        },
+        {
+          "id": "hook-seg5",
+          "at": 1.2,
+          "action": "pip 缓存塞进磁盘条",
+          "soundRequired": false
+        },
+        {
+          "id": "hook-seg6",
+          "at": 1.44,
+          "action": "Cursor 缓存塞进磁盘条",
+          "soundRequired": false
+        },
+        {
+          "id": "hook-warn",
+          "at": 2.4,
+          "action": "磁盘条变成警示色",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "brand",
+      "start": 3.84,
+      "end": 7.68,
+      "type": "title",
+      "headlineEn": "Light. Nimble. Quiet.",
+      "headline": "轻量 · 灵动 · 安静",
+      "description": "照看 Mac 的原生小伙伴。",
+      "plainExplanation": "Nori 是一个轻量、灵动、安静的原生 macOS 小工具。",
+      "descriptionAt": 1.9,
+      "claim": true,
+      "source": [
+        "repo:README.md",
+        "repo:docs/brand/nori-design.md",
+        "repo:SimpleMole/Support/Nori/Animations/nori-working.svg"
+      ],
+      "component": "repo:SimpleMole/Support/Nori/Animations/nori-working.svg",
+      "actions": [
+        {
+          "id": "brand-wipe",
+          "at": 0,
+          "action": "三色缎带扫过换场",
+          "soundRequired": true
+        },
+        {
+          "id": "brand-title",
+          "at": 0.96,
+          "action": "字标 Nori 落定",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "start": 7.68,
+      "end": 15.36,
+      "type": "detail",
+      "headlineEn": "Knows your agents",
+      "headline": "识别 AI Agent 的垃圾",
+      "description": "缓存默认勾选；会话和记忆，要你单独确认。",
+      "plainExplanation": "Nori 能识别 24 款 AI 工具的本地数据，能重建的缓存直接勾上，会话历史留给你决定。",
+      "descriptionAt": 2.2,
+      "claim": true,
+      "source": [
+        "repo:README.md",
+        "repo:SimpleMole/Views/AgentsTabView.swift",
+        "repo:SimpleMole/Services/AgentCatalog.swift"
+      ],
+      "component": "rebuild:SimpleMole/Views/AgentsTabView.swift",
+      "actions": [
+        {
+          "id": "agents-wall",
+          "at": 0.1,
+          "action": "24 款 AI 工具名铺满画面",
+          "soundRequired": true
+        },
+        {
+          "id": "agents-tick1",
+          "at": 2.88,
+          "action": "Claude Code 旧版本被勾选",
+          "soundRequired": true
+        },
+        {
+          "id": "agents-tick2",
+          "at": 3.36,
+          "action": "Codex 日志被勾选",
+          "soundRequired": true
+        },
+        {
+          "id": "agents-tick3",
+          "at": 3.84,
+          "action": "Cursor 缓存被勾选",
+          "soundRequired": true
+        },
+        {
+          "id": "agents-warn",
+          "at": 4.56,
+          "action": "会话与检查点标出需要确认",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "devjunk",
+      "start": 15.36,
+      "end": 23.04,
+      "type": "detail",
+      "headlineEn": "Built for developers",
+      "headline": "识别开发环境垃圾",
+      "description": "Xcode、模拟器、npm、Gradle、Go……可重建的缓存按工具列出。",
+      "plainExplanation": "Nori 能识别常见开发工具的缓存，按工具列出大小，确认后一次清掉。",
+      "descriptionAt": 2.0,
+      "claim": true,
+      "source": [
+        "repo:README.md",
+        "repo:SimpleMole/Views/CleanupTabView.swift",
+        "repo:SimpleMole/Services/DeveloperCacheLocator.swift"
+      ],
+      "component": "rebuild:SimpleMole/Views/CleanupTabView.swift",
+      "actions": [
+        {
+          "id": "dev-wall",
+          "at": 0.1,
+          "action": "开发工具名流入",
+          "soundRequired": true
+        },
+        {
+          "id": "dev-click",
+          "at": 4.8,
+          "action": "点击「清理 50.00 GB」",
+          "soundRequired": true
+        },
+        {
+          "id": "dev-success",
+          "at": 5.1,
+          "action": "清理完成，Nori 成功动画",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "devenv",
+      "start": 23.04,
+      "end": 28.8,
+      "type": "workspace",
+      "headlineEn": "Tidy dev setup",
+      "headline": "开发环境，也帮你打理",
+      "description": "Shell 变量、hosts、运行时、CLI 与 PATH，一处看清。",
+      "plainExplanation": "Dev 环境页把 Shell 配置、hosts、运行时版本和 CLI 工具放在一起管理。",
+      "descriptionAt": 0.7,
+      "claim": true,
+      "source": [
+        "repo:SimpleMole/Views/DevEnvTabView.swift",
+        "repo:SimpleMole/Views/DeveloperShellPanel.swift",
+        "repo:SimpleMole/Views/DeveloperNetworkPanel.swift",
+        "repo:SimpleMole/Views/DeveloperRuntimePanel.swift",
+        "repo:SimpleMole/Views/DeveloperCLIPanel.swift"
+      ],
+      "component": "rebuild:SimpleMole/Views/DevEnvTabView.swift",
+      "actions": [
+        {
+          "id": "devenv-wipe",
+          "at": 0,
+          "action": "三色缎带扫过换场",
+          "soundRequired": true
+        },
+        {
+          "id": "devenv-shell",
+          "at": 1.44,
+          "action": "Shell 变量保存成功",
+          "soundRequired": true
+        },
+        {
+          "id": "devenv-hosts",
+          "at": 2.4,
+          "action": "hosts 新增一条映射",
+          "soundRequired": true
+        },
+        {
+          "id": "devenv-runtime",
+          "at": 3.36,
+          "action": "勾选旧版 Node v20",
+          "soundRequired": true
+        },
+        {
+          "id": "devenv-path",
+          "at": 4.32,
+          "action": "PATH 多来源被标出",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "ports",
+      "start": 28.8,
+      "end": 32.64,
+      "type": "detail",
+      "headlineEn": "Free up a port",
+      "headline": "端口被占？一键释放",
+      "description": "看清谁在监听，确认后关闭对应进程。",
+      "plainExplanation": "端口页列出所有 TCP 监听端口和进程，点关闭并确认就能释放。",
+      "descriptionAt": 0.5,
+      "claim": true,
+      "source": [
+        "repo:SimpleMole/Views/ProcessesTabView.swift",
+        "repo:SimpleMole/L10n/TablesBase.swift"
+      ],
+      "component": "rebuild:SimpleMole/Views/ProcessesTabView.swift#PortsTabView",
+      "actions": [
+        {
+          "id": "ports-click",
+          "at": 1.2,
+          "action": "点击端口 3000 的「关闭」",
+          "soundRequired": true
+        },
+        {
+          "id": "ports-confirm",
+          "at": 1.92,
+          "action": "确认关闭，行收起",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "screenshot",
+      "start": 32.64,
+      "end": 38.4,
+      "type": "workspace",
+      "headlineEn": "Capture & polish",
+      "headline": "截图、标注、加背景",
+      "description": "矩形、箭头、马赛克随手标，一键套背景。",
+      "plainExplanation": "Nori 带截图编辑器：截完直接标注、打码，再选一个背景预设。",
+      "descriptionAt": 0.7,
+      "claim": true,
+      "source": [
+        "repo:SimpleMole/Views/ScreenshotEditorView.swift",
+        "repo:SimpleMole/L10n/TablesProductivity.swift"
+      ],
+      "component": "rebuild:SimpleMole/Views/ScreenshotEditorView.swift",
+      "actions": [
+        {
+          "id": "shot-wipe",
+          "at": 0,
+          "action": "三色缎带扫过换场",
+          "soundRequired": true
+        },
+        {
+          "id": "shot-rect",
+          "at": 0.72,
+          "action": "画出矩形框",
+          "soundRequired": true
+        },
+        {
+          "id": "shot-arrow",
+          "at": 1.2,
+          "action": "画出箭头",
+          "soundRequired": true
+        },
+        {
+          "id": "shot-mosaic",
+          "at": 1.68,
+          "action": "密钥被打上马赛克",
+          "soundRequired": true
+        },
+        {
+          "id": "shot-preset1",
+          "at": 2.4,
+          "action": "背景切到极光",
+          "soundRequired": true
+        },
+        {
+          "id": "shot-preset2",
+          "at": 3.36,
+          "action": "背景切到日落",
+          "soundRequired": true
+        },
+        {
+          "id": "shot-preset3",
+          "at": 4.32,
+          "action": "背景切到海洋",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "clipboard",
+      "start": 38.4,
+      "end": 44.16,
+      "type": "detail",
+      "headlineEn": "Never lose a copy",
+      "headline": "复制过的，都找得回",
+      "description": "文本、网址、文件、图片自动记录，常用的可置顶。",
+      "plainExplanation": "剪贴板历史自动记下复制过的内容，可以按类型筛选，常用的置顶。",
+      "descriptionAt": 0.5,
+      "claim": true,
+      "source": [
+        "repo:SimpleMole/Views/ClipboardHistoryTabView.swift",
+        "repo:SimpleMole/L10n/TablesProductivity.swift"
+      ],
+      "component": "rebuild:SimpleMole/Views/ClipboardHistoryTabView.swift",
+      "actions": [
+        {
+          "id": "clip-cards",
+          "at": 0.2,
+          "action": "剪贴板卡片落下",
+          "soundRequired": true
+        },
+        {
+          "id": "clip-filter1",
+          "at": 1.92,
+          "action": "筛选切到网址",
+          "soundRequired": true
+        },
+        {
+          "id": "clip-filter2",
+          "at": 2.88,
+          "action": "筛选切到图片",
+          "soundRequired": true
+        },
+        {
+          "id": "clip-filter3",
+          "at": 3.84,
+          "action": "回到全部",
+          "soundRequired": true
+        },
+        {
+          "id": "clip-pin",
+          "at": 4.56,
+          "action": "把命令卡片置顶",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "schedule",
+      "start": 44.16,
+      "end": 48.0,
+      "type": "detail",
+      "headlineEn": "Tidy on a schedule",
+      "headline": "定时清理，自动整洁",
+      "description": "保留最近 N 天或限制容量，先预览，再开启。",
+      "plainExplanation": "给下载、构建缓存等目录设规则，Nori 按时把过期内容移入废纸篓。",
+      "descriptionAt": 0.4,
+      "claim": true,
+      "source": [
+        "repo:SimpleMole/Views/AutoCleanupRulesView.swift",
+        "repo:SimpleMole/L10n/TablesAutoCleanup.swift",
+        "repo:README.md"
+      ],
+      "component": "rebuild:SimpleMole/Views/AutoCleanupRulesView.swift",
+      "actions": [
+        {
+          "id": "sched-preview",
+          "at": 0.96,
+          "action": "点「预览」，清理预览数字滚动",
+          "soundRequired": true
+        },
+        {
+          "id": "sched-on",
+          "at": 2.4,
+          "action": "开启自动清理",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "duplicates",
+      "start": 48.0,
+      "end": 51.84,
+      "type": "detail",
+      "headlineEn": "Find the duplicates",
+      "headline": "按内容查出重复文件",
+      "description": "内容指纹比对，每组至少保留一份。",
+      "plainExplanation": "Nori 用内容指纹找出完全相同的文件，你勾选多余的副本移入废纸篓。",
+      "descriptionAt": 0.4,
+      "claim": true,
+      "source": [
+        "repo:SimpleMole/Views/AnalyzeSectionViews.swift",
+        "repo:SimpleMole/Views/DuplicateScanActivity.swift",
+        "repo:SimpleMole/L10n/TablesBase.swift"
+      ],
+      "component": "rebuild:SimpleMole/Views/AnalyzeSectionViews.swift#duplicates",
+      "actions": [
+        {
+          "id": "dup-scan",
+          "at": 0.1,
+          "action": "开始校验候选文件",
+          "soundRequired": true
+        },
+        {
+          "id": "dup-found",
+          "at": 1.2,
+          "action": "找到 3 组重复",
+          "soundRequired": true
+        },
+        {
+          "id": "dup-tick1",
+          "at": 2.4,
+          "action": "勾选第一个副本",
+          "soundRequired": true
+        },
+        {
+          "id": "dup-tick2",
+          "at": 2.88,
+          "action": "勾选第二个副本",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "montage",
+      "start": 51.84,
+      "end": 55.68,
+      "type": "montage",
+      "headlineEn": "And more",
+      "headline": "还有更多",
+      "description": "灵动岛 · 软件卸载 · 磁盘分析 · 图片瘦身 · 模拟器设备 · Docker 明细 · 进程 · 流量",
+      "plainExplanation": "Nori 还有灵动岛监控、卸载、磁盘分析、图片瘦身、模拟器设备、Docker 明细、进程和流量。",
+      "descriptionAt": 0,
+      "claim": true,
+      "source": [
+        "repo:SimpleMole/Views/FloatingIslandView.swift",
+        "repo:SimpleMole/Views/UninstallTabView.swift",
+        "repo:SimpleMole/Views/AnalyzeTabView.swift",
+        "repo:SimpleMole/Views/MediaSlimViews.swift",
+        "repo:SimpleMole/Views/SimulatorDevicesView.swift",
+        "repo:SimpleMole/Views/DockerDetailsView.swift",
+        "repo:SimpleMole/Views/ProcessesTabView.swift",
+        "repo:SimpleMole/Views/TrafficTabView.swift"
+      ],
+      "component": null,
+      "actions": [
+        {
+          "id": "montage-in",
+          "at": 0,
+          "action": "功能名逐拍切换",
+          "soundRequired": true
+        }
+      ]
+    },
+    {
+      "id": "close",
+      "start": 55.68,
+      "end": 59.52,
+      "type": "end",
+      "headlineEn": "Light. Nimble. Quiet.",
+      "headline": "轻量 · 灵动 · 安静",
+      "description": "约 10 MB · 原生 Swift · macOS 13+ · 开源",
+      "plainExplanation": "Nori 安装后约 10 MB，原生 Swift 编写，支持 macOS 13 及以上，开源。",
+      "descriptionAt": 1.8,
+      "claim": true,
+      "source": [
+        "repo:README.md",
+        "repo:LICENSE",
+        "measure:du -sh /Applications/Nori.app = 10M"
+      ],
+      "component": "repo:SimpleMole/Support/Nori/Animations/nori-working.svg",
+      "actions": [
+        {
+          "id": "close-converge",
+          "at": 0,
+          "action": "缎带合拢回到 Nori",
+          "soundRequired": true
+        },
+        {
+          "id": "close-title",
+          "at": 0.96,
+          "action": "字标与三个词落版",
+          "soundRequired": true
+        }
+      ]
+    }
+  ]
+}

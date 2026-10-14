@@ -1,0 +1,7 @@
+node_modules/
+.browsers/
+.build/
+.tmp/
+dist/
+renders/*.mp4
+evidence/stills/

@@ -198,6 +198,36 @@ struct MolePlainButtonStyle: ButtonStyle {
     }
 }
 
+/// 整个内容区切换选择；附加操作必须放在 Toggle 的同级，避免一次点击执行两种操作。
+struct MoleRowSelectionToggleStyle: ToggleStyle {
+    var partiallySelected = false
+    var horizontalPadding: CGFloat = 12
+    var minHeight: CGFloat = 36
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: {
+            HStack(spacing: 8) {
+                Image(systemName: configuration.isOn ? "checkmark.square.fill"
+                      : (partiallySelected ? "minus.square.fill" : "square"))
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(configuration.isOn || partiallySelected
+                                     ? Color.moleAccentText : Color.secondary)
+                    .frame(width: 18)
+                    .accessibilityHidden(true)
+                configuration.label
+            }
+            .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .leading)
+            .padding(.horizontal, horizontalPadding)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+                .toggleStyle(.checkbox)
+        }
+    }
+}
+
 /// 小型图标按钮：保持固定命中尺寸，仅提供轻量悬停和按压反馈。
 /// `isActive` 适用于展开、筛选等持续状态，不承担危险操作的语义着色。
 struct MoleIconButtonStyle: ButtonStyle {

@@ -13,8 +13,106 @@ private struct CleanupPresentationRoot: View {
     }
 }
 
+@MainActor
+private final class CleanupSelectionState: ObservableObject {
+    @Published var enabled = true
+    @Published var category = CleanupCategory(name: "A long cleanup category name for selection testing",
+        paths: ["/fixture/cache/first.log", "/fixture/cache/second.log"], bytes: 8192,
+        pathBytes: ["/fixture/cache/first.log": 6144, "/fixture/cache/second.log": 2048],
+        selected: false, source: .core, risk: .safe, reasonKey: "cleanup.risk.safe")
+    var scheduleRequests = 0
+}
+
+private struct CleanupSelectionRoot: View {
+    @ObservedObject var state: CleanupSelectionState
+    var body: some View {
+        VStack {
+            CategoryRowView(category: $state.category, selectionEnabled: state.enabled,
+                            onAutoClean: { state.scheduleRequests += 1 })
+            Spacer()
+        }
+        .padding(16)
+        .background(Color.glassOpaque)
+        .transaction { $0.animation = nil; $0.disablesAnimations = true }
+    }
+}
+
 @main
 struct CleanupPresentationTests {
+    /// Route real mouse events inside this disposable fixture window only.
+    /// Fixed fixture coordinates cover the checkbox, title, blank space and sibling buttons.
+    @MainActor private static func click(at point: CGPoint, in window: NSWindow) {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0)!
+            NSApp.postEvent(event, atStart: false)
+        }
+        while let event = NSApp.nextEvent(matching: [.leftMouseDown, .leftMouseUp],
+                                          until: Date(), inMode: .default, dequeue: true) {
+            NSApp.sendEvent(event)
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+    }
+
+    @MainActor private static func verifySelection(output: URL) {
+        let state = CleanupSelectionState()
+        let host = NSHostingView(rootView: CleanupSelectionRoot(state: state))
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 600, height: 280),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderBack(nil)
+        defer { window.close() }
+        func settle() { RunLoop.main.run(until: Date().addingTimeInterval(0.2)); host.layoutSubtreeIfNeeded() }
+        settle()
+        click(at: CGPoint(x: 300, y: 246), in: window)
+        precondition(state.category.allSelected && !state.category.expanded,
+                     "Clicking title/blank space must select once without expanding")
+        click(at: CGPoint(x: 37, y: 246), in: window)
+        precondition(!state.category.selected, "Clicking the checkbox must toggle exactly once")
+        click(at: CGPoint(x: 527, y: 246), in: window)
+        precondition(state.scheduleRequests == 1 && !state.category.selected && !state.category.expanded,
+                     "Scheduling button must perform only its own action")
+        click(at: CGPoint(x: 561, y: 246), in: window)
+        precondition(state.category.expanded && !state.category.selected && state.scheduleRequests == 1,
+                     "Expand button must preserve selection and scheduling")
+        settle()
+        click(at: CGPoint(x: 400, y: 197), in: window)
+        precondition(state.category.selectedPathCount == 1 && state.category.selectedPathBytes == 6144,
+                     "Child row blank-space click must select only its path and update bytes")
+        precondition(!state.category.isPathSelected(state.category.paths[1]), "Other paths must remain unselected")
+        let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        try! bitmap.representation(using: .png, properties: [:])!.write(
+            to: output.appendingPathComponent("selection-expanded-partial.png"))
+        click(at: CGPoint(x: 300, y: 246), in: window)
+        precondition(state.category.allSelected, "Partial row selection must select the full category")
+        state.enabled = false
+        settle()
+        click(at: CGPoint(x: 300, y: 246), in: window)
+        precondition(state.category.allSelected, "Disabled row clicks must not mutate selection")
+        click(at: CGPoint(x: 527, y: 246), in: window)
+        precondition(state.scheduleRequests == 1, "Disabled schedule button must not execute")
+        click(at: CGPoint(x: 561, y: 246), in: window)
+        precondition(!state.category.expanded && state.category.allSelected, "Details remain independent while busy")
+        state.enabled = true
+        state.category.risk = .protected
+        state.category.selected = false
+        settle()
+        click(at: CGPoint(x: 300, y: 246), in: window)
+        precondition(!state.category.selected && state.category.expanded,
+                     "Protected row clicks must show details without becoming selected")
+        click(at: CGPoint(x: 400, y: 197), in: window)
+        precondition(!state.category.selected, "Read-only paths must not act like checkboxes")
+        let readOnlyBitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
+        host.cacheDisplay(in: host.bounds, to: readOnlyBitmap)
+        try! readOnlyBitmap.representation(using: .png, properties: [:])!.write(
+            to: output.appendingPathComponent("protected-readonly-expanded.png"))
+        print("Cleanup selection interaction: title/blank area, checkbox, scheduling, expand, child paths, partial selection, busy and protected guards passed")
+    }
+
     @MainActor static func main() {
         _ = NSApplication.shared
         NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -83,6 +181,16 @@ struct CleanupPresentationTests {
         state.isCleanupScanning = false
         state.cleanupScanComplete = true
         render("scan results")
+        let groupY = window.contentLayoutRect.maxY - 22
+        click(at: CGPoint(x: size.width * 0.6, y: groupY), in: window)
+        precondition(!state.categories[0].selected, "Group title/blank area must toggle selection")
+        click(at: CGPoint(x: size.width - 39, y: groupY), in: window)
+        precondition(!state.categories[0].selected, "Group expansion must not toggle selection")
+        click(at: CGPoint(x: size.width - 39, y: groupY), in: window)
+        precondition(!state.categories[0].selected, "Group collapse must not toggle selection")
+        click(at: CGPoint(x: size.width * 0.6, y: groupY), in: window)
+        precondition(state.categories[0].allSelected, "Group selection must remain independent")
+        verifySelection(output: output)
 
         state.isApplying = true
         state.statusText = "Fixture cleanup in progress"

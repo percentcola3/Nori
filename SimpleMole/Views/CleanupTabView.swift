@@ -360,13 +360,8 @@ struct CleanupTabView: View {
 
     @ViewBuilder
     private func cleanupGroupHeader(_ group: CleanupPresentationGroup) -> some View {
-        HStack(spacing: 8) {
-            Toggle("", isOn: groupSelection(group))
-                .toggleStyle(.checkbox)
-                .labelsHidden()
-                .disabled(!state.cleanupScanComplete || state.isApplying)
-            // 整个标题区可点击折叠，比小箭头按钮更容易命中。
-            Button { toggleCollapsed(group.kind) } label: {
+        HStack(spacing: 0) {
+            Toggle(isOn: groupSelection(group)) {
                 HStack(spacing: 8) {
                     Image(systemName: group.kind.symbol)
                         .font(.system(size: 11, weight: .semibold))
@@ -380,19 +375,20 @@ struct CleanupTabView: View {
                     Text(ByteFormat.format(group.bytes))
                         .font(.system(size: 11, weight: .semibold).monospacedDigit())
                         .foregroundStyle(Color.moleAccentText)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(collapsedGroups.contains(group.kind) ? -90 : 0))
-                        .frame(width: 18, height: 18)
-                        .background(Circle().fill(Color.surface2))
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
+            .toggleStyle(MoleRowSelectionToggleStyle(horizontalPadding: 10))
+            .disabled(!state.cleanupScanComplete || state.isApplying)
+            .accessibilityIdentifier("cleanup-group-select-" + group.kind.rawValue)
+            Button { toggleCollapsed(group.kind) } label: {
+                Image(systemName: "chevron.down")
+                    .rotationEffect(.degrees(collapsedGroups.contains(group.kind) ? -90 : 0))
+            }
+            .buttonStyle(MoleIconButtonStyle(size: 30))
+            .accessibilityLabel(l10n.t(collapsedGroups.contains(group.kind) ? "cleanup.expand" : "cleanup.collapse") + ": " + l10n.t(group.kind.titleKey))
+            .accessibilityIdentifier("cleanup-group-expand-" + group.kind.rawValue)
+            .padding(.trailing, 8)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
         .modifier(ListRowSurface(emphasis: .header))
     }
 
@@ -470,7 +466,6 @@ struct CategoryRowView: View {
     @Binding var category: CleanupCategory
     let selectionEnabled: Bool
     var highlightsSensitiveData = false
-    var selectsOnRowClick = false
     var coveredPaths: Set<String> = []
     var onAutoClean: (() -> Void)? = nil
     @ObservedObject private var l10n = L10n.shared
@@ -491,63 +486,33 @@ struct CategoryRowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                if !selectsOnRowClick {
-                    Toggle("", isOn: categorySelection)
-                        .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
-                        .disabled(!category.canSelect || !selectionEnabled)
-                }
-                Button {
-                    if selectsOnRowClick { categorySelection.wrappedValue.toggle() }
-                    else { toggleExpanded() }
-                } label: {
-                    HStack(spacing: 8) {
-                        if selectsOnRowClick {
-                            Toggle("", isOn: .constant(category.allSelected))
-                                .toggleStyle(.checkbox).controlSize(.mini).labelsHidden().fixedSize()
-                                .allowsHitTesting(false).accessibilityHidden(true)
-                        }
-                        Text(L10nLocalizationAuditTables.categoryName(category.name, isAppLeftover: category.source == .appLeftover))
-                            .font(.system(size: 12, weight: .medium))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        if sensitive {
-                            Text(l10n.t("agents.risk.high"))
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(Color.danger)
-                        } else { RiskBadge(risk: category.risk) }
-                        Spacer(minLength: 8)
-                        SizeBadge(text: ByteFormat.format(category.partiallySelected ? category.selectedPathBytes : category.bytes),
-                                  prominent: category.selected)
-                        if !coveredPaths.isEmpty {
-                            HStack(spacing: 3) {
-                                Image(systemName: "clock.fill")
-                                    .font(.system(size: 8, weight: .semibold))
-                                Text(scheduledBadgeText)
-                                    .font(.system(size: 9, weight: .semibold))
-                            }
-                            .foregroundStyle(Color.moleAccentText)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Capsule().fill(Color.moleAccent.opacity(0.12)))
-                            .help(l10n.t("auto.mark.covered"))
-                            .accessibilityLabel(l10n.t("auto.mark.covered"))
-                        }
+            HStack(spacing: 4) {
+                if category.canSelect {
+                    Toggle(isOn: categorySelection) { categoryLabel }
+                        .toggleStyle(MoleRowSelectionToggleStyle(partiallySelected: category.partiallySelected))
+                        .disabled(!selectionEnabled)
+                        .accessibilityIdentifier("cleanup-category-select-" + category.id.uuidString)
+                } else {
+                    Button { toggleExpanded() } label: {
+                        readOnlyContent(horizontalPadding: 12, minHeight: 36) { categoryLabel }
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.leading, selectsOnRowClick ? 12 : 0)
-                    .padding(.vertical, selectsOnRowClick ? 8 : 0)
-                    .contentShape(Rectangle())
+                    .buttonStyle(MolePlainButtonStyle(pressedScale: 0.995))
+                    .help(l10n.t(category.reasonKey))
+                    .accessibilityLabel(L10nLocalizationAuditTables.categoryName(category.name,
+                        isAppLeftover: category.source == .appLeftover) + " · " + l10n.t("agents.badge.showOnly"))
+                    .accessibilityValue(l10n.t(category.expanded ? "agents.expanded" : "agents.collapsed"))
+                    .accessibilityIdentifier("cleanup-category-readonly-" + category.id.uuidString)
                 }
-                .buttonStyle(MolePlainButtonStyle(pressedScale: 0.99))
-                .disabled(selectsOnRowClick && (!category.canSelect || !selectionEnabled))
-                .accessibilityAddTraits(selectsOnRowClick && category.allSelected ? .isSelected : [])
                 if let onAutoClean {
                     Button(action: onAutoClean) {
                         Image(systemName: "clock.arrow.circlepath")
                             .font(.system(size: 10, weight: .semibold))
                     }
-                    .buttonStyle(MoleIconButtonStyle(size: 22))
+                    .buttonStyle(MoleIconButtonStyle(size: 30))
                     .disabled(!selectionEnabled)
+                    .help(l10n.t("auto.title"))
+                    .accessibilityLabel(l10n.t("auto.title"))
+                    .accessibilityIdentifier("cleanup-category-schedule-" + category.id.uuidString)
                 }
                 Button {
                     toggleExpanded()
@@ -556,11 +521,11 @@ struct CategoryRowView: View {
                         .font(.system(size: 10, weight: .semibold))
                         .rotationEffect(.degrees(category.expanded ? 180 : 0))
                 }
-                .buttonStyle(MoleIconButtonStyle(size: 22))
-                .padding(.trailing, selectsOnRowClick ? 12 : 0)
+                .buttonStyle(MoleIconButtonStyle(size: 30))
+                .accessibilityLabel(l10n.t(category.expanded ? "cleanup.collapse" : "cleanup.expand"))
+                .accessibilityIdentifier("cleanup-category-expand-" + category.id.uuidString)
+                .padding(.trailing, 8)
             }
-            .padding(.horizontal, selectsOnRowClick ? 0 : 12)
-            .padding(.vertical, selectsOnRowClick ? 0 : 8)
             if category.expanded {
                 LazyVStack(alignment: .leading, spacing: 3) {
                     Label(l10n.t(category.reasonKey), systemImage: riskSymbol)
@@ -568,41 +533,27 @@ struct CategoryRowView: View {
                         .foregroundStyle(riskColor)
                         .padding(.bottom, 2)
                     ForEach(sortedPaths, id: \.self) { path in
-                        HStack(spacing: 7) {
-                            Toggle("", isOn: childSelection(for: path))
-                                .toggleStyle(.checkbox)
-                                .controlSize(.mini)
-                                .labelsHidden()
-                                .fixedSize()
-                                .disabled(!category.canSelect || !selectionEnabled)
-                            if coveredPaths.contains(path) {
-                                Image(systemName: "clock.fill")
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(Color.moleAccentText)
-                                    .help(l10n.t("auto.mark.covered"))
-                            }
-                            Text(path)
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer(minLength: 8)
-                            if let note = category.pathNotes[path] {
-                                Text(note)
-                                    .font(.system(size: 9))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            if let bytes = category.pathBytes[path], bytes > 0 {
-                                Text(ByteFormat.format(bytes))
-                                    .font(.system(size: 9).monospacedDigit())
-                                    .foregroundStyle(.secondary)
+                        Group {
+                            if category.canSelect {
+                                Toggle(isOn: childSelection(for: path)) { pathLabel(for: path) }
+                                    .toggleStyle(MoleRowSelectionToggleStyle(horizontalPadding: 8, minHeight: 28))
+                                    .disabled(!selectionEnabled)
+                                    .accessibilityLabel(path)
+                                    .accessibilityIdentifier("cleanup-path-select-" + path)
+                            } else {
+                                readOnlyContent(horizontalPadding: 8, minHeight: 28) { pathLabel(for: path) }
+                                    .accessibilityElement(children: .combine)
+                                    .accessibilityLabel(path + " · " + l10n.t("agents.badge.showOnly"))
+                                    .accessibilityIdentifier("cleanup-path-readonly-" + path)
                             }
                         }
-                        .contentShape(Rectangle())
+                        .background(RoundedRectangle(cornerRadius: 6)
+                            .fill(category.isPathSelected(path) ? Color.selectionFill : Color.surface1))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 40)
+                .padding(.leading, 32)
+                .padding(.trailing, 12)
                 .padding(.bottom, 10)
                 .transition(.molePanelReveal)
                 .task(id: pathOrderKey) { sortedPaths = category.pathsByDescendingSize }
@@ -612,6 +563,82 @@ struct CategoryRowView: View {
         .modifier(ListRowSurface(selected: category.selected))
         .animation(reduceMotion ? nil : MoleMotion.selection, value: category.selected)
         .opacity(category.risk == .protected ? 0.72 : 1)
+    }
+
+    private var categoryLabel: some View {
+        HStack(spacing: 8) {
+            Text(L10nLocalizationAuditTables.categoryName(category.name, isAppLeftover: category.source == .appLeftover))
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            if !category.canSelect {
+                Text(l10n.t("agents.badge.showOnly"))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            } else if sensitive {
+                Text(l10n.t("agents.risk.high"))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Color.danger)
+            } else { RiskBadge(risk: category.risk) }
+            Spacer(minLength: 8)
+            SizeBadge(text: ByteFormat.format(category.partiallySelected ? category.selectedPathBytes : category.bytes),
+                      prominent: category.selected)
+            if !coveredPaths.isEmpty {
+                HStack(spacing: 3) {
+                    Image(systemName: "clock.fill")
+                        .font(.system(size: 8, weight: .semibold))
+                    Text(scheduledBadgeText)
+                        .font(.system(size: 9, weight: .semibold))
+                }
+                .foregroundStyle(Color.moleAccentText)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(Capsule().fill(Color.moleAccent.opacity(0.12)))
+                .help(l10n.t("auto.mark.covered"))
+                .accessibilityLabel(l10n.t("auto.mark.covered"))
+            }
+        }
+    }
+
+    private func pathLabel(for path: String) -> some View {
+        HStack(spacing: 7) {
+            if coveredPaths.contains(path) {
+                Image(systemName: "clock.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(Color.moleAccentText)
+                    .help(l10n.t("auto.mark.covered"))
+            }
+            Text(path)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 8)
+            if let note = category.pathNotes[path] {
+                Text(note)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.tertiary)
+            }
+            if let bytes = category.pathBytes[path], bytes > 0 {
+                Text(ByteFormat.format(bytes))
+                    .font(.system(size: 9).monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func readOnlyContent<Content: View>(horizontalPadding: CGFloat, minHeight: CGFloat,
+                                               @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            content()
+        }
+        .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .leading)
+        .padding(.horizontal, horizontalPadding)
+        .contentShape(Rectangle())
     }
 
     /// 路径数与总字节一起变化才重排；只勾选不会改变这两个值。
