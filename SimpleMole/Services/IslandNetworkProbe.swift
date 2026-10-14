@@ -76,7 +76,7 @@ enum IslandNetworkProbeParser {
 @MainActor
 final class IslandNetworkProbe: ObservableObject {
     enum Mode: Equatable { case ping, bandwidth }
-    @Published var host = "1.1.1.1"
+    @Published var host = "google.com"
     @Published private(set) var running: Mode?
     @Published private(set) var pingResult: IslandPingResult?
     @Published private(set) var bandwidthResult: IslandBandwidthResult?

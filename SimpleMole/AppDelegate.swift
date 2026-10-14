@@ -507,6 +507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             maxRailHeight: fit.height,
             edge: edge,
             onOpenMain: { [weak self] in self?.openMainFromIsland() },
+            onOpenSettings: { [weak self] in self?.openMainFromIsland(page: .settings) },
             onHitFrameChange: { [weak self, weak panel] frame, shape in
                 guard let self, let panel, self.islandPanel === panel else { return }
                 // 同步赋值：SwiftUI 回调本就在主线程；async 跳一拍会让同一时刻的
@@ -618,7 +619,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         islandSideDragSession = nil
     }
 
-    private func openMainFromIsland() {
+    private func openMainFromIsland(page: AppState.PageKey? = nil) {
         cancelIslandSideDragTracking()
         // 点击发生在灵动岛所在的屏：主窗口就开在这块屏上，而不是按光标推断。
         let islandScreen = islandPanel?.screen
@@ -628,6 +629,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         islandExpanded = false
         DispatchQueue.main.async { [weak self] in
             self?.showMainWindow(on: islandScreen)
+            if let page { self?.appState.jump(to: page) }
         }
     }
 

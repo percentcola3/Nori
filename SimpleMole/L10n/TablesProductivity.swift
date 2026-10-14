@@ -32,6 +32,7 @@ enum L10nProductivityTables {
         conflict: "The shortcut is already used by another app.",
         copied: "Copied ✓", failed: "Operation failed").merging([
             "island.advanced": "Open advanced panel",
+            "island.settings": "Open settings",
             "island.clean": "Smart cleanup",
             "island.clean.hint": "Ends leftover processes only: orphaned background processes that belong to no running app or system service. Apps you are using are never touched.",
             "island.top.cpu": "Highest CPU usage",
@@ -229,6 +230,7 @@ enum L10nProductivityTables {
         conflict: "快捷键已被其他应用占用。",
         copied: "已复制 ✓", failed: "操作失败").merging([
             "island.advanced": "打开高级面板",
+            "island.settings": "打开设置",
             "island.clean": "智能清理",
             "island.clean.hint": "只结束残留进程：已脱离父进程、不属于任何运行中 App 或系统服务的后台进程。你正在使用的 App 不会被结束。",
             "island.top.cpu": "CPU 占用最高",

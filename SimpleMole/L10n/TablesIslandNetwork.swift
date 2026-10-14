@@ -16,6 +16,9 @@ enum L10nIslandNetworkTables {
         "island.network.host": "Host or IP address",
         "island.network.ping": "Ping",
         "island.network.speed": "Speed test",
+        "island.network.start": "Start speed test",
+        "island.network.jitter": "Jitter",
+        "island.network.live": "Live throughput",
         "island.network.stop": "Stop",
         "island.network.latency": "Ping latency",
         "island.network.loss": "Packet loss",
@@ -31,6 +34,8 @@ enum L10nIslandNetworkTables {
         "island.network.failed": "Could not measure bandwidth. Check connectivity and try again.",
         "island.network.pingFailed": "Ping failed. Check the target address or whether ICMP is blocked.",
         "island.network.hint": "Ping measures latency; speed testing generates upload and download traffic. Stop at any time.",
+        "island.network.hint.ping": "Ping measures latency and packet loss to the host (default google.com).",
+        "island.network.hint.speed": "Speed testing generates upload and download traffic. Stop at any time.",
     ]
     private static let zhHans: [String: String] = [
         "island.network.open": "网络检测与测速",
@@ -39,6 +44,9 @@ enum L10nIslandNetworkTables {
         "island.network.host": "域名或 IP 地址",
         "island.network.ping": "Ping 检测",
         "island.network.speed": "带宽测速",
+        "island.network.start": "开始测速",
+        "island.network.jitter": "抖动",
+        "island.network.live": "实时速率",
         "island.network.stop": "停止",
         "island.network.latency": "Ping 延迟",
         "island.network.loss": "丢包率",
@@ -54,5 +62,7 @@ enum L10nIslandNetworkTables {
         "island.network.failed": "未能测量带宽，请检查网络后重试。",
         "island.network.pingFailed": "Ping 检测失败，请检查目标地址或 ICMP 是否被拦截。",
         "island.network.hint": "Ping 检测延迟；带宽测速会产生上下行流量，可随时停止。",
+        "island.network.hint.ping": "Ping 检测到目标主机的延迟与丢包（默认 google.com）。",
+        "island.network.hint.speed": "带宽测速会产生上下行流量，可随时停止。",
     ]
 }

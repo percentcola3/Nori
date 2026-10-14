@@ -167,6 +167,7 @@ struct FloatingIslandView: View {
     var maxRailHeight: CGFloat = .greatestFiniteMagnitude
     var edge: AppState.IslandEdge = .top
     var onOpenMain: () -> Void
+    var onOpenSettings: () -> Void = {}
     var onHitFrameChange: (CGRect, NotchShape) -> Void
     var onDetailHitFrameChange: (CGRect?) -> Void = { _ in }
     var onExpandedChange: (Bool) -> Void = { _ in }
@@ -336,14 +337,19 @@ struct FloatingIslandView: View {
                     .scaleEffect(expanded || reduceMotion ? 1 : 0.94, anchor: .top)
                     .allowsHitTesting(expanded)
                     .accessibilityHidden(!expanded)
-                // 刘海屏把 Nori 放在刘海左侧的肩位，不额外占高度。
+                // 刘海屏把 Nori 放在刘海左侧的肩位，不额外占高度；右侧肩位放设置入口。
                 if expanded && hardwareNotch {
-                    mascot(size: min(30, safeTop))
-                        .padding(.leading, 20)
-                        .frame(width: expandedPanelWidth, height: safeTop, alignment: .leading)
-                        .transition(.asymmetric(
-                            insertion: .opacity.animation(contentFade(visible: true)),
-                            removal: .opacity.animation(contentFade(visible: false))))
+                    HStack(spacing: 0) {
+                        mascot(size: min(30, safeTop))
+                            .padding(.leading, 20)
+                        Spacer(minLength: 0)
+                        settingsControl(height: min(36, safeTop))
+                            .padding(.trailing, 16)
+                    }
+                    .frame(width: expandedPanelWidth, height: safeTop)
+                    .transition(.asymmetric(
+                        insertion: .opacity.animation(contentFade(visible: true)),
+                        removal: .opacity.animation(contentFade(visible: false))))
                 }
                 collapsedHandle
                     .opacity(expanded ? 0 : 1)
@@ -431,7 +437,7 @@ struct FloatingIslandView: View {
                         .scaleEffect(sideMetricScale)
                         .frame(height: IslandLayout.sideMetricHeight * sideMetricScale)
                 }
-                moreControl
+                settingsControl()
                     .frame(height: 32)
             }
             .padding(.vertical, 12)
@@ -591,7 +597,7 @@ struct FloatingIslandView: View {
                         ForEach([IslandResource.cpu, .memory], id: \.self) { resource in
                             resourcePanel(resource)
                                 .opacity(selectedResource == resource ? 1 : 0)
-                                .offset(x: selectedResource == resource ? 0 : (resource == .cpu ? -10 : 10))
+                                .offset(y: selectedResource == resource || reduceMotion ? 0 : -10)
                                 .allowsHitTesting(selectedResource == resource)
                                 .accessibilityHidden(selectedResource != resource)
                         }
@@ -603,7 +609,7 @@ struct FloatingIslandView: View {
                         if hovering { resourceDebounce?.cancel() }
                         else { scheduleResourceDismissal() }
                     }
-                    .transition(.opacity)
+                    .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
                 }
             }
             .clipped()
@@ -655,9 +661,9 @@ struct FloatingIslandView: View {
                     }
                     if index == 0 {
                         AwakeIslandIndicator(controller: state.awake, onOpenMain: onOpenMain)
-                        moreControl
+                        if !hardwareNotch { settingsControl() }
                     } else {
-                        Color.clear.frame(width: IslandLayout.awakeWidth + IslandLayout.moreWidth, height: 1)
+                        Color.clear.frame(width: IslandLayout.awakeWidth + (hardwareNotch ? 0 : IslandLayout.moreWidth), height: 1)
                     }
                 }
             }
@@ -667,12 +673,12 @@ struct FloatingIslandView: View {
         .padding(.bottom, 8)
     }
 
-    private var moreControl: some View {
-        Image(systemName: edge == .right ? "chevron.left" : "chevron.right")
-            .font(.system(size: 15, weight: .semibold))
-            .offset(x: moreHovered && !reduceMotion ? (edge == .right ? -2 : 2) : 0)
+    private func settingsControl(height: CGFloat = 36) -> some View {
+        Image(systemName: "gearshape")
+            .font(.system(size: 14, weight: .semibold))
+            .rotationEffect(.degrees(moreHovered && !reduceMotion ? 30 : 0))
             .foregroundStyle(moreHovered ? Color.accentText : Color.secondary)
-            .frame(width: IslandLayout.moreWidth, height: 36)
+            .frame(width: IslandLayout.moreWidth, height: height)
             .contentShape(Rectangle())
         .animation(reduceMotion ? nil : MoleMotion.press, value: moreHovered)
         .brightness(morePressed ? 0.12 : 0)
@@ -681,14 +687,14 @@ struct FloatingIslandView: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
         .overlay {
-            IslandActionTarget(label: l10n.t("island.advanced"),
+            IslandActionTarget(label: l10n.t("island.settings"),
                                isEnabled: expanded,
                                onPressChange: { morePressed = $0 }) {
                 hoverDebounce?.cancel()
                 resourceDebounce?.cancel()
                 resourceHoverDebounce?.cancel()
                 setExpanded(false)
-                onOpenMain()
+                onOpenSettings()
             }
         }
         .onHover {
@@ -713,6 +719,21 @@ struct FloatingIslandView: View {
                 .allowsHitTesting(false).accessibilityHidden(true)
                 .overlay {
                     IslandActionTarget(label: l10n.t("island.network.open"), accessibilityValue: networkValue, isEnabled: expanded) { openNetworkProbe() }
+                }
+                .onHover { hovering in
+                    guard expanded else { return }
+                    if hovering {
+                        resourceHoverDebounce?.cancel()
+                        resourceDebounce?.cancel()
+                        resourceHoverDebounce = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 160_000_000)
+                            guard !Task.isCancelled else { return }
+                            openNetworkProbe()
+                        }
+                    } else {
+                        resourceHoverDebounce?.cancel()
+                        scheduleResourceDismissal()
+                    }
                 }
         } else if let resource = item.resource {
             Button { beginCleanup(resource) } label: { ring(item) }
@@ -742,7 +763,7 @@ struct FloatingIslandView: View {
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel(l10n.t(item.labelKey))
                 .accessibilityValue(valueText(item))
-                .onHover { if $0 && !networkPresented { selectResource(nil) } }
+                .onHover { if $0 { selectResource(nil) } }
         }
     }
 
@@ -873,7 +894,6 @@ struct FloatingIslandView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(l10n.t("island.item.network"))
             .accessibilityValue(networkValue)
-            .onHover { if $0 && !networkPresented { selectResource(nil) } }
         }
     }
 
@@ -897,7 +917,6 @@ struct FloatingIslandView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(l10n.t("island.item.network"))
         .accessibilityValue(networkValue)
-        .onHover { if $0 && !networkPresented { selectResource(nil) } }
     }
 
     private func rateLine(symbol: String, text: String, tint: Color) -> some View {
@@ -1041,11 +1060,9 @@ struct FloatingIslandView: View {
     }
 
     private var networkProbePanel: some View {
-        IslandNetworkProbeView(controller: state.islandNetworkProbe) {
-            state.islandNetworkProbe.cancel()
-            withAnimation(detailMotion) { networkPresented = false }
-            if !islandHovered { scheduleHoverTransition(false) }
-        }
+        IslandNetworkProbeView(controller: state.islandNetworkProbe,
+            liveDownloadMBps: metricsStore.metrics.networkRxMBps,
+            liveUploadMBps: metricsStore.metrics.networkTxMBps)
     }
 
     private func openNetworkProbe() {
@@ -1084,12 +1101,11 @@ struct FloatingIslandView: View {
 
     private func selectResource(_ resource: IslandResource?) {
         guard state.islandCleaningResource == nil, state.islandNetworkProbe.running == nil else { return }
-        if resource != nil { networkPresented = false }
         if feedbackPinned, resource == nil { return }
         resourceDebounce?.cancel()
         resourceHoverDebounce?.cancel()
-        guard selectedResource != resource || collectionPresented else { return }
-        withAnimation(detailMotion) { selectedResource = resource; collectionPresented = false }
+        guard selectedResource != resource || collectionPresented || networkPresented else { return }
+        withAnimation(detailMotion) { selectedResource = resource; collectionPresented = false; networkPresented = false }
         if resource != nil { collectionPresented = false; state.refreshIslandProcesses() }
     }
 
@@ -1097,10 +1113,10 @@ struct FloatingIslandView: View {
         resourceDebounce?.cancel()
         resourceDebounce = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled, !networkPresented, state.islandCleaningResource == nil,
+            guard !Task.isCancelled, state.islandNetworkProbe.running == nil, state.islandCleaningResource == nil,
                   state.islandClosingPIDs.isEmpty, hoveredResource == nil, !collectionHovered, !moreHovered, !feedbackPinned,
                   !detailHovered, !sideDragging, edge == .top || focusedResource == nil else { return }
-            withAnimation(detailMotion) { selectedResource = nil; collectionPresented = false }
+            withAnimation(detailMotion) { selectedResource = nil; collectionPresented = false; networkPresented = false }
         }
     }
 
@@ -1119,7 +1135,7 @@ struct FloatingIslandView: View {
         hoverDebounce = Task { @MainActor in
             try? await Task.sleep(nanoseconds: hovering ? 220_000_000 : 400_000_000)
             guard !Task.isCancelled, !sideDragging else { return }
-            if !hovering, networkPresented || feedbackPinned || state.islandCleaningResource != nil
+            if !hovering, state.islandNetworkProbe.running != nil || feedbackPinned || state.islandCleaningResource != nil
                 || (edge != .top && focusedResource != nil) { return }
             setExpanded(hovering)
         }
