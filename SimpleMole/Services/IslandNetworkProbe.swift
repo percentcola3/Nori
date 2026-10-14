@@ -104,7 +104,7 @@ final class IslandNetworkProbe: ObservableObject {
             }
             // -c is supported from the tool's original macOS release. Bound the
             // entire command through the process runner rather than newer flags.
-            command = ("/usr/bin/networkQuality", ["-c"], 45)
+            command = ("/usr/bin/networkQuality", ["-c"], 120)
             bandwidthResult = nil
         }
         generation += 1

@@ -293,7 +293,6 @@ struct FloatingIslandView: View {
             if !visible { collectionPresented = false; collectionHovered = false }
         }
         .onDisappear {
-            state.islandNetworkProbe.cancel()
             networkPresented = false
             hoverDebounce?.cancel()
             resourceDebounce?.cancel()
@@ -883,6 +882,9 @@ struct FloatingIslandView: View {
                 Text(l10n.t("island.item.network"))
                     .font(.system(size: 9, weight: .medium))
                     .foregroundStyle(.secondary)
+                if state.islandNetworkProbe.running != nil {
+                    ProgressView().controlSize(.mini)
+                }
                 rateLine(symbol: "arrow.down", text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkRxMBps),
                          tint: Color.success)
                 rateLine(symbol: "arrow.up", text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkTxMBps),
@@ -899,7 +901,13 @@ struct FloatingIslandView: View {
 
     private var topNetworkMeter: some View {
         VStack(alignment: .leading, spacing: 0) {
-            tileLabel(.network, highlighted: false)
+            HStack {
+                tileLabel(.network, highlighted: false)
+                Spacer(minLength: 2)
+                if state.islandNetworkProbe.running != nil {
+                    ProgressView().controlSize(.mini)
+                }
+            }
             Spacer(minLength: 3)
             VStack(alignment: .leading, spacing: 1) {
                 rateLine(symbol: "arrow.down",
@@ -1088,7 +1096,7 @@ struct FloatingIslandView: View {
     }
 
     private func selectCollection() {
-        guard state.islandCleaningResource == nil, !feedbackPinned, state.islandNetworkProbe.running == nil else { return }
+        guard state.islandCleaningResource == nil, !feedbackPinned else { return }
         networkPresented = false
         resourceDebounce?.cancel()
         resourceHoverDebounce?.cancel()
@@ -1100,7 +1108,7 @@ struct FloatingIslandView: View {
     }
 
     private func selectResource(_ resource: IslandResource?) {
-        guard state.islandCleaningResource == nil, state.islandNetworkProbe.running == nil else { return }
+        guard state.islandCleaningResource == nil else { return }
         if feedbackPinned, resource == nil { return }
         resourceDebounce?.cancel()
         resourceHoverDebounce?.cancel()
@@ -1113,7 +1121,7 @@ struct FloatingIslandView: View {
         resourceDebounce?.cancel()
         resourceDebounce = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled, state.islandNetworkProbe.running == nil, state.islandCleaningResource == nil,
+            guard !Task.isCancelled, state.islandCleaningResource == nil,
                   state.islandClosingPIDs.isEmpty, hoveredResource == nil, !collectionHovered, !moreHovered, !feedbackPinned,
                   !detailHovered, !sideDragging, edge == .top || focusedResource == nil else { return }
             withAnimation(detailMotion) { selectedResource = nil; collectionPresented = false; networkPresented = false }
@@ -1135,7 +1143,7 @@ struct FloatingIslandView: View {
         hoverDebounce = Task { @MainActor in
             try? await Task.sleep(nanoseconds: hovering ? 220_000_000 : 400_000_000)
             guard !Task.isCancelled, !sideDragging else { return }
-            if !hovering, state.islandNetworkProbe.running != nil || feedbackPinned || state.islandCleaningResource != nil
+            if !hovering, feedbackPinned || state.islandCleaningResource != nil
                 || (edge != .top && focusedResource != nil) { return }
             setExpanded(hovering)
         }
@@ -1143,7 +1151,6 @@ struct FloatingIslandView: View {
 
     private func beginCleanup(_ resource: IslandResource) {
         guard state.islandCleaningResource == nil else { return }
-        state.islandNetworkProbe.cancel()
         networkPresented = false
         ringReplay?.cancel()
         resetRingReveal(to: 1)
@@ -1199,7 +1206,6 @@ struct FloatingIslandView: View {
         withAnimation(islandMotion(expanding: value)) {
             expanded = value
             if !value {
-                state.islandNetworkProbe.cancel()
                 networkPresented = false
                 ringReplay?.cancel()
                 resetRingReveal(to: 1)

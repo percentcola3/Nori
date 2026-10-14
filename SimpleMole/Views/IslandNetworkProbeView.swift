@@ -19,6 +19,11 @@ struct IslandNetworkProbeView: View {
             modeSwitch
             if activeMode == .ping { pingContent } else { bandwidthContent }
         }.padding(.horizontal, 14).padding(.vertical, 10)
+        .onAppear {
+            if controller.running == nil, controller.bandwidthResult != nil, controller.pingResult == nil {
+                mode = .bandwidth
+            }
+        }
         .onChange(of: controller.running) { running in
             if let running { mode = running }
         }
