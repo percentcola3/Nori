@@ -274,8 +274,12 @@ test_island_contract() {
         fail "island does not avoid physical notch content"
     /usr/bin/grep -Fq 'state.cleanIslandResource(resource)' "$island" || \
         fail "CPU/memory resource cleanup is disconnected"
-    /usr/bin/grep -Fq 'onOpenMain()' "$island" || \
-        fail "island advanced action does not open main panel"
+    /usr/bin/grep -Fq 'onOpenSettings()' "$island" || \
+        fail "island settings action does not open Settings"
+    /usr/bin/grep -Fq 'IslandActionTarget(label: l10n.t("island.settings")' "$island" || \
+        fail "island settings action has no accessible localized label"
+    /usr/bin/grep -Fq 'onOpenSettings: { [weak self] in self?.openMainFromIsland(page: .settings) }' "$app_delegate" || \
+        fail "island settings action is not routed to the main Settings page"
     /usr/bin/grep -Fq 'IslandWindowGeometry.origin(' "$app_delegate" || \
         fail "island window does not use shared physical-edge geometry"
     /usr/bin/grep -Fq 'y: screenFrame.maxY - size.height' "$ROOT_DIR/SimpleMole/Views/IslandWindow.swift" || \
@@ -320,9 +324,9 @@ test_island_contract() {
     # 否则表现为"点更多没有任何面板出现"（窗口开在了另一块屏上）。
     /usr/bin/grep -Fq 'restoreMainWindow(to: targetScreen ?? cursorScreen, force: createdWindow)' "$app_delegate" || \
         fail "main window placement never follows the cursor's screen"
-    # 从灵动岛点"更多"：主窗口开在灵动岛所在的屏上。
+    # 从灵动岛点设置：主窗口开在灵动岛所在的屏上。
     /usr/bin/grep -Fq 'self?.showMainWindow(on: islandScreen)' "$app_delegate" || \
-        fail "island advanced action does not open the main panel on the island's screen"
+        fail "island settings action does not open the main panel on the island's screen"
     if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
         bash "$ROOT_DIR/script/test_island_window.sh" || fail "island window hit testing"
         bash "$ROOT_DIR/script/test_island_resources.sh" || fail "island resource policy"
