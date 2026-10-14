@@ -2508,6 +2508,9 @@ test_swift() {
 
 printf 'Nori local regression tests\n'
 test_shell_syntax
+# Check the whole product against the selected SDK before the slower native
+# suites, so compiler/SDK compatibility failures are reported immediately.
+test_swift
 if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_duplicates.sh" || fail "exact duplicate scanning tests"
     bash "$ROOT_DIR/script/test_duplicate_responsiveness.sh" || fail "duplicate background responsiveness tests"
@@ -2626,5 +2629,4 @@ test_cleanup_risk_policy
 test_cleanup_execution_accounting
 test_inventory_components
 test_clipboard_history
-test_swift
 printf 'All %d checks passed.\n' "$PASSED"

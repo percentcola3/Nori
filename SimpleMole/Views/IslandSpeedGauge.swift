@@ -1,4 +1,5 @@
 import SwiftUI
+import Darwin
 
 /// Log-scaled speedometer for the island network panel: 240° arc with the gap
 /// at the bottom, hairline track, success-coloured progress and a needle.
@@ -19,7 +20,7 @@ struct IslandSpeedGauge: View, Animatable {
     private static let ticks: [Double] = [0, 1, 5, 10, 50, 100, 500, 1000]
 
     private var fraction: Double {
-        log10(1 + min(max(value, 0), Self.maxMbps)) / log10(1 + Self.maxMbps)
+        Darwin.log10(1 + min(max(value, 0), Self.maxMbps)) / Darwin.log10(1 + Self.maxMbps)
     }
 
     private var formattedValue: String {
@@ -27,12 +28,13 @@ struct IslandSpeedGauge: View, Animatable {
     }
 
     private static func fraction(of v: Double) -> Double {
-        log10(1 + min(max(v, 0), maxMbps)) / log10(1 + maxMbps)
+        Darwin.log10(1 + min(max(v, 0), maxMbps)) / Darwin.log10(1 + maxMbps)
     }
 
     private static func point(_ center: CGPoint, _ radius: CGFloat, _ degrees: Double) -> CGPoint {
         let rad = degrees * .pi / 180
-        return CGPoint(x: center.x + radius * cos(rad), y: center.y + radius * sin(rad))
+        return CGPoint(x: center.x + radius * CGFloat(Darwin.cos(rad)),
+                       y: center.y + radius * CGFloat(Darwin.sin(rad)))
     }
 
     var body: some View {
