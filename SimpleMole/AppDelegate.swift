@@ -306,10 +306,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings(_ sender: Any?) {
+        appState.jump(to: .settings)
         showMainWindow()
-        DispatchQueue.main.async { [weak self] in
-            self?.appState.jump(to: .settings)
-        }
     }
 
     private func menuBarIcon(size: NSSize) -> NSImage? {
@@ -628,8 +626,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         islandPanel?.orderOut(nil)
         islandExpanded = false
         DispatchQueue.main.async { [weak self] in
-            self?.showMainWindow(on: islandScreen)
+            // Seed the destination before the first hosting view is created.
+            // Otherwise AnimatedTabContent can retain its initial cleanup page
+            // while the navigation already shows Settings as selected.
             if let page { self?.appState.jump(to: page) }
+            self?.showMainWindow(on: islandScreen)
         }
     }
 
