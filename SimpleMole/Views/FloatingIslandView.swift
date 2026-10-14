@@ -6,8 +6,8 @@ enum IslandLayout {
     static let panelWidth: CGFloat = max(468, expandedWidth(items: Set(AppState.IslandItem.allCases),
                                                             hardwareNotch: false))
     static let minimumPanelWidth: CGFloat = 344
-    static let metricWidth: CGFloat = 84
-    static let networkWidth: CGFloat = 112
+    static let metricWidth: CGFloat = 76
+    static let networkWidth: CGFloat = 104
     static let mascotWidth: CGFloat = 32
     static let awakeWidth: CGFloat = 68
     static let moreWidth: CGFloat = 28
@@ -24,7 +24,7 @@ enum IslandLayout {
                    + CGFloat(spacingCount) * metricSpacing + contentInset * 2)
     }
     static let contentInset: CGFloat = 12
-    static let tileHeight: CGFloat = 62
+    static let tileHeight: CGFloat = 52
     /// 无刘海屏的虚拟刘海宽度，与 MacBook 硬件刘海（约 185pt）加 8pt 边一致。
     static let virtualNotchWidth: CGFloat = 193
     /// 硬件刘海是实黑遮挡，玻璃必须在刘海下沿再露出这一截才看得见手柄。
@@ -35,7 +35,7 @@ enum IslandLayout {
     static let handleHeight: CGFloat = 12
     static let handleBottomRadius: CGFloat = 6
     /// 展开后是一排对齐的核心指标，加右下角入口。窗口按它预留高度。
-    static let metricsHeight: CGFloat = 118
+    static let metricsHeight: CGFloat = 100
     static let detailBudget: CGFloat = 340
     /// 无刘海屏展开态的顶部内边距：没有硬件刘海需要避让，只保留一个
     /// 折叠手柄高度的呼吸空间，避免展开后顶部出现菜单栏高度的空白带。
@@ -157,6 +157,7 @@ private struct AwakeIslandIndicator: View {
 struct FloatingIslandView: View {
     @ObservedObject var state: AppState
     @ObservedObject var metricsStore: MetricsStore
+    @ObservedObject var menuBarCollection: MenuBarCollectionController
     @ObservedObject private var l10n = L10n.shared
     /// 刘海屏为硬件刘海高度，无刘海屏为菜单栏高度（虚拟刘海）。
     var safeTop: CGFloat = 0
@@ -214,8 +215,10 @@ struct FloatingIslandView: View {
         hardwareNotch ? safeTop : IslandLayout.nonNotchExpandedTopInset
     }
 
+    private var collectionVisible: Bool { menuBarCollection.enabled && !menuBarCollection.icons.isEmpty }
+
     private var orderedItems: [AppState.IslandItem] {
-        AppState.IslandItem.allCases.filter { state.islandItems.contains($0) }
+        AppState.IslandItem.allCases.filter { state.islandItems.contains($0) && ($0 != .collection || collectionVisible) }
     }
 
     private var topRows: [[AppState.IslandItem]] {
@@ -243,9 +246,9 @@ struct FloatingIslandView: View {
     private var detailMotion: Animation? {
         reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82)
     }
-    /// 内容淡入淡出与表面形变错峰：展开时等表面先长开再淡入，收起时先于表面淡出。
+    /// 展开时内容随表面生长同步淡入（延迟会让玻璃先空着长开、内容再闪现）；收起时先于表面淡出。
     private func contentFade(visible: Bool) -> Animation? {
-        reduceMotion ? nil : visible ? .easeOut(duration: 0.32).delay(0.08) : .easeIn(duration: 0.14)
+        reduceMotion ? nil : visible ? .easeOut(duration: 0.28) : .easeIn(duration: 0.14)
     }
     private var visibleShape: NotchShape {
         let attachment: IslandAttachment = edge == .left ? .left : edge == .right ? .right : .top
@@ -284,6 +287,9 @@ struct FloatingIslandView: View {
         .onChange(of: state.islandItems) { items in
             if !items.contains(.collection) { collectionPresented = false; collectionHovered = false }
             if !items.contains(.network) { state.islandNetworkProbe.cancel(); networkPresented = false }
+        }
+        .onChange(of: collectionVisible) { visible in
+            if !visible { collectionPresented = false; collectionHovered = false }
         }
         .onDisappear {
             state.islandNetworkProbe.cancel()
@@ -327,8 +333,7 @@ struct FloatingIslandView: View {
                     }
                     .opacity(expanded ? 1 : 0)
                     .animation(contentFade(visible: expanded), value: expanded)
-                    .scaleEffect(expanded || reduceMotion ? 1 : 0.88, anchor: .top)
-                    .blur(radius: expanded || reduceMotion ? 0 : 8)
+                    .scaleEffect(expanded || reduceMotion ? 1 : 0.94, anchor: .top)
                     .allowsHitTesting(expanded)
                     .accessibilityHidden(!expanded)
                 // 刘海屏把 Nori 放在刘海左侧的肩位，不额外占高度。
@@ -432,8 +437,7 @@ struct FloatingIslandView: View {
             .padding(.vertical, 12)
             .opacity(expanded ? 1 : 0)
             .animation(contentFade(visible: expanded), value: expanded)
-            .scaleEffect(expanded || reduceMotion ? 1 : 0.88, anchor: edge == .left ? .leading : .trailing)
-            .blur(radius: expanded || reduceMotion ? 0 : 8)
+            .scaleEffect(expanded || reduceMotion ? 1 : 0.94, anchor: edge == .left ? .leading : .trailing)
             .allowsHitTesting(expanded)
             .accessibilityHidden(!expanded)
             sideCollapsedHandle
@@ -564,42 +568,45 @@ struct FloatingIslandView: View {
     private var expandedPanel: some View {
         VStack(spacing: 0) {
             headerRow
-            if collectionPresented || networkPresented {
-                Rectangle().fill(Color.hairline).frame(height: 1).padding(.horizontal, IslandLayout.contentInset + 10)
-                Group {
-                    if networkPresented { networkProbePanel }
-                    else { collectionDrawer }
-                }
+            VStack(spacing: 0) {
+                if collectionPresented || networkPresented {
+                    Rectangle().fill(Color.hairline).frame(height: 1).padding(.horizontal, IslandLayout.contentInset + 10)
+                    Group {
+                        if networkPresented { networkProbePanel }
+                        else { collectionDrawer }
+                    }
+                        .onHover { hovering in
+                            detailHovered = hovering
+                            if hovering { resourceDebounce?.cancel() }
+                            else { scheduleResourceDismissal() }
+                        }
+                        .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
+                } else if selectedResource != nil {
+                    Rectangle()
+                        .fill(Color.hairline)
+                        .frame(height: 1)
+                        .padding(.horizontal, IslandLayout.contentInset + 10)
+                        .transition(.opacity)
+                    ZStack(alignment: .top) {
+                        ForEach([IslandResource.cpu, .memory], id: \.self) { resource in
+                            resourcePanel(resource)
+                                .opacity(selectedResource == resource ? 1 : 0)
+                                .offset(x: selectedResource == resource ? 0 : (resource == .cpu ? -10 : 10))
+                                .allowsHitTesting(selectedResource == resource)
+                                .accessibilityHidden(selectedResource != resource)
+                        }
+                    }
+                    .frame(minHeight: 150, alignment: .top)
+                    .clipped()
+                    .contentShape(Rectangle())
                     .onHover { hovering in
-                        detailHovered = hovering
                         if hovering { resourceDebounce?.cancel() }
                         else { scheduleResourceDismissal() }
                     }
-                    .transition(reduceMotion ? .identity : .opacity.combined(with: .move(edge: .top)))
-            } else if selectedResource != nil {
-                Rectangle()
-                    .fill(Color.hairline)
-                    .frame(height: 1)
-                    .padding(.horizontal, IslandLayout.contentInset + 10)
                     .transition(.opacity)
-                ZStack(alignment: .top) {
-                    ForEach([IslandResource.cpu, .memory], id: \.self) { resource in
-                        resourcePanel(resource)
-                            .opacity(selectedResource == resource ? 1 : 0)
-                            .offset(x: selectedResource == resource ? 0 : (resource == .cpu ? -10 : 10))
-                            .allowsHitTesting(selectedResource == resource)
-                            .accessibilityHidden(selectedResource != resource)
-                    }
                 }
-                .frame(minHeight: 150, alignment: .top)
-                .clipped()
-                .contentShape(Rectangle())
-                .onHover { hovering in
-                    if hovering { resourceDebounce?.cancel() }
-                    else { scheduleResourceDismissal() }
-                }
-                .transition(.opacity)
             }
+            .clipped()
         }
         .frame(width: expandedPanelWidth)
     }
@@ -656,8 +663,8 @@ struct FloatingIslandView: View {
             }
         }
         .padding(.horizontal, IslandLayout.contentInset)
-        .padding(.top, 6)
-        .padding(.bottom, 10)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
     }
 
     private var moreControl: some View {
@@ -696,11 +703,10 @@ struct FloatingIslandView: View {
     @ViewBuilder
     private func metric(_ item: AppState.IslandItem) -> some View {
         if item == .collection {
-            IslandMenuBarCollectionPreview(controller: state.menuBarCollection,
+            IslandMenuBarCollectionPreview(controller: menuBarCollection,
                 onOpen: { selectCollection() }, onHoverChange: { hovering in
                     collectionHovered = hovering
                     if hovering { selectCollection() }
-                    else { scheduleResourceDismissal() }
                 })
         } else if item == .network {
             networkMeter
@@ -791,14 +797,14 @@ struct FloatingIslandView: View {
             if let resource = item.resource, state.islandCleaningResource == resource {
                 ProgressView()
                     .controlSize(.small)
-                    .frame(height: 24, alignment: .leading)
+                    .frame(height: 22, alignment: .leading)
             } else {
                 Text(primaryValue(item))
-                    .font(.system(size: 20, weight: .semibold, design: .rounded).monospacedDigit())
+                    .font(.system(size: 18, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(healthColor(item))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                    .frame(height: 24, alignment: .leading)
+                    .frame(height: 22, alignment: .leading)
                     .contentTransition(.numericText())
             }
             Spacer(minLength: 6)
@@ -1057,13 +1063,10 @@ struct FloatingIslandView: View {
     }
 
     private var collectionDrawer: some View {
-        IslandMenuBarCollectionDrawer(controller: state.menuBarCollection,
+        IslandMenuBarCollectionDrawer(controller: menuBarCollection,
             onNativeAction: { icon, secondary in
                 setExpanded(false)
-                state.menuBarCollection.activate(icon, secondary: secondary)
-            }, onSettings: {
-                setExpanded(false)
-                state.menuBarCollection.openSettings()
+                menuBarCollection.activate(icon, secondary: secondary)
             })
     }
 
@@ -1243,9 +1246,9 @@ private struct IslandResourceButtonStyle: ButtonStyle {
 private struct IslandTileFrame: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .frame(height: IslandLayout.tileHeight + 16, alignment: .topLeading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(height: IslandLayout.tileHeight + 12, alignment: .topLeading)
     }
 }
 

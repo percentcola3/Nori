@@ -207,7 +207,8 @@ private struct DeveloperScreenshot: View {
 private struct IslandScreenshot: View {
     let state: AppState
     var body: some View {
-        FloatingIslandView(state: state, metricsStore: state.metricsStore, safeTop: 0, hardwareNotch: false,
+        FloatingIslandView(state: state, metricsStore: state.metricsStore, menuBarCollection: state.menuBarCollection,
+                           safeTop: 0, hardwareNotch: false,
                            onOpenMain: {}, onHitFrameChange: { _, _ in })
             .padding(.top, 18)
             .background {

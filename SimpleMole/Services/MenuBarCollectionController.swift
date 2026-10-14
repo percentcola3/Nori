@@ -15,6 +15,7 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var candidates: [Candidate] = []
     @Published private(set) var icons: [CollectedMenuBarIcon] = []
+    @Published private(set) var trayIconVisible: Bool
     @Published private(set) var selected: Set<String>
     @Published private(set) var error: String?
     let backend = MenuBarCollectionPolicy.backend(majorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
@@ -31,6 +32,7 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        trayIconVisible = defaults.bool(forKey: "SMMenuBarCollectionTray")
         selected = Set(defaults.stringArray(forKey: "SMMenuBarCollectionApps") ?? [])
         super.init()
         // Never restore a collapsed session at launch. Every hide is explicit.
@@ -51,18 +53,38 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
         }
     }
 
-    func setEnabled(_ value: Bool) {
-        guard value != enabled else { return }
-        restore()
-        error = nil
-        guard value && available else { stop(); return }
-        enabled = true
+    private var needsTrayItem: Bool { backend == .separator || trayIconVisible }
+
+    private func installTrayItem() {
+        guard recovery == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: 24)
         item.autosaveName = "NoriMenuBarCollectionRecovery"
         item.button?.image = NSImage(systemSymbolName: "tray", accessibilityDescription: L10n.shared.t("menubar.title"))
         item.button?.target = self
         item.button?.action = #selector(toggleFromMenuBar)
         recovery = item
+    }
+
+    private func removeTrayItem() {
+        if let recovery { NSStatusBar.system.removeStatusItem(recovery) }
+        recovery = nil
+    }
+
+    func setTrayIconVisible(_ value: Bool) {
+        guard value != trayIconVisible else { return }
+        defaults.set(value, forKey: "SMMenuBarCollectionTray")
+        trayIconVisible = value
+        guard enabled else { return }
+        if needsTrayItem { installTrayItem() } else { removeTrayItem() }
+    }
+
+    func setEnabled(_ value: Bool) {
+        guard value != enabled else { return }
+        restore()
+        error = nil
+        guard value && available else { stop(); return }
+        enabled = true
+        if needsTrayItem { installTrayItem() }
         if backend == .separator {
             let divider = NSStatusBar.system.statusItem(withLength: 20)
             divider.autosaveName = "NoriMenuBarCollectionBoundary"
@@ -171,9 +193,8 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
         enabled = false
         icons.removeAll()
         if let boundary { NSStatusBar.system.removeStatusItem(boundary) }
-        if let recovery { NSStatusBar.system.removeStatusItem(recovery) }
         boundary = nil
-        recovery = nil
+        removeTrayItem()
         observers.forEach { NotificationCenter.default.removeObserver($0); NSWorkspace.shared.notificationCenter.removeObserver($0) }
         observers.removeAll()
     }

@@ -16,6 +16,10 @@ struct MenuBarCollectionSettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             if controller.enabled {
                 if controller.backend == .nativeExperimental {
+                    Toggle(l10n.t("menubar.tray.show"), isOn: Binding(
+                        get: { controller.trayIconVisible }, set: { controller.setTrayIconVisible($0) }))
+                        .toggleStyle(MoleSwitchToggleStyle()).controlSize(.small)
+                        .font(.system(size: 12))
                     HStack {
                         Text(l10n.t("menubar.apps.hint"))
                             .font(.system(size: 10.5)).foregroundStyle(.secondary)
@@ -101,7 +105,7 @@ struct IslandMenuBarCollectionPreview: View {
     private var previews: [CollectedMenuBarIcon] { controller.enabled ? controller.icons : [] }
 
     var body: some View {
-        VStack(spacing: 5) {
+        VStack(spacing: 3) {
             HStack(spacing: -7) {
                 if previews.isEmpty {
                     Image(systemName: "square.stack.3d.up")
@@ -109,17 +113,17 @@ struct IslandMenuBarCollectionPreview: View {
                 } else {
                     ForEach(Array(previews.prefix(3))) { icon in
                         Image(nsImage: icon.image).resizable().scaledToFit()
-                            .frame(width: 23, height: 23).clipShape(RoundedRectangle(cornerRadius: 5))
+                            .frame(width: 20, height: 20).clipShape(RoundedRectangle(cornerRadius: 5))
                     }
                     if previews.count > 3 {
                         Text("+\(previews.count - 3)").font(.system(size: 9, weight: .semibold)).padding(.leading, 9)
                     }
                 }
-            }.frame(height: 28)
+            }.frame(height: 24)
             Text(l10n.t("island.item.collection"))
                 .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, minHeight: 54)
+        .frame(maxWidth: .infinity, minHeight: 46)
         .allowsHitTesting(false).accessibilityHidden(true)
         .overlay {
             IslandActionTarget(label: l10n.t("menubar.drawer.open")) { onOpen() }
@@ -132,45 +136,24 @@ struct IslandMenuBarCollectionDrawer: View {
     @ObservedObject var controller: MenuBarCollectionController
     @ObservedObject private var l10n = L10n.shared
     var onNativeAction: (CollectedMenuBarIcon, Bool) -> Void
-    var onSettings: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(l10n.t("menubar.drawer.title")).font(.system(size: 11, weight: .semibold))
-                Text("\(controller.enabled ? controller.icons.count : 0)").font(.system(size: 10)).foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Image(systemName: controller.collapsed ? "arrow.up.right" : "arrow.down.right")
-                    .frame(width: 24, height: 24).allowsHitTesting(false).accessibilityHidden(true)
-                    .overlay {
-                        IslandActionTarget(label: l10n.t(controller.collapsed ? "menubar.restore" : "menubar.collapse"),
-                                           isEnabled: controller.enabled && !controller.busy) {
-                            if controller.collapsed { controller.restore() } else { controller.collapse() }
-                        }
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 64), spacing: 6)], spacing: 6) {
+                    ForEach(controller.icons) { icon in
+                        IslandCollectedIconTile(icon: icon,
+                            onPrimary: { onNativeAction(icon, false) },
+                            onSecondary: { onNativeAction(icon, true) })
                     }
-                Image(systemName: "gearshape").frame(width: 24, height: 24)
-                    .allowsHitTesting(false).accessibilityHidden(true)
-                    .overlay { IslandActionTarget(label: l10n.t("menubar.title"), action: onSettings) }
-            }
-            if !controller.enabled || controller.icons.isEmpty {
-                Text(l10n.t(controller.enabled ? "menubar.drawer.empty" : "menubar.drawer.disabled"))
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 48)
-            } else {
-                ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 68), spacing: 6)], spacing: 6) {
-                        ForEach(controller.icons) { icon in
-                            IslandCollectedIconTile(icon: icon,
-                                onPrimary: { onNativeAction(icon, false) },
-                                onSecondary: { onNativeAction(icon, true) })
-                        }
-                    }
-                }.frame(maxHeight: 208)
-                Text(l10n.t(controller.canControlNativeIcons ? "menubar.drawer.interaction" : "menubar.preview.fallback"))
+                }
+            }.frame(maxHeight: 208)
+            if !controller.canControlNativeIcons {
+                Text(l10n.t("menubar.preview.fallback"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-        }.padding(.horizontal, 14).padding(.vertical, 10)
+        }.padding(.horizontal, 14).padding(.vertical, 8)
     }
 }
 
@@ -183,10 +166,10 @@ private struct IslandCollectedIconTile: View {
     var body: some View {
         VStack(spacing: 5) {
             Image(nsImage: icon.image).resizable().scaledToFit()
-                .frame(width: 24, height: 24).clipShape(RoundedRectangle(cornerRadius: 4))
+                .frame(width: 22, height: 22).clipShape(RoundedRectangle(cornerRadius: 4))
             Text(icon.name).font(.system(size: 9)).lineLimit(1)
         }
-        .frame(maxWidth: .infinity).frame(height: 58)
+        .frame(maxWidth: .infinity).frame(height: 52)
         .background(RoundedRectangle(cornerRadius: 9).fill(hovered ? Color.surface2 : Color.surface1))
         .allowsHitTesting(false).accessibilityHidden(true)
         .overlay {

@@ -499,6 +499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hosting = IslandHostingView(rootView: FloatingIslandView(
             state: appState,
             metricsStore: appState.metricsStore,
+            menuBarCollection: appState.menuBarCollection,
             safeTop: safeTop,
             hardwareNotch: hardwareNotch,
             collapsedWidth: collapsedWidth,
