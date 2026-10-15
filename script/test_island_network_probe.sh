@@ -20,6 +20,12 @@ final class L10n {
 ''')
 PY
 swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
+    -module-cache-path "$TEST_DIR/cache" \
+    "$TEST_DIR/RunResult.swift" \
+    "$ROOT_DIR/SimpleMole/Services/IslandNetworkProbe.swift" \
+    "$ROOT_DIR/script/IslandNetworkProbeCommandTests.swift" -o "$TEST_DIR/command-tests"
+"$TEST_DIR/command-tests"
+swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -module-cache-path "$TEST_DIR/cache" -framework Security \
     "$TEST_DIR/RunResult.swift" "$TEST_DIR/L10n.swift" \
     "$ROOT_DIR/SimpleMole/Services/MoleEngine.swift" \

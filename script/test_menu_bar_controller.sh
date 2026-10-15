@@ -20,6 +20,7 @@ swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -import-objc-header "$ROOT_DIR/SimpleMole/Support/MenuBarCollection/NoriMenuBarVisibility.h" \
     -module-cache-path "$TEST_DIR/cache" -framework Cocoa -framework SwiftUI \
     "$TEST_DIR/bridge.o" "$ROOT_DIR/SimpleMole/Services/MenuBarCollectionPolicy.swift" \
+    "$ROOT_DIR/SimpleMole/Services/MenuBarCollectionPreferences.swift" \
     "$ROOT_DIR/SimpleMole/Services/MenuBarCollectionController.swift" \
     "$ROOT_DIR/SimpleMole/Services/MenuBarIconAccess.swift" \
     "$ROOT_DIR/script/MenuBarCollectionControllerTests.swift" -o "$APP_DIR/Contents/MacOS/tests"

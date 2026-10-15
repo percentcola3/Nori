@@ -72,6 +72,15 @@ struct MenuBarCollectionControllerTests {
         controller.stop()
         let reopened = MenuBarCollectionController(defaults: defaults)
         precondition(!reopened.enabled && !reopened.collapsed)
-        print("PASS: defaults isolated, candidate exclusions, explicit selection, empty selection fails open, restart expanded, enable/disable recovery")
+        precondition(defaults.bool(forKey: "SMMenuBarCollectionEnabled"), "Shutdown must preserve enabled preference")
+        reopened.start()
+        precondition(reopened.enabled, "The saved enabled state must be restored after relaunch")
+        reopened.restore()
+        precondition(!defaults.bool(forKey: "SMMenuBarCollectionCollapsed"), "Explicit restore must clear the saved collapse state")
+        reopened.setEnabled(false)
+        let disabled = MenuBarCollectionController(defaults: defaults)
+        disabled.start()
+        precondition(!disabled.enabled, "Explicit disable must survive relaunch")
+        print("PASS: isolated defaults, candidates, selection, persistent enable/disable, temporary shutdown and explicit restore")
     }
 }

@@ -41,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
         updateStatusItem()
+        if appState.islandEnabled { appState.menuBarCollection.start() }
 
         AppUpdateController.shared.start { [weak self] in
             guard let self else { return false }

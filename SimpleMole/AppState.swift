@@ -139,6 +139,7 @@ final class AppState: ObservableObject {
 
     func setIslandEnabled(_ enabled: Bool) {
         if !enabled { menuBarCollection.stop(); islandNetworkProbe.cancel() }
+        else { menuBarCollection.start() }
         if !enabled && !menuBarIconVisible { setMenuBarIconVisible(true) }
         islandEnabled = enabled
         UserDefaults.standard.set(enabled, forKey: "SMIslandEnabled")

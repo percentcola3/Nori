@@ -28,14 +28,19 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
     private var activationTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var previewGeneration = 0
-    private let defaults: UserDefaults
+    private let preferences: MenuBarCollectionPreferences
+    private var restorationTask: Task<Void, Never>?
 
     init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-        trayIconVisible = defaults.bool(forKey: "SMMenuBarCollectionTray")
-        selected = Set(defaults.stringArray(forKey: "SMMenuBarCollectionApps") ?? [])
+        preferences = MenuBarCollectionPreferences(defaults: defaults)
+        trayIconVisible = preferences.trayIconVisible
+        selected = preferences.selected
         super.init()
-        // Never restore a collapsed session at launch. Every hide is explicit.
+    }
+
+    /// Called after AppKit has finished launching, when status items can exist.
+    func start() {
+        if preferences.enabled { setEnabled(true) }
     }
 
     var available: Bool {
@@ -72,15 +77,17 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
 
     func setTrayIconVisible(_ value: Bool) {
         guard value != trayIconVisible else { return }
-        defaults.set(value, forKey: "SMMenuBarCollectionTray")
+        preferences.trayIconVisible = value
         trayIconVisible = value
         guard enabled else { return }
         if needsTrayItem { installTrayItem() } else { removeTrayItem() }
     }
 
     func setEnabled(_ value: Bool) {
+        preferences.enabled = value
+        if !value { preferences.collapsed = false }
         guard value != enabled else { return }
-        restore()
+        releaseVisibility()
         error = nil
         guard value && available else { stop(); return }
         enabled = true
@@ -94,21 +101,30 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
             boundary = divider
         }
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification,
-                     NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+                     NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
             observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.restore() }
+                MainActor.assumeIsolated { self?.refreshCandidates(clearError: false) }
+            })
+        }
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+            observers.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.restorationTask?.cancel()
+                    self?.releaseVisibility()
+                }
             })
         }
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
-            object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.restore() } })
+            object: nil, queue: .main) { [weak self] _ in MainActor.assumeIsolated { self?.refreshCandidates(clearError: false) } })
         refreshCandidates()
     }
 
     func setSelected(_ id: String, _ value: Bool) {
-        restore()
+        releaseVisibility()
         if value { selected.insert(id) } else { selected.remove(id) }
-        defaults.set(Array(selected).sorted(), forKey: "SMMenuBarCollectionApps")
+        preferences.selected = selected
         refreshPreviews()
+        schedulePersistentCollapse()
     }
 
     @objc func openSettings() { onOpenSettings() }
@@ -153,7 +169,8 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
             openSettings()
             return
         }
-        restore()
+        restorationTask?.cancel()
+        releaseVisibility()
         let token = generation
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 180_000_000)
@@ -175,6 +192,13 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
     }
 
     func restore() {
+        preferences.collapsed = false
+        restorationTask?.cancel()
+        releaseVisibility()
+    }
+
+    /// Temporary visibility changes must not erase the user's saved choices.
+    private func releaseVisibility() {
         activationTask?.cancel()
         activationTask = nil
         generation += 1
@@ -187,7 +211,9 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
     }
 
     func stop() {
-        restore()
+        restorationTask?.cancel()
+        restorationTask = nil
+        releaseVisibility()
         previewTask?.cancel()
         previewGeneration += 1
         enabled = false
@@ -201,6 +227,7 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
 
     func collapse() {
         guard enabled, available, !busy, !collapsed else { return }
+        preferences.collapsed = true
         error = nil
         if backend == .separator {
             guard let divider = boundary?.button?.window?.frame,
@@ -240,7 +267,7 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
             guard let self, self.generation == token, self.busy else { return }
-            self.restore()
+            self.releaseVisibility()
             self.error = L10n.shared.t("menubar.failed")
         }
     }
@@ -258,7 +285,7 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
                     self.collapsed = true
                     self.recovery?.button?.image = NSImage(systemSymbolName: "tray.full", accessibilityDescription: L10n.shared.t("menubar.restore"))
                 } else {
-                    self.restore()
+                    self.releaseVisibility()
                     self.error = L10n.shared.t("menubar.failed") + (message.map { " · " + $0 } ?? "")
                 }
             }
@@ -266,7 +293,7 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
     }
 
     func refreshCandidates(clearError: Bool = true) {
-        restore()
+        releaseVisibility()
         if clearError { error = nil }
         let ownPID = ProcessInfo.processInfo.processIdentifier
         var apps: [String: Candidate] = [:]
@@ -279,5 +306,21 @@ final class MenuBarCollectionController: NSObject, ObservableObject {
         candidates = Array(apps.values)
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         refreshPreviews()
+        schedulePersistentCollapse()
+    }
+
+    private func schedulePersistentCollapse() {
+        restorationTask?.cancel()
+        guard enabled, preferences.collapsed else { return }
+        restorationTask = Task { @MainActor [weak self] in
+            // Status items and newly launched apps may arrive after the launch
+            // notification. Retry briefly, without a permanent polling timer.
+            for delay: UInt64 in [500_000_000, 1_000_000_000, 2_000_000_000] {
+                try? await Task.sleep(nanoseconds: delay)
+                guard !Task.isCancelled, let self, self.enabled, self.preferences.collapsed else { return }
+                if self.collapsed { return }
+                if !self.busy { self.collapse() }
+            }
+        }
     }
 }

@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import IOKit
+import CoreAudio
 
 /// 温度、GPU、功耗与内存压力。温度走 IOHIDEventSystem 的私有符号，运行时
 /// dlsym 解析：符号缺失时只返回 nil，界面退回系统热状态，不会影响启动。
@@ -123,29 +124,97 @@ enum SensorMetrics {
 }
 
 /// 蓝牙外设电量：妙控外设走 IOKit，AirPods 等音频设备走 system_profiler。
-/// 后者较慢，后台节流刷新，采样只读缓存。
+/// 后者较慢，后台节流刷新；音频设备变化时立即重读，避免新连接等满一分钟。
 final class BluetoothBatteryMonitor: @unchecked Sendable {
     static let shared = BluetoothBatteryMonitor()
     private let lock = NSLock()
+    private let queue: DispatchQueue
+    private let clock: @Sendable () -> Date
+    private let reader: @Sendable () -> [BluetoothBattery]
     private var cached: [BluetoothBattery] = []
-    private var lastRefresh: Date = .distantPast
+    private var nextRefresh: Date = .distantPast
     private var refreshing = false
+    private var generation = 0
+    // A connected headset may report battery a little after its audio device
+    // appears. Retry twice at two-second intervals, then return to minute polling.
+    private var remainingRetries = 2
+    private let audioEventQueue = DispatchQueue(label: "com.nori.bluetooth-audio-events", qos: .utility)
+    private var audioListener: AudioObjectPropertyListenerBlock?
+    private var observedAudioSelectors: [AudioObjectPropertySelector] = []
+
+    init(queue: DispatchQueue = DispatchQueue(label: "com.nori.bluetooth-battery", qos: .utility),
+         clock: @escaping @Sendable () -> Date = { Date() },
+         reader: (@Sendable () -> [BluetoothBattery])? = nil,
+         observeAudioChanges: Bool = true) {
+        self.queue = queue
+        self.clock = clock
+        self.reader = reader ?? { Self.hidBatteries() + Self.profilerBatteries() }
+        if observeAudioChanges { observeAudioDeviceChanges() }
+    }
+
+    deinit {
+        if let audioListener {
+            for selector in observedAudioSelectors {
+                var address = Self.audioAddress(selector)
+                AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject),
+                    &address, audioEventQueue, audioListener)
+            }
+        }
+    }
+
+    private static func audioAddress(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                   mElement: kAudioObjectPropertyElementMain)
+    }
+
+    private func observeAudioDeviceChanges() {
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.connectionDidChange()
+        }
+        audioListener = listener
+        // Device availability catches connections even when the headset is not
+        // selected as output; output changes also cover existing audio routes.
+        for selector in [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultOutputDevice] {
+            var address = Self.audioAddress(selector)
+            if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject),
+                &address, audioEventQueue, listener) == noErr {
+                observedAudioSelectors.append(selector)
+            }
+        }
+    }
+
+    func connectionDidChange() {
+        lock.lock()
+        generation += 1
+        nextRefresh = .distantPast
+        remainingRetries = 2
+        lock.unlock()
+        _ = latest()
+    }
 
     func latest() -> [BluetoothBattery] {
         lock.lock()
         let value = cached
-        let stale = !refreshing && Date().timeIntervalSince(lastRefresh) >= 60
+        let stale = !refreshing && clock() >= nextRefresh
+        let token = generation
         if stale { refreshing = true }
         lock.unlock()
         if stale {
-            DispatchQueue.global(qos: .utility).async { [self] in
-                let devices = Self.hidBatteries() + Self.profilerBatteries()
+            queue.async { [self] in
+                let devices = reader()
                 lock.lock()
-                var seen = Set<String>()
-                cached = devices.filter { seen.insert($0.name).inserted }.sorted { $0.percent < $1.percent }
-                lastRefresh = Date()
+                let current = token == generation
+                if current {
+                    var seen = Set<String>()
+                    cached = devices.filter { seen.insert($0.name).inserted }.sorted { $0.percent < $1.percent }
+                    nextRefresh = clock().addingTimeInterval(remainingRetries > 0 ? 2 : 60)
+                    if remainingRetries > 0 { remainingRetries -= 1 }
+                }
                 refreshing = false
                 lock.unlock()
+                // A connection changed while system_profiler was reading.
+                // Discard that older snapshot and service the new connection.
+                if !current { _ = latest() }
             }
         }
         return value

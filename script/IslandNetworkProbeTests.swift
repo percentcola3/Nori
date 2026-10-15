@@ -17,6 +17,11 @@ struct IslandNetworkProbeTests {
                      "No replies must never expose or index malformed latency samples")
         let bandwidth = IslandNetworkProbeParser.bandwidth(#"{"dl_throughput":200000000,"ul_throughput":40000000,"base_rtt":12.5}"#)!
         precondition(bandwidth.downloadMbps == 200 && bandwidth.uploadMbps == 40 && bandwidth.idleMilliseconds == 12.5)
+        for (speed, category) in [(0.0, "slow"), (4.9, "slow"), (5, "basic"), (24.9, "basic"),
+                                  (25, "good"), (99.9, "good"), (100, "fast")] {
+            let result = IslandBandwidthResult(downloadMbps: speed, uploadMbps: 10, idleMilliseconds: nil)
+            precondition(result.summaryKey == "island.network.summary." + category)
+        }
         for bad in ["", "{}", #"{"dl_throughput":true,"ul_throughput":1}"#, #"{"dl_throughput":0,"ul_throughput":0}"#, #"{"dl_throughput":-1,"ul_throughput":10}"#, #"{"dl_throughput":10,"ul_throughput":10,"error_code":2}"#] {
             precondition(IslandNetworkProbeParser.bandwidth(bad) == nil)
         }

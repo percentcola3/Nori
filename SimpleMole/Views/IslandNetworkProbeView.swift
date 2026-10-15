@@ -18,7 +18,10 @@ struct IslandNetworkProbeView: View {
             Text(l10n.t("island.network.title")).font(.system(size: 12, weight: .semibold))
             modeSwitch
             if activeMode == .ping { pingContent } else { bandwidthContent }
-        }.padding(.horizontal, 14).padding(.vertical, 10)
+        }
+        .padding(.horizontal, IslandLayout.contentInset + 10)
+        .padding(.top, 12)
+        .padding(.bottom, 14)
         .onAppear {
             if controller.running == nil, controller.bandwidthResult != nil, controller.pingResult == nil {
                 mode = .bandwidth
@@ -54,7 +57,7 @@ struct IslandNetworkProbeView: View {
             HStack(spacing: 7) {
                 TextField(l10n.t("island.network.host"), text: $controller.host)
                     .textFieldStyle(.plain).font(.system(size: 11))
-                    .padding(.horizontal, 8).frame(height: 28)
+                    .padding(.horizontal, 10).frame(height: 28)
                     .background(RoundedRectangle(cornerRadius: 7).fill(Color.surface2))
                     .onSubmit { start(.ping) }
                     .disabled(controller.running != nil)
@@ -101,13 +104,14 @@ struct IslandNetworkProbeView: View {
     private var bandwidthContent: some View {
         Group {
             IslandSpeedGauge(value: gaugeValue, caption: gaugeCaption, detail: gaugeDetail)
-                .frame(maxWidth: .infinity).frame(height: 176)
+                .frame(maxWidth: .infinity)
                 .animation(reduceMotion ? nil : .spring(response: 0.6, dampingFraction: 0.8), value: gaugeValue)
             HStack(spacing: 6) {
                 Spacer(minLength: 0)
-                probeButton("island.network.start", symbol: "speedometer", enabled: controller.running == nil) { start(.bandwidth) }
                 if controller.running == .bandwidth {
                     probeButton("island.network.stop", symbol: "stop.fill") { controller.cancel() }
+                } else {
+                    probeButton("island.network.start", symbol: "speedometer", enabled: controller.running == nil) { start(.bandwidth) }
                 }
                 Spacer(minLength: 0)
             }
@@ -135,6 +139,11 @@ struct IslandNetworkProbeView: View {
         } else if controller.running == nil, controller.stopped,
                   lastStarted == nil || lastStarted == testMode {
             Text(l10n.t("island.network.stopped")).font(.system(size: 10)).foregroundStyle(.secondary)
+        } else if controller.running == nil, testMode == .bandwidth, let result = controller.bandwidthResult {
+            Text(l10n.t(result.summaryKey))
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -149,7 +158,7 @@ struct IslandNetworkProbeView: View {
 
     private func probeButton(_ key: String, symbol: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
         Label(l10n.t(key), systemImage: symbol).font(.system(size: 10.5, weight: .medium))
-            .padding(.horizontal, 9).frame(height: 28)
+            .padding(.horizontal, 11).frame(height: 28)
             .background(Capsule().fill(Color.surface2))
             .foregroundStyle(enabled ? Color.primary : Color.secondary)
             .allowsHitTesting(false).accessibilityHidden(true)

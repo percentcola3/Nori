@@ -38,10 +38,30 @@ struct IslandSpeedGauge: View, Animatable {
     }
 
     var body: some View {
+        VStack(spacing: 6) {
+            dial
+                .frame(height: 132)
+            VStack(spacing: 4) {
+                Text(caption).font(.system(size: 10))
+                if let detail {
+                    Text(detail).font(.system(size: 10))
+                }
+            }
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(caption)
+        .accessibilityValue(["\(formattedValue) Mbps", detail].compactMap { $0 }.joined(separator: ", "))
+    }
+
+    private var dial: some View {
         Canvas { context, size in
-            let radius = min(size.width / 2 - 24, size.height - 60, 80)
+            let radius = min(size.width / 2 - 24, size.height - 52, 64)
             guard radius > 30 else { return }
-            let center = CGPoint(x: size.width / 2, y: radius + 14)
+            let center = CGPoint(x: size.width / 2, y: radius + 18)
 
             var track = Path()
             track.addArc(center: center, radius: radius,
@@ -49,7 +69,7 @@ struct IslandSpeedGauge: View, Animatable {
                          endAngle: .degrees(Self.startDegrees + Self.sweepDegrees),
                          clockwise: false)
             context.stroke(track, with: .color(.hairline),
-                           style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                           style: StrokeStyle(lineWidth: 6, lineCap: .round))
 
             if fraction > 0.001 {
                 var progress = Path()
@@ -58,7 +78,7 @@ struct IslandSpeedGauge: View, Animatable {
                                 endAngle: .degrees(Self.startDegrees + Self.sweepDegrees * fraction),
                                 clockwise: false)
                 context.stroke(progress, with: .color(.success),
-                               style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                               style: StrokeStyle(lineWidth: 6, lineCap: .round))
             }
 
             for tick in Self.ticks {
@@ -86,21 +106,10 @@ struct IslandSpeedGauge: View, Animatable {
             let valueText = context.resolve(
                 Text(formattedValue)
                     .font(.system(size: 20, weight: .semibold, design: .rounded).monospacedDigit()))
-            context.draw(valueText, at: CGPoint(x: center.x, y: center.y + radius * 0.42), anchor: .center)
+            context.draw(valueText, at: CGPoint(x: center.x, y: center.y + radius * 0.4), anchor: .center)
             let unitText = context.resolve(
                 Text("Mbps").font(.system(size: 9)).foregroundColor(.secondary))
-            context.draw(unitText, at: CGPoint(x: center.x, y: center.y + radius * 0.42 + 15), anchor: .center)
-            let captionText = context.resolve(
-                Text(caption).font(.system(size: 10)).foregroundColor(.secondary))
-            context.draw(captionText, at: CGPoint(x: center.x, y: center.y + radius * 0.42 + 28), anchor: .center)
-            if let detail {
-                let detailText = context.resolve(
-                    Text(detail).font(.system(size: 10)).foregroundColor(.secondary))
-                context.draw(detailText, at: CGPoint(x: center.x, y: center.y + radius * 0.42 + 42), anchor: .center)
-            }
+            context.draw(unitText, at: CGPoint(x: center.x, y: center.y + radius * 0.4 + 15), anchor: .center)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(caption)
-        .accessibilityValue("\(formattedValue) Mbps")
     }
 }

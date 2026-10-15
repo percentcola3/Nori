@@ -14,6 +14,17 @@ struct IslandBandwidthResult: Equatable {
     let downloadMbps: Double
     let uploadMbps: Double
     let idleMilliseconds: Double?
+
+    /// Describe the measured download capacity without inferring connectivity
+    /// or call quality from a bandwidth measurement alone.
+    var summaryKey: String {
+        switch downloadMbps {
+        case 100...: return "island.network.summary.fast"
+        case 25..<100: return "island.network.summary.good"
+        case 5..<25: return "island.network.summary.basic"
+        default: return "island.network.summary.slow"
+        }
+    }
 }
 
 enum IslandNetworkProbeParser {
@@ -102,9 +113,9 @@ final class IslandNetworkProbe: ObservableObject {
             guard FileManager.default.isExecutableFile(atPath: "/usr/bin/networkQuality") else {
                 errorKey = "island.network.unavailable"; return
             }
-            // -c is supported from the tool's original macOS release. Bound the
-            // entire command through the process runner rather than newer flags.
-            command = ("/usr/bin/networkQuality", ["-c"], 120)
+            // Let the tool finish normally and emit its JSON summary. Killing
+            // it at the runner's timeout would discard the measurement.
+            command = ("/usr/bin/networkQuality", ["-c", "-M", "15"], 20)
             bandwidthResult = nil
         }
         generation += 1

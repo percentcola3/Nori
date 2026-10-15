@@ -6,16 +6,24 @@ enum IslandLayout {
     static let panelWidth: CGFloat = max(468, expandedWidth(items: Set(AppState.IslandItem.allCases),
                                                             hardwareNotch: false))
     static let minimumPanelWidth: CGFloat = 344
-    static let metricWidth: CGFloat = 76
-    static let networkWidth: CGFloat = 104
+    static let metricWidth: CGFloat = 56
+    static let networkWidth: CGFloat = 88
     static let mascotWidth: CGFloat = 32
     static let awakeWidth: CGFloat = 68
     static let moreWidth: CGFloat = 28
     static let metricSpacing: CGFloat = 4
 
+    static func width(for item: AppState.IslandItem) -> CGFloat {
+        switch item {
+        case .network: return networkWidth
+        case .collection: return 76
+        default: return metricWidth
+        }
+    }
+
     static func expandedWidth(items: Set<AppState.IslandItem>, hardwareNotch: Bool) -> CGFloat {
         let metricTotal = items.reduce(CGFloat.zero) { width, item in
-            width + (item == .network ? networkWidth : metricWidth)
+            width + Self.width(for: item)
         }
         let accessoryCount = hardwareNotch ? 2 : 3
         let spacingCount = max(0, items.count + accessoryCount - 1)
@@ -35,7 +43,7 @@ enum IslandLayout {
     static let handleHeight: CGFloat = 12
     static let handleBottomRadius: CGFloat = 6
     /// 展开后是一排对齐的核心指标，加右下角入口。窗口按它预留高度。
-    static let metricsHeight: CGFloat = 100
+    static let metricsHeight: CGFloat = 84
     static let detailBudget: CGFloat = 340
     /// 无刘海屏展开态的顶部内边距：没有硬件刘海需要避让，只保留一个
     /// 折叠手柄高度的呼吸空间，避免展开后顶部出现菜单栏高度的空白带。
@@ -48,7 +56,7 @@ enum IslandLayout {
     static let sideDetailGap: CGFloat = 12
     static let sideCollapsedWidth: CGFloat = 12
     static let sideCollapsedHeight: CGFloat = 96
-    static let sideMetricHeight: CGFloat = 82
+    static let sideMetricHeight: CGFloat = 64
     static let sideRailBudget: CGFloat = max(480, sideRailHeight(itemCount: AppState.IslandItem.allCases.count))
     static let sideWindowSize = NSSize(
         width: sideRailWidth + sideDetailWidth + sideDetailGap + windowMargin,
@@ -638,7 +646,7 @@ struct FloatingIslandView: View {
         .accessibilityLabel(l10n.t("settings.island"))
     }
 
-    /// 指标块同高同排版：标题、数值、底部进度。悬停只改标题颜色，不画底框。
+    /// 紧凑仪表统一放置数值与名称；网络展示上下行读数和迷你趋势。
     /// 「更多」是行尾的箭头图标入口，不再单独占一行。
     private var headerRow: some View {
         let rows = topRows
@@ -654,7 +662,7 @@ struct FloatingIslandView: View {
                     }
                     ForEach(row, id: \.self) { item in
                         metric(item)
-                            .frame(minWidth: item == .network ? IslandLayout.networkWidth : IslandLayout.metricWidth,
+                            .frame(minWidth: IslandLayout.width(for: item),
                                    maxWidth: .infinity,
                                    alignment: .leading)
                     }
@@ -766,100 +774,36 @@ struct FloatingIslandView: View {
         }
     }
 
-    @ViewBuilder
     private func ring(_ item: AppState.IslandItem) -> some View {
-        if edge == .top { topMetric(item) }
-        else { sideMetric(item) }
-    }
-
-    private func sideMetric(_ item: AppState.IslandItem) -> some View {
         let active = item.resource != nil && (selectedResource == item.resource
             || hoveredResource == item.resource || focusedResource == item.resource)
-        return VStack(spacing: 3) {
-            ZStack {
-                Circle().stroke(Color.hairline, lineWidth: 4)
-                Circle()
-                    .trim(from: 0, to: min(1, max(0, progress(item))) * ringReveal)
-                    .stroke(healthColor(item), style: StrokeStyle(lineWidth: 4, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                if let resource = item.resource, state.islandCleaningResource == resource {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: item.systemImage)
-                        .font(.system(size: 19, weight: .medium))
-                        .foregroundStyle(active ? Color.accentText : Color.primary)
-                }
-            }
-            .frame(width: 42, height: 42)
-            Text(primaryValue(item))
-                .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
-                .foregroundStyle(healthColor(item))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .contentTransition(.numericText())
-            Text(l10n.t(item.labelKey))
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .contentShape(Rectangle())
-    }
-
-    private func topMetric(_ item: AppState.IslandItem) -> some View {
-        let selected = item.resource != nil && selectedResource == item.resource
-        let active = item.resource != nil && (
-            selected || hoveredResource == item.resource || focusedResource == item.resource)
-        return VStack(alignment: .leading, spacing: 0) {
-            tileLabel(item, highlighted: active)
-            Spacer(minLength: 4)
-            if let resource = item.resource, state.islandCleaningResource == resource {
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(height: 22, alignment: .leading)
-            } else {
-                Text(primaryValue(item))
-                    .font(.system(size: 18, weight: .semibold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(healthColor(item))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                    .frame(height: 22, alignment: .leading)
-                    .contentTransition(.numericText())
-            }
-            Spacer(minLength: 6)
-            Capsule()
-                .fill(Color.hairline)
-                .frame(height: 3)
-                .overlay(alignment: .leading) {
-                    GeometryReader { geo in
-                        Capsule()
-                            .fill(healthColor(item))
-                            .frame(width: max(3, geo.size.width * min(1, max(0, progress(item))) * ringReveal))
-                    }
-                }
-        }
+        return IslandMetricGauge(title: l10n.t(item.labelKey), value: primaryValue(item),
+            progress: progress(item), tint: healthColor(item), highlighted: active,
+            busy: item.resource.map { state.islandCleaningResource == $0 } ?? false, reveal: ringReveal)
         .modifier(IslandTileFrame())
         .contentShape(Rectangle())
+        .help(valueText(item))
     }
 
     private func tileLabel(_ item: AppState.IslandItem, highlighted: Bool) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3) {
             Image(systemName: item.systemImage)
-                .font(.system(size: 9, weight: .semibold))
+                .font(.system(size: 8, weight: .semibold))
             Text(l10n.t(item.labelKey))
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 9, weight: .medium))
                 .lineLimit(1)
         }
         .foregroundStyle(highlighted ? Color.accentText : Color.secondary)
-        .frame(height: 14, alignment: .leading)
+        .frame(height: 11, alignment: .leading)
     }
 
     private func progress(_ item: AppState.IslandItem) -> Double {
         switch item {
         case .cpu: return metricsStore.metrics.cpuPercent / 100
         case .memory: return metricsStore.metrics.memoryPercent / 100
-        case .disk: return metricsStore.metrics.diskUsedPercent / 100
+        case .disk:
+            guard metricsStore.metrics.diskFreeBytes > 0 else { return 0 }
+            return 1 - metricsStore.metrics.diskUsedPercent / 100
         case .network, .collection: return 0
         case .gpu: return (metricsStore.metrics.gpuPercent ?? 0) / 100
         case .thermal:
@@ -871,35 +815,7 @@ struct FloatingIslandView: View {
     }
 
     /// 吞吐没有 0–100% 的上限，不用占用环表示。下行用成功色，上行用次要色。
-    @ViewBuilder
     private var networkMeter: some View {
-        if edge == .top { topNetworkMeter }
-        else {
-            VStack(spacing: 4) {
-                Image(systemName: AppState.IslandItem.network.systemImage)
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundStyle(Color.success)
-                Text(l10n.t("island.item.network"))
-                    .font(.system(size: 9, weight: .medium))
-                    .foregroundStyle(.secondary)
-                if state.islandNetworkProbe.running != nil {
-                    ProgressView().controlSize(.mini)
-                }
-                rateLine(symbol: "arrow.down", text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkRxMBps),
-                         tint: Color.success)
-                rateLine(symbol: "arrow.up", text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkTxMBps),
-                         tint: Color.secondary)
-                IslandSparkline(primary: metricsStore.networkHistory, secondary: metricsStore.networkUploadHistory)
-                    .frame(height: 10)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(l10n.t("island.item.network"))
-            .accessibilityValue(networkValue)
-        }
-    }
-
-    private var topNetworkMeter: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 tileLabel(.network, highlighted: false)
@@ -908,7 +824,7 @@ struct FloatingIslandView: View {
                     ProgressView().controlSize(.mini)
                 }
             }
-            Spacer(minLength: 3)
+            Spacer(minLength: 1)
             VStack(alignment: .leading, spacing: 1) {
                 rateLine(symbol: "arrow.down",
                          text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkRxMBps),
@@ -917,9 +833,9 @@ struct FloatingIslandView: View {
                          text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkTxMBps),
                          tint: Color.secondary)
             }
-            Spacer(minLength: 3)
+            Spacer(minLength: 1)
             IslandSparkline(primary: metricsStore.networkHistory, secondary: metricsStore.networkUploadHistory)
-                .frame(height: 10)
+                .frame(height: 8)
         }
         .modifier(IslandTileFrame())
         .accessibilityElement(children: .ignore)
@@ -932,7 +848,7 @@ struct FloatingIslandView: View {
             Image(systemName: symbol)
                 .font(.system(size: 8, weight: .bold))
             Text(text)
-                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .font(.system(size: 10, weight: .semibold).monospacedDigit())
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
         }
@@ -952,6 +868,7 @@ struct FloatingIslandView: View {
         case .memory where metricsStore.metrics.memoryPressure == "critical": health = .high
         case .memory where metricsStore.metrics.memoryPressure == "warning": health = .elevated
         case .memory where metricsStore.metrics.memoryPressure == "normal": health = .healthy
+        case .disk: health = IslandResourcePolicy.health(percent: metricsStore.metrics.diskUsedPercent)
         case .thermal:
             let temperature = metricsStore.metrics.cpuTemperature ?? 0
             let level = metricsStore.metrics.thermalLevel
@@ -1268,9 +1185,9 @@ private struct IslandResourceButtonStyle: ButtonStyle {
 private struct IslandTileFrame: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .frame(height: IslandLayout.tileHeight + 12, alignment: .topLeading)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .frame(height: IslandLayout.tileHeight)
     }
 }
 
