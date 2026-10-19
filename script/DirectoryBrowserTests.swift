@@ -477,10 +477,27 @@ struct DirectoryBrowserTests {
         defer { model.suspend(); model.stopSizeBackgroundWork() }
         model.start()
         try await settle { model.sizeUpdatedAt.count == 129 && !model.isCalculatingSizes }
+        // Initial directory-creation events can arrive after the size worker
+        // finishes (the watcher batches for one second, then the model debounces).
+        // Establish a quiet baseline before testing a filter-only interaction.
+        var observed = model.sizeUpdatedAt
+        var quietSince = Date()
+        try await settle {
+            if model.isCalculatingSizes || model.sizeUpdatedAt != observed {
+                observed = model.sizeUpdatedAt
+                quietSince = Date()
+                return false
+            }
+            return Date().timeIntervalSince(quietSince) >= 2
+        }
         let timestamps = model.sizeUpdatedAt
         model.query = "folder"
         model.query = ""
         try await Task.sleep(nanoseconds: 350_000_000)
+        if model.isCalculatingSizes || model.sizeUpdatedAt != timestamps {
+            let changed = model.sizeUpdatedAt.filter { timestamps[$0.key] != $0.value }.keys.sorted()
+            print("Visible capacity diagnostics: working=\(model.isCalculatingSizes) changed=\(changed.map { ($0 as NSString).lastPathComponent }) states=\(model.sizeStates)")
+        }
         precondition(!model.isCalculatingSizes && model.sizeUpdatedAt == timestamps,
                      "Visible folders churned the bounded persistent inventory on filter changes")
         print("Directory visible totals: filtering reuses all 129 results beyond the persistent inventory capacity")
