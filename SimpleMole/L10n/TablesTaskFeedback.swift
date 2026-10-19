@@ -341,12 +341,13 @@ enum L10nTaskFeedbackTables {
         precondition(uninstallValues.count == uninstallKeys.count, "Uninstall task translation count mismatch")
         let recoveryValues = recoveryTranslations[language] ?? []
         precondition(recoveryValues.count == recoveryKeys.count, "Recovery translation count mismatch")
-        return Dictionary(uniqueKeysWithValues: zip(keys, values))
-            .merging(Dictionary(uniqueKeysWithValues: zip(recoveryKeys, recoveryValues))) { _, value in value }
-            .merging(Dictionary(uniqueKeysWithValues: zip(uninstallKeys, uninstallValues))) { _, value in value }
-            .merging(Dictionary(uniqueKeysWithValues: zip(developerKeys, developerValues))) { _, value in value }
-            .merging(Dictionary(uniqueKeysWithValues: zip(summaryKeys, summaryValues))) { _, value in value }
-            .merging(Dictionary(uniqueKeysWithValues: zip(remainingKeys, remainingValues))) { _, value in value }
+        var result: [String: String] = Dictionary(uniqueKeysWithValues: zip(keys, values))
+        for (key, value) in zip(recoveryKeys, recoveryValues) { result[key] = value }
+        for (key, value) in zip(uninstallKeys, uninstallValues) { result[key] = value }
+        for (key, value) in zip(developerKeys, developerValues) { result[key] = value }
+        for (key, value) in zip(summaryKeys, summaryValues) { result[key] = value }
+        for (key, value) in zip(remainingKeys, remainingValues) { result[key] = value }
+        return result
     }
 
     private static let developerKeys = [
