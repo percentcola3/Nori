@@ -16,6 +16,6 @@ if [[ -n "${NORI_NATIVE_CORE_TEST_SOURCE:-}" ]]; then
     cp "$NORI_NATIVE_CORE_TEST_SOURCE" "$NATIVE_PERF_TEST_DIR/sources/NativeCore.swift"
 fi
 swiftc -O -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$NATIVE_PERF_TEST_DIR/cache" -framework AppKit -framework IOKit \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$NATIVE_PERF_TEST_DIR/cache}" -framework AppKit -framework IOKit \
     "$NATIVE_PERF_TEST_DIR/sources/"*.swift -o "$NATIVE_PERF_TEST_DIR/tests"
 "$NATIVE_PERF_TEST_DIR/tests" "$NATIVE_PERF_FIXTURE" "${1:-optimized}"

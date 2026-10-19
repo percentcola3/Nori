@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-media-tests.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 swiftc -O -target "$(uname -m)-apple-macos13.0" \
-    -module-cache-path "$TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \

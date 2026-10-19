@@ -27,7 +27,7 @@ fixture = "import Foundation\nenum LocalizationPreviewFixture {\n" + source[star
 (destination / "MaintenancePreviewFixture.swift").write_text(fixture)
 PY
 swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$LOCALIZATION_TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$LOCALIZATION_TEST_DIR/cache}" \
     "$ROOT_DIR/SimpleMole/L10n/TablesDeveloperExisting.swift" \
     "$ROOT_DIR/SimpleMole/L10n/TablesLocalizationAudit.swift" \
     "$ROOT_DIR/script/LocalizationTableTestSupport.swift" \

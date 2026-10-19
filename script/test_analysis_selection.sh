@@ -45,6 +45,6 @@ result = result.replace('// PRODUCTION_METHODS', '\n\n'.join(methods))
 (destination / 'Tests.swift').write_text(result)
 PY
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$ANALYSIS_SELECTION_DIR/cache" "$ANALYSIS_SELECTION_DIR/Tests.swift" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$ANALYSIS_SELECTION_DIR/cache}" "$ANALYSIS_SELECTION_DIR/Tests.swift" \
     -o "$ANALYSIS_SELECTION_DIR/tests"
 "$ANALYSIS_SELECTION_DIR/tests"

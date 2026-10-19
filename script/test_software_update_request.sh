@@ -33,6 +33,6 @@ template = template.replace('// PRODUCTION_MUTATION_GATES', '\n'.join(declaratio
 (destination / 'Tests.swift').write_text(template)
 PY
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$REQUEST_TEST_DIR/cache" "$REQUEST_TEST_DIR/Tests.swift" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$REQUEST_TEST_DIR/cache}" "$REQUEST_TEST_DIR/Tests.swift" \
     -o "$REQUEST_TEST_DIR/tests"
 "$REQUEST_TEST_DIR/tests"

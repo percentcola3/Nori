@@ -10,7 +10,7 @@ awk '/^enum DeveloperToolchainService / { exit } { print }' \
     "$ROOT_DIR/SimpleMole/Services/DeveloperToolchainService.swift" \
     > "$DEV_QUEUE_TEST_DIR/DeveloperToolchainTypes.swift"
 swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$DEV_QUEUE_TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$DEV_QUEUE_TEST_DIR/cache}" \
     "$DEV_QUEUE_TEST_DIR/DeveloperToolchainTypes.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperTerminalEnvironment.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperAvailableVersions.swift" \

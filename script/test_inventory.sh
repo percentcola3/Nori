@@ -180,7 +180,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     architecture="$(uname -m)"
     mkdir -p "$INVENTORY_TEST_ROOT/module-cache" "$INVENTORY_TEST_ROOT/parser-fixture"
     swiftc -DINVENTORY_PARSER_TESTS -target "$architecture-apple-macos13.0" \
-        -module-cache-path "$INVENTORY_TEST_ROOT/module-cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$INVENTORY_TEST_ROOT/module-cache}" \
         "$ROOT_DIR/SimpleMole/Services/SimulatorInventory.swift" \
         "$ROOT_DIR/SimpleMole/Services/DockerInventory.swift" \
         "$ROOT_DIR/SimpleMole/L10n/TablesDeveloperExisting.swift" \

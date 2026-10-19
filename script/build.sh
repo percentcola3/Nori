@@ -201,7 +201,7 @@ swiftui_sdk_usable() {
     /usr/bin/printf 'import SwiftUI\nstruct SwiftUIMacroProbe: View {\n    @State private var flag = false\n    var body: some View { Text(String(flag)) }\n}\n' \
         > "$BUILD_TMP/swiftui-macro-probe.swift"
     SDKROOT="$1" swiftc -typecheck -framework SwiftUI \
-        -module-cache-path "$BUILD_TMP/module-cache-probe" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$BUILD_TMP/module-cache-probe}" \
         "$BUILD_TMP/swiftui-macro-probe.swift" >/dev/null 2>&1
 }
 if ! swiftui_sdk_usable "$SWIFT_SDKROOT"; then
@@ -258,7 +258,7 @@ for arch in $BUILD_ARCHS; do
         -c "$SWIFT_SOURCE_DIR/Support/MenuBarCollection/NoriMenuBarVisibility.m" \
         -o "$BUILD_TMP/menu-bar-$arch.o"
     SDKROOT="$SWIFT_SDKROOT" swiftc -O -whole-module-optimization -target "$arch-apple-macos13.0" \
-        -module-cache-path "$BUILD_TMP/module-cache-$arch" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$BUILD_TMP/module-cache-$arch}" \
         -import-objc-header "$SWIFT_SOURCE_DIR/Support/MenuBarCollection/NoriMenuBarVisibility.h" \
         "$BUILD_TMP/menu-bar-$arch.o" \
         -F "$SPARKLE_DIR" -framework Sparkle \

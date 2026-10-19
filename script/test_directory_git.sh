@@ -14,7 +14,7 @@ awk 'BEGIN { print "import Foundation" } /^    static func executable\(/ { print
     "$ROOT_DIR/SimpleMole/Services/DeveloperToolchainService.swift" > "$DIRECTORY_GIT_TEST_DIR/GitExecutable.swift"
 
 swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$DIRECTORY_GIT_TEST_DIR/cache" -framework Security \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$DIRECTORY_GIT_TEST_DIR/cache}" -framework Security \
     "$DIRECTORY_GIT_TEST_DIR/RunResult.swift" \
     "$DIRECTORY_GIT_TEST_DIR/GitEnvironment.swift" \
     "$DIRECTORY_GIT_TEST_DIR/GitExecutable.swift" \

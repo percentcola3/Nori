@@ -7,7 +7,7 @@ WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-cleanup-policy.XXXXXX")"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 swiftc -target "$(uname -m)-apple-macos13.0" \
-    -module-cache-path "$WORK_DIR/module-cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$WORK_DIR/module-cache}" \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \

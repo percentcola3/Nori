@@ -9,7 +9,7 @@ case "${1:---simulate}" in --simulate|--benchmark) ;; *) echo "usage: test_featu
 if [[ "${1:---simulate}" == --benchmark && "$#" != 2 ]]; then echo 'benchmark requires a report path' >&2; exit 2; fi
 source "$ROOT_DIR/script/test_developer_toolchain.sh"
 swiftc -O -DINVENTORY_PARSER_TESTS -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" \
     -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \

@@ -2,6 +2,14 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TEST_GROUP=all
+if [[ $# -gt 0 ]]; then
+    [[ $# -eq 2 && "$1" == --group ]] || { echo 'usage: test.sh [--group preflight|native-a|native-b|native-c|contracts]' >&2; exit 2; }
+    TEST_GROUP="$2"
+fi
+case "$TEST_GROUP" in all|preflight|native-a|native-b|native-c|contracts) ;;
+    *) echo "error: unknown regression group: $TEST_GROUP" >&2; exit 2 ;;
+esac
 MOLE_SRC="${MOLE_SRC:-$ROOT_DIR/vendor/mole}"
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/nori-tests.XXXXXX")"
 RUNTIME_DIR="$TEST_ROOT/runtime"
@@ -28,6 +36,20 @@ pass() {
 fail() {
     printf 'not ok - %s\n' "$1" >&2
     exit 1
+}
+
+runs_group() { [[ "$TEST_GROUP" == all || "$TEST_GROUP" == "$1" ]]; }
+
+# CI runs each group in its own runner. The default still executes every
+# suite in its original order, including all safety and presentation checks.
+run_suite() {
+    local group="$1" started="$SECONDS" status=0
+    shift
+    runs_group "$group" || return 0
+    "$@" || status=$?
+    printf 'Suite timing [%s] %s: %ss\n' "$group" "${2##*/}" "$((SECONDS - started))"
+    [[ "$status" -eq 0 ]] || return "$status"
+    pass "${2##*/}"
 }
 
 assert_status() {
@@ -790,7 +812,7 @@ test_screenshot_presets() {
     binary="$TEST_ROOT/screenshot-preset-tests"
     mkdir -p "$TEST_ROOT/screenshot-module-cache"
     swiftc -target "$arch-apple-macos13.0" \
-        -module-cache-path "$TEST_ROOT/screenshot-module-cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_ROOT/screenshot-module-cache}" \
         -framework AppKit \
         "$ROOT_DIR/SimpleMole/Services/ScreenshotPreset.swift" \
         "$ROOT_DIR/script/ScreenshotPresetTests.swift" \
@@ -847,7 +869,7 @@ test_theme_contract() {
         binary="$TEST_ROOT/theme-contrast-tests"
         mkdir -p "$TEST_ROOT/theme-module-cache"
         swiftc -target "$arch-apple-macos13.0" \
-            -module-cache-path "$TEST_ROOT/theme-module-cache" \
+            -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_ROOT/theme-module-cache}" \
             -framework AppKit -framework SwiftUI \
             "$theme" "$ROOT_DIR/script/ThemeContrastTests.swift" \
             -o "$binary" || fail "theme contrast tests compile"
@@ -880,7 +902,7 @@ test_process_sampler() {
     binary="$TEST_ROOT/process-sampler-tests"
     mkdir -p "$TEST_ROOT/process-module-cache"
     swiftc -target "$arch-apple-macos13.0" \
-        -module-cache-path "$TEST_ROOT/process-module-cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_ROOT/process-module-cache}" \
         -framework AppKit -framework IOKit \
         "$ROOT_DIR/SimpleMole/Models.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
@@ -906,7 +928,7 @@ test_signing_identity_classification() {
     binary="$TEST_ROOT/signing-identity-tests"
     mkdir -p "$TEST_ROOT/signing-module-cache"
     swiftc -target "$arch-apple-macos13.0" \
-        -module-cache-path "$TEST_ROOT/signing-module-cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_ROOT/signing-module-cache}" \
         -framework Security -framework AppKit -framework Combine \
         "$ROOT_DIR/SimpleMole/Services/SigningIdentityInspector.swift" \
         "$ROOT_DIR/SimpleMole/Services/PermissionCenter.swift" \
@@ -998,7 +1020,7 @@ test_runtime_store_aggregation() {
     module_cache="$TEST_ROOT/runtime-store-module-cache"
     mkdir -p "$module_cache"
     swiftc -target "$arch-apple-macos13.0" \
-        -module-cache-path "$module_cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$module_cache}" \
         -framework AppKit -framework IOKit \
         "$ROOT_DIR/SimpleMole/Models.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
@@ -1745,7 +1767,7 @@ test_uninstall_space_breakdown() {
         module_cache="$TEST_ROOT/uninstall-space-module-cache"
         mkdir -p "$module_cache"
         swiftc -target "$arch-apple-macos13.0" \
-            -module-cache-path "$module_cache" \
+            -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$module_cache}" \
             "$ROOT_DIR/SimpleMole/Models.swift" \
             "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
             "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
@@ -1839,7 +1861,7 @@ test_uninstall_queue() {
         module_cache="$TEST_ROOT/uninstall-queue-module-cache"
         mkdir -p "$module_cache"
         swiftc -target "$arch-apple-macos13.0" \
-            -module-cache-path "$module_cache" \
+            -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$module_cache}" \
             "$ROOT_DIR/SimpleMole/Models.swift" \
             "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
             "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
@@ -2349,7 +2371,7 @@ test_auto_cleanup_planner() {
     mkdir -p "$module_cache"
 
     swiftc -target "$arch-apple-macos13.0" \
-        -module-cache-path "$module_cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$module_cache}" \
         "$ROOT_DIR/SimpleMole/Models.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
@@ -2380,7 +2402,7 @@ test_cleanup_risk_policy() {
     mkdir -p "$module_cache" "$fixture"
 
     swiftc -target "$arch-apple-macos13.0" \
-        -module-cache-path "$module_cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$module_cache}" \
         "$ROOT_DIR/SimpleMole/Models.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
@@ -2427,7 +2449,7 @@ test_cleanup_execution_accounting() {
     module_cache="$TEST_ROOT/cleanup-execution-module-cache"
     mkdir -p "$module_cache"
     swiftc -target "$arch-apple-macos13.0" \
-        -module-cache-path "$module_cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$module_cache}" \
         "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" \
         "$ROOT_DIR/script/CleanupExecutionTests.swift" \
@@ -2442,7 +2464,7 @@ test_clipboard_history() {
     binary="$TEST_ROOT/clipboard-history-tests"
     mkdir -p "$TEST_ROOT/clipboard-module-cache"
     swiftc -target "$arch-apple-macos13.0" \
-        -module-cache-path "$TEST_ROOT/clipboard-module-cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_ROOT/clipboard-module-cache}" \
         -framework AppKit -framework Combine \
         "$ROOT_DIR/SimpleMole/Services/ClipboardHistoryManager.swift" \
         "$ROOT_DIR/script/ClipboardHistoryTests.swift" \
@@ -2473,13 +2495,13 @@ test_swift() {
     /usr/bin/printf 'import SwiftUI\nstruct SwiftUIMacroProbe: View {\n    @State private var flag = false\n    var body: some View { Text(String(flag)) }\n}\n' \
         > "$TEST_ROOT/swiftui-macro-probe.swift"
     if ! SDKROOT="$typecheck_sdkroot" swiftc -typecheck -framework SwiftUI \
-            -module-cache-path "$TEST_ROOT/swift-module-cache" \
+            -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_ROOT/swift-module-cache}" \
             "$TEST_ROOT/swiftui-macro-probe.swift" >/dev/null 2>&1; then
         for fallback_sdk in macosx26.5 macosx26.0; do
             fallback_root="$(xcrun --sdk "$fallback_sdk" --show-sdk-path 2>/dev/null)" || continue
             [[ -d "$fallback_root" ]] || continue
             if SDKROOT="$fallback_root" swiftc -typecheck -framework SwiftUI \
-                    -module-cache-path "$TEST_ROOT/swift-module-cache" \
+                    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_ROOT/swift-module-cache}" \
                     "$TEST_ROOT/swiftui-macro-probe.swift" >/dev/null 2>&1; then
                 typecheck_sdkroot="$fallback_root"
                 break
@@ -2488,7 +2510,7 @@ test_swift() {
     fi
     SDKROOT="$typecheck_sdkroot" swiftc -typecheck -target "$arch-apple-macos13.0" \
         -import-objc-header "$ROOT_DIR/SimpleMole/Support/MenuBarCollection/NoriMenuBarVisibility.h" \
-        -module-cache-path "$TEST_ROOT/swift-module-cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_ROOT/swift-module-cache}" \
         -F "$sparkle_dir" -framework Sparkle \
         -framework Cocoa -framework SwiftUI -framework Security -framework CryptoKit -framework IOKit -framework ServiceManagement \
         "${swift_sources[@]}" || fail "Swift typecheck"
@@ -2506,42 +2528,7 @@ test_swift() {
     fi
 }
 
-printf 'Nori local regression tests\n'
-test_shell_syntax
-# Check the whole product against the selected SDK before the slower native
-# suites, so compiler/SDK compatibility failures are reported immediately.
-test_swift
-if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
-    bash "$ROOT_DIR/script/test_duplicates.sh" || fail "exact duplicate scanning tests"
-    bash "$ROOT_DIR/script/test_duplicate_responsiveness.sh" || fail "duplicate background responsiveness tests"
-    bash "$ROOT_DIR/script/test_duplicate_deletion.sh" || fail "duplicate deletion safety tests"
-    bash "$ROOT_DIR/script/test_similar_images.sh" || fail "similar image grouping tests"
-    bash "$ROOT_DIR/script/test_duplicate_workspaces.sh" || fail "duplicate result reuse and persistence tests"
-    bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
-    bash "$ROOT_DIR/script/test_cache_cleanup.sh" --all || fail "cache cleanup unit and filesystem E2E tests"
-    bash "$ROOT_DIR/script/test_cleanup_page_state.sh" || fail "cleanup modal results and pending retry tests"
-    bash "$ROOT_DIR/script/test_auto_cleanup_workflow.sh" || fail "automatic cleanup scheduler lifecycle tests"
-    bash "$ROOT_DIR/script/test_administrator_cleanup.sh" || fail "administrator cleanup safety tests"
-    bash "$ROOT_DIR/script/test_administrator_cleanup_performance.sh" || fail "bounded cleanup batches, path indices and UI responsiveness"
-    bash "$ROOT_DIR/script/test_analysis_deletion.sh" || fail "analysis selection identity-bound Trash tests"
-    bash "$ROOT_DIR/script/test_analysis_inventory.sh" || fail "independent incremental analysis cache tests"
-    bash "$ROOT_DIR/script/test_analysis_selection.sh" || fail "per-category cleanup and compression selection tests"
-    bash "$ROOT_DIR/script/test_analysis_automation.sh" || fail "automatic incremental analysis scheduling tests"
-    bash "$ROOT_DIR/script/test_system_disk_metrics.sh" || fail "macOS available disk capacity tests"
-    bash "$ROOT_DIR/script/test_agents.sh" || fail "agent cleanup catalog, skills and MCP tests"
-    bash "$ROOT_DIR/script/test_awake_session.sh" || fail "keep-awake assertion lifecycle tests"
-    bash "$ROOT_DIR/script/test_agent_scan_performance.sh" || fail "bounded Agent scan, metadata reuse and cancellation"
-    bash "$ROOT_DIR/script/test_agent_storage_footprint.sh" || fail "shared Agent/software capacity and garbage classification"
-    bash "$ROOT_DIR/script/test_agent_software_inventory.sh" || fail "selected Agent application and CLI inventory"
-    bash "$ROOT_DIR/script/test_agent_data_process_scope.sh" || fail "trusted shared-data consumers and process isolation"
-    bash "$ROOT_DIR/script/test_agent_program_removal.sh" || fail "selected Agent installation removal and separate data consent"
-    bash "$ROOT_DIR/script/test_agent_cli.sh" || fail "agent CLI uninstall execution tests"
-    bash "$ROOT_DIR/script/test_agent_cli_ownership.sh" || fail "agent CLI program and alias ownership tests"
-    bash "$ROOT_DIR/script/test_agent_removal.sh" || fail "complete Agent data removal and reversible Trash tests"
-    bash "$ROOT_DIR/script/test_agent_workflow.sh" || fail "agent cleanup lifecycle tests"
-    bash "$ROOT_DIR/script/test_agent_icons.sh" || fail "agent icon tests"
-    bash "$ROOT_DIR/script/test_task_feedback.sh" || fail "task feedback queue tests"
-    bash "$ROOT_DIR/script/test_task_feedback_localization.sh" || fail "multilingual task feedback tests"
+test_agent_cleanup_selection_contract() {
     # Ordinary Agent cleanup executes its captured selection directly. The
     # executor routes safe caches to permanent deletion and user data to Trash;
     # installation removal and associated user-data cleanup have separate consent.
@@ -2553,14 +2540,9 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
         | /usr/bin/grep -Eq 'confirmation[[:space:]]*='; then
         fail "ordinary Agent garbage cleanup asks for confirmation again"
     fi
-    bash "$ROOT_DIR/script/test_optimize.sh" || fail "optimize admin bridge safety tests"
-    bash "$ROOT_DIR/script/test_cleanup_refresh.sh" || fail "post-cleanup inventory refresh tests"
-    bash "$ROOT_DIR/script/test_disk_analysis.sh" || fail "directory analysis tests"
-    bash "$ROOT_DIR/script/test_directory_files.sh" || fail "directory file operation safety tests"
-    bash "$ROOT_DIR/script/test_directory_search.sh" || fail "directory persistent index and search tests"
-    bash "$ROOT_DIR/script/test_directory_browser.sh" || fail "directory navigation and clipboard workflow tests"
-    bash "$ROOT_DIR/script/test_directory_git.sh" || fail "directory Git repository operation tests"
-    bash "$ROOT_DIR/script/test_media.sh" || fail "file slimming tests"
+}
+
+test_media_cleanup_selection_contract() {
     # 瘦身只删除自己的临时输出；原件只能经注入的 Trash 离开原位。
     media_slimmer="$ROOT_DIR/SimpleMole/Services/MediaSlimmer.swift"
     [[ "$(/usr/bin/grep -c 'removeItem(' "$media_slimmer")" -eq \
@@ -2571,20 +2553,71 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     if /usr/bin/grep -Fq 'case images' "$APP_STATE_CONTRACT_SOURCE"; then
         fail "the standalone image tab came back; image slimming lives in disk analysis"
     fi
-    bash "$ROOT_DIR/script/test_login_item.sh" || fail "login item opt-in and system status tests"
-    bash "$ROOT_DIR/script/test_page_keyboard_shortcuts.sh" || fail "page shortcut persistence and validation"
-    bash "$ROOT_DIR/script/test_uninstall_residue.sh" || fail "uninstall residue discovery and result tests"
-    bash "$ROOT_DIR/script/test_application_processes.sh" || fail "complete application process shutdown tests"
-    bash "$ROOT_DIR/script/test_uninstall_processes.sh" || fail "confirmed uninstall process shutdown tests"
-    bash "$ROOT_DIR/script/test_cli_tools.sh" || fail "multi-ecosystem CLI inventory tests"
-    bash "$ROOT_DIR/script/test_software_updates.sh" || fail "application and CLI version checks"
-    bash "$ROOT_DIR/script/test_software_update_execution.sh" || fail "software update commands and running-process closure"
-    bash "$ROOT_DIR/script/test_software_update_request.sh" || fail "independent signed-updater routing and software reentry"
-    bash "$ROOT_DIR/script/test_cli_uninstall_workflow.sh" || fail "confirmed CLI uninstall and scoped process shutdown"
-    bash "$ROOT_DIR/script/test_cli_uninstall_request.sh" || fail "generic CLI request guards and stale confirmation"
-    bash "$ROOT_DIR/script/test_software_workflows.sh" || fail "software workflow dependency and orchestration contracts"
-    bash "$ROOT_DIR/script/test_administrator_uninstall.sh" || fail "administrator uninstall and Trash safety tests"
+}
+
+printf 'Nori local regression tests\n'
+if runs_group preflight; then
+    test_shell_syntax
+    # Check the whole product against the selected SDK before native suites
+    # so compiler/SDK compatibility failures are reported immediately.
+    test_swift
 fi
+if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
+    run_suite native-a bash "$ROOT_DIR/script/test_duplicates.sh" || fail "exact duplicate scanning tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_duplicate_responsiveness.sh" || fail "duplicate background responsiveness tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_duplicate_deletion.sh" || fail "duplicate deletion safety tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_similar_images.sh" || fail "similar image grouping tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_duplicate_workspaces.sh" || fail "duplicate result reuse and persistence tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_cache_cleanup.sh" --all || fail "cache cleanup unit and filesystem E2E tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_cleanup_page_state.sh" || fail "cleanup modal results and pending retry tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_auto_cleanup_workflow.sh" || fail "automatic cleanup scheduler lifecycle tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_administrator_cleanup.sh" || fail "administrator cleanup safety tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_administrator_cleanup_performance.sh" || fail "bounded cleanup batches, path indices and UI responsiveness"
+    run_suite native-c bash "$ROOT_DIR/script/test_analysis_deletion.sh" || fail "analysis selection identity-bound Trash tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_analysis_inventory.sh" || fail "independent incremental analysis cache tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_analysis_selection.sh" || fail "per-category cleanup and compression selection tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_analysis_automation.sh" || fail "automatic incremental analysis scheduling tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_system_disk_metrics.sh" || fail "macOS available disk capacity tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_agents.sh" || fail "agent cleanup catalog, skills and MCP tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_awake_session.sh" || fail "keep-awake assertion lifecycle tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_agent_scan_performance.sh" || fail "bounded Agent scan, metadata reuse and cancellation"
+    run_suite native-b bash "$ROOT_DIR/script/test_agent_storage_footprint.sh" || fail "shared Agent/software capacity and garbage classification"
+    run_suite native-c bash "$ROOT_DIR/script/test_agent_software_inventory.sh" || fail "selected Agent application and CLI inventory"
+    run_suite native-a bash "$ROOT_DIR/script/test_agent_data_process_scope.sh" || fail "trusted shared-data consumers and process isolation"
+    run_suite native-b bash "$ROOT_DIR/script/test_agent_program_removal.sh" || fail "selected Agent installation removal and separate data consent"
+    run_suite native-c bash "$ROOT_DIR/script/test_agent_cli.sh" || fail "agent CLI uninstall execution tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_agent_cli_ownership.sh" || fail "agent CLI program and alias ownership tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_agent_removal.sh" || fail "complete Agent data removal and reversible Trash tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_agent_workflow.sh" || fail "agent cleanup lifecycle tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_agent_icons.sh" || fail "agent icon tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_task_feedback.sh" || fail "task feedback queue tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_task_feedback_localization.sh" || fail "multilingual task feedback tests"
+    if runs_group native-b; then test_agent_cleanup_selection_contract; fi
+    run_suite native-a bash "$ROOT_DIR/script/test_optimize.sh" || fail "optimize admin bridge safety tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_cleanup_refresh.sh" || fail "post-cleanup inventory refresh tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_disk_analysis.sh" || fail "directory analysis tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_directory_files.sh" || fail "directory file operation safety tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_directory_search.sh" || fail "directory persistent index and search tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_directory_browser.sh" || fail "directory navigation and clipboard workflow tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_directory_git.sh" || fail "directory Git repository operation tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_media.sh" || fail "file slimming tests"
+    if runs_group native-c; then test_media_cleanup_selection_contract; fi
+    run_suite native-c bash "$ROOT_DIR/script/test_login_item.sh" || fail "login item opt-in and system status tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_page_keyboard_shortcuts.sh" || fail "page shortcut persistence and validation"
+    run_suite native-b bash "$ROOT_DIR/script/test_uninstall_residue.sh" || fail "uninstall residue discovery and result tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_application_processes.sh" || fail "complete application process shutdown tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_uninstall_processes.sh" || fail "confirmed uninstall process shutdown tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_cli_tools.sh" || fail "multi-ecosystem CLI inventory tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_software_updates.sh" || fail "application and CLI version checks"
+    run_suite native-a bash "$ROOT_DIR/script/test_software_update_execution.sh" || fail "software update commands and running-process closure"
+    run_suite native-b bash "$ROOT_DIR/script/test_software_update_request.sh" || fail "independent signed-updater routing and software reentry"
+    run_suite native-c bash "$ROOT_DIR/script/test_cli_uninstall_workflow.sh" || fail "confirmed CLI uninstall and scoped process shutdown"
+    run_suite native-a bash "$ROOT_DIR/script/test_cli_uninstall_request.sh" || fail "generic CLI request guards and stale confirmation"
+    run_suite native-b bash "$ROOT_DIR/script/test_software_workflows.sh" || fail "software workflow dependency and orchestration contracts"
+    run_suite native-c bash "$ROOT_DIR/script/test_administrator_uninstall.sh" || fail "administrator uninstall and Trash safety tests"
+fi
+if runs_group contracts; then
 test_native_core_ownership_contract
 test_plists
 test_brand_contract
@@ -2641,4 +2674,20 @@ fi
 test_cleanup_execution_accounting
 test_inventory_components
 test_clipboard_history
+# Release-only supplemental checks were previously inline in release.yml.
+# Keep them under the same default full-regression entry point too.
+if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
+    bash "$ROOT_DIR/script/test_island_network_probe.sh" || fail "island network probe"
+    bash "$ROOT_DIR/script/test_bluetooth_battery.sh" || fail "Bluetooth battery"
+    bash "$ROOT_DIR/script/test_menu_bar_collection.sh" || fail "menu bar collection"
+    bash "$ROOT_DIR/script/test_menu_bar_preferences.sh" || fail "menu bar preferences"
+    bash "$ROOT_DIR/script/test_menu_bar_controller.sh" || fail "menu bar controller"
+    bash "$ROOT_DIR/script/test_release_version.sh" || fail "release version"
+    bash "$ROOT_DIR/script/test_install_update.sh" || fail "local installation transaction"
+    bash "$ROOT_DIR/script/test_app_updates.sh" || fail "signed application updates"
+    sparkle_dir=$(/usr/bin/python3 "$ROOT_DIR/script/fetch_sparkle.py")
+    NORI_TEST_SPARKLE_SIGN_TOOL="$sparkle_dir/bin/sign_update" bash "$ROOT_DIR/script/test_release_appcast.sh" || fail "release appcast"
+fi
+fi
+printf 'Regression group: %s\n' "$TEST_GROUP"
 printf 'All %d checks passed.\n' "$PASSED"

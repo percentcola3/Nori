@@ -15,7 +15,7 @@ end = len(source)
 (temporary / 'DirectoryPathBarTests.swift').write_text((root / 'script/DirectoryPathBarTests.swift').read_text())
 PY
 swiftc -parse-as-library -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$DIRECTORY_PATH_TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$DIRECTORY_PATH_TEST_DIR/cache}" \
     "$DIRECTORY_PATH_TEST_DIR/DirectoryPathLayout.swift" "$DIRECTORY_PATH_TEST_DIR/DirectoryPathBarTests.swift" \
     -o "$DIRECTORY_PATH_TEST_DIR/tests"
 "$DIRECTORY_PATH_TEST_DIR/tests"

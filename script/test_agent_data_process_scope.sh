@@ -21,6 +21,6 @@ SOURCES+=("$ROOT_DIR/SimpleMole/Services/CommandLineTool.swift"
 mkdir -p "$TEST_DIR/sources"
 cp "${SOURCES[@]}" "$TEST_DIR/sources/"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/cache" -framework AppKit -framework IOKit \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" -framework AppKit -framework IOKit \
     "$TEST_DIR/sources/"*.swift -o "$TEST_DIR/agent-data-process-scope-tests"
 "$TEST_DIR/agent-data-process-scope-tests" "$FIXTURE_DIR"

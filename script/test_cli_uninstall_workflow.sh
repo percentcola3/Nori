@@ -24,6 +24,6 @@ SOURCES+=(
 mkdir -p "$CLI_WORKFLOW_TEST_DIR/sources"
 cp "${SOURCES[@]}" "$CLI_WORKFLOW_TEST_DIR/sources/"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$CLI_WORKFLOW_TEST_DIR/cache" -framework AppKit -framework IOKit -framework Security \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$CLI_WORKFLOW_TEST_DIR/cache}" -framework AppKit -framework IOKit -framework Security \
     "$CLI_WORKFLOW_TEST_DIR/sources/"*.swift -o "$CLI_WORKFLOW_TEST_DIR/tests"
 "$CLI_WORKFLOW_TEST_DIR/tests" "$CLI_WORKFLOW_FIXTURE"

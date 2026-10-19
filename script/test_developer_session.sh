@@ -59,7 +59,7 @@ view = '''import Foundation
 (destination / 'SessionViewFixture.swift').write_text(view)
 PY
 swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$DEV_SESSION_TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$DEV_SESSION_TEST_DIR/cache}" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperWorkspaceSession.swift" \
     "$DEV_SESSION_TEST_DIR/SessionTestSupport.swift" \
     "$DEV_SESSION_TEST_DIR/SessionViewFixture.swift" \

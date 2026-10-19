@@ -6,7 +6,7 @@ TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-application-processes.XXXXXX")"
 FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/.application-process-fixture.XXXXXX")"
 trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/cache" -framework AppKit \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" -framework AppKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \

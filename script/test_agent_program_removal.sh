@@ -31,6 +31,6 @@ method = source[start:position]
     'import Foundation\n\n@MainActor\nextension AppState {\n' + method + '\n}\n')
 PY
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$PROGRAM_TEST_DIR/cache" "$PROGRAM_TEST_DIR/sources/"*.swift \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$PROGRAM_TEST_DIR/cache}" "$PROGRAM_TEST_DIR/sources/"*.swift \
     -o "$PROGRAM_TEST_DIR/tests"
 "$PROGRAM_TEST_DIR/tests" "$PROGRAM_FIXTURE_DIR"

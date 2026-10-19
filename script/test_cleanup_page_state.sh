@@ -81,7 +81,7 @@ cp "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" "$TEST_DIR/sources/"
 swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" \
     "$TEST_DIR/sources/"*.swift \
     "$TEST_DIR/CleanupPageStateTests.swift" \
     -o "$TEST_DIR/cleanup-page-state-tests"

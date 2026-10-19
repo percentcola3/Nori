@@ -16,7 +16,7 @@ source = source.replace('analysisAutoScanPreferences.save()',
 (destination / 'Scheduler.swift').write_text(source)
 PY
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$ANALYSIS_TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$ANALYSIS_TEST_DIR/cache}" \
     "$ROOT_DIR/SimpleMole/Services/AnalysisAutoScanPreferences.swift" \
     "$ROOT_DIR/SimpleMole/L10n/TablesAnalysis.swift" \
     "$ROOT_DIR/SimpleMole/L10n/TablesMedia.swift" \

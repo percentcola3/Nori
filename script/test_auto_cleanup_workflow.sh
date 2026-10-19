@@ -38,6 +38,6 @@ mkdir -p "$WORK/sources"
 cp "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" "$WORK/sources/"
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$WORK/cache" "$WORK/tests.swift" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$WORK/cache}" "$WORK/tests.swift" \
     "$WORK/sources/"*.swift -o "$WORK/tests"
 "$WORK/tests"

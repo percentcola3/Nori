@@ -46,6 +46,6 @@ PY
 FLAGS=(-D AGENT_SCAN_FIXTURE)
 if [[ "${1:-}" == baseline ]]; then FLAGS+=(-D AGENT_SCAN_BASELINE); fi
 swiftc -O -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$AGENT_SCAN_WORK/cache" -framework AppKit -framework IOKit \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$AGENT_SCAN_WORK/cache}" -framework AppKit -framework IOKit \
     "${FLAGS[@]}" "$AGENT_SCAN_WORK/sources/"*.swift -o "$AGENT_SCAN_WORK/tests"
 "$AGENT_SCAN_WORK/tests" "$AGENT_SCAN_FIXTURE"

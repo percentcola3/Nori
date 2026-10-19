@@ -12,7 +12,7 @@ model = (root / 'SimpleMole/Models.swift').read_text()
 (destination / 'MetricsSnapshot.swift').write_text(model[:model.index('/// 清理扫描的实时状态。')])
 PY
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
     "$TEST_DIR/MetricsSnapshot.swift" \
     "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
     "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift" \

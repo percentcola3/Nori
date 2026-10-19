@@ -53,7 +53,7 @@ run_projection() {
     local source_path="$2"
     cp "$source_path" "$PROJECTION_TEST_DIR/sources/AnalysisInventoryCache.swift"
     swiftc -O -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-        -module-cache-path "$PROJECTION_TEST_DIR/module-cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$PROJECTION_TEST_DIR/module-cache}" \
         "$PROJECTION_TEST_DIR"/sources/*.swift -o "$PROJECTION_TEST_DIR/$label"
     "$PROJECTION_TEST_DIR/$label" --label "$label" --files "$PROJECTION_FILES" \
         --iterations "$PROJECTION_ITERATIONS" --depth "$PROJECTION_DEPTH"

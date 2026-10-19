@@ -10,7 +10,7 @@ awk '/    \/\/ MARK: - 网络与系统服务修复/ { exit } { print }' \
 printf '}\n' >> "$DEV_WORKSPACE_TEST_DIR/refresh.swift"
 swiftc -target "$(uname -m)-apple-macos13.0" \
     -sdk "$SDKROOT" \
-    -module-cache-path "$DEV_WORKSPACE_TEST_DIR/module-cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$DEV_WORKSPACE_TEST_DIR/module-cache}" \
     "$DEV_WORKSPACE_TEST_DIR/refresh.swift" \
     "$ROOT_DIR/script/DeveloperWorkspaceRefreshTests.swift" \
     -o "$DEV_WORKSPACE_TEST_DIR/tests"

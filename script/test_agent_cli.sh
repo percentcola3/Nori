@@ -53,7 +53,7 @@ AGENT_CLI_SOURCES=(
 )
 cp "${AGENT_CLI_SOURCES[@]}" "$TEST_DIR/sources/"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
-    -sdk "$SDK_PATH" -module-cache-path "$TEST_DIR/cache" \
+    -sdk "$SDK_PATH" -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
     -framework AppKit -framework IOKit \
     "$TEST_DIR/sources/"*.swift \
     -o "$TEST_DIR/agent-cli-tests"

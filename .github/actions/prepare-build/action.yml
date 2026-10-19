@@ -1,0 +1,48 @@
+name: Prepare pinned build dependencies
+description: Restore only compiler SDK modules and checksum-pinned public downloads
+inputs:
+  architecture:
+    description: Target architecture, or native for host regression suites
+    required: true
+  scope:
+    description: Cache namespace for this regression group or architecture build
+    required: true
+outputs:
+  module-path:
+    value: ${{ steps.sdk.outputs.cache-directory }}
+    description: Public compiler module directory
+  module-key:
+    value: ${{ steps.sdk.outputs.cache-prefix }}-${{ inputs.scope }}-${{ github.sha }}
+    description: Exact toolchain, architecture and source cache key
+  module-hit:
+    value: ${{ steps.modules.outputs.cache-hit }}
+    description: Whether this exact cache already exists
+runs:
+  using: composite
+  steps:
+    - id: sdk
+      shell: bash
+      env:
+        TARGET_ARCH: ${{ inputs.architecture }}
+      run: bash script/ci_prepare.sh "$TARGET_ARCH"
+    - id: modules
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.sdk.outputs.cache-directory }}
+        key: ${{ steps.sdk.outputs.cache-prefix }}-${{ inputs.scope }}-${{ github.sha }}
+        restore-keys: |
+          ${{ steps.sdk.outputs.cache-prefix }}-${{ inputs.scope }}-
+          ${{ steps.sdk.outputs.cache-prefix }}-preflight-
+    - id: sparkle
+      uses: actions/cache/restore@v4
+      with:
+        path: .build/dependencies/sparkle/downloads
+        key: nori-sparkle-v1-${{ runner.os }}-${{ hashFiles('vendor/sparkle/release.json') }}
+    - name: Verify the pinned dependency archive
+      shell: bash
+      run: python3 script/fetch_sparkle.py
+    - uses: actions/cache/save@v4
+      if: github.event_name != 'pull_request' && steps.sparkle.outputs.cache-hit != 'true'
+      with:
+        path: .build/dependencies/sparkle/downloads
+        key: nori-sparkle-v1-${{ runner.os }}-${{ hashFiles('vendor/sparkle/release.json') }}

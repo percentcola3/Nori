@@ -22,7 +22,7 @@ HOST_FIXTURE_DIR="$(mktemp -d "$FIXTURE_ROOT/.agents-host-fixture.XXXXXX")"
 trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR" "$HOST_FIXTURE_DIR"' EXIT
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
     -sdk "$SDK_PATH" \
-    -module-cache-path "$TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
     -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
@@ -56,7 +56,7 @@ if [[ "${1:-}" == "--probe" ]]; then
 else
     "$TEST_DIR/agent-tests" "$FIXTURE_DIR"
     swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDK_PATH" \
-        -module-cache-path "$TEST_DIR/cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
         "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \
@@ -65,7 +65,7 @@ else
         -o "$TEST_DIR/project-storage-tests"
     "$TEST_DIR/project-storage-tests" "$FIXTURE_DIR"
     swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDK_PATH" \
-        -module-cache-path "$TEST_DIR/cache" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
         "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \

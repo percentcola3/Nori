@@ -19,6 +19,6 @@ for relative in [*paths, 'script/CleanupRiskTestL10nStub.swift', 'script/AgentCL
     shutil.copy2(root / relative, build / 'sources' / Path(relative).name)
 PY
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$OWNERSHIP_BUILD_DIR/cache" -framework AppKit -framework IOKit \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$OWNERSHIP_BUILD_DIR/cache}" -framework AppKit -framework IOKit \
     "$OWNERSHIP_BUILD_DIR/sources/"*.swift -o "$OWNERSHIP_BUILD_DIR/tests"
 "$OWNERSHIP_BUILD_DIR/tests" "$OWNERSHIP_FIXTURE_DIR"

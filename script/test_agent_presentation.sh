@@ -61,7 +61,7 @@ AGENT_PRESENTATION_SOURCES=(
 )
 cp "${AGENT_PRESENTATION_SOURCES[@]}" "$TEST_DIR/sources/"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework SwiftUI -framework WebKit -framework IOKit \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" -framework AppKit -framework SwiftUI -framework WebKit -framework IOKit \
     "$TEST_DIR/sources/"*.swift \
     -o "$FIXTURE_APP/Contents/MacOS/AgentPresentationTests"
 if [[ "${NORI_AGENT_PRESENTATION_COMPILE_ONLY:-0}" == 1 ]]; then

@@ -91,6 +91,10 @@ bash script/configure_release_secrets.sh
 
 脚本从 `origin` 推断仓库，也接受 `owner/repository` 参数；秘密通过标准输入上传，临时导出随后删除。如果任一同名 secret 已存在，脚本会拒绝覆盖。Actions 的 **Signed macOS release** 支持默认分支手动构建；推送 `v*` 标签会运行回归检查，生成两个 DMG、校验和及 **draft Release**，由维护者检查后公开。
 
+流水线先检查发布元数据、签名连续性和整个 App 的类型检查，再并行执行四组完整回归。标签发布和默认分支的手动运行还会同时构建 arm64、x86_64 两个签名安装包；只有全部回归与构建成功后才汇总产物。汇总阶段核对源码提交、版本、校验和并重新验签，复用本轮构建的 App，不再编译。手动运行可验证已发布版本，只上传 Actions 产物，不创建或修改 Release。普通默认分支推送和 PR 只做检查，不使用发布私钥。
+
+CI 仅缓存按工具链、SDK 和架构隔离的编译器模块，以及 SHA-256 固定的公开 Sparkle 下载包；每次仍独立编译并运行所有测试。测试结果、App、签名钥匙串与私钥不进入缓存。PR 可以恢复公开缓存，不能保存发布使用的缓存。相同分支的新任务会取消旧验证，标签任务独立完成。
+
 固定签名有助于跨版本保持同一应用身份，但不能保证所有 macOS 版本保留全部隐私权限。从 ad-hoc 或其他证书签署的版本迁移时，可能需要重新授权。自签名也不等同于 Apple 公证：用户首次打开下载的 App 时可能需要前往“系统设置 → 隐私与安全性”允许打开，再按功能需求授予完全磁盘访问和屏幕录制权限。用户无需安装发布证书。
 
 ### 本机开发和测试
@@ -181,6 +185,8 @@ bash script/test.sh
 ```
 
 测试覆盖脚本语法、Plist、受保护路径权限门禁、关键删除身份绑定、GC 退出码、图片计划互斥，并可执行 Swift 构建与签名检查。测试数据只在临时目录内创建。
+
+可用 `bash script/test.sh --group preflight` 或 `--group native-a|native-b|native-c|contracts` 复现单个 CI 分组。不带参数仍按原顺序执行全部检查。`python3 script/test_release_pipeline.py` 验证完整回归清单、分组覆盖、构建产物协议和发布边界；新增回归入口时同步更新 `script/release_regression_suites.json`。
 
 ## 安全约定
 
