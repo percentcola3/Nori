@@ -17,17 +17,8 @@ struct CleanupTabView: View {
         state.categories.filter { $0.isAppDataReview && $0.selected }
     }
 
-    private var collapsedGroups: Set<CleanupGroupBucket> {
-        userCollapsed ?? defaultCollapsedGroups
-    }
-
-    private var defaultCollapsedGroups: Set<CleanupGroupBucket> {
-        let groups = groupedCategories
-        guard groups.count > 1 else { return [] }
-        return Set(groups.dropFirst().map(\.kind))
-    }
-
-    private func toggleCollapsed(_ kind: CleanupGroupBucket) {
+    private func toggleCollapsed(_ kind: CleanupGroupBucket,
+                                 in collapsedGroups: Set<CleanupGroupBucket>) {
         withAnimation(reduceMotion ? nil : MoleMotion.panel) {
             var next = collapsedGroups
             if next.contains(kind) { next.remove(kind) } else { next.insert(kind) }
@@ -120,11 +111,16 @@ struct CleanupTabView: View {
                     scanButton
                 }
             } else {
+                // Classify the inventory once per render. Each header and
+                // lazy row must share this result instead of rewalking all
+                // paths to derive the initial collapse state.
+                let groups = groupedCategories
+                let collapsedGroups = userCollapsed ?? Set(groups.dropFirst().map(\.kind))
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        ForEach(groupedCategories) { group in
+                        ForEach(groups) { group in
                             VStack(spacing: 8) {
-                                cleanupGroupHeader(group)
+                                cleanupGroupHeader(group, collapsedGroups: collapsedGroups)
                                 if !collapsedGroups.contains(group.kind) {
                                     LazyVStack(spacing: 8) {
                                         ForEach(group.categoryIDs, id: \.self) { categoryID in
@@ -321,7 +317,8 @@ struct CleanupTabView: View {
     }
 
     @ViewBuilder
-    private func cleanupGroupHeader(_ group: CleanupPresentationGroup) -> some View {
+    private func cleanupGroupHeader(_ group: CleanupPresentationGroup,
+                                    collapsedGroups: Set<CleanupGroupBucket>) -> some View {
         HStack(spacing: 0) {
             Toggle(isOn: groupSelection(group)) {
                 HStack(spacing: 8) {
@@ -342,7 +339,7 @@ struct CleanupTabView: View {
             .toggleStyle(MoleRowSelectionToggleStyle(horizontalPadding: 10))
             .disabled(!state.cleanupScanComplete || state.isApplying)
             .accessibilityIdentifier("cleanup-group-select-" + group.kind.rawValue)
-            Button { toggleCollapsed(group.kind) } label: {
+            Button { toggleCollapsed(group.kind, in: collapsedGroups) } label: {
                 Image(systemName: "chevron.down")
                     .rotationEffect(.degrees(collapsedGroups.contains(group.kind) ? -90 : 0))
             }

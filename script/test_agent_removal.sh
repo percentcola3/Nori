@@ -8,9 +8,9 @@ REMOVAL_TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-agent-removal-build.XXXXXX")
 REMOVAL_FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/.agent-removal-fixture.XXXXXX")"
 trap 'rm -rf "$REMOVAL_TEST_DIR" "$REMOVAL_FIXTURE_DIR"' EXIT
 SOURCES=()
-while IFS= read -r relative; do SOURCES+=("$ROOT_DIR/$relative"); done < <(
-    rg -o '"\$ROOT_DIR/(SimpleMole/[^" ]+|script/CleanupRiskTestL10nStub.swift)"' "$ROOT_DIR/script/test_agents.sh" \
-        | sed 's/"\$ROOT_DIR\///; s/"$//' | awk '!seen[$0]++')
+SOURCE_LIST="$(/usr/bin/grep -Eo '"\$ROOT_DIR/(SimpleMole/[^" ]+|script/CleanupRiskTestL10nStub.swift)"' "$ROOT_DIR/script/test_agents.sh" \
+    | /usr/bin/sed 's/"\$ROOT_DIR\///; s/"$//' | /usr/bin/awk '!seen[$0]++')"
+while IFS= read -r relative; do SOURCES+=("$ROOT_DIR/$relative"); done <<< "$SOURCE_LIST"
 SOURCES+=("$ROOT_DIR/SimpleMole/Services/AgentRemovalService.swift"
     "$ROOT_DIR/script/AgentRemovalServiceTests.swift")
 mkdir "$REMOVAL_TEST_DIR/sources"

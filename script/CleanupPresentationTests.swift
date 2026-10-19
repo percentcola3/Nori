@@ -222,6 +222,26 @@ struct CleanupPresentationTests {
         precondition(state.categories[0].allSelected, "Group selection must remain independent")
         verifySelection(output: output)
 
+        let smallInventory = state.categories
+        let trashPaths = (0..<100_000).map { NSHomeDirectory() + "/.Trash/presentation-fixture-\($0).cache" }
+        let largeTrash = CleanupCategory(name: "Large Trash fixture", paths: trashPaths,
+            bytes: 100_000, pathIdentities: [:], selected: true, source: .core,
+            risk: .safe, disposal: .permanentDelete, activityGuard: .none)
+        precondition(CleanupGroupBucket(category: largeTrash) == .trash,
+                     "A large Trash inventory keeps its display bucket")
+        var escapedTrash = largeTrash
+        escapedTrash.paths = [NSHomeDirectory() + "/.Trash/../keep.cache"]
+        precondition(CleanupGroupBucket(category: escapedTrash) != .trash,
+                     "A normalized path outside Trash cannot enter the Trash group")
+        let renderStarted = ProcessInfo.processInfo.systemUptime
+        state.categories = [largeTrash] + smallInventory
+        render("large-trash-results")
+        let renderSeconds = ProcessInfo.processInfo.systemUptime - renderStarted
+        precondition(renderSeconds < 15,
+                     "100000-item results must render without blocking for tens of seconds: \(renderSeconds)s")
+        print("100000-item Trash result render: \(renderSeconds)s")
+        state.categories = smallInventory
+
         state.isApplying = true
         state.statusText = "Fixture cleanup in progress"
         state.cleanupTaskProgress = CleanupTaskProgress(phase: .preparing, completed: 0, total: 8,
