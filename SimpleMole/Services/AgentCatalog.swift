@@ -480,6 +480,28 @@ enum AgentCatalog {
                 .init(path: ".config/opencode/opencode.jsonc", format: .json(keyPath: "mcp"))
             ]),
         AgentDefinition(
+            id: "hermes", name: "Hermes Agent", owners: ["hermes", "hermes-agent", "hermes-acp"],
+            detect: [".hermes"], documented: false,
+            targets: [
+                .init(.review, .path(".hermes/logs"), "agents.label.logs"),
+                .init(.review, .path(".hermes/cache"), "agents.label.cache"),
+                .init(.review, .path(".hermes/bootstrap-cache"), "agents.label.cache"),
+                .init(.showOnly, .path(".hermes/sessions"), "agents.label.sessions"),
+                .init(.showOnly, .sqlite(dir: ".hermes", prefix: "state", ext: ".db"),
+                      "agents.label.stateDatabase"),
+                .init(.showOnly, .path(".hermes/memories"), "agents.label.knowledge"),
+                .init(.showOnly, .path(".hermes/SOUL.md"), "agents.label.knowledge"),
+                .init(.showOnly, .path(".hermes/cron"), "agents.label.todos"),
+                .init(.showOnly, .path(".hermes/hooks"), "agents.label.configuration"),
+                .init(.showOnly, .path(".hermes/config.yaml"), "agents.label.configuration"),
+                .init(.showOnly, .path(".hermes/.env"), "agents.label.credentials"),
+                .init(.showOnly, .path(".hermes/auth.json"), "agents.label.credentials"),
+                .init(.showOnly, .path(".hermes/pairing"), "agents.label.credentials"),
+                .init(.showOnly, .path(".hermes/audio_cache"), "agents.label.appData"),
+                .init(.showOnly, .path(".hermes/image_cache"), "agents.label.generatedImages")
+            ],
+            skillDirectories: [".hermes/skills"], mcpSources: []),
+        AgentDefinition(
             id: "grok", name: "Grok CLI", owners: ["grok"],
             detect: [".grok"], documented: true,
             targets: [
@@ -770,6 +792,7 @@ enum AgentCatalog {
             "pi": .init(bundleNames: [], commands: ["pi"]),
             "kimi": .init(bundleNames: [], commands: ["kimi", "kimi-cli"]),
             "factory": .init(bundleNames: ["Factory"], commands: ["droid"]),
+            "hermes": .init(bundleNames: [], commands: ["hermes", "hermes-agent", "hermes-acp"]),
             "devin": .init(bundleNames: ["Devin"], commands: ["devin"]),
             "windsurf": .init(bundleNames: ["Windsurf"], commands: ["windsurf"])
         ]
@@ -785,7 +808,8 @@ enum AgentCatalog {
             context.applicationDirs.contains { isDirectory($0 + "/" + name + ".app") }
         }) { return true }
         if presence.commands.contains(where: {
-            resolveExecutable($0, searchPath: context.searchPath, home: home) != nil
+            guard let path = resolveExecutable($0, searchPath: context.searchPath, home: home) else { return false }
+            return agent.id != "hermes" || hermesLauncherHasTarget(path, home: home)
         }) { return true }
         if agent.id == "codex",
            !AgentHostPresence.integratedCodexOwners(context: context).isEmpty { return true }
@@ -796,6 +820,7 @@ enum AgentCatalog {
         return nativeLaunchers(for: agent).contains { relative in
             let path = absolute(relative, home: home)
             guard isExecutableCommandFile(path) else { return false }
+            if agent.id == "hermes" { return hermesLauncherHasTarget(path, home: home) }
             // `agent` 同时被 Cursor/Grok 等安装器使用，不能只按入口名判归属。
             if relative == ".local/bin/agent", agent.id == "cursor-cli" {
                 let target = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
@@ -803,6 +828,37 @@ enum AgentCatalog {
             }
             return true
         }
+    }
+
+    /// The installer leaves a regular shell launcher, so an executable bit alone
+    /// cannot prove its venv survived. Recognize only the known shell/exec shape
+    /// and its optional exact Python environment unsets; unfamiliar commands
+    /// remain installation evidence, never deletion authority.
+    private static func hermesLauncherHasTarget(_ path: String, home: String) -> Bool {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+              (attributes[.size] as? NSNumber)?.intValue ?? Int.max <= 16_384,
+              let text = try? String(contentsOfFile: path, encoding: .utf8),
+              text.hasPrefix("#!") else { return true }
+        let lines = text.components(separatedBy: .newlines).map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        let shells = ["#!/bin/bash", "#!/bin/sh", "#!/bin/zsh",
+                      "#!/usr/bin/env bash", "#!/usr/bin/env sh", "#!/usr/bin/env zsh"]
+        guard let first = lines.first, shells.contains(first) else { return true }
+        let statements = lines.dropFirst().filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        guard let statement = statements.last else { return true }
+        let unsets = Array(statements.dropLast())
+        guard unsets.allSatisfy({ $0 == "unset PYTHONPATH" || $0 == "unset PYTHONHOME" }),
+              Set(unsets).count == unsets.count else { return true }
+        for environment in ["venv", ".venv"] {
+            for command in ["hermes", "hermes-agent", "hermes-acp"] {
+                let target = absolute(".hermes/hermes-agent/" + environment + "/bin/" + command, home: home)
+                if ["exec \"\(target)\" \"$@\"", "exec '\(target)' \"$@\"", "exec \(target) \"$@\""].contains(statement) {
+                    return isExecutableCommandFile(target)
+                }
+            }
+        }
+        return true
     }
 
     /// 所有 Agent 都按安装本体判定残留，不能把旧配置目录当成安装证据。
@@ -830,6 +886,10 @@ enum AgentCatalog {
         case "opencode": return [".opencode/bin/opencode", ".local/bin/opencode"]
         case "grok": return [".grok/bin/grok", ".grok/bin/agent", ".local/bin/grok"]
         case "factory": return [".local/bin/droid"]
+        case "hermes": return ["hermes", "hermes-agent", "hermes-acp"].flatMap {
+            [".local/bin/" + $0, ".hermes/hermes-agent/venv/bin/" + $0,
+             ".hermes/hermes-agent/.venv/bin/" + $0]
+        }
         case "kimi": return [".kimi-code/bin/kimi", ".local/bin/kimi"]
         case "amp": return [".amp/bin/amp", ".local/bin/amp"]
         default: return []

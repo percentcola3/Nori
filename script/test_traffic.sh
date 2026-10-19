@@ -14,6 +14,7 @@ sources=(
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift"
     "$ROOT_DIR/SimpleMole/Services/Parsers.swift"
     "$ROOT_DIR/SimpleMole/Services/TrafficAttribution.swift"
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift"
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift"
 )
 for suite in TrafficAttribution; do

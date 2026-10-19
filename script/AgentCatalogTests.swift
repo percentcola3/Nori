@@ -73,6 +73,38 @@ struct AgentCatalogTests {
                && AgentCLIService.installations(for: gemini, home: home, presence: sandboxPresence).isEmpty,
                "a searchable PATH directory was mistaken for an installed/uninstallable CLI")
 
+        // Hermes user data is not installation evidence, and ordinary cache
+        // cleanup must never consume its credentials, state or user artifacts.
+        let hermes = AgentCatalog.definitions.first { $0.id == "hermes" }!
+        for path in ["config.yaml", ".env", "auth.json", "state.db", "state.db-wal",
+                     "sessions/session.json", "memories/memory.md", "audio_cache/recording.wav"] {
+            try write(".hermes/" + path)
+        }
+        try write(".hermes/logs/debug.log")
+        expect(AgentCatalog.isOrphaned(hermes, home: home, presence: sandboxPresence),
+               "Hermes data alone was mistaken for an installed program")
+        let hermesProtected = AgentCatalog.managedCleanupPaths(home: home)
+        for path in ["config.yaml", ".env", "auth.json", "state.db", "state.db-wal",
+                     "sessions/session.json", "memories/memory.md", "audio_cache/recording.wav"] {
+            expect(AgentCatalog.isManagedCleanupPath(home + "/.hermes/" + path,
+                                                    protectedPaths: hermesProtected),
+                   "Hermes protected data entered daily cleanup: " + path)
+        }
+        expect(CleanupRiskPolicy.agentOwnedRoots(homeDirectory: home).contains(home + "/.hermes"),
+               "generic cleanup does not recognize Hermes ownership")
+        let hermesLauncher = home + "/.local/bin/hermes"
+        try fm.createDirectory(atPath: home + "/.local/bin", withIntermediateDirectories: true)
+        try ("#!/bin/sh\nexec \"" + home + "/.hermes/hermes-agent/venv/bin/hermes\" \"$@\"\n")
+            .write(toFile: hermesLauncher, atomically: true, encoding: .utf8)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hermesLauncher)
+        expect(!AgentCatalog.isInstalled(hermes, home: home, presence: sandboxPresence),
+               "a dangling Hermes shell wrapper was installation evidence")
+        try executable(".hermes/hermes-agent/venv/bin/hermes")
+        expect(AgentCatalog.isInstalled(hermes, home: home, presence: sandboxPresence),
+               "a live Hermes wrapper lost installation presence")
+        try fm.removeItem(atPath: hermesLauncher)
+        try fm.removeItem(atPath: home + "/.hermes")
+
         let retentionSuite = "NoriAgentRetentionTests-" + UUID().uuidString
         let retentionDefaults = UserDefaults(suiteName: retentionSuite)!
         defer { retentionDefaults.removePersistentDomain(forName: retentionSuite) }

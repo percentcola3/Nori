@@ -8,6 +8,7 @@ private enum AgentProgramSelection {
     var key: String { switch self { case .cli(let item): return item.id; case .app(let item): return item.id } }
     var path: String { switch self { case .cli(let item): return item.managedPaths.first ?? item.executablePaths.first ?? ""; case .app(let item): return item.path } }
     var agentIDs: Set<String> { switch self { case .cli(let item): return [item.agentID]; case .app(let item): return AgentSoftwareInventory.agentIDs(for: item) } }
+    var onlyUnlinksExecutable: Bool { if case .cli(let item) = self { return item.onlyUnlinksExecutable }; return false }
 }
 
 @MainActor
@@ -62,14 +63,17 @@ extension AppState {
 
     private func showAgentProgramRemovalConfirmation(_ selection: AgentProgramSelection, identity: String?,
                                                      processes: SoftwareUpdateProcesses.Probe) {
-        var message = l10n.tf("agents.program.confirm.message", selection.path)
+        var message = selection.onlyUnlinksExecutable
+            ? l10n.tf("agents.cli.confirmLink", selection.name)
+            : l10n.tf("agents.program.confirm.message", selection.path)
         let running = !processes.processes.isEmpty
         if running {
             message += "\n\n" + l10n.tf("cli.uninstall.confirm.running", selection.name)
                 + "\n" + Set(processes.processes.map(\.name)).sorted().joined(separator: ", ")
         }
         confirmation = Confirmation(title: l10n.tf("cli.uninstall.confirm.title", selection.name),
-            message: message, confirmLabel: l10n.t(running ? "cli.uninstall.confirm.closeAction" : "uninstall.action")) { [weak self] in
+            message: message, confirmLabel: l10n.t(running ? "cli.uninstall.confirm.closeAction"
+                : selection.onlyUnlinksExecutable ? "agents.cli.unlink" : "uninstall.action")) { [weak self] in
                 guard let self, !self.isAgentTaskBusy, !self.isCleanupMutationBusy,
                       self.uninstallQueue.activeJob == nil, self.commandLineToolBusyID == nil,
                       self.softwareUpdatingID == nil,
@@ -121,7 +125,7 @@ extension AppState {
         case .app(let app):
             let result = await executeAgentApplicationRemoval(app, progress: { _ in })
             switch result {
-            case .applied(let summary):
+            case .applied(let summary, _):
                 succeeded = summary.succeeded && summary.removedPaths.contains(app.path)
                 if !succeeded { presentTaskFailure(message: l10n.tf("cli.status.failed", app.name), details: summary.messages) }
             case .processesCouldNotStop:
@@ -145,6 +149,15 @@ extension AppState {
         CleanupCache.invalidate()
         cleanupScanComplete = false
         resampleAfterMutation()
+        if selection.onlyUnlinksExecutable {
+            let message = l10n.tf("agents.cli.unlinked", selection.name)
+            commandLineToolStatus = message
+            agentStatus = message
+            agentCleanupHasFeedback = true
+            agentOutcomeMood = .success
+            log(message)
+            return
+        }
         offerAgentAssociatedDataCleanup(agentIDs: selection.agentIDs, programName: selection.name)
     }
 }

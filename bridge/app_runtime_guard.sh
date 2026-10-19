@@ -137,12 +137,198 @@ simplemole_path_open_state() {
     return 1
 }
 
+# These are storage contracts, not suspicious directory names. Keep their
+# absolute roots separate from the relative content-name checks below so a
+# discarded copy in Trash does not inherit the live store's protection.
+SIMPLEMOLE_DEVELOPER_STATE_HOME=""
+SIMPLEMOLE_DEVELOPER_STATE_DENO=""
+SIMPLEMOLE_DEVELOPER_STATE_BREW=""
+SIMPLEMOLE_DEVELOPER_STATE_GO_MOD=""
+SIMPLEMOLE_DEVELOPER_STATE_POETRY=""
+SIMPLEMOLE_DEVELOPER_STATE_READY="false"
+SIMPLEMOLE_DEVELOPER_STATE_VALID="false"
+SIMPLEMOLE_PROTECTED_DEVELOPER_ROOTS=()
+SIMPLEMOLE_RAW_PROTECTED_DEVELOPER_ROOTS=()
+SIMPLEMOLE_HOMEBREW_CACHE_ROOTS=()
+SIMPLEMOLE_GO_MODULE_ROOTS=()
+SIMPLEMOLE_PHYSICAL_DEVELOPER_ROOTS=()
+SIMPLEMOLE_PHYSICAL_HOMEBREW_ROOTS=()
+SIMPLEMOLE_PHYSICAL_GO_MODULE_ROOTS=()
+
+simplemole_prepare_developer_state_roots() {
+    if [[ "$SIMPLEMOLE_DEVELOPER_STATE_READY" == "true" &&
+          "$SIMPLEMOLE_DEVELOPER_STATE_HOME" == "${HOME:-}" &&
+          "$SIMPLEMOLE_DEVELOPER_STATE_DENO" == "${DENO_DIR:-}" &&
+          "$SIMPLEMOLE_DEVELOPER_STATE_BREW" == "${HOMEBREW_CACHE:-}" &&
+          "$SIMPLEMOLE_DEVELOPER_STATE_GO_MOD" == "${GOMODCACHE:-}" &&
+          "$SIMPLEMOLE_DEVELOPER_STATE_POETRY" == "${POETRY_CACHE_DIR:-}" ]]; then
+        [[ "$SIMPLEMOLE_DEVELOPER_STATE_VALID" == "true" ]]
+        return
+    fi
+    SIMPLEMOLE_DEVELOPER_STATE_READY="true"
+    SIMPLEMOLE_DEVELOPER_STATE_VALID="false"
+    SIMPLEMOLE_DEVELOPER_STATE_HOME="${HOME:-}"
+    SIMPLEMOLE_DEVELOPER_STATE_DENO="${DENO_DIR:-}"
+    SIMPLEMOLE_DEVELOPER_STATE_BREW="${HOMEBREW_CACHE:-}"
+    SIMPLEMOLE_DEVELOPER_STATE_GO_MOD="${GOMODCACHE:-}"
+    SIMPLEMOLE_DEVELOPER_STATE_POETRY="${POETRY_CACHE_DIR:-}"
+    SIMPLEMOLE_PROTECTED_DEVELOPER_ROOTS=()
+    SIMPLEMOLE_RAW_PROTECTED_DEVELOPER_ROOTS=()
+    SIMPLEMOLE_HOMEBREW_CACHE_ROOTS=()
+    SIMPLEMOLE_GO_MODULE_ROOTS=()
+
+    local home_root="${HOME:-}" deno_root="" brew_root="" root="" lower_root="" poetry_root="${POETRY_CACHE_DIR:-}"
+    home_root="${home_root%/}"
+    # Runtime launchers may append a separator to an already slash-terminated
+    # TMPDIR/HOME. Match the shared physical-path guard's equivalent spelling;
+    # explicit custom roots still retain their strict syntax validation.
+    while [[ "$home_root" == *//* ]]; do
+        home_root="${home_root%%//*}/${home_root#*//*}"
+    done
+    home_root="${home_root%/}"
+    [[ "$home_root" == /* && "$home_root" != / &&
+       ! "$home_root" =~ [[:cntrl:]] ]] || return 1
+    # An invalid DENO_DIR must not make the blanket cache sweep forget the
+    # very store it cannot resolve. The common library validates its syntax.
+    declare -F mole_deno_cache_root >/dev/null 2>&1 || return 1
+    deno_root=$(DENO_DIR="${DENO_DIR:-$home_root/Library/Caches/deno}" mole_deno_cache_root) || return 1
+    [[ -n "$deno_root" ]] || return 1
+    # The shared resolver also checks HOME boundaries. Repeat them using its
+    # normalized equivalent so a doubled separator cannot disguise the root.
+    case "$deno_root" in
+        "$home_root"|"$home_root/Library"|"$home_root/Library/Caches"|"$home_root/.cache") return 1 ;;
+    esac
+    if [[ -n "$poetry_root" ]]; then
+        [[ "$poetry_root" == /* && ! "$poetry_root" =~ [[:cntrl:]] ]] || return 1
+        case "$poetry_root" in *'/../'*|*/..|*'/./'*|*/.|*'//'*) return 1 ;; esac
+        poetry_root="${poetry_root%/}"
+        case "$poetry_root" in
+            ""|/|"$home_root"|"$home_root/Library"|"$home_root/Library/Caches"|"$home_root/.cache") return 1 ;;
+        esac
+    fi
+    for root in \
+        "$home_root/Library/Caches/deno" "$home_root/.cache/deno" "$home_root/.deno" "$deno_root" \
+        "$home_root/.aws/cli/cache" "$home_root/.jupyter/runtime" \
+        "$home_root/Library/Caches/org.R-project.R/R/renv" \
+        "$home_root/Library/Caches/pypoetry/virtualenvs" \
+        "${poetry_root:+$poetry_root/virtualenvs}"; do
+        [[ -n "$root" ]] || continue
+        SIMPLEMOLE_RAW_PROTECTED_DEVELOPER_ROOTS+=("$root")
+        lower_root=$(printf '%s' "$root" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
+        SIMPLEMOLE_PROTECTED_DEVELOPER_ROOTS+=("$lower_root")
+    done
+    for brew_root in "$home_root/Library/Caches/Homebrew" "${HOMEBREW_CACHE:-}"; do
+        [[ -n "$brew_root" ]] || continue
+        [[ "$brew_root" == /* && ! "$brew_root" =~ [[:cntrl:]] ]] || return 1
+        case "$brew_root" in *'/../'*|*/..|*'/./'*|*/.|*'//'*) return 1 ;; esac
+        brew_root="${brew_root%/}"
+        case "$brew_root" in
+            ""|/|"$home_root"|"$home_root/Library"|"$home_root/Library/Caches"|"$home_root/.cache") return 1 ;;
+        esac
+        lower_root=$(printf '%s' "$brew_root" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
+        SIMPLEMOLE_HOMEBREW_CACHE_ROOTS+=("$lower_root")
+    done
+    for root in "$home_root/go/pkg/mod" "${GOMODCACHE:-}"; do
+        [[ -n "$root" ]] || continue
+        [[ "$root" == /* && ! "$root" =~ [[:cntrl:]] ]] || return 1
+        case "$root" in *'/../'*|*/..|*'/./'*|*/.|*'//'*) return 1 ;; esac
+        root="${root%/}"
+        case "$root" in
+            ""|/|"$home_root"|"$home_root/Library"|"$home_root/Library/Caches"|"$home_root/.cache"|"$home_root/go") return 1 ;;
+        esac
+        lower_root=$(printf '%s' "$root" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
+        SIMPLEMOLE_GO_MODULE_ROOTS+=("$lower_root")
+    done
+    SIMPLEMOLE_DEVELOPER_STATE_VALID="true"
+}
+
+simplemole_refresh_developer_state_paths() {
+    simplemole_prepare_developer_state_roots || return 1
+    SIMPLEMOLE_PHYSICAL_DEVELOPER_ROOTS=()
+    SIMPLEMOLE_PHYSICAL_HOMEBREW_ROOTS=()
+    SIMPLEMOLE_PHYSICAL_GO_MODULE_ROOTS=()
+    local root="" physical="" lower=""
+    # Resolve current aliases at each final content boundary, not once for
+    # the lifetime of a plan. Either a retained root or one of its parents
+    # may redirect it into an otherwise ordinary cache sibling.
+    for root in "${SIMPLEMOLE_RAW_PROTECTED_DEVELOPER_ROOTS[@]}"; do
+        [[ -e "$root" || -L "$root" ]] || continue
+        physical=$(cd -P "$root" 2>/dev/null && pwd -P) || return 1
+        lower=$(printf '%s' "$physical" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
+        SIMPLEMOLE_PHYSICAL_DEVELOPER_ROOTS+=("$lower")
+    done
+    for root in "$HOME/Library/Caches/Homebrew" "${HOMEBREW_CACHE:-}"; do
+        [[ -n "$root" && ( -e "$root" || -L "$root" ) ]] || continue
+        physical=$(cd -P "$root" 2>/dev/null && pwd -P) || return 1
+        lower=$(printf '%s' "$physical" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
+        SIMPLEMOLE_PHYSICAL_HOMEBREW_ROOTS+=("$lower")
+    done
+    for root in "$HOME/go/pkg/mod" "${GOMODCACHE:-}"; do
+        [[ -n "$root" && ( -e "$root" || -L "$root" ) ]] || continue
+        physical=$(cd -P "$root" 2>/dev/null && pwd -P) || return 1
+        lower=$(printf '%s' "$physical" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
+        SIMPLEMOLE_PHYSICAL_GO_MODULE_ROOTS+=("$lower")
+    done
+}
+
+simplemole_forbidden_developer_state_path() {
+    local lower="$1" root=""
+    if [[ "${_SIMPLEMOLE_DEVELOPER_STATE_TRAVERSAL:-false}" != "true" ]]; then
+        simplemole_refresh_developer_state_paths || return 0
+    fi
+    for root in "${SIMPLEMOLE_PROTECTED_DEVELOPER_ROOTS[@]}"; do
+        case "$lower" in "$root"|"$root"/*) return 0 ;; esac
+    done
+    if [[ ${#SIMPLEMOLE_PHYSICAL_DEVELOPER_ROOTS[@]} -gt 0 ]]; then
+        for root in "${SIMPLEMOLE_PHYSICAL_DEVELOPER_ROOTS[@]}"; do
+            case "$lower" in "$root"|"$root"/*) return 0 ;; esac
+        done
+    fi
+    # API metadata, bootsnap and lock state are intentionally outside the
+    # download cache. Even an old plan may not delete the enclosing root.
+    for root in "${SIMPLEMOLE_HOMEBREW_CACHE_ROOTS[@]}"; do
+        case "$lower" in
+            "$root/downloads"|"$root/downloads"/*) ;;
+            "$root"|"$root"/*) return 0 ;;
+        esac
+    done
+    if [[ ${#SIMPLEMOLE_PHYSICAL_HOMEBREW_ROOTS[@]} -gt 0 ]]; then
+        for root in "${SIMPLEMOLE_PHYSICAL_HOMEBREW_ROOTS[@]}"; do
+            case "$lower" in
+                "$root/downloads"|"$root/downloads"/*) ;;
+                "$root"|"$root"/*) return 0 ;;
+            esac
+        done
+    fi
+    # Extracted Go modules are a dependency store. Only its download cache
+    # is offered for direct cleanup; go clean -modcache remains an owner action.
+    for root in "${SIMPLEMOLE_GO_MODULE_ROOTS[@]}"; do
+        case "$lower" in
+            "$root/cache"|"$root/cache"/*) ;;
+            "$root"|"$root"/*) return 0 ;;
+        esac
+    done
+    if [[ ${#SIMPLEMOLE_PHYSICAL_GO_MODULE_ROOTS[@]} -gt 0 ]]; then
+        for root in "${SIMPLEMOLE_PHYSICAL_GO_MODULE_ROOTS[@]}"; do
+            case "$lower" in
+                "$root/cache"|"$root/cache"/*) ;;
+                "$root"|"$root"/*) return 0 ;;
+            esac
+        done
+    fi
+    return 1
+}
+
 # Hard automation boundary shared by Quick Clean's generic sink. App-owned
 # cache databases remain eligible, but models, user sessions and Docker state
 # are never touched automatically even when nested inside a cache root.
 simplemole_forbidden_automatic_path() {
     local value="$1" lower="" leaf="" extension=""
+    while [[ "$value" == *//* ]]; do
+        value="${value%%//*}/${value#*//*}"
+    done
     lower=$(printf '%s' "$value" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 0
+    simplemole_forbidden_developer_state_path "$lower" && return 0
     leaf="${lower##*/}"
     extension="${leaf##*.}"
     case "$lower" in
@@ -178,6 +364,8 @@ simplemole_forbidden_automatic_path() {
 # traversal, and 2 when traversal is incomplete.
 simplemole_automatic_content_state() {
     local candidate="$1" listing="" item=""
+    simplemole_refresh_developer_state_paths || return 2
+    local _SIMPLEMOLE_DEVELOPER_STATE_TRAVERSAL="true"
     simplemole_forbidden_automatic_path "$candidate" && return 0
     [[ -d "$candidate" ]] || return 1
     listing=$(create_temp_file 2>/dev/null || true)
@@ -226,6 +414,8 @@ simplemole_trash_sensitive_path() {
 simplemole_trash_content_state() {
     local candidate="$1" listing="" item=""
     simplemole_is_home_trash_item "$candidate" || return 2
+    simplemole_refresh_developer_state_paths || return 2
+    local _SIMPLEMOLE_DEVELOPER_STATE_TRAVERSAL="true"
     simplemole_trash_sensitive_path "$candidate" && return 0
     [[ -d "$candidate" ]] || return 1
     listing=$(create_temp_file 2>/dev/null || true)

@@ -20,8 +20,10 @@ final class CleanupScanProgressSink: @unchecked Sendable {
     private var lastPath = ""
     private var lastCompleted = -1
     private var reportedChild = false
+    private let minimumInterval: TimeInterval
 
-    init(handler: @escaping (CleanupScanProgressEvent) -> Void) {
+    init(minimumInterval: TimeInterval = 0.15, handler: @escaping (CleanupScanProgressEvent) -> Void) {
+        self.minimumInterval = max(0, minimumInterval)
         self.handler = handler
     }
 
@@ -39,7 +41,7 @@ final class CleanupScanProgressSink: @unchecked Sendable {
         let shouldSend = event.phase != lastPhase
             || (event.total > 0 && event.completed == event.total)
             || firstChild
-            || now.timeIntervalSince(lastSentAt) >= 0.15
+            || now.timeIntervalSince(lastSentAt) >= minimumInterval
         if shouldSend {
             lastSentAt = now
             lastPhase = event.phase
@@ -84,6 +86,7 @@ final class NativeCore: @unchecked Sendable {
     private var cleanupInspections: [String: CleanupInspection] = [:]
     private var lastCleanupInspectionSweep: ContinuousClock.Instant?
     private static let cleanupInspectionLifetime: TimeInterval = 300
+    private let scanInventoryCache = CleanupPathInventoryCache()
 
     struct CleanupScan: Sendable {
         let categories: [CleanupCategory]
@@ -263,6 +266,9 @@ final class NativeCore: @unchecked Sendable {
                      includingAdministratorRequired: Bool = false,
                      excludingScannedRoots: Set<String> = []) async -> CleanupScan {
         let control = control ?? CleanupScanControl(mode: mode)
+        // Refresh configured cache aliases between scans; deletion guards recheck
+        // current physical roots again at the mutation edge.
+        DeveloperCacheLocations.invalidate()
         return await Task.detached(priority: .utility) { [self] in
             let home = URL(fileURLWithPath: CleanupRiskPolicy.normalizedPathLiteral(homeDirectory), isDirectory: true)
             guard self.fileManager.fileExists(atPath: home.path) else {
@@ -275,8 +281,19 @@ final class NativeCore: @unchecked Sendable {
             let roots = self.cleanupRoots(home: home, mode: mode, control: control,
                                           orphanNames: orphanNames)
             let whitelist = self.loadWhitelist(homeDirectory: homeDirectory)
+            guard !whitelist.contains(Self.unavailableWhitelistMarker) else {
+                return CleanupScan(categories: [], succeeded: false, error: "Cleanup whitelist is unavailable.")
+            }
             let broadRoots = Set(["Library/Caches", "Library/Logs", "Library/DiagnosticReports",
                                   ".cache", ".Trash"].map { home.appendingPathComponent($0).path })
+            let homePath = home.path
+            let agentOwnedRoots = CleanupRiskPolicy.agentOwnedRoots(homeDirectory: homePath)
+            let auditedRoots = CleanupRiskPolicy.auditedRebuildableRoots(homeDirectory: homePath)
+                + [homePath + "/Library/Application Support/Zed/node"]
+            let globalCachePrefixes = [homePath + "/Library/Caches/", homePath + "/Library/Logs/"]
+            let shadowedBroadChildren = Self.shadowedCleanupChildren(roots: roots.map { $0.0.path }, broadRoots: broadRoots)
+            var trashEntryCount = 0
+            var trashDiscoverySeconds: TimeInterval = 0
             var candidates: [CleanupScanCandidate] = []
             var seen = Set<String>()
             // 自定义日志/SQLite/XDG 路径同样归 Agent 专清；普通缓存父目录
@@ -294,26 +311,47 @@ final class NativeCore: @unchecked Sendable {
             // Its explicit review flow must never enter the junk inventory.
             for (root, label, _, _, retention) in roots {
                 guard !control.shouldStop else { break }
-                progress?.send(.init(phase: "discovery", completed: 0, total: 0, currentPath: root.path))
+                let rootPath = root.path
+                let broad = broadRoots.contains(rootPath)
+                let isTrash = rootPath == homePath + "/.Trash"
+                let mayHaveAuditedPaths = overlaps(rootPath, auditedRoots)
+                let mayHaveAgentOwnedPaths = overlaps(rootPath, agentOwnedRoots)
+                let mayOverlapAgentData = overlaps(rootPath, agentDataRoots)
+                let mayOverlapAgentRetained = overlaps(rootPath, agentRetainedPaths)
+                let rootBegan = ProcessInfo.processInfo.systemUptime
+                progress?.send(.init(phase: "discovery", completed: 0, total: 0, currentPath: rootPath))
                 guard self.cleanupPathIsPhysical(root, home: home) else { continue }
-                let entries = broadRoots.contains(root.path) ? self.directChildren(of: root) : [root]
-                for entry in entries {
+                let entries = broad ? self.directChildren(of: root) : [root]
+                if isTrash {
+                    trashEntryCount = entries.count
+                    Self.cleanupLogger.notice("Trash discovery started: entries=\(entries.count, privacy: .public), rules=\(roots.count, privacy: .public)")
+                }
+                for (entryIndex, entry) in entries.enumerated() {
+                    guard !control.shouldStop else { break }
                     let path = CleanupRiskPolicy.normalizedPathLiteral(entry.path)
+                    // Resolve broad/narrow overlap once per scan. Comparing
+                    // every Trash item with every URL rule caused a quadratic
+                    // discovery hot loop before any sizing worker could start.
+                    if broad, shadowedBroadChildren.contains(path) { continue }
+                    if entryIndex % 64 == 0 {
+                        progress?.send(.init(phase: "discovery", completed: 0, total: 0, currentPath: path))
+                    }
+                    let audited = mayHaveAuditedPaths && CleanupRiskPolicy.auditedRebuildableRoot(containing: path, homeDirectory: homePath) != nil
+                    let agentOwned = mayHaveAgentOwnedPaths && !audited && agentOwnedRoots.contains {
+                        path == $0 || path.hasPrefix($0 + "/")
+                    }
+                    let globallyCovered = audited || (globalCachePrefixes.contains { path.hasPrefix($0) }
+                        && CleanupRiskPolicy.isCoveredByGlobalCleanup(path, homeDirectory: homePath))
                     // AI Agent 的缓存、版本与会话只在 Agent 专清页呈现。
                     guard self.isAllowedCleanupPath(entry, home: home),
                           self.cleanupPathIsPhysical(entry, home: home),
-                          !CleanupRiskPolicy.isAgentOwnedPath(path, homeDirectory: home.path),
-                          (CleanupRiskPolicy.auditedRebuildableRoot(containing: path, homeDirectory: home.path) != nil
-                            || (CleanupRiskPolicy.isCoveredByGlobalCleanup(path, homeDirectory: home.path)
-                                && !overlaps(path, agentRetainedPaths))
-                            || !overlaps(path, agentDataRoots)),
+                          !agentOwned,
+                          (audited
+                            || (globallyCovered
+                                && (!mayOverlapAgentRetained || !overlaps(path, agentRetainedPaths)))
+                            || !mayOverlapAgentData || !overlaps(path, agentDataRoots)),
                           !self.directlyMatchesWhitelist(path, entries: whitelist),
                           !Self.isCoveredByScannedRoot(path, roots: excludingScannedRoots) else { continue }
-                    // A precise leaf replaces an overlapping broad parent before
-                    // traversal. Never size or offer that parent for deletion.
-                    if broadRoots.contains(root.path), roots.contains(where: {
-                        $0.0 != root && (path == $0.0.path || $0.0.path.hasPrefix(path + "/"))
-                    }) { continue }
                     let descriptor: CleanupPolicyDescriptor
                     let name: String
                     if let orphan = orphanNames[path] {
@@ -325,7 +363,7 @@ final class NativeCore: @unchecked Sendable {
                                                           homeDirectory: homeDirectory)
                         descriptor = entry.deletingLastPathComponent().path == home.path + "/.Trash"
                             && base.risk != .protected ? CleanupRiskPolicy.recommendedTrash() : base
-                        if broadRoots.contains(root.path), root.lastPathComponent != ".Trash" {
+                        if broad, !isTrash {
                             let identifier = entry.lastPathComponent
                             let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
                             name = app?.deletingPathExtension().lastPathComponent ?? identifier
@@ -354,13 +392,28 @@ final class NativeCore: @unchecked Sendable {
                                                           policy: descriptor,
                                                           retention: retention))
                 }
+                if isTrash {
+                    trashDiscoverySeconds = ProcessInfo.processInfo.systemUptime - rootBegan
+                    Self.cleanupLogger.notice("Trash discovery finished: entries=\(entries.count, privacy: .public), seconds=\(trashDiscoverySeconds, privacy: .public), stopped=\(control.shouldStop, privacy: .public)")
+                }
+            }
+            if control.isCancelled {
+                Self.cleanupLogger.notice("Cleanup discovery cancelled before occupancy probe")
+                return CleanupScan(categories: [], succeeded: false, error: "Scan cancelled.",
+                    diagnostics: String(format: "cleanup[%@] discovery=%.2fs cancelled=true trashEntries=%d trashDiscovery=%.2fs rules=%d",
+                        mode.rawValue, control.elapsed, trashEntryCount, trashDiscoverySeconds, roots.count))
             }
             candidates = Self.nonOverlappingCleanupCandidates(candidates)
+            Self.cleanupLogger.notice("Cleanup discovery finished: seconds=\(control.elapsed, privacy: .public), candidates=\(candidates.count, privacy: .public), rules=\(roots.count, privacy: .public), stopped=\(control.shouldStop, privacy: .public)")
             progress?.send(.init(phase: "occupancy", completed: 0, total: 0, currentPath: home.path))
+            let occupancyBegan = control.elapsed
+            Self.cleanupLogger.notice("Cleanup occupancy probe started")
             guard let openFiles = self.currentCleanupOpenFiles() else {
                 return CleanupScan(categories: [], succeeded: false,
                     error: "Open-file safety state is unavailable.")
             }
+            Self.cleanupLogger.notice("Cleanup occupancy probe finished: seconds=\(control.elapsed - occupancyBegan, privacy: .public)")
+            let previewBlockedPaths = Self.cleanupPreviewBlockedPaths(openFiles.union(excludingScannedRoots))
             var eligibleCandidates: [CleanupScanCandidate] = []
             var measurements: [CleanupScanWorker.Measurement] = []
             var deferred: [String] = []
@@ -384,11 +437,15 @@ final class NativeCore: @unchecked Sendable {
                     let before = completed
                     queueLock.unlock()
                     let candidate = candidates[index]
+                    let candidateBegan = control.elapsed
                     let rebuildable = CleanupRiskPolicy.core(section: "Cache", path: candidate.path,
                                                             homeDirectory: home.path)
                     let checked = self.preflightCleanupPath(candidate.path, homeDirectory: home.path,
                         openFiles: openFiles, whitelist: whitelist,
                         excludingScannedRoots: excludingScannedRoots, control: control,
+                        usingScanInventoryCache: true,
+                        previewBlockedPaths: previewBlockedPaths,
+                        refreshingActivity: candidate.retention > 0,
                         includingAdministratorRequired: includingAdministratorRequired
                             && (rebuildable.risk == .safe && rebuildable.disposal == .permanentDelete
                                 || CleanupRiskPolicy.trashEntryRoot(containing: candidate.path,
@@ -397,6 +454,10 @@ final class NativeCore: @unchecked Sendable {
                             progress?.send(.init(phase: "native", completed: before,
                                 total: candidates.count, currentPath: path))
                         })
+                    let candidateSeconds = control.elapsed - candidateBegan
+                    if candidateSeconds >= 1 {
+                        Self.cleanupLogger.notice("Cleanup slow root: index=\(index, privacy: .public), source=\(candidate.policy.source.rawValue, privacy: .public), seconds=\(candidateSeconds, privacy: .public), files=\(checked.measurement.files, privacy: .public), deferred=\(checked.deferredPaths.count, privacy: .public)")
+                    }
                     queueLock.lock()
                     checkedRoots[index] = checked
                     completed += 1
@@ -484,16 +545,21 @@ final class NativeCore: @unchecked Sendable {
                 categories += self.appDataReviewCategories(home: home, offered: categories.flatMap(\.paths),
                                                            whitelist: whitelist, scanControl: control)
             }
-            return CleanupScan(categories: categories.sorted(by: CleanupCategory.sizeDescending),
+            let report = CleanupScan(categories: categories.sorted(by: CleanupCategory.sizeDescending),
                 succeeded: !control.isCancelled,
                 error: control.isCancelled ? "Scan cancelled." : nil,
                 deferredPaths: deferred,
-                diagnostics: String(format: "cleanup[%@] discovery=%.2fs sizing=%.2fs paths=%d deferred=%d files=%d ageGated=%d",
+                diagnostics: String(format: "cleanup[%@] discovery=%.2fs sizing=%.2fs paths=%d deferred=%d files=%d ageGated=%d trashCached=%d trashMeasured=%d ruleCached=%d ruleMeasured=%d trashEntries=%d trashDiscovery=%.2fs rules=%d",
                     mode.rawValue, discoverySeconds, control.elapsed - discoverySeconds,
                     candidates.count, deferred.count,
-                    measurements.reduce(0) { $0 + $1.files }, ageGated),
+                    measurements.reduce(0) { $0 + $1.files }, ageGated,
+                    control.discardedPreviewCounts.cached, control.discardedPreviewCounts.measured,
+                    control.rulePreviewCounts.cached, control.rulePreviewCounts.measured,
+                    trashEntryCount, trashDiscoverySeconds, roots.count),
                 administratorRequiredPaths: administratorPaths,
                 completedRoots: completedRoots)
+            Self.cleanupLogger.notice("\(report.diagnostics, privacy: .public)")
+            return report
         }.value
     }
 
@@ -734,7 +800,7 @@ final class NativeCore: @unchecked Sendable {
 
     func projectArtifactPaths(home: URL, budget: TimeInterval = 8, maximumDirectories: Int = 120_000,
                               control: CleanupScanControl? = nil) -> [String] {
-        let started = Date()
+        let started = ProcessInfo.processInfo.systemUptime
         let skippedTop: Set<String> = ["Library", "Applications", "Movies", "Music", "Pictures", "Public"]
         var queue = directChildren(of: home).filter {
             !$0.lastPathComponent.hasPrefix(".") && !skippedTop.contains($0.lastPathComponent)
@@ -742,16 +808,22 @@ final class NativeCore: @unchecked Sendable {
         }.map { ($0, 1) }
         var found: [String] = []
         var visited = 0
-        while visited < queue.count, visited < maximumDirectories, Date().timeIntervalSince(started) < budget,
+        while visited < queue.count, visited < maximumDirectories, ProcessInfo.processInfo.systemUptime - started < budget,
               !(control?.shouldStop ?? false) {
             let (directory, depth) = queue[visited]
             visited += 1
             for child in directChildren(of: directory) where isDirectory(child) && !isSymlink(child) {
+                guard ProcessInfo.processInfo.systemUptime - started < budget,
+                      !(control?.shouldStop ?? false) else { return found }
                 let name = child.lastPathComponent
-                if CleanupRiskPolicy.projectArtifactMarkers[name] != nil {
+                if ProjectArtifactPolicy.isCandidate(child.path) {
                     let path = CleanupRiskPolicy.normalizedPathLiteral(child.path)
-                    if CleanupRiskPolicy.isProjectArtifact(path, homeDirectory: home.path) { found.append(path) }
-                    continue
+                    let remaining = budget - (ProcessInfo.processInfo.systemUptime - started)
+                    if ProjectArtifactPolicy.isArtifact(path, homeDirectory: home.path,
+                        inspectionBudget: min(2, remaining), shouldStop: { control?.shouldStop ?? false }) {
+                        found.append(path)
+                    }
+                    if ProjectArtifactPolicy.shouldPrune(path, homeDirectory: home.path) { continue }
                 }
                 guard depth < 6, !name.hasPrefix("."), (name as NSString).pathExtension.isEmpty
                         || !["app", "bundle", "framework", "photoslibrary", "musiclibrary"]
@@ -819,6 +891,34 @@ final class NativeCore: @unchecked Sendable {
             .sorted { $0.path < $1.path }
     }
 
+    /// Direct children already represented by precise rules are excluded from
+    /// broad discovery. All paths are literal; brackets and prefix siblings
+    /// retain their original meaning.
+    static func shadowedCleanupChildren(roots: [String], broadRoots: Set<String>) -> Set<String> {
+        var result = Set<String>()
+        for broad in broadRoots {
+            let prefix = broad + "/"
+            for root in roots where root.hasPrefix(prefix) {
+                if let child = root.dropFirst(prefix.count).split(separator: "/", maxSplits: 1).first {
+                    result.insert(prefix + child)
+                }
+            }
+        }
+        return result
+    }
+
+    /// Literal ancestor membership replaces a full lsof search per preview.
+    /// Keep repeated/trailing separators exactly as String.hasPrefix did.
+    static func cleanupPreviewBlockedPaths(_ paths: Set<String>) -> Set<String> {
+        var blocked = paths
+        for path in paths {
+            for index in path.indices where path[index] == "/" && index != path.startIndex {
+                blocked.insert(String(path[..<index]))
+            }
+        }
+        return blocked
+    }
+
     /// Recheck inventories from every scanner and old caches before they are
     /// published. A mixed tree contributes only its independently deletable
     /// descendants; its protected or busy bytes are never offered as junk.
@@ -828,6 +928,7 @@ final class NativeCore: @unchecked Sendable {
                                     includingAdministratorRequired: Bool = false,
                                     verifiedRebuildableRoots: Set<String> = [],
                                     excludingPaths: Set<String> = [],
+                                    usingScanInventoryCache: Bool = false,
                                     onVisit: ((String) -> Void)? = nil) -> CleanupScan {
         let control = control ?? CleanupScanControl(mode: .deep)
         guard let openFiles = currentCleanupOpenFiles() else {
@@ -836,9 +937,13 @@ final class NativeCore: @unchecked Sendable {
         }
         let whitelist = loadWhitelist(homeDirectory: homeDirectory)
             + excludingPaths.filter(DeletionPlan.isLexicallySafePath)
+        guard !whitelist.contains(Self.unavailableWhitelistMarker) else {
+            return CleanupScan(categories: [], succeeded: false, error: "Cleanup whitelist is unavailable.")
+        }
         var result: [CleanupCategory] = []
         var deferred: [String] = []
         var administratorPaths = Set<String>()
+        let previewBlockedPaths = Self.cleanupPreviewBlockedPaths(openFiles)
         for category in categories where category.isAppDataReview {
             let intact = category.paths.filter {
                 CleanupRiskPolicy.reviewTargetKind($0, homeDirectory: homeDirectory) != nil
@@ -865,6 +970,9 @@ final class NativeCore: @unchecked Sendable {
                     || catalogVerified || (trashItem && descriptor.risk != .protected) else { continue }
                 let checked = preflightCleanupPath(path, homeDirectory: homeDirectory,
                     openFiles: openFiles, whitelist: whitelist, control: control,
+                    usingScanInventoryCache: usingScanInventoryCache,
+                    previewBlockedPaths: previewBlockedPaths,
+                    refreshingActivity: category.retention > 0,
                     includingAdministratorRequired: includingAdministratorRequired
                         && (descriptor.risk == .safe && descriptor.disposal == .permanentDelete || trashItem),
                     rootIsVerifiedRebuildable: catalogVerified, onVisit: onVisit)
@@ -935,6 +1043,12 @@ final class NativeCore: @unchecked Sendable {
         return openFileSnapshot()
     }
 
+    /// Reuse the same fail-closed, injectable occupancy probe for the separate
+    /// user-confirmed Agent data removal flow. This grants no deletion access.
+    func agentRemovalOpenFiles() -> Set<String>? {
+        currentCleanupOpenFiles()
+    }
+
     private func cleanupDeletionAccess(_ path: String, metadata: stat) -> CleanupDeletionAccess {
         let immutable = UInt32(UF_IMMUTABLE | SF_IMMUTABLE | UF_APPEND | SF_APPEND | SF_RESTRICTED)
         let parent = (path as NSString).deletingLastPathComponent
@@ -985,6 +1099,9 @@ final class NativeCore: @unchecked Sendable {
                                      openFiles: Set<String>, whitelist: [String],
                                      excludingScannedRoots: Set<String> = [],
                                      control: CleanupScanControl,
+                                     usingScanInventoryCache: Bool = false,
+                                     previewBlockedPaths: Set<String>? = nil,
+                                     refreshingActivity: Bool = false,
                                      includingAdministratorRequired: Bool,
                                      rootIsVerifiedRebuildable: Bool = false,
                                      onVisit: ((String) -> Void)? = nil) -> CleanupPreflightResult {
@@ -1005,19 +1122,158 @@ final class NativeCore: @unchecked Sendable {
         var metadata = stat()
         guard fstatat(parentFD, components.last!, &metadata, AT_SYMLINK_NOFOLLOW) == 0 else { return .init() }
         let deadline = min(control.totalBudget, control.elapsed + control.directoryBudget)
+        guard !control.shouldStop, control.elapsed < deadline else {
+            return CleanupPreflightResult(deferredPaths: [path])
+        }
+        // Only user-discarded top-level items use the size-only display path.
+        // The deletion caller keeps the default false and fully revalidates.
+        let previewBlockedPaths = usingScanInventoryCache
+            ? previewBlockedPaths ?? Self.cleanupPreviewBlockedPaths(openFiles.union(excludingScannedRoots)) : []
+        if usingScanInventoryCache,
+           CleanupRiskPolicy.trashEntryRoot(containing: path, homeDirectory: homeDirectory) == path,
+           let preview = discardedCleanupPreview(path, metadata: metadata, previewBlockedPaths: previewBlockedPaths,
+               homeDirectory: homeDirectory,
+               whitelist: whitelist, control: control,
+               deadline: deadline,
+               includingAdministratorRequired: includingAdministratorRequired, onVisit: onVisit) {
+            return preview
+        }
         let catalogRoot = CleanupRiskPolicy.auditedRebuildableRoot(containing: path, homeDirectory: homeDirectory)
-        let contentRoot = catalogRoot ?? verifiedBrowserCacheRoot(containing: path, homeDirectory: homeDirectory) ?? path
+        let browserRoot = verifiedBrowserCacheRoot(containing: path, homeDirectory: homeDirectory)
+        let contentRoot = catalogRoot ?? browserRoot ?? path
         let contentPolicy = CleanupRiskPolicy.core(section: "Cache", path: contentRoot,
                                                  homeDirectory: homeDirectory)
-        return preflightCleanupEntry(parentFD: parentFD, name: components.last!, path: path,
+        let verifiedRoot = rootIsVerifiedRebuildable || catalogRoot != nil || contentRoot != path
+            || isVerifiedBrowserCacheRoot(path, homeDirectory: homeDirectory)
+        let context = [contentRoot, String(verifiedRoot), contentPolicy.reasonKey,
+                       contentPolicy.source.rawValue, contentPolicy.applyRoute.rawValue].joined(separator: "\t")
+        var ticket: CleanupPathInventoryCache.Ticket?
+        if usingScanInventoryCache, metadata.st_mode & S_IFMT == S_IFDIR,
+           CleanupRiskPolicy.permitsInventoryReuse(path, homeDirectory: homeDirectory) || browserRoot != nil {
+            ticket = scanInventoryCache.begin(path, metadata: metadata, watching: homeDirectory)
+            if let cached = ticket?.cached, cached.validationContext == context,
+               let preview = cachedRulePreview(path, metadata: metadata, inventory: cached,
+                   previewBlockedPaths: previewBlockedPaths, whitelist: whitelist,
+                   control: control, deadline: deadline, refreshingActivity: refreshingActivity,
+                   includingAdministratorRequired: includingAdministratorRequired) {
+                onVisit?(path)
+                control.recordRulePreview(cached: true)
+                return preview
+            }
+        }
+        var observedPaths = Set<String>()
+        var cacheable = true
+        let result = preflightCleanupEntry(parentFD: parentFD, name: components.last!, path: path,
             metadata: metadata, device: metadata.st_dev, cacheRoot: path,
             homeDirectory: homeDirectory, openFiles: openFiles, whitelist: whitelist,
             excludingScannedRoots: excludingScannedRoots,
             control: control, deadline: deadline,
             includingAdministratorRequired: includingAdministratorRequired,
-            rootIsVerifiedRebuildable: rootIsVerifiedRebuildable || catalogRoot != nil || contentRoot != path
-                || isVerifiedBrowserCacheRoot(path, homeDirectory: homeDirectory),
-            contentRoot: contentRoot, contentPolicy: contentPolicy, onVisit: onVisit, depth: 0)
+            rootIsVerifiedRebuildable: verifiedRoot,
+            trackingActivity: ticket != nil,
+            contentRoot: contentRoot, contentPolicy: contentPolicy, onVisit: { visited in
+                onVisit?(visited)
+                if ticket != nil, cacheable {
+                    if observedPaths.count < 100_000 { observedPaths.insert(visited) }
+                    else { cacheable = false; observedPaths.removeAll() }
+                }
+            }, depth: 0)
+        if let ticket {
+            control.recordRulePreview(cached: false)
+            if cacheable, result.wholeTreeEligible, result.deferredPaths.isEmpty, !control.shouldStop {
+                var inventory = CleanupScanWorker.MetadataInventory(measurement: result.measurement,
+                    paths: Array(observedPaths), requiresAdministrator: result.requiresAdministrator)
+                inventory.validationContext = context
+                scanInventoryCache.store(inventory, ticket: ticket)
+            }
+        }
+        return result
+    }
+
+    private func cachedRulePreview(_ path: String, metadata: stat,
+                                   inventory: CleanupScanWorker.MetadataInventory,
+                                   previewBlockedPaths: Set<String>, whitelist: [String],
+                                   control: CleanupScanControl, deadline: TimeInterval,
+                                   refreshingActivity: Bool, includingAdministratorRequired: Bool) -> CleanupPreflightResult? {
+        guard !control.shouldStop, control.elapsed < deadline,
+              !previewBlockedPaths.contains(path),
+              includingAdministratorRequired || !inventory.requiresAdministrator,
+              whitelist.isEmpty || !inventory.paths.contains(where: { directlyMatchesWhitelist($0, entries: whitelist) }) else { return nil }
+        var measurement = inventory.measurement
+        if refreshingActivity {
+            guard let activity = CleanupScanWorker.activity(in: inventory.paths, control: control, deadline: deadline,
+                evidence: { self.cleanupInspection($0, matching: $1)?.original ?? $1 }) else { return nil }
+            measurement.newestModified = activity.modified
+            measurement.newestAccessed = activity.accessed
+        }
+        var current = stat()
+        guard !control.shouldStop, control.elapsed < deadline,
+              lstat(path, &current) == 0, Self.sameCleanupEntry(metadata, current, checkingChangeTime: true) else { return nil }
+        return CleanupPreflightResult(entries: measurement.files > 0 && measurement.bytes > 0
+            ? [CleanupPreflightEntry(path: path, measurement: measurement,
+                requiresAdministrator: inventory.requiresAdministrator)] : [],
+            wholeTreeEligible: true, measurement: measurement, requiresAdministrator: inventory.requiresAdministrator)
+    }
+
+    private func discardedCleanupPreview(_ path: String, metadata: stat, previewBlockedPaths: Set<String>,
+                                         homeDirectory: String,
+                                         whitelist: [String],
+                                         control: CleanupScanControl, deadline: TimeInterval,
+                                         includingAdministratorRequired: Bool,
+                                         onVisit: ((String) -> Void)?) -> CleanupPreflightResult? {
+        guard !control.shouldStop,
+              !previewBlockedPaths.contains(path) else { return nil }
+        // A standalone discarded file already has its complete allocated size
+        // in stat. It needs neither an FTS walk nor an inventory subscription.
+        if metadata.st_mode & S_IFMT == S_IFREG, !isCleanupLockItem(path) {
+            let access = cleanupDeletionAccess(path, metadata: metadata)
+            guard access != .blocked else { return nil }
+            let measurement = CleanupScanWorker.Measurement(
+                bytes: UInt64(max(0, metadata.st_blocks)) * 512, files: 1,
+                newestModified: Date(timeIntervalSince1970: TimeInterval(metadata.st_mtimespec.tv_sec)),
+                newestAccessed: Date(timeIntervalSince1970: TimeInterval(metadata.st_atimespec.tv_sec)))
+            let inventory = CleanupScanWorker.MetadataInventory(measurement: measurement,
+                paths: [path], requiresAdministrator: access == .administrator)
+            if let result = cachedRulePreview(path, metadata: metadata, inventory: inventory,
+                previewBlockedPaths: previewBlockedPaths, whitelist: whitelist,
+                control: control, deadline: deadline, refreshingActivity: false,
+                includingAdministratorRequired: includingAdministratorRequired) {
+                onVisit?(path)
+                control.recordDiscardedPreview(cached: false)
+                return result
+            }
+            return nil
+        }
+        let ticket = scanInventoryCache.begin(path, metadata: metadata, watching: homeDirectory)
+        let inventory: CleanupScanWorker.MetadataInventory
+        if let cached = ticket.cached {
+            inventory = cached
+            onVisit?(path)
+        } else {
+            guard let measured = CleanupScanWorker.discardedInventory(path, control: control, deadline: deadline, inspect: { current, info in
+                onVisit?(current)
+                guard !self.isCleanupLockItem(current),
+                      !self.directlyMatchesWhitelist(current, entries: whitelist) else { return nil }
+                let access = self.cleanupDeletionAccess(current, metadata: info)
+                guard access != .blocked else { return nil }
+                return access == .administrator
+            }) else { return nil }
+            inventory = measured
+            scanInventoryCache.store(measured, ticket: ticket)
+        }
+        // Whitelists and occupancy are request-specific, not cached permissions.
+        guard !control.shouldStop, control.elapsed < deadline,
+              !inventory.paths.contains(where: { directlyMatchesWhitelist($0, entries: whitelist) }),
+              includingAdministratorRequired || !inventory.requiresAdministrator else { return nil }
+        var current = stat()
+        guard lstat(path, &current) == 0, Self.sameCleanupEntry(metadata, current, checkingChangeTime: true) else { return nil }
+        let measurement = inventory.measurement
+        control.recordDiscardedPreview(cached: ticket.cached != nil)
+        return CleanupPreflightResult(entries: measurement.files > 0 && measurement.bytes > 0
+            ? [CleanupPreflightEntry(path: path, measurement: measurement,
+                requiresAdministrator: inventory.requiresAdministrator)] : [],
+            wholeTreeEligible: true, measurement: measurement,
+            requiresAdministrator: inventory.requiresAdministrator)
     }
 
     private func preflightCleanupEntry(parentFD: Int32, name: String, path: String,
@@ -1027,6 +1283,7 @@ final class NativeCore: @unchecked Sendable {
                                        control: CleanupScanControl, deadline: TimeInterval,
                                        includingAdministratorRequired: Bool,
                                        rootIsVerifiedRebuildable: Bool,
+                                       trackingActivity: Bool,
                                        contentRoot: String, contentPolicy: CleanupPolicyDescriptor,
                                        onVisit: ((String) -> Void)?, depth: Int) -> CleanupPreflightResult {
         var result = CleanupPreflightResult()
@@ -1105,6 +1362,7 @@ final class NativeCore: @unchecked Sendable {
                     control: control, deadline: deadline,
                     includingAdministratorRequired: includingAdministratorRequired,
                     rootIsVerifiedRebuildable: rootIsVerifiedRebuildable,
+                    trackingActivity: trackingActivity,
                     contentRoot: contentRoot, contentPolicy: contentPolicy,
                     onVisit: onVisit, depth: depth + 1)
                 result.entries.append(contentsOf: checked.entries)
@@ -1140,7 +1398,8 @@ final class NativeCore: @unchecked Sendable {
             // atime before the separate administrator worker can inspect them.
             if !discarded && !CleanupRiskPolicy.isArchivedPowerlogPath(path)
                 && !CleanupRiskPolicy.isPowerlogTelemetryPath(path) {
-                guard let database = sqliteHeader(in: fd, path: path, homeDirectory: homeDirectory),
+                guard let database = sqliteHeader(in: fd, path: path, homeDirectory: homeDirectory,
+                    trackingActivity: trackingActivity),
                       !database else { return .init() }
             }
             result.measurement.files = 1
@@ -1228,8 +1487,8 @@ final class NativeCore: @unchecked Sendable {
     }
 
     private func beginCleanupInspection(_ path: String, fd: Int32,
-                                        homeDirectory: String) -> CleanupInspectionStart? {
-        guard CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: homeDirectory) != nil else { return nil }
+                                        homeDirectory: String, trackingActivity: Bool = false) -> CleanupInspectionStart? {
+        guard trackingActivity || CleanupRiskPolicy.systemCleanupKind(for: path, homeDirectory: homeDirectory) != nil else { return nil }
         var before = stat()
         guard fstat(fd, &before) == 0 else { return nil }
         let previous = cleanupInspection(path, matching: before)
@@ -1497,12 +1756,6 @@ final class NativeCore: @unchecked Sendable {
         }
         add(home.appendingPathComponent(".cache", isDirectory: true),
             "User Cache", .core, .openFile)
-        add(home.appendingPathComponent(".npm/_cacache", isDirectory: true),
-            "npm Cache", .developerCache, .packageManager, retention)
-        add(home.appendingPathComponent(".yarn/cache", isDirectory: true),
-            "Yarn Cache", .developerCache, .packageManager, retention)
-        add(home.appendingPathComponent(".bun/install/cache", isDirectory: true),
-            "Bun Cache", .developerCache, .packageManager, retention)
         // Gradle: the module cache under ~/.gradle/caches and the Maven local
         // repository are dependency stores (review-only, see
         // CleanupRiskPolicy.dependencyStoreRoots). Only the hash-keyed build
@@ -1521,29 +1774,7 @@ final class NativeCore: @unchecked Sendable {
                     add(entry, "Gradle Build Cache", .developerCache, .packageManager, retention)
                 }
             }
-            for (relative, label) in [("daemon", "Gradle Daemon Logs"),
-                                      ("workers", "Gradle Worker Cache"),
-                                      ("notifications", "Gradle Notifications")] {
-                add(gradleHome.appendingPathComponent(relative, isDirectory: true),
-                    label, .developerCache, .packageManager, retention)
-            }
         }
-        add(home.appendingPathComponent(".cargo/registry/cache", isDirectory: true),
-            "Cargo Cache", .developerCache, .packageManager, retention)
-        add(home.appendingPathComponent(".swiftpm/cache", isDirectory: true),
-            "Swift Package Cache", .developerCache, .packageManager, retention)
-        add(home.appendingPathComponent(".cache/pip", isDirectory: true),
-            "pip Cache", .developerCache, .packageManager, retention)
-        add(home.appendingPathComponent(".cache/uv", isDirectory: true),
-            "uv Cache", .developerCache, .packageManager, retention)
-        add(home.appendingPathComponent(".cache/node/corepack", isDirectory: true),
-            "Corepack Cache", .developerCache, .packageManager, retention)
-        add(home.appendingPathComponent("Library/Caches/Homebrew/downloads", isDirectory: true),
-            "Homebrew Cache", .developerCache, .packageManager, retention)
-        add(home.appendingPathComponent("Library/Caches/org.carthage.CarthageKit", isDirectory: true),
-            "Carthage Cache", .developerCache, .packageManager, retention)
-        add(home.appendingPathComponent("go/pkg/mod/cache", isDirectory: true),
-            "Go Module Cache", .developerCache, .packageManager, retention)
         add(home.appendingPathComponent(".Trash", isDirectory: true),
             "Trash", .core, .openFile)
 
@@ -1657,57 +1888,11 @@ final class NativeCore: @unchecked Sendable {
             }
         }
 
-        // Additional fixed developer cache locations. These are all
-        // rebuildable package/build caches; project sources and installed
-        // runtimes are intentionally not included in the quick inventory.
-        let developerCaches: [(String, String)] = [
-            ("Library/Caches/pnpm", "pnpm Cache"),
-            ("Library/pnpm/store", "pnpm Store"),
-            (".pnpm-store", "pnpm Store"),
-            (".local/share/pnpm/store", "pnpm Store"),
-            ("Library/Caches/Yarn", "Yarn Cache"),
-            ("Library/Caches/go-build", "Go Build Cache"),
-            ("Library/Caches/pip", "pip Cache"),
-            ("Library/Caches/pypoetry", "Poetry Cache"),
-            ("Library/Caches/NuGet", "NuGet Cache"),
-            ("Library/Caches/composer", "Composer Cache"),
-            ("Library/Caches/node-gyp", "node-gyp Cache"),
-            ("Library/Caches/typescript", "TypeScript Cache"),
-            ("Library/Caches/org.swift.swiftpm", "SwiftPM Cache"),
-            (".node-gyp", "node-gyp Cache"),
-            (".cache/bazel", "Bazel Cache"),
-            (".cache/zig", "Zig Cache"),
-            (".cache/electron", "Electron Cache"),
-            (".cache/node-gyp", "node-gyp Cache"),
-            (".turbo/cache", "Turborepo Cache"),
-            (".vite/cache", "Vite Cache"),
-            (".cache/vite", "Vite Cache"),
-            (".cache/webpack", "Webpack Cache"),
-            (".parcel-cache", "Parcel Cache"),
-            (".cache/eslint", "ESLint Cache"),
-            (".cache/prettier", "Prettier Cache"),
-            (".cache/swift-package-manager", "SwiftPM Cache")
-        ]
-        for (relative, label) in developerCaches {
-            add(home.appendingPathComponent(relative, isDirectory: true),
-                label, .developerCache, .packageManager, retention)
-        }
-        // 工具配置声明的自定义缓存位置（npmrc / yarnrc / pip.conf / 各类
-        // *_HOME 环境变量）与默认位置同等进入清单，同样适用 7 天门槛。
-        for (custom, label) in [(locations.npmCache, "npm Cache"),
-                                (locations.yarnCache, "Yarn Cache"),
-                                (locations.pipCache, "pip Cache"),
-                                (locations.poetryCache, "Poetry Cache"),
-                                (locations.goModCache, "Go Module Cache"),
-                                (locations.goBuildCache, "Go Build Cache"),
-                                (locations.pnpmStore, "pnpm Store")] {
-            guard let custom else { continue }
-            add(URL(fileURLWithPath: custom, isDirectory: true),
-                label, .developerCache, .packageManager, retention)
-        }
-        if let cargoHome = locations.cargoHome {
-            add(URL(fileURLWithPath: cargoHome + "/registry/cache", isDirectory: true),
-                "Cargo Cache", .developerCache, .packageManager, retention)
+        // Discovery and risk classification consume the same catalog, including
+        // owner-configured leaves. Dependency stores and live tool state stay out.
+        for entry in DeveloperCleanupCatalog.entries(home: home.path) {
+            add(URL(fileURLWithPath: entry.path, isDirectory: true),
+                entry.label, .developerCache, .openFile, retention)
         }
 
         // 缓存地图：大体积、可重建的应用级缓存。发现层只负责枚举形状
@@ -2382,6 +2567,9 @@ final class NativeCore: @unchecked Sendable {
                         defer { trashLock.unlock() }
                         try trashHandler(url)
                     } else { try fileManager.trashItem(at: url, resultingItemURL: &resultingURL) }
+                    if let destination = resultingURL?.path {
+                        outcome.messages.append("Moved to Trash: \(path) -> \(destination)")
+                    }
                     outcome.removed += coveredCount
                     outcome.removedPaths.formUnion(coveredPaths)
                 } catch {
@@ -2540,7 +2728,7 @@ final class NativeCore: @unchecked Sendable {
     /// Completed roots are literal paths, even when their names contain glob
     /// characters. Ancestor lookup keeps continuation work proportional to
     /// path depth rather than the number of roots already checked.
-    private static func isCoveredByScannedRoot(_ path: String, roots: Set<String>) -> Bool {
+    static func isCoveredByScannedRoot(_ path: String, roots: Set<String>) -> Bool {
         guard !roots.isEmpty else { return false }
         var ancestor = path[...]
         while !ancestor.isEmpty {
@@ -2719,9 +2907,11 @@ final class NativeCore: @unchecked Sendable {
         return UInt64(max(0, metadata.st_blocks)) * 512
     }
 
-    private func sqliteHeader(in fd: Int32, path: String, homeDirectory: String) -> Bool? {
+    private func sqliteHeader(in fd: Int32, path: String, homeDirectory: String,
+                              trackingActivity: Bool = false) -> Bool? {
         var header = [UInt8](repeating: 0, count: 16)
-        let inspection = beginCleanupInspection(path, fd: fd, homeDirectory: homeDirectory)
+        let inspection = beginCleanupInspection(path, fd: fd, homeDirectory: homeDirectory,
+            trackingActivity: trackingActivity)
         let count = pread(fd, &header, header.count, 0)
         let readError = errno
         finishCleanupInspection(inspection, path: path, fd: fd, succeeded: count >= 0)
@@ -3370,6 +3560,8 @@ final class NativeCore: @unchecked Sendable {
     /// shell globs (`*`, `?`, `[...]`), comments, and no `..` traversal. A file
     /// written by `mo clean --whitelist` therefore protects the native route
     /// exactly like it protects the CLI and the bridge scripts.
+    private static let unavailableWhitelistMarker = "nori:unavailable-whitelist"
+
     func loadWhitelist(homeDirectory: String) -> [String] {
         let home = CleanupRiskPolicy.normalizedPathLiteral(homeDirectory)
         let url = URL(fileURLWithPath: homeDirectory)
@@ -3391,6 +3583,14 @@ final class NativeCore: @unchecked Sendable {
                 if !entries.contains(value) { entries.append(value) }
             }
         } else {
+            var metadata = stat()
+            if lstat(url.path, &metadata) == 0 || errno != ENOENT {
+                // Existing unreadable, malformed or dangling files cannot be
+                // interpreted as an absent user policy. Protect every target,
+                // including system cleanup paths, at all native entry points.
+                Self.cleanupLogger.error("Whitelist is unavailable; cleanup refused")
+                return ["/*", Self.unavailableWhitelistMarker]
+            }
             entries = Self.defaultWhitelistPatterns(home: home)
         }
         // Hard safety entries merge unconditionally, exactly like Mole's
@@ -3431,7 +3631,8 @@ final class NativeCore: @unchecked Sendable {
             home + "/Library/Caches/com.apple.spotlight*",
             home + "/Library/Caches/com.apple.Spotlight*",
             home + "/Library/Caches/CloudKit*",
-            home + "/Library/Caches/pypoetry/virtualenvs*"
+            home + "/Library/Caches/pypoetry/virtualenvs*",
+            home + "/Library/Caches/org.R-project.R/R/renv/*"
         ]
     }
 

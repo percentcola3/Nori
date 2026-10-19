@@ -72,6 +72,7 @@ final class AppUpdateController: NSObject, ObservableObject, SPUUpdaterDelegate,
             started = true
         } catch {
             status = .failed(error.localizedDescription)
+            TaskFeedbackNotice.reportFailure(details: [error.localizedDescription])
         }
     }
 

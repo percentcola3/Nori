@@ -22,6 +22,7 @@ WORKFLOW_SOURCES=(
     "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift"
     "$ROOT_DIR/SimpleMole/Services/TaskFeedbackQueue.swift"
     "$ROOT_DIR/SimpleMole/AppState+Agents.swift"
+    "$ROOT_DIR/SimpleMole/AppState+AgentRemoval.swift"
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift"
     "$ROOT_DIR/script/AgentWorkflowTests.swift"
 )

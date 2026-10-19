@@ -286,6 +286,26 @@ enum CleanupRiskPolicy {
         }
     }
 
+    /// Built-in rebuildable rules may reuse an already fully validated tree.
+    /// The container itself is never evidence that uninspected children are safe.
+    static func permitsInventoryReuse(_ path: String, homeDirectory: String) -> Bool {
+        let home = normalize(homeDirectory)
+        let path = normalize(path)
+        guard systemCleanupKind(for: path, homeDirectory: home) == nil else { return false }
+        let policy = core(section: "Cache", path: path, homeDirectory: home)
+        guard policy.risk == .safe, policy.disposal == .permanentDelete else { return false }
+        return auditedRebuildableRoot(containing: path, homeDirectory: home) != nil
+            || isExplicitDeveloperCachePath(path, home: home)
+            || isExplicitXcodeCachePath(path, home: home)
+            || isApplicationSupportCachePath(path, home: home)
+            || appCacheKnowledgeDescriptor(path, home: home) != nil
+            || ["/Library/Caches/", "/Library/Logs/", "/Library/DiagnosticReports/"].contains {
+                path.hasPrefix(home + $0)
+            }
+            || containerCacheOwner(path, home: home) != nil
+            || userRebuildableReason(path, home: home) != nil
+    }
+
     private static func hasModelFileSignature(_ component: String) -> Bool {
         // Components already belong to a normalized path. Creating relative
         // file URLs here needlessly resolves each name against the working directory.
@@ -303,6 +323,15 @@ enum CleanupRiskPolicy {
         }
 
         let home = normalize(homeDirectory)
+
+        let trashRoot = home + "/.Trash"
+        if isDirectChild(normalized, of: trashRoot) {
+            // `Parsers` promotes ordinary top-level Trash entries for the
+            // cleanup page (age gate 0). Direct callers that do not make that
+            // promotion stay Warning by default.
+            return warningDescriptor(source: .core, route: .genericTrash,
+                                     reasonKey: "cleanup.risk.unknown")
+        }
 
         if let kind = systemCleanupKind(for: normalized, homeDirectory: home) {
             switch kind {
@@ -334,15 +363,13 @@ enum CleanupRiskPolicy {
             return knowledgeDescriptor
         }
 
-        let trashRoot = home + "/.Trash"
-        if isDirectChild(normalized, of: trashRoot) {
-            // `Parsers` promotes ordinary top-level Trash entries for the
-            // cleanup page (age gate 0). Direct callers that do not make that
-            // promotion stay Warning by default.
-            return warningDescriptor(source: .core, route: .genericTrash,
-                                     reasonKey: "cleanup.risk.unknown")
+        // A custom dependency store can live under Library/Caches. Its path
+        // contract takes precedence over the broad macOS cache fallback.
+        if dependencyStoreRoots(home: home).contains(where: {
+            normalized == $0 || isStrictDescendant(normalized, of: $0)
+        }) {
+            return developerCache(path: normalized, homeDirectory: home)
         }
-
         if isExplicitDeveloperCachePath(normalized, home: home) {
             return developerCache(path: normalized, homeDirectory: homeDirectory)
         }
@@ -600,27 +627,10 @@ enum CleanupRiskPolicy {
         return true
     }
 
-    static let projectArtifactMarkers: [String: [String]] = [
-        "node_modules": ["package.json"], ".next": ["package.json"], ".nuxt": ["package.json"],
-        ".svelte-kit": ["package.json"], ".turbo": ["package.json"], ".parcel-cache": ["package.json"],
-        ".angular": ["angular.json"], "target": ["Cargo.toml", "pom.xml"], "Pods": ["Podfile"],
-        ".gradle": ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"],
-        ".dart_tool": ["pubspec.yaml"], ".venv": [], "venv": []
-    ]
+    static let projectArtifactMarkers = ProjectArtifactPolicy.markers
 
     static func isProjectArtifact(_ path: String, homeDirectory: String = NSHomeDirectory()) -> Bool {
-        let home = normalize(homeDirectory), normalized = normalize(path)
-        guard DeletionPlan.isLexicallySafePath(normalized), isStrictDescendant(normalized, of: home),
-              !isStrictDescendant(normalized, of: home + "/Library"),
-              !isStrictDescendant(normalized, of: home + "/.Trash") else { return false }
-        let name = (normalized as NSString).lastPathComponent
-        guard let markers = projectArtifactMarkers[name] else { return false }
-        let ancestors = normalized.dropFirst(home.count).split(separator: "/").dropLast()
-        guard !ancestors.contains(where: { projectArtifactMarkers[String($0)] != nil || $0 == ".git" }) else { return false }
-        let fm = FileManager.default
-        if markers.isEmpty { return fm.fileExists(atPath: normalized + "/pyvenv.cfg") }
-        let parent = (normalized as NSString).deletingLastPathComponent
-        return markers.contains { fm.fileExists(atPath: parent + "/" + $0) }
+        ProjectArtifactPolicy.isArtifact(path, homeDirectory: homeDirectory)
     }
 
     static func reviewTargetKind(_ path: String, homeDirectory: String = NSHomeDirectory()) -> ReviewTargetKind? {
@@ -669,9 +679,7 @@ enum CleanupRiskPolicy {
         // recovery-contract rule: emptying them is not a cache refresh but a
         // forced full re-download, and ~/.m2 may hold locally installed
         // SNAPSHOT artifacts that exist on no remote at all.
-        if dependencyStoreRoots(home: home).contains(where: {
-            normalized == $0 || isStrictDescendant(normalized, of: $0)
-        }) && !isGradleBuildCachePath(normalized, home: home) {
+        if DeveloperCleanupCatalog.isDependencyStoreContent(normalized, home: home) {
             return warningDescriptor(source: .developerCache, route: .developerCacheTrash,
                                      reasonKey: "cleanup.risk.dependencyStore")
         }
@@ -831,7 +839,7 @@ enum CleanupRiskPolicy {
         ].map { home + "/Library/Application Support/" + $0 }
         let dotted = [
             ".cache/opencode", ".cache/chrome-devtools-mcp", ".claude", ".codex", ".cursor",
-            ".grok", ".gemini", ".copilot", ".kimi", ".kimi-code", ".pi", ".factory", ".claude.json",
+            ".grok", ".gemini", ".copilot", ".kimi", ".kimi-code", ".pi", ".factory", ".hermes", ".claude.json",
             ".qoder", ".kiro", ".trae", ".warp", ".devin", ".codeium", ".opencode",
             ".config/opencode", ".config/amp", ".config/crush", ".config/devin", ".config/zed",
             ".cache/amp", ".cache/crush", ".cache/.gemini", ".cache/chrome-devtools-mcp-cli",
@@ -1269,6 +1277,8 @@ enum CleanupRiskPolicy {
         guard DeletionPlan.isLexicallySafePath(rawPath) else { return true }
         let path = normalize(rawPath)
         let home = normalize(homeDirectory)
+        if DeveloperCleanupCatalog.isRetainedToolState(path, home: home) { return true }
+        if DeveloperCleanupCatalog.isDependencyStoreContent(path, home: home) { return true }
         let fullComponents = URL(fileURLWithPath: path).pathComponents.map { $0.lowercased() }
         // A split inventory may submit a metadata child as its own cache root.
         // Check immutable model signatures before any ancestor is stripped.
@@ -1508,6 +1518,7 @@ enum CleanupRiskPolicy {
     }
 
     static func isProtectedContent(_ path: String, homeDirectory: String) -> Bool {
+        if DeveloperCleanupCatalog.isRetainedToolState(path, home: normalize(homeDirectory)) { return true }
         if systemCleanupKind(for: path, homeDirectory: homeDirectory) != nil
             || auditedRebuildableRoot(containing: path, homeDirectory: homeDirectory) != nil { return false }
         if protectedAbsoluteRoots.contains(where: { path == $0 || isStrictDescendant(path, of: $0) }) {
@@ -1542,123 +1553,14 @@ enum CleanupRiskPolicy {
     }
 
     private static func developerCacheRoots(home: String) -> [String] {
-        var roots = [
-            home + "/.npm/_cacache",
-            home + "/.npm/_logs",
-            home + "/.swiftpm/cache",
-            home + "/.cache/node/corepack",
-            home + "/Library/Caches/org.carthage.CarthageKit",
-            home + "/.bun/install/cache",
-            home + "/Library/Caches/pnpm",
-            home + "/Library/pnpm/store",
-            home + "/.pnpm-store",
-            home + "/.local/share/pnpm/store",
-            home + "/.yarn/cache",
-            home + "/Library/Caches/Yarn",
-            // Gradle: only the build cache, daemon logs, worker scratch and
-            // notification state are rebuildable. The module cache under
-            // ~/.gradle/caches is a dependency store (see dependencyStoreRoots)
-            // and its build-cache-* children are admitted separately.
-            home + "/.gradle/daemon",
-            home + "/.gradle/workers",
-            home + "/.gradle/notifications",
-            home + "/Library/Caches/go-build",
-            // Only the download cache (zips + VCS mirrors) is offered here; the
-            // extracted module tree is reset through `go clean -modcache`.
-            home + "/go/pkg/mod/cache",
-            home + "/.cargo/registry/cache",
-            home + "/Library/Caches/NuGet",
-            home + "/Library/Caches/pip",
-            home + "/.cache/pip",
-            home + "/Library/Caches/pypoetry",
-            home + "/.cache/uv",
-            home + "/.composer/cache",
-            home + "/Library/Caches/composer",
-            home + "/.cache/bazel",
-            home + "/.cache/zig",
-            home + "/Library/Caches/org.swift.swiftpm",
-            home + "/Library/Caches/Homebrew/downloads",
-            home + "/Library/Caches/node-gyp",
-            home + "/Library/Caches/typescript",
-            home + "/.hex/cache",
-            home + "/.tnpm/_cacache",
-            home + "/.tnpm/_logs",
-            home + "/.cache/poetry",
-            home + "/.cache/ruff",
-            home + "/.cache/mypy",
-            home + "/.pytest_cache",
-            home + "/.jupyter/runtime",
-            home + "/.rbenv/cache",
-            home + "/.gem/specs",
-            home + "/.bundle/cache",
-            home + "/.cpan/build",
-            home + "/.kube/cache",
-            home + "/.aws/cli/cache",
-            home + "/.config/gcloud/logs",
-            home + "/.azure/logs",
-            home + "/.cache/typescript",
-            home + "/.cache/electron",
-            home + "/.cache/node-gyp",
-            home + "/.node-gyp",
-            home + "/.turbo/cache",
-            home + "/.vite/cache",
-            home + "/.cache/vite",
-            home + "/.cache/webpack",
-            home + "/.parcel-cache",
-            home + "/.cache/eslint",
-            home + "/.cache/prettier",
-            home + "/.android/build-cache",
-            home + "/.android/cache",
-            home + "/.cache/swift-package-manager",
-            home + "/.expo/expo-go",
-            home + "/.expo/android-apk-cache",
-            home + "/.expo/ios-simulator-app-cache",
-            home + "/.expo/native-modules-cache",
-            home + "/.expo/schema-cache",
-            home + "/.expo/template-cache",
-            home + "/.expo/versions-cache",
-            home + "/Library/Logs/JetBrains"
-        ]
-        // 工具配置声明的自定义缓存位置与默认位置同级可信：发现层会枚举
-        // 它们，策略层也必须承认它们（否则出现“扫得到却被保护拦下”）。
-        let locations = DeveloperCacheLocations.current(home: home)
-        for custom in [locations.npmCache, locations.yarnCache, locations.pipCache,
-                       locations.poetryCache, locations.goModCache, locations.goBuildCache, locations.pnpmStore] {
-            if let custom { roots.append(custom) }
-        }
-        if let cargoHome = locations.cargoHome {
-            roots.append(cargoHome + "/registry/cache")
-        }
-        return roots
+        DeveloperCleanupCatalog.entries(home: home).map(\.path)
     }
 
     /// Stores that builds consume directly. They are inventoried for review
     /// but never enter the one-click cleanup; Mole keeps the same list off its
     /// blanket delete path and resets them only through owner commands.
     static func dependencyStoreRoots(home: String) -> [String] {
-        var roots = [
-            home + "/.m2/repository",
-            home + "/.ivy2/cache",
-            home + "/.gradle/caches",
-            home + "/.nuget/packages",
-            home + "/.pub-cache",
-            home + "/.cargo/git",
-            home + "/.cargo/registry/src",
-            home + "/.cabal/packages",
-            home + "/.cpan/sources",
-            home + "/.sbt/boot",
-            home + "/.sbt/launchers"
-        ]
-        // 自定义 GRADLE_USER_HOME 的模块缓存与默认位置同等对待：
-        // 依赖仓库只复核，build-cache-* 仍按可重建缓存放行。
-        if let gradleHome = DeveloperCacheLocations.current(home: home).gradleUserHome {
-            roots.append(gradleHome + "/caches")
-        }
-        if let cargoHome = DeveloperCacheLocations.current(home: home).cargoHome {
-            roots.append(cargoHome + "/registry/src")
-            roots.append(cargoHome + "/git")
-        }
-        return roots
+        DeveloperCleanupCatalog.dependencyStoreRoots(home: home)
     }
 
     /// `~/.gradle/caches/build-cache-*`（或自定义 GRADLE_USER_HOME 下的同
@@ -1867,6 +1769,239 @@ enum CleanupRiskPolicy {
 
     private static func pathsOverlap(_ lhs: String, _ rhs: String) -> Bool {
         lhs == rhs || isStrictDescendant(lhs, of: rhs) || isStrictDescendant(rhs, of: lhs)
+    }
+}
+
+/// Project names only identify candidates. Discovery and deletion both require
+/// an ecosystem marker, a physical path and a complete authored-content probe.
+/// These items remain Warning/manual-review; age never promotes them to Safe.
+enum ProjectArtifactPolicy {
+    private static let pythonMarkers = ["pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile"]
+    private static let gradleMarkers = ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
+    static let markers: [String: [String]] = [
+        "node_modules": ["package.json"], ".next": ["package.json"], ".nuxt": ["package.json"],
+        ".output": ["package.json"], ".svelte-kit": ["package.json"], ".astro": ["package.json"],
+        ".turbo": ["package.json"], ".parcel-cache": ["package.json"], ".expo": ["package.json"],
+        ".angular": ["angular.json"], "target": ["Cargo.toml", "pom.xml"], "Pods": ["Podfile"],
+        ".gradle": gradleMarkers, ".cxx": gradleMarkers, ".dart_tool": ["pubspec.yaml"],
+        ".venv": [], "venv": [], ".pytest_cache": pythonMarkers + ["pytest.ini"],
+        ".mypy_cache": pythonMarkers + ["mypy.ini", ".mypy.ini"],
+        ".ruff_cache": pythonMarkers + ["ruff.toml", ".ruff.toml"],
+        ".tox": pythonMarkers + ["tox.ini"], ".nox": pythonMarkers + ["noxfile.py"],
+        "__pycache__": pythonMarkers,
+        ".terragrunt-cache": ["terragrunt.hcl"], "vendor": ["composer.json"],
+        "bin": [], "obj": [], "DerivedData": [], ".build": ["Package.swift"],
+        ".zig-cache": ["build.zig", "build.zig.zon"], "zig-out": ["build.zig", "build.zig.zon"],
+        "dist": ["package.json"] + pythonMarkers,
+        "build": ["package.json", "Cargo.toml", "pom.xml", "Package.swift", "pubspec.yaml",
+                  "CMakeLists.txt", "Makefile", "build.zig"] + pythonMarkers + gradleMarkers,
+        "coverage": ["package.json", "Cargo.toml", "pom.xml"] + pythonMarkers + gradleMarkers
+    ]
+    private static let projectMarkers = Set(markers.values.flatMap { $0 })
+        .union(["go.mod", "Gemfile", "composer.json", "lerna.json", "pnpm-workspace.yaml", "nx.json", "rush.json"])
+    private static let cacheTagSignature = Array("Signature: 8a477f597d28d172789f06886806bc55".utf8)
+    private static let pythonCacheNames: Set<String> = [
+        ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".nox", "__pycache__"
+    ]
+    private static let dependencyContainers: Set<String> = ["node_modules", "vendor", "Pods", ".venv", "venv"]
+
+    /// Cheap discovery filter, never deletion authorization. Read only the
+    /// standard tag's signature; a symlink or malformed tag is not evidence.
+    static func isCandidate(_ path: String) -> Bool {
+        markers[(path as NSString).lastPathComponent] != nil || hasCacheTag(path)
+    }
+
+    /// Prune real artifact/dependency containers, not source projects that
+    /// merely happen to be named build, dist or bin.
+    static func shouldPrune(_ path: String, homeDirectory: String) -> Bool {
+        let name = (path as NSString).lastPathComponent
+        return name == ".git" || dependencyContainers.contains(name)
+            || matchesShape(path, home: CleanupRiskPolicy.normalizedPathLiteral(homeDirectory))
+    }
+
+    static func hasCacheTag(_ path: String) -> Bool {
+        let fd = open(path + "/CACHEDIR.TAG", O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var metadata = stat()
+        guard fstat(fd, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG else { return false }
+        var bytes = [UInt8](repeating: 0, count: cacheTagSignature.count)
+        return read(fd, &bytes, bytes.count) == bytes.count && bytes == cacheTagSignature
+    }
+
+    /// Called on scan/apply workers, never from view rendering. The shared
+    /// deadline includes content and Git probes; unknown/timeout means keep.
+    static func isArtifact(_ rawPath: String, homeDirectory: String,
+                           inspectionBudget: TimeInterval = 2,
+                           shouldStop: () -> Bool = { false }) -> Bool {
+        guard inspectionBudget > 0, !shouldStop(), DeletionPlan.isLexicallySafePath(rawPath),
+              DeletionPlan.isLexicallySafePath(homeDirectory) else { return false }
+        let deadline = ProcessInfo.processInfo.systemUptime + inspectionBudget
+        let path = CleanupRiskPolicy.normalizedPathLiteral(rawPath)
+        let home = CleanupRiskPolicy.normalizedPathLiteral(homeDirectory)
+        guard path.hasPrefix(home + "/"), !path.hasPrefix(home + "/Library/"),
+              !path.hasPrefix(home + "/.Trash/"),
+              physicalDirectory(path, beneath: home), matchesShape(path, home: home),
+              !CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: home) else { return false }
+
+        // Do not enter dependencies or nested artifact trees. A project named
+        // build/dist is allowed when its parent does not identify it as output.
+        var ancestor = (path as NSString).deletingLastPathComponent
+        while ancestor != home {
+            if shouldPrune(ancestor, homeDirectory: home) { return false }
+            ancestor = (ancestor as NSString).deletingLastPathComponent
+        }
+        guard contentProbe(path, deadline: deadline, shouldStop: shouldStop) else { return false }
+        return gitTracksNoFiles(path, home: home, deadline: deadline, shouldStop: shouldStop)
+    }
+
+    private static func physicalDirectory(_ path: String, beneath home: String) -> Bool {
+        var current = home
+        var metadata = stat()
+        guard lstat(current, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR else { return false }
+        for component in path.dropFirst(home.count + 1).split(separator: "/") {
+            current += "/" + component
+            guard lstat(current, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR else { return false }
+        }
+        return true
+    }
+
+    private static func regularFile(_ path: String) -> Bool {
+        var metadata = stat()
+        return lstat(path, &metadata) == 0 && metadata.st_mode & S_IFMT == S_IFREG
+    }
+
+    private static func matchesShape(_ path: String, home: String) -> Bool {
+        let name = (path as NSString).lastPathComponent
+        let parent = (path as NSString).deletingLastPathComponent
+        if let required = markers[name] {
+            switch name {
+            case ".venv", "venv": return regularFile(path + "/pyvenv.cfg")
+            case "bin", "obj":
+                guard hasProjectFile(parent, extensions: ["csproj", "fsproj", "vbproj"]) else { return false }
+                return name == "obj" || physicalDirectory(path + "/Debug", beneath: path)
+                    || physicalDirectory(path + "/Release", beneath: path)
+            case "DerivedData": return hasProjectFile(parent, extensions: ["xcodeproj", "xcworkspace"], directory: true)
+            case "vendor":
+                // Go/Rails vendoring may hold locally authored code.
+                guard !regularFile(parent + "/go.mod"), !regularFile(parent + "/Gemfile") else { return false }
+            default: break
+            }
+            if required.contains(where: { regularFile(parent + "/" + $0) }) { return true }
+            if pythonCacheNames.contains(name) {
+                return hasProjectContext(parent, home: home, requiring: Set(required))
+            }
+        }
+        // A tag is a cache declaration, but only search inside a project; it
+        // must not turn an arbitrary Documents/Downloads directory into junk.
+        return hasCacheTag(path) && hasProjectContext(parent, home: home)
+    }
+
+    private static func hasProjectFile(_ path: String, extensions: Set<String>, directory: Bool = false) -> Bool {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else { return false }
+        return names.contains { name in
+            guard extensions.contains((name as NSString).pathExtension.lowercased()) else { return false }
+            var metadata = stat()
+            return lstat(path + "/" + name, &metadata) == 0
+                && metadata.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG)
+        }
+    }
+
+    private static func hasProjectContext(_ path: String, home: String, requiring required: Set<String>? = nil) -> Bool {
+        var current = path
+        for _ in 0..<6 where current.hasPrefix(home + "/") {
+            if (required ?? projectMarkers).contains(where: { regularFile(current + "/" + $0) }) { return true }
+            var metadata = stat()
+            if lstat(current + "/.git", &metadata) == 0 {
+                return required == nil && [S_IFDIR, S_IFREG].contains(metadata.st_mode & S_IFMT)
+            }
+            if required == nil && (hasProjectFile(current, extensions: ["csproj", "fsproj", "vbproj"])
+                || hasProjectFile(current, extensions: ["xcodeproj", "xcworkspace"], directory: true)) {
+                return true
+            }
+            current = (current as NSString).deletingLastPathComponent
+        }
+        return false
+    }
+
+    private static func contentProbe(_ path: String, deadline: TimeInterval, shouldStop: () -> Bool) -> Bool {
+        guard let name = strdup(path) else { return false }
+        defer { free(name) }
+        var paths: [UnsafeMutablePointer<CChar>?] = [name, nil]
+        guard let tree = paths.withUnsafeMutableBufferPointer({
+            fts_open($0.baseAddress!, FTS_PHYSICAL | FTS_NOCHDIR | FTS_XDEV, nil)
+        }) else { return false }
+        defer { fts_close(tree) }
+        var device: dev_t?
+        while !shouldStop(), ProcessInfo.processInfo.systemUptime < deadline {
+            errno = 0
+            guard let entry = fts_read(tree) else { return errno == 0 }
+            let info = Int32(entry.pointee.fts_info)
+            guard ![FTS_ERR, FTS_DNR, FTS_NS, FTS_DC].contains(info) else { return false }
+            guard let metadata = entry.pointee.fts_statp?.pointee else { return false }
+            if let device, metadata.st_dev != device { return false }
+            device = metadata.st_dev
+            let name = withUnsafePointer(to: &entry.pointee.fts_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.fts_namelen) + 1) { String(cString: $0) }
+            }.lowercased()
+            if name == ".git" || name.hasSuffix("-keypair.json") { return false }
+        }
+        return false
+    }
+
+    private static func gitTracksNoFiles(_ path: String, home: String, deadline: TimeInterval,
+                                        shouldStop: () -> Bool) -> Bool {
+        var repository = (path as NSString).deletingLastPathComponent
+        while repository == home || repository.hasPrefix(home + "/") {
+            guard !shouldStop(), ProcessInfo.processInfo.systemUptime < deadline else { return false }
+            var metadata = stat()
+            if lstat(repository + "/.git", &metadata) == 0 {
+                guard [S_IFDIR, S_IFREG].contains(metadata.st_mode & S_IFMT) else { return false }
+                break
+            }
+            guard errno == ENOENT else { return false }
+            if repository == home { return true }
+            repository = (repository as NSString).deletingLastPathComponent
+        }
+        guard !shouldStop(), ProcessInfo.processInfo.systemUptime < deadline else { return false }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        let relative = String(path.dropFirst(repository.count + 1))
+        process.arguments = ["-c", "core.fsmonitor=false", "--git-dir=" + repository + "/.git",
+                             "--work-tree=" + repository, "-C", repository, "ls-files", "-z", "--cached",
+                             "--", ":(top,literal,icase)" + relative]
+        var environment = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("GIT_") }
+        environment["GIT_CONFIG_NOSYSTEM"] = "1"
+        environment["GIT_CONFIG_GLOBAL"] = "/dev/null"
+        environment["GIT_OPTIONAL_LOCKS"] = "0"
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let output = Pipe()
+        process.standardOutput = output
+        defer {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            try? output.fileHandleForReading.close()
+            try? output.fileHandleForWriting.close()
+        }
+        let fd = output.fileHandleForReading.fileDescriptor
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { return false }
+        do { try process.run() } catch { return false }
+        try? output.fileHandleForWriting.close()
+        var bytes = [UInt8](repeating: 0, count: 512)
+        while !shouldStop(), ProcessInfo.processInfo.systemUptime < deadline {
+            let count = read(fd, &bytes, bytes.count)
+            if count > 0 { return false } // Any tracked path protects the whole artifact.
+            if count < 0 && errno != EAGAIN && errno != EINTR { return false }
+            if !process.isRunning {
+                // Drain once after exit so termination cannot race the pipe.
+                return process.terminationStatus == 0 && read(fd, &bytes, bytes.count) == 0
+            }
+            usleep(2_000)
+        }
+        return false
     }
 }
 

@@ -4,6 +4,16 @@ import Foundation
 /// 占位符约定：%d 整数、%@ 字符串、%1$@… 位置参数。
 enum L10nTables {
     static let en: [String: String] = [
+        "settings.pageShortcuts.title": "Page shortcuts",
+        "settings.pageShortcuts.hint": "Click a shortcut, then press a new combination. Esc cancels. Global shortcuts open pages even while the island is collapsed; hidden pages stay inactive.",
+        "settings.pageShortcuts.globalConflict": "Could not register this global shortcut. It may be used by another app; choose another combination.",
+        "settings.pageShortcuts.resetAll": "Restore defaults",
+        "settings.pageShortcuts.unset": "Not set",
+        "settings.pageShortcuts.record": "Set shortcut for %@",
+        "settings.pageShortcuts.clear": "Clear shortcut for %@",
+        "settings.pageShortcuts.invalid": "Include ⌘, ⌥ or ⌃ with a key.",
+        "settings.pageShortcuts.reserved": "This shortcut is used by an existing app or system action.",
+        "settings.pageShortcuts.conflict": "Already used by “%@”. Choose another combination.",
         // 窗口与导航
         "window.title": "Nori",
         "header.task.cleaning": "Cleaning…",
@@ -100,7 +110,7 @@ enum L10nTables {
         "cli.agentData.hint": "Sessions, state and credentials of this Agent are managed on the Agent page.",
         "cli.uninstall.confirm.title": "Uninstall %@?",
         "cli.uninstall.confirm.message": "%@ will remove it from %@. Configuration and data in your home folder stay in place.",
-        "cli.uninstall.confirm.agentMessage": "%@ will remove it from %@. The Agent's sessions, state and credentials stay in place; review them on the Agent page.",
+        "cli.uninstall.confirm.agentMessage": "%@ will remove it from %@. After uninstalling, separately review moving the Agent's exclusive data to the Trash, including sessions, settings and credentials.",
         "cli.uninstall.confirm.running": "%@ is running. Confirming will close processes belonging to this installation, force quit any that remain, then uninstall. Unsaved work may be lost.",
         "cli.uninstall.confirm.closeAction": "Close & uninstall",
         "cli.uninstall.runtimeUnknown": "Running processes could not be checked. Try again before uninstalling.",
@@ -248,6 +258,7 @@ enum L10nTables {
         "menu.about": "About Nori",
         "menu.quit": "Quit Nori",
         "menu.edit": "Edit",
+        "menu.navigate": "Navigate",
         "menu.copy": "Copy",
         "menu.selectAll": "Select All",
         "menu.undo": "Undo",
@@ -338,6 +349,16 @@ enum L10nTables {
     ]
 
     static let zhHans: [String: String] = [
+        "settings.pageShortcuts.title": "页面快捷键",
+        "settings.pageShortcuts.hint": "点击快捷键后按下新组合，Esc 取消。全局生效，灵动岛收起时也可直接打开页面；隐藏页面不响应。",
+        "settings.pageShortcuts.globalConflict": "全局快捷键注册失败，可能已被其他应用占用，请换一个组合。",
+        "settings.pageShortcuts.resetAll": "恢复默认",
+        "settings.pageShortcuts.unset": "未设置",
+        "settings.pageShortcuts.record": "设置%@的快捷键",
+        "settings.pageShortcuts.clear": "清除%@的快捷键",
+        "settings.pageShortcuts.invalid": "请同时按下 ⌘、⌥ 或 ⌃ 与另一个按键。",
+        "settings.pageShortcuts.reserved": "此快捷键已用于现有应用操作或系统操作。",
+        "settings.pageShortcuts.conflict": "已被“%@”使用，请换一个组合。",
         "window.title": "Nori",
         "header.task.cleaning": "清理中…",
         "header.task.uninstalling": "正在卸载 %@",
@@ -428,7 +449,7 @@ enum L10nTables {
         "cli.agentData.hint": "这个 Agent 的会话、状态和凭据在 Agent 页处理。",
         "cli.uninstall.confirm.title": "卸载 %@？",
         "cli.uninstall.confirm.message": "将由 %@ 卸载，位置：%@。主目录里的配置和数据会保留。",
-        "cli.uninstall.confirm.agentMessage": "将由 %@ 卸载，位置：%@。这个 Agent 的会话、状态和凭据会保留，请到 Agent 页处理。",
+        "cli.uninstall.confirm.agentMessage": "将由 %@ 卸载，位置：%@。卸载后另行确认是否将这个 Agent 的独占数据移入废纸篓，其中可能包含会话、设置和凭据。",
         "cli.uninstall.confirm.running": "%@ 正在运行。确认后将关闭此安装的进程，仍未退出的会强制结束，然后卸载。未保存的内容可能丢失。",
         "cli.uninstall.confirm.closeAction": "关闭并卸载",
         "cli.uninstall.runtimeUnknown": "无法检查运行进程，请稍后重试卸载。",
@@ -566,6 +587,7 @@ enum L10nTables {
         "menu.about": "关于 Nori",
         "menu.quit": "退出 Nori",
         "menu.edit": "编辑",
+        "menu.navigate": "前往",
         "menu.copy": "拷贝",
         "menu.selectAll": "全选",
         "menu.undo": "撤销",

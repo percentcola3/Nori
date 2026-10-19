@@ -8,6 +8,7 @@ final class ProcessRuntimeState {
     fileprivate var history = ProcessHistory(capacity: 30)
     fileprivate var highUsageTracker = HighUsageTracker()
     fileprivate var sampleInFlight = false
+    fileprivate var exitingRoots: Set<String> = []
     fileprivate var automaticTracker = RuntimeStore.AutomaticCandidateTracker()
     fileprivate var cleanupAttempted = 0
     fileprivate var cleanupSucceeded = 0
@@ -108,11 +109,12 @@ extension AppState {
                 guard !name.isEmpty, name != ownName, name != "Mole" else { return nil }
                 return (application.processIdentifier, name, identity)
             }
+        let previous = processGroups
         Task {
             let sampled: (groups: [ProcessGroup], total: Int) = await Task.detached(priority: .utility) {
                 let samples = ProcessSampler.shared.sample()
                 let groups = ProcessAggregator.groups(
-                    samples: samples, applications: applications, ownPID: ownPID,
+                    samples: samples, applications: applications, ownPID: ownPID, previous: previous,
                     detail: { L10n.shared.tf("proc.detail.app", $0) },
                     childDetail: { L10n.shared.tf("proc.detail.pid", $0.pid) })
                 return (groups, samples.count)
@@ -123,6 +125,9 @@ extension AppState {
             let liveTokens = Set(sampled.groups.map { $0.app.signalToken })
             processQuitFeedback = processQuitFeedback.filter {
                 liveTokens.contains($0.key) || $0.value == .waiting
+            }
+            for group in sampled.groups where group.bundlePath.map({ processRuntime.exitingRoots.contains($0) }) == true {
+                processQuitFeedback[group.app.signalToken] = .waiting
             }
             processRows = sampled.groups.map(\.app)
             processRuntime.history.record(sampled.groups)
@@ -139,84 +144,130 @@ extension AppState {
         return application
     }
 
-    /// 温和退出（等同 ⌘Q）：应用可以弹出保存提示；5 秒后仍在运行则提示可强制退出。
+    /// Normal Quit lets the main application handle save prompts first, then
+    /// closes and verifies the complete owned background scope.
     func quitApplication(_ row: ProcessRow) {
         guard processQuitFeedback[row.signalToken] != .waiting else { return }
-        guard let application = runningApplication(for: row) else {
-            processQuitFeedback[row.signalToken] = .stale
-            processActionStatus = l10n.t("proc.refusal.identity")
-            presentTaskFailure(message: processActionStatus)
+        guard let group = processGroup(for: row) else {
+            presentTaskFailure(message: l10n.t("proc.refusal.identity"))
             refreshNativeProcesses()
             return
         }
-        processQuitFeedback[row.signalToken] = .waiting
-        processActionStatus = l10n.tf("proc.status.quitRequested", row.name)
-        guard application.terminate() else {
-            processQuitFeedback[row.signalToken] = .refused
-            processActionStatus = l10n.t("status.quitRefused")
-            presentTaskFailure(message: processActionStatus)
+        Task { await performApplicationExit(group, force: false) }
+    }
+
+    func endProcessGroup(_ group: ProcessGroup) {
+        guard processQuitFeedback[group.app.signalToken] != .waiting else { return }
+        confirmation = Confirmation(
+            title: l10n.tf("proc.confirm.endGroup.title", group.app.name),
+            message: l10n.t("proc.exit.confirm"),
+            confirmLabel: l10n.t("proc.endGroup")) { [weak self] in
+                guard let self else { return }
+                Task { await self.performApplicationExit(group, force: true) }
+            }
+    }
+
+    private func processGroup(for row: ProcessRow) -> ProcessGroup? {
+        if let group = processGroups.first(where: { $0.app.signalToken == row.signalToken }) { return group }
+        guard let app = runningApplication(for: row) else { return nil }
+        return ProcessAggregator.groups(samples: ProcessSampler.shared.sample(),
+            applications: [(app.processIdentifier, row.name, row.startIdentity)],
+            ownPID: ProcessInfo.processInfo.processIdentifier,
+            detail: { self.l10n.tf("proc.detail.app", $0) },
+            childDetail: { self.l10n.tf("proc.detail.pid", $0.pid) })
+            .first { $0.app.signalToken == row.signalToken }
+    }
+
+    private func performApplicationExit(_ group: ProcessGroup, force: Bool) async {
+        let token = group.app.signalToken
+        guard processQuitFeedback[token] != .waiting, let root = group.bundlePath else {
+            presentTaskFailure(message: l10n.t("proc.refusal.identity"))
             return
         }
-        Task {
-            for _ in 0..<50 {
-                if application.isTerminated { break }
-                try? await Task.sleep(nanoseconds: 100_000_000)
+        guard processRuntime.exitingRoots.insert(root).inserted else { return }
+        processQuitFeedback[token] = .waiting
+        defer {
+            processRuntime.exitingRoots.remove(root)
+            for current in processGroups where current.bundlePath == root {
+                processQuitFeedback[current.app.signalToken] = nil
             }
-            processActionStatus = application.isTerminated
-                ? l10n.tf("proc.status.quitDone", row.name)
-                : l10n.tf("proc.status.stillRunning", row.name)
-            processQuitFeedback[row.signalToken] = application.isTerminated ? nil : .stillRunning
-            if !application.isTerminated { presentTaskFailure(message: processActionStatus) }
+            processQuitFeedback[token] = nil
             refreshNativeProcesses()
             resampleAfterMutation()
         }
-    }
-
-    /// 结束整组：主进程 terminate → 5 秒 → forceTerminate；子进程 SIGTERM → 3 秒 → SIGKILL。
-    /// 每个子进程结束前都重新核对启动身份、用户与路径。
-    func endProcessGroup(_ group: ProcessGroup) {
-        confirmation = Confirmation(
-            title: l10n.tf("proc.confirm.endGroup.title", group.app.name),
-            message: l10n.tf("proc.confirm.endGroup.msg", group.children.count),
-            confirmLabel: l10n.t("proc.endGroup")) { [weak self] in
-                guard let self else { return }
-                Task { await self.performEndGroup(group) }
-            }
-    }
-
-    private func performEndGroup(_ group: ProcessGroup) async {
-        guard processQuitFeedback[group.app.signalToken] != .waiting else { return }
-        processQuitFeedback[group.app.signalToken] = .waiting
-        defer { processQuitFeedback[group.app.signalToken] = nil }
         processActionStatus = l10n.tf("proc.status.quitRequested", group.app.name)
-        let application = runningApplication(for: group.app)
-        var mainEnded = application == nil
-        if let application {
-            if !application.terminate() { _ = application.forceTerminate() }
-            for _ in 0..<50 {
+        let independentRoots = Set(processGroups.compactMap(\.bundlePath)).subtracting([root])
+        let scope = ApplicationProcessScope(root: root, independentRoots: independentRoots)
+        var known = group.members
+        let own = ProcessInfo.processInfo.processIdentifier
+        let before = await Task.detached(priority: .utility) { ProcessSampler.shared.snapshot() }.value
+        guard before.isComplete else {
+            processActionStatus = ""
+            presentTaskFailure(message: l10n.t("proc.exit.unknown"))
+            return
+        }
+        // An old row needs at least one surviving, verified member before
+        // it may authorize this application scope.
+        guard known.contains(where: { old in before.processes.contains {
+            $0.identity.isSameProcess(as: old.identity) && $0.path == old.path
+        } }) else {
+            processActionStatus = ""
+            presentTaskFailure(message: l10n.t("proc.refusal.identity"))
+            return
+        }
+        known = scope.processes(in: before.processes, remembering: known)
+        guard known.allSatisfy({ $0.uid == getuid() &&
+            !ApplicationProcessScope.belongsToOwnTree($0.pid, ownPID: own, samples: before.processes) }) else {
+            processActionStatus = ""
+            presentTaskFailure(message: l10n.t("proc.exit.protected"))
+            return
+        }
+        if !group.isBackgroundOnly, let application = runningApplication(for: group.app) {
+            let requested = force ? application.forceTerminate() : application.terminate()
+            guard requested || application.isTerminated else {
+                processActionStatus = ""
+                presentExitRecovery(group, message: l10n.t("proc.quit.refused"))
+                return
+            }
+            for _ in 0..<(force ? 20 : 50) {
+                // Capture descendants while the app is still alive so an
+                // external helper remains owned after its parent exits.
+                let prior = known
+                let snapshot = await Task.detached(priority: .utility) { ProcessSampler.shared.snapshot() }.value
+                known = scope.processes(in: snapshot.processes, remembering: prior)
                 if application.isTerminated { break }
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
-            if !application.isTerminated { _ = application.forceTerminate() }
-            for _ in 0..<10 where !application.isTerminated {
-                try? await Task.sleep(nanoseconds: 100_000_000)
+            guard application.isTerminated else {
+                processActionStatus = ""
+                presentExitRecovery(group, message: l10n.t("proc.quit.stillRunning"))
+                return
             }
-            mainEnded = application.isTerminated
         }
-        var endedChildren = 0
-        for child in group.children {
-            guard let identity = Self.childIdentity(child) else { continue }
-            if await ProcessTerminator.terminateThenKill(identity, grace: 3) { endedChildren += 1 }
+        let remembered = known
+        let outcome = await Task.detached(priority: .userInitiated) {
+            await ApplicationProcessController.stop(scope, remembering: remembered, force: force)
+        }.value
+        if outcome.completed {
+            processActionStatus = l10n.tf("proc.exit.done", group.app.name)
+        } else {
+            processActionStatus = ""
+            let details = outcome.remaining.map { "\($0.name) · PID \($0.pid)" } + outcome.jobs
+            presentExitRecovery(group, message: l10n.t(outcome.reasonKey ?? "proc.exit.incomplete"), details: details)
         }
-        processActionStatus = mainEnded
-            ? l10n.tf("proc.status.groupEnded", group.app.name, endedChildren)
-            : l10n.tf("proc.status.stillRunning", group.app.name)
-        if !mainEnded || endedChildren < group.children.count {
-            presentTaskFailure(message: processActionStatus,
-                details: group.children.map { "\($0.name) · PID \($0.pid)" }, detailsAreLocalized: true)
+    }
+
+    private func presentExitRecovery(_ group: ProcessGroup, message: String, details: [String] = []) {
+        var notice = TaskFeedbackNotice(message: message, details: details, detailsAreLocalized: true)
+        notice.recoveryLabel = l10n.t("proc.endGroup")
+        notice.recoveryMessage = l10n.t("proc.exit.confirm")
+        notice.recoveryIsDestructive = true
+        notice.onRetry = { [weak self] in
+            guard let self else { return }
+            let current = self.processGroups.first { $0.bundlePath == group.bundlePath } ?? group
+            Task { await self.performApplicationExit(current, force: true) }
         }
-        refreshNativeProcesses()
-        resampleAfterMutation()
+        presentTaskNotice(notice)
     }
 
     /// 结束单个子进程（非应用主进程）。
@@ -374,39 +425,12 @@ extension AppState {
 
     func terminateProcess(_ row: ProcessRow) {
         if row.isNativeApp {
-            guard processQuitFeedback[row.signalToken] != .waiting else { return }
-            confirmation = Confirmation(
-                title: l10n.tf("proc.confirm.quit.title", row.name),
-                message: l10n.t("proc.force.message"),
-                confirmLabel: l10n.t("proc.force.action")) {
-                    guard self.processQuitFeedback[row.signalToken] != .waiting else { return }
-                    let application = NSRunningApplication(processIdentifier: row.pid)
-                    let identityMatches = application.flatMap(RuntimeStore.nativeStartIdentity(for:))
-                        == row.startIdentity
-                    let requested = identityMatches && !(application?.isTerminated ?? true)
-                        ? (application?.forceTerminate() ?? false)
-                        : false
-                    self.processQuitFeedback[row.signalToken] = requested ? .waiting : .refused
-                    Task { @MainActor in
-                        self.processActionStatus = requested
-                            ? self.l10n.t("status.quitRequested")
-                            : self.l10n.t("status.quitRefused")
-                        guard requested, let application else {
-                            self.presentTaskFailure(message: self.processActionStatus)
-                            return
-                        }
-                        for _ in 0..<20 {
-                            if application.isTerminated { break }
-                            try? await Task.sleep(nanoseconds: 100_000_000)
-                        }
-                        self.processActionStatus = application.isTerminated
-                            ? self.l10n.t("proc.force.done") : self.l10n.t("status.quitRefused")
-                        self.processQuitFeedback[row.signalToken] = application.isTerminated ? nil : .refused
-                        if !application.isTerminated { self.presentTaskFailure(message: self.processActionStatus) }
-                        self.refreshProcesses(allowAutomaticCleanup: false)
-                        self.resampleAfterMutation()
-                    }
-                }
+            guard let group = processGroup(for: row) else {
+                presentTaskFailure(message: l10n.t("proc.refusal.identity"))
+                refreshNativeProcesses()
+                return
+            }
+            endProcessGroup(group)
             return
         }
         if row.lifecycle != .normal {

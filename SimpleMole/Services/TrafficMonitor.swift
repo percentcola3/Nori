@@ -11,7 +11,17 @@ final class TrafficMonitorStore: ObservableObject {
         didSet { rows = sortOrder.sorted(rows) }
     }
     @Published private(set) var sessionStartedAt = Date()
-    @Published private(set) var historySaveFailed = false
+    @Published private(set) var historySaveFailed = false {
+        didSet {
+            if historySaveFailed && !oldValue {
+                // Restoration can fail during AppState initialization. Deliver
+                // after its task-feedback observer has been installed.
+                DispatchQueue.main.async {
+                    TaskFeedbackNotice.reportFailure(messageKey: "netmon.history.saveFailed")
+                }
+            }
+        }
+    }
 
     // 顶部汇总卡（会话 = 自上次重置累计）。
     @Published private(set) var tunnelDown: UInt64 = 0

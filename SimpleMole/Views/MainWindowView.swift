@@ -25,7 +25,14 @@ struct MainWindowView: View {
             ZStack {
                 VStack(spacing: 0) {
                     titleBarRow
-                    PillPicker(items: tabs, selection: $state.selectedTab)
+                    PillPicker(items: tabs, selection: $state.selectedTab,
+                               helpTexts: state.visiblePages.map {
+                                   let title = l10n.t($0.titleKey)
+                                   if let shortcut = state.pageShortcut(for: $0) {
+                                       return title + " (" + shortcut.displayLabel + ")"
+                                   }
+                                   return title
+                               })
                         .disabled(state.agentApplying)
                         .padding(.top, 10)
                         .padding(.bottom, 8)

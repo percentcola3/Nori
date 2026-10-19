@@ -20,16 +20,18 @@ struct UninstallJob: Identifiable, Equatable {
     let plan: UninstallPlan?
     let dataPaths: Set<String>
     let scope: Scope
+    let forceCleanup: Bool
     fileprivate(set) var state: State = .queued
     fileprivate(set) var message: String?
 
     init(id: UUID, app: UninstallApp, plan: UninstallPlan?, dataPaths: Set<String>,
-         scope: Scope = .applicationAndResidues) {
+         scope: Scope = .applicationAndResidues, forceCleanup: Bool = false) {
         self.id = id
         self.app = app
         self.plan = plan
         self.dataPaths = dataPaths
         self.scope = scope
+        self.forceCleanup = forceCleanup
     }
 }
 
@@ -52,10 +54,13 @@ struct UninstallQueue {
 
     @discardableResult
     mutating func enqueue(app: UninstallApp, plan: UninstallPlan?, dataPaths: Set<String> = [],
-                          scope: UninstallJob.Scope = .applicationAndResidues) -> UUID? {
+                          scope: UninstallJob.Scope = .applicationAndResidues,
+                          forceCleanup: Bool = false) -> UUID? {
         guard !app.appIdentity.isEmpty, !containsPendingOrActive(app) else { return nil }
         jobs.removeAll { $0.state.isFinished && $0.app.id == app.id }
-        let job = UninstallJob(id: UUID(), app: app, plan: plan, dataPaths: dataPaths, scope: scope)
+        guard !forceCleanup || plan != nil else { return nil }
+        let job = UninstallJob(id: UUID(), app: app, plan: plan, dataPaths: dataPaths,
+                               scope: scope, forceCleanup: forceCleanup)
         jobs.append(job)
         trimHistory()
         return job.id

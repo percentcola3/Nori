@@ -29,7 +29,7 @@ struct AgentHistoryView: View {
                 Text(l10n.t("agents.history.pendingValidation"))
                     .font(.system(size: 11)).foregroundStyle(Color.warning)
             }
-            if let key = page.statusKey {
+            if let key = page.statusKey, !key.hasPrefix("agents.history.error"), page.failureKeys.isEmpty {
                 Text(statusText(key))
                     .font(.system(size: 11))
                     .foregroundStyle(key.hasPrefix("agents.history.error") ? Color.warning : Color.secondary)
@@ -81,6 +81,14 @@ struct AgentHistoryView: View {
             }
         }
         .padding(16)
+        .onChange(of: page.failureKeys) { failures in
+            guard !failures.isEmpty else { return }
+            state.presentTaskFailure(details: failures.sorted { $0.key < $1.key }.map { l10n.t($0.value) },
+                                     detailsAreLocalized: true)
+        }
+        .onChange(of: page.statusKey) { key in
+            if let key, key.hasPrefix("agents.history.error") { state.presentTaskFailure(message: statusText(key)) }
+        }
     }
 
     private var controls: some View {
@@ -116,9 +124,7 @@ struct AgentHistoryView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(row.title).font(.system(size: 12, weight: .medium)).lineLimit(2)
                     Text(row.sessionID).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
-                    if let failure = page.failureKeys[row.id] {
-                        Text(l10n.t(failure)).font(.system(size: 10)).foregroundStyle(Color.warning)
-                    } else if let reason = row.protection {
+                    if let reason = row.protection {
                         Text(l10n.t(reason)).font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                 }

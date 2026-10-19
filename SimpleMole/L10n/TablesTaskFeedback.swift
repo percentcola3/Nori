@@ -339,7 +339,10 @@ enum L10nTaskFeedbackTables {
         precondition(remainingValues.count == remainingKeys.count, "Remaining task translation count mismatch")
         let uninstallValues = uninstallTranslations[language] ?? []
         precondition(uninstallValues.count == uninstallKeys.count, "Uninstall task translation count mismatch")
+        let recoveryValues = recoveryTranslations[language] ?? []
+        precondition(recoveryValues.count == recoveryKeys.count, "Recovery translation count mismatch")
         return Dictionary(uniqueKeysWithValues: zip(keys, values))
+            .merging(Dictionary(uniqueKeysWithValues: zip(recoveryKeys, recoveryValues))) { _, value in value }
             .merging(Dictionary(uniqueKeysWithValues: zip(uninstallKeys, uninstallValues))) { _, value in value }
             .merging(Dictionary(uniqueKeysWithValues: zip(developerKeys, developerValues))) { _, value in value }
             .merging(Dictionary(uniqueKeysWithValues: zip(summaryKeys, summaryValues))) { _, value in value }
@@ -841,4 +844,20 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "Temizlenebilen öğeler işlendi. İşlem durumları güvenilir şekilde kontrol edilemediğinden kalan bazı öğeler korundu. Bu öğeleri işlemek için tekrar deneyin."
         ]
     ]
+    private static let recoveryKeys = ["uninstall.recovery.action", "uninstall.recovery.message"]
+    private static let recoveryTranslations: [AppLanguage: [String]] = [
+        .en: ["Force cleanup", "Closes related processes and moves the remaining items from this uninstall to Trash, requesting administrator access when needed. Uses the original data selection and file checks. For Homebrew apps, this removes files directly without running Homebrew again. Unsaved work may be lost."],
+        .zhHans: ["强制清理", "关闭相关进程，将本次卸载的剩余项目移入废纸篓，必要时请求管理员权限。沿用原先的数据选择并校验文件身份。Homebrew 应用将直接移除文件，不再调用 Homebrew。未保存的内容可能丢失。"],
+        .zhHant: ["強制清理", "結束相關程序，將本次解除安裝的剩餘項目移至垃圾桶，必要時要求管理員權限。沿用原先的資料選擇並驗證檔案身分。Homebrew 應用程式將直接移除檔案，不再呼叫 Homebrew。未儲存的內容可能遺失。"],
+        .ja: ["強制クリーンアップ", "関連プロセスを終了し、今回のアンインストールで残った項目をゴミ箱に移動します。必要に応じて管理者権限を要求します。元のデータ選択とファイル確認を維持します。Homebrew アプリは Homebrew を再実行せずにファイルを直接削除します。未保存の作業が失われる可能性があります。"],
+        .ko: ["강제 정리", "관련 프로세스를 종료하고 이번 제거의 남은 항목을 휴지통으로 이동하며 필요한 경우 관리자 권한을 요청합니다. 기존 데이터 선택과 파일 검사를 유지합니다. Homebrew 앱은 Homebrew를 다시 실행하지 않고 파일을 직접 제거합니다. 저장하지 않은 작업이 손실될 수 있습니다."],
+        .de: ["Bereinigung erzwingen", "Beendet zugehörige Prozesse und verschiebt die verbleibenden Objekte dieser Deinstallation in den Papierkorb, bei Bedarf mit Administratorrechten. Die ursprüngliche Datenauswahl und Dateiprüfung bleiben erhalten. Bei Homebrew-Apps werden Dateien direkt entfernt, ohne Homebrew erneut auszuführen. Ungespeicherte Arbeit kann verloren gehen."],
+        .fr: ["Forcer le nettoyage", "Ferme les processus associés et place les éléments restants de cette désinstallation dans la Corbeille, avec des droits administrateur si nécessaire. Conserve la sélection des données et la vérification des fichiers. Pour Homebrew, supprime les fichiers directement sans relancer Homebrew. Le travail non enregistré peut être perdu."],
+        .es: ["Forzar limpieza", "Cierra los procesos relacionados y mueve a la Papelera los elementos restantes de esta desinstalación, solicitando permisos de administrador si es necesario. Conserva la selección de datos y las comprobaciones de archivos. Las apps de Homebrew se eliminan directamente sin volver a ejecutar Homebrew. Se puede perder el trabajo no guardado."],
+        .pt: ["Forçar limpeza", "Encerra os processos relacionados e move os itens restantes desta desinstalação para o Lixo, solicitando acesso de administrador quando necessário. Mantém a seleção de dados e as verificações dos arquivos. Para apps Homebrew, remove os arquivos diretamente sem executar o Homebrew novamente. O trabalho não salvo pode ser perdido."],
+        .it: ["Forza pulizia", "Chiude i processi associati e sposta nel Cestino gli elementi rimasti da questa disinstallazione, richiedendo privilegi di amministratore se necessario. Mantiene la selezione dei dati e i controlli dei file. Per le app Homebrew rimuove i file direttamente senza eseguire di nuovo Homebrew. Il lavoro non salvato potrebbe andare perso."],
+        .ru: ["Принудительная очистка", "Завершает связанные процессы и перемещает оставшиеся объекты этой деинсталляции в Корзину, при необходимости запрашивая права администратора. Сохраняет исходный выбор данных и проверки файлов. Файлы приложений Homebrew удаляются напрямую без повторного запуска Homebrew. Несохранённая работа может быть потеряна."],
+        .tr: ["Temizlemeyi zorla", "İlgili işlemleri kapatır ve bu kaldırmadan kalan öğeleri Çöp Sepeti’ne taşır; gerekirse yönetici izni ister. İlk veri seçimini ve dosya kontrollerini korur. Homebrew uygulamalarının dosyaları Homebrew yeniden çalıştırılmadan doğrudan kaldırılır. Kaydedilmemiş çalışmalar kaybolabilir."]
+    ]
+
 }

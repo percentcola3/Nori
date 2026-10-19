@@ -111,10 +111,6 @@ private struct DeveloperHostsCard: View {
                     pendingBar
                 }
             }
-            if let error = model.hostsError {
-                DevDivider()
-                DevNotice(symbol: "exclamationmark.triangle", text: errorMessage(error), color: .danger)
-            }
             if !model.status.isEmpty {
                 DevDivider()
                 DevNotice(symbol: "checkmark.circle", text: model.status + (model.backupPath.map { "  ·  " + L10n.shared.t("dev.network.backup") + $0 } ?? ""),

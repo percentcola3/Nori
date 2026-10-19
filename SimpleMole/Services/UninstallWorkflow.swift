@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum UninstallExecutionPhase {
@@ -7,7 +8,7 @@ enum UninstallExecutionPhase {
 enum UninstallExecutionOutcome {
     case processesCouldNotStop
     case planUnavailable
-    case applied(NativeCore.ApplySummary)
+    case applied(NativeCore.ApplySummary, plan: UninstallPlan? = nil)
 }
 
 /// Executes an already-confirmed request. Authorization, queue ownership and
@@ -25,6 +26,13 @@ struct UninstallWorkflow: UninstallExecuting {
         var plan: @MainActor (UninstallApp) async -> UninstallPlan?
         var elevate: @MainActor (UninstallApp) async -> NativeCore.ApplySummary
         var apply: @MainActor (UninstallApp, UninstallPlan, Set<String>, Bool) async -> NativeCore.ApplySummary
+        var isAbsent: @MainActor (UninstallApp) -> Bool = {
+            var metadata = stat()
+            return lstat($0.path, &metadata) != 0 && errno == ENOENT
+        }
+        var hasNoProcesses: @MainActor (UninstallApp) -> Bool = {
+            UninstallProcessController.processes(for: $0, samples: ProcessSampler.shared.sample()).isEmpty
+        }
 
         static var live: Self {
             Self(stop: { await UninstallProcessController.stop($0) },
@@ -49,13 +57,23 @@ struct UninstallWorkflow: UninstallExecuting {
     func execute(_ job: UninstallJob,
                  progress: (UninstallExecutionPhase) -> Void) async -> UninstallExecutionOutcome {
         let app = job.app
+        let wasAlreadyAbsent = job.forceCleanup && dependencies.isAbsent(app)
         progress(.closing)
-        guard await dependencies.stop(app) else { return .processesCouldNotStop }
+        if wasAlreadyAbsent {
+            // A missing bundle cannot authorize terminating processes. Only
+            // continue with residues when no process still uses its path.
+            guard dependencies.hasNoProcesses(app) else { return .processesCouldNotStop }
+        } else {
+            guard await dependencies.stop(app) else { return .processesCouldNotStop }
+        }
 
         // Cached inventory is for presentation. Rebuild the plan for the
         // captured app identity after shutdown, immediately before removal.
         progress(.planning)
-        guard let freshPlan = await dependencies.plan(app), !freshPlan.files.isEmpty,
+        // Recovery owns the exact previously accepted scope. Never rescan into
+        // new data, or rebind the request to a replacement app at the same path.
+        let candidate = job.forceCleanup ? job.plan : await dependencies.plan(app)
+        guard let freshPlan = candidate, !freshPlan.files.isEmpty,
               freshPlan.includesProtectedAppData else { return .planUnavailable }
         let plan: UninstallPlan
         switch job.scope {
@@ -73,25 +91,49 @@ struct UninstallWorkflow: UninstallExecuting {
                 needsAdmin: freshPlan.needsAdmin, isBrewCask: freshPlan.isBrewCask, caskToken: freshPlan.caskToken,
                 includesProtectedAppData: freshPlan.includesProtectedAppData, scannedAt: freshPlan.scannedAt)
         }
-        guard await dependencies.stop(app) else { return .processesCouldNotStop }
+        if wasAlreadyAbsent {
+            guard dependencies.isAbsent(app) else { return .planUnavailable }
+            guard dependencies.hasNoProcesses(app) else { return .processesCouldNotStop }
+        } else {
+            guard await dependencies.stop(app) else { return .processesCouldNotStop }
+        }
         progress(.removing)
 
         let includingData = job.dataPaths.intersection(plan.dataPaths)
         let appAlreadyRemoved: Bool
-        if plan.needsAdmin && !plan.isBrewCask {
+        if wasAlreadyAbsent {
+            appAlreadyRemoved = true
+        } else if (plan.needsAdmin && !plan.isBrewCask)
+                    || (job.forceCleanup && AdministratorUninstallPlan.allows(app)) {
             let elevated = await dependencies.elevate(app)
-            guard elevated.succeeded else { return .applied(elevated) }
+            guard elevated.succeeded else { return .applied(elevated, plan: plan) }
             guard elevated.removedPaths == [app.path] else {
                 return .applied(.init(removed: elevated.removed, skipped: elevated.skipped,
                     failed: max(1, elevated.failed),
                     messages: elevated.messages + ["The application bundle was not removed."],
                     removedPaths: elevated.removedPaths, remainingPaths: elevated.remainingPaths,
-                    retainedPaths: elevated.retainedPaths, reclaimedBytes: elevated.reclaimedBytes))
+                    retainedPaths: elevated.retainedPaths, reclaimedBytes: elevated.reclaimedBytes), plan: plan)
             }
             appAlreadyRemoved = true
         } else {
             appAlreadyRemoved = false
         }
-        return .applied(await dependencies.apply(app, plan, includingData, appAlreadyRemoved))
+        // An explicitly chosen recovery uses the native Trash route even if
+        // the package manager was the reason the first attempt failed.
+        let applyPlan = job.forceCleanup ? UninstallPlan(files: plan.files,
+            fileIdentities: plan.fileIdentities, needsAdmin: plan.needsAdmin,
+            isBrewCask: false, caskToken: "", includesProtectedAppData: plan.includesProtectedAppData,
+            scannedAt: plan.scannedAt) : plan
+        var result = await dependencies.apply(app, applyPlan, includingData, appAlreadyRemoved)
+        if wasAlreadyAbsent, result.removedPaths.contains(app.path) {
+            // The first attempt already counted the bundle. Recovery only
+            // reports newly removed residues, even though apply verifies both.
+            result = .init(removed: max(0, result.removed - 1), skipped: result.skipped,
+                failed: result.failed, messages: result.messages,
+                removedPaths: result.removedPaths.subtracting([app.path]),
+                remainingPaths: result.remainingPaths, retainedPaths: result.retainedPaths,
+                reclaimedBytes: result.reclaimedBytes)
+        }
+        return .applied(result, plan: plan)
     }
 }

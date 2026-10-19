@@ -113,6 +113,35 @@ struct CleanupPresentationTests {
         print("Cleanup selection interaction: title/blank area, checkbox, scheduling, expand, child paths, partial selection, busy and protected guards passed")
     }
 
+    @MainActor private static func verifyFailureDialog(output: URL) {
+        var notices = TaskFeedbackQueue()
+        var recoveryCount = 0
+        let notice = TaskFeedbackNotice(message: "Fixture 应用卸载未完成",
+            details: ["/Applications/Fixture.app", "/fixture/selected-data"],
+            detailsAreLocalized: true, recoveryLabel: L10n.shared.t("uninstall.recovery.action"),
+            recoveryMessage: L10n.shared.t("uninstall.recovery.message"), recoveryIsDestructive: true,
+            onRetry: { recoveryCount += 1 })
+        notices.enqueue(notice)
+        for size in [CGSize(width: 760, height: 620), CGSize(width: 560, height: 520)] {
+            let view = TaskFeedbackView(notice: notice, dismiss: { notices.dismiss() }, retry: {
+                notices.dismiss()
+                notice.onRetry?()
+            }).background(Color.glassOpaque).frame(width: size.width, height: size.height)
+            let host = NSHostingView(rootView: view)
+            host.frame = CGRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+                preconditionFailure("Recovery dialog must render")
+            }
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try! bitmap.representation(using: .png, properties: [:])!.write(
+                to: output.appendingPathComponent("uninstall-recovery-\(Int(size.width)).png"))
+            precondition(notices.active?.id == notice.id && recoveryCount == 0,
+                         "Presenting or resizing a failure dialog must never start force cleanup")
+        }
+        print("Recovery dialog rendered at standard and constrained sizes without executing cleanup")
+    }
+
     @MainActor static func main() {
         _ = NSApplication.shared
         NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -122,6 +151,7 @@ struct CleanupPresentationTests {
         let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["NORI_PRESENTATION_OUTPUT"]
                          ?? NSTemporaryDirectory() + "nori-cleanup-presentation-renders", isDirectory: true)
         try! FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        verifyFailureDialog(output: output)
         let state = AppState()
         let host = NSHostingView(rootView: CleanupPresentationRoot(state: state))
         host.sizingOptions = []

@@ -802,7 +802,7 @@ test_screenshot_presets() {
     bash "$ROOT_DIR/script/test_cleanup_presentation.sh" || fail "cleanup presentation layout"
     pass "cleanup presentation: real view states retain screen-constrained window geometry"
     bash "$ROOT_DIR/script/test_agent_presentation.sh" || fail "agent cleanup presentation layout"
-    pass "agent cleanup presentation: inline results and aligned actions retain window geometry"
+    pass "agent cleanup presentation: modal failures and aligned actions retain window geometry"
 }
 
 test_destructive_sinks() {
@@ -1799,7 +1799,7 @@ test_uninstall_queue() {
     /usr/bin/grep -Fq 'let target = job.app' "$state_source" || \
         fail "uninstall worker does not use the queued application identity"
     /usr/bin/grep -Fq 'uninstallExecutor.execute(job)' "$state_source" && \
-        /usr/bin/grep -Fq 'dependencies.apply(app, plan, includingData, appAlreadyRemoved)' "$ROOT_DIR/SimpleMole/Services/UninstallWorkflow.swift" || \
+        /usr/bin/grep -Fq 'dependencies.apply(app, applyPlan, includingData, appAlreadyRemoved)' "$ROOT_DIR/SimpleMole/Services/UninstallWorkflow.swift" || \
         fail "uninstall worker does not pass the captured request to its scoped executor"
     if /usr/bin/grep -Eq 'var uninstall(Target|Files|NeedsAdmin|IsBrewCask|CaskToken|IncludesProtectedAppData)' \
         "$state_source"; then
@@ -2519,7 +2519,7 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_duplicate_workspaces.sh" || fail "duplicate result reuse and persistence tests"
     bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
     bash "$ROOT_DIR/script/test_cache_cleanup.sh" --all || fail "cache cleanup unit and filesystem E2E tests"
-    bash "$ROOT_DIR/script/test_cleanup_page_state.sh" || fail "cleanup inline results and pending retry tests"
+    bash "$ROOT_DIR/script/test_cleanup_page_state.sh" || fail "cleanup modal results and pending retry tests"
     bash "$ROOT_DIR/script/test_auto_cleanup_workflow.sh" || fail "automatic cleanup scheduler lifecycle tests"
     bash "$ROOT_DIR/script/test_administrator_cleanup.sh" || fail "administrator cleanup safety tests"
     bash "$ROOT_DIR/script/test_administrator_cleanup_performance.sh" || fail "bounded cleanup batches, path indices and UI responsiveness"
@@ -2536,6 +2536,8 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_agent_data_process_scope.sh" || fail "trusted shared-data consumers and process isolation"
     bash "$ROOT_DIR/script/test_agent_program_removal.sh" || fail "selected Agent installation removal and separate data consent"
     bash "$ROOT_DIR/script/test_agent_cli.sh" || fail "agent CLI uninstall execution tests"
+    bash "$ROOT_DIR/script/test_agent_cli_ownership.sh" || fail "agent CLI program and alias ownership tests"
+    bash "$ROOT_DIR/script/test_agent_removal.sh" || fail "complete Agent data removal and reversible Trash tests"
     bash "$ROOT_DIR/script/test_agent_workflow.sh" || fail "agent cleanup lifecycle tests"
     bash "$ROOT_DIR/script/test_agent_icons.sh" || fail "agent icon tests"
     bash "$ROOT_DIR/script/test_task_feedback.sh" || fail "task feedback queue tests"
@@ -2570,7 +2572,9 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
         fail "the standalone image tab came back; image slimming lives in disk analysis"
     fi
     bash "$ROOT_DIR/script/test_login_item.sh" || fail "login item opt-in and system status tests"
+    bash "$ROOT_DIR/script/test_page_keyboard_shortcuts.sh" || fail "page shortcut persistence and validation"
     bash "$ROOT_DIR/script/test_uninstall_residue.sh" || fail "uninstall residue discovery and result tests"
+    bash "$ROOT_DIR/script/test_application_processes.sh" || fail "complete application process shutdown tests"
     bash "$ROOT_DIR/script/test_uninstall_processes.sh" || fail "confirmed uninstall process shutdown tests"
     bash "$ROOT_DIR/script/test_cli_tools.sh" || fail "multi-ecosystem CLI inventory tests"
     bash "$ROOT_DIR/script/test_software_updates.sh" || fail "application and CLI version checks"
@@ -2608,6 +2612,10 @@ test_node_cache_inventory
 test_identity_bound_apply
 test_auto_cleanup_apply
 test_installer_apply
+bash "$ROOT_DIR/script/test_installer_policy.sh" || fail "installer policy transaction"
+pass "installer policy transaction"
+bash "$ROOT_DIR/script/test_developer_state_guard.sh" || fail "live developer-state protection"
+pass "live developer-state protection"
 test_packaged_apply_layout
 test_uninstall_space_breakdown
 test_native_cask_uninstall_contract
@@ -2626,6 +2634,10 @@ test_nvm_delete_time_guard
 test_owner_managed_runtimes_readonly
 test_auto_cleanup_planner
 test_cleanup_risk_policy
+if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
+    bash "$ROOT_DIR/script/test_project_artifact_policy.sh" || fail "project artifact policy"
+    pass "project artifact policy"
+fi
 test_cleanup_execution_accounting
 test_inventory_components
 test_clipboard_history

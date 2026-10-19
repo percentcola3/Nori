@@ -8,6 +8,7 @@ struct ProcessAppIcon: View {
     let fallbackSystemName: String
     let fallbackTint: Color
     let validatesNativeStartIdentity: Bool
+    var bundlePath: String? = nil
 
     @State private var icon: NSImage?
 
@@ -27,6 +28,10 @@ struct ProcessAppIcon: View {
         .frame(width: size, height: size)
         .task(id: row.signalToken) {
             icon = nil
+            if let bundlePath {
+                icon = NSWorkspace.shared.icon(forFile: bundlePath)
+                return
+            }
             guard let application = NSRunningApplication(processIdentifier: row.pid),
                   !application.isTerminated else { return }
             if validatesNativeStartIdentity {

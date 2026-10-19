@@ -9,13 +9,17 @@ import Foundation
 // - 每个进程带启动时间，构成跨采样稳定的身份，动作前重新采样核对，PID
 //   复用也不会误杀新进程。
 
-/// 跨采样稳定的进程身份：PID 在进程退出后可能被复用，加上启动时间、父进程和
-/// 用户就能唯一确定"当时看到的那个进程"。
+/// PID、启动时间与用户确定同一个进程；父进程仅记录关系。
+/// 父进程退出后被 launchd 接管，不会改变进程身份。
 struct ProcessIdentity: Hashable, Sendable {
     let pid: Int32
     let startTime: UInt64
     let ppid: Int32
     let uid: UInt32
+
+    func isSameProcess(as other: ProcessIdentity) -> Bool {
+        pid == other.pid && startTime == other.startTime && uid == other.uid
+    }
 }
 
 struct ProcessSample: Equatable, Sendable {
@@ -144,11 +148,11 @@ final class ProcessSampler: @unchecked Sendable {
         let bsdSize = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard proc_pidinfo(identity.pid, PROC_PIDTBSDINFO, 0, &bsd, bsdSize) == bsdSize else { return nil }
         let startTime = bsd.pbi_start_tvsec * 1_000_000 + bsd.pbi_start_tvusec
-        guard startTime == identity.startTime,
-              Int32(bitPattern: bsd.pbi_ppid) == identity.ppid,
-              bsd.pbi_uid == identity.uid else { return nil }
+        guard startTime == identity.startTime, bsd.pbi_uid == identity.uid else { return nil }
+        let freshIdentity = ProcessIdentity(pid: identity.pid, startTime: startTime,
+                                            ppid: Int32(bitPattern: bsd.pbi_ppid), uid: bsd.pbi_uid)
         let path = Self.path(of: identity.pid)
-        return ProcessSample(identity: identity, name: Self.name(from: bsd, path: path), path: path,
+        return ProcessSample(identity: freshIdentity, name: Self.name(from: bsd, path: path), path: path,
                              cpuPercent: 0, residentBytes: 0,
                              isZombie: bsd.pbi_status == UInt32(SZOMB),
                              isExiting: (bsd.pbi_flags & UInt32(PROC_FLAG_INEXIT)) != 0,
@@ -211,9 +215,85 @@ final class ProcessSampler: @unchecked Sendable {
 struct ProcessGroup: Identifiable, Equatable, Sendable {
     let app: ProcessRow
     let children: [ProcessRow]
+    var bundlePath: String? = nil
+    var members: [ProcessSample] = []
+    var isBackgroundOnly = false
     var id: Int32 { app.pid }
     var totalCPU: Double { app.cpu }
     var totalBytes: UInt64 { app.memBytes }
+}
+
+/// Ownership is established by a canonical bundle path or an observed parent
+/// chain. Process names, vendor prefixes and arbitrary command arguments are
+/// never evidence of ownership.
+struct ApplicationProcessScope: Equatable, Sendable {
+    let root: String
+    var independentRoots: Set<String>
+
+    init(root: String, independentRoots: Set<String> = []) {
+        self.root = Self.canonical(root)
+        self.independentRoots = independentRoots
+    }
+
+    static func canonical(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    static func bundlePath(of path: String) -> String? {
+        guard path.hasPrefix("/"), !path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else { return nil }
+        let components = canonical(path).split(separator: "/")
+        for index in components.indices where components[index].hasSuffix(".app") {
+            guard index + 1 < components.count, components[index + 1] == "Contents" else { continue }
+            let root = "/" + components[...index].joined(separator: "/")
+            return ProcessAggregator.isProtectedPath(root) ? nil : root
+        }
+        return nil
+    }
+
+    func contains(_ path: String) -> Bool {
+        guard path.hasPrefix("/"), !path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else { return false }
+        return Self.canonical(path).hasPrefix(root + "/")
+    }
+
+    func processes(in samples: [ProcessSample], remembering known: [ProcessSample] = [],
+                   canonicalPaths suppliedPaths: [String: String]? = nil) -> [ProcessSample] {
+        let paths = suppliedPaths ?? Dictionary(Set(samples.map(\.path)).map { ($0, Self.canonical($0)) },
+                                                uniquingKeysWith: { a, _ in a })
+        let remembered = Dictionary(known.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
+        func independent(_ sample: ProcessSample) -> Bool {
+            guard !independentRoots.isEmpty, let path = paths[sample.path] else { return false }
+            return independentRoots.contains { path.hasPrefix($0 + "/") }
+        }
+        var owned = Set(samples.filter { sample in
+            guard !sample.isZombie, !independent(sample) else { return false }
+            if sample.path.hasPrefix("/"), !sample.path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }),
+               paths[sample.path]?.hasPrefix(root + "/") == true { return true }
+            guard let old = remembered[sample.pid] else { return false }
+            return old.identity.isSameProcess(as: sample.identity) && old.path == sample.path
+        }.map(\.pid))
+        // Fixed-point expansion handles arbitrary sample order and grandchildren.
+        for _ in 0..<64 {
+            let next = samples.filter { !$0.isZombie && !independent($0) && owned.contains($0.ppid) }.map(\.pid)
+            let count = owned.count
+            owned.formUnion(next)
+            if count == owned.count { break }
+        }
+        return samples.filter { owned.contains($0.pid) }
+    }
+
+    static func belongsToOwnTree(_ pid: Int32, ownPID: Int32, samples: [ProcessSample]) -> Bool {
+        let byPID = Dictionary(samples.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
+        func isAncestor(_ ancestor: Int32, of child: Int32) -> Bool {
+            var current = child
+            var seen = Set<Int32>()
+            while current > 1, seen.insert(current).inserted {
+                if current == ancestor { return true }
+                current = byPID[current]?.ppid ?? 0
+            }
+            return false
+        }
+        return isAncestor(pid, of: ownPID) || isAncestor(ownPID, of: pid)
+    }
 }
 
 enum ProcessSort: String, CaseIterable {
@@ -244,50 +324,84 @@ enum ProcessAggregator {
         return nil
     }
 
-    /// 生成应用分组：每个 NSRunningApplication 一组，CPU / 内存为整棵进程树之和。
-    /// `applications` 由调用方在主线程取好（NSWorkspace 不是线程安全的）。
+    /// Combine live application ancestry with physical bundle ownership. Bundle
+    /// helpers remain visible even after reparenting to launchd. Previously
+    /// observed descendants retain ownership only while start identity AND
+    /// executable match, so an exec or PID reuse cannot inherit that scope.
     static func groups(samples: [ProcessSample],
                        applications: [(pid: Int32, name: String, startIdentity: String)],
                        ownPID: Int32,
+                       previous: [ProcessGroup] = [],
                        detail: (Int32) -> String,
                        childDetail: (ProcessSample) -> String) -> [ProcessGroup] {
         let byPID = Dictionary(samples.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
-        let applicationPIDs = Set(applications.map(\.pid))
-        var usage: [Int32: (cpu: Double, bytes: UInt64)] = [:]
-        var children: [Int32: [ProcessSample]] = [:]
-        for sample in samples where sample.pid != ownPID {
-            guard let owner = owningApplicationPID(of: sample, applicationPIDs: applicationPIDs, byPID: byPID)
-            else { continue }
-            var current = usage[owner] ?? (0, 0)
-            current.cpu += sample.cpuPercent
-            current.bytes += sample.residentBytes
-            usage[owner] = current
-            if sample.pid != owner { children[owner, default: []].append(sample) }
+        let canonicalPaths = Dictionary(Set(samples.map(\.path)).filter { !$0.isEmpty }.map {
+            ($0, ApplicationProcessScope.canonical($0))
+        }, uniquingKeysWith: { a, _ in a })
+        let ownRoot = byPID[ownPID].flatMap { ApplicationProcessScope.bundlePath(of: $0.path) }
+        let live = applications.filter { $0.pid != ownPID && byPID[$0.pid] != nil }
+        let roots = Set(samples.compactMap { ApplicationProcessScope.bundlePath(of: $0.path) } + previous.compactMap(\.bundlePath))
+        let liveRoots = Set(live.compactMap { byPID[$0.pid].flatMap { ApplicationProcessScope.bundlePath(of: $0.path) } })
+        var assigned = Set<Int32>()
+        var result: [ProcessGroup] = []
+        func row(_ sample: ProcessSample, name: String? = nil, identity: String? = nil,
+                 totalCPU: Double? = nil, totalBytes: UInt64? = nil, native: Bool = false) -> ProcessRow {
+            let bytes = totalBytes ?? sample.residentBytes
+            return ProcessRow(pid: sample.pid, startIdentity: identity ?? String(sample.identity.startTime, radix: 16),
+                              name: name ?? sample.name, detail: native ? detail(sample.pid) : childDetail(sample),
+                              isNativeApp: native, cpu: totalCPU ?? sample.cpuPercent,
+                              mem: percentOfPhysicalMemory(bytes), memBytes: bytes,
+                              ppid: sample.ppid, uid: sample.uid,
+                              state: sample.isZombie ? "Z" : (sample.isExiting ? "E" : "S"), elapsed: sample.elapsed)
         }
-        return applications.compactMap { application in
-            guard let main = byPID[application.pid] else { return nil }
-            let total = usage[application.pid] ?? (0, 0)
-            let row = ProcessRow(pid: application.pid, startIdentity: application.startIdentity,
-                                 name: application.name, detail: detail(application.pid),
-                                 isNativeApp: true, cpu: total.cpu,
-                                 mem: percentOfPhysicalMemory(total.bytes), memBytes: total.bytes,
-                                 ppid: main.ppid, uid: main.uid,
-                                 state: main.isZombie ? "Z" : (main.isExiting ? "E" : "S"),
-                                 elapsed: main.elapsed)
-            let childRows = (children[application.pid] ?? [])
-                .sorted { $0.residentBytes > $1.residentBytes }
-                .map { sample in
-                    ProcessRow(pid: sample.pid, startIdentity: String(sample.identity.startTime, radix: 16),
-                               name: sample.name, detail: childDetail(sample),
-                               isNativeApp: false, cpu: sample.cpuPercent,
-                               mem: percentOfPhysicalMemory(sample.residentBytes),
-                               memBytes: sample.residentBytes,
-                               ppid: sample.ppid, uid: sample.uid,
-                               state: sample.isZombie ? "Z" : (sample.isExiting ? "E" : "S"),
-                               elapsed: sample.elapsed)
-                }
-            return ProcessGroup(app: row, children: childRows)
+        let candidates = roots.filter { $0 != ownRoot }.map { root in
+            let scope = ApplicationProcessScope(root: root, independentRoots: liveRoots.subtracting([root]))
+            let remembered = previous.filter { $0.bundlePath == root }.flatMap(\.members)
+            return (root: root, members: scope.processes(in: samples, remembering: remembered, canonicalPaths: canonicalPaths))
+        }.sorted { lhs, rhs in
+            if liveRoots.contains(lhs.root) != liveRoots.contains(rhs.root) { return liveRoots.contains(lhs.root) }
+            if lhs.members.count != rhs.members.count { return lhs.members.count > rhs.members.count }
+            return lhs.root < rhs.root
         }
+        for candidate in candidates {
+            let root = candidate.root
+            let members = candidate.members.filter { $0.pid != ownPID && !assigned.contains($0.pid) }
+            guard !members.isEmpty else { continue }
+            let bundle = Bundle(path: root)
+            let executable = bundle?.executablePath.map(ApplicationProcessScope.canonical)
+            let application = live.first {
+                guard let path = byPID[$0.pid].flatMap({ canonicalPaths[$0.path] }) else { return false }
+                return path == executable
+            } ?? live.first {
+                byPID[$0.pid].flatMap { canonicalPaths[$0.path] }?.hasPrefix(root + "/Contents/MacOS/") == true
+            }
+            let main = application.flatMap { byPID[$0.pid] } ?? members.min { $0.pid < $1.pid }!
+            let name = application?.name ?? previous.first(where: { $0.bundlePath == root })?.app.name ?? (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+                ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
+                ?? URL(fileURLWithPath: root).deletingPathExtension().lastPathComponent
+            let totalCPU = members.reduce(0) { $0 + $1.cpuPercent }
+            let totalBytes = members.reduce(UInt64(0)) { $0 + $1.residentBytes }
+            let children = members.filter { application == nil || $0.pid != main.pid }.sorted { $0.residentBytes > $1.residentBytes }.map { row($0) }
+            result.append(ProcessGroup(app: row(main, name: name, identity: application?.startIdentity,
+                                                totalCPU: totalCPU, totalBytes: totalBytes, native: true),
+                                       children: children, bundlePath: root, members: members,
+                                       isBackgroundOnly: application == nil))
+            assigned.formUnion(members.map(\.pid))
+        }
+        // Preserve native rows for apps whose executable is outside a .app.
+        let applicationPIDs = Set(live.map(\.pid))
+        for application in live where !assigned.contains(application.pid) {
+            guard let main = byPID[application.pid], !isProtectedPath(main.path) else { continue }
+            let members = samples.filter {
+                !assigned.contains($0.pid) && $0.pid != ownPID &&
+                    owningApplicationPID(of: $0, applicationPIDs: applicationPIDs, byPID: byPID) == main.pid
+            }
+            result.append(ProcessGroup(app: row(main, name: application.name, identity: application.startIdentity,
+                                                totalCPU: members.reduce(0) { $0 + $1.cpuPercent },
+                                                totalBytes: members.reduce(0) { $0 + $1.residentBytes }, native: true),
+                                       children: members.filter { $0.pid != main.pid }.map { row($0) }, members: members))
+        }
+        return result
     }
 
     static func sorted(_ groups: [ProcessGroup], by sort: ProcessSort) -> [ProcessGroup] {

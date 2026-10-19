@@ -18,6 +18,9 @@ struct DeveloperCacheLocations: Equatable {
     var denoCache: String? = nil
     var homebrewCache: String? = nil
     var pnpmStore: String? = nil
+    var retainedPhysicalRoots: [String] = []
+    var homebrewPhysicalRoots: [String] = []
+    var goModPhysicalRoots: [String] = []
 
     static func resolve(home: String,
                         environment: [String: String],
@@ -113,11 +116,28 @@ struct DeveloperCacheLocations: Equatable {
             bunCache: expand(environment["BUN_INSTALL_CACHE_DIR"]),
             denoCache: expand(environment["DENO_DIR"]),
             homebrewCache: expand(environment["HOMEBREW_CACHE"]),
-            pnpmStore: pnpmStore)
+            pnpmStore: pnpmStore,
+            retainedPhysicalRoots: ([home + "/Library/Caches/deno", home + "/.cache/deno", home + "/.deno",
+                                     home + "/Library/Caches/pypoetry/virtualenvs", home + "/.cache/poetry/virtualenvs",
+                                     home + "/Library/Caches/org.R-project.R/R/renv",
+                                     home + "/.aws/cli/cache", home + "/.jupyter/runtime"]
+                + [expand(environment["DENO_DIR"]),
+                   expand(environment["POETRY_CACHE_DIR"]).map { $0 + "/virtualenvs" }].compactMap { $0 }).map {
+                    URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
+                },
+            homebrewPhysicalRoots: ([home + "/Library/Caches/Homebrew"]
+                + [expand(environment["HOMEBREW_CACHE"])].compactMap { $0 }).map {
+                    URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
+                },
+            goModPhysicalRoots: ([home + "/go/pkg/mod"]
+                + [expand(environment["GOMODCACHE"])].compactMap { $0 }).map {
+                    URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
+                })
     }
 
     /// 进程级缓存。环境变量与用户配置在进程生命周期内视为稳定；测试用
     /// `override` 注入受控值。
+    private static let processEnvironment = ProcessInfo.processInfo.environment
     private static let lock = NSLock()
     private static var cachedValue: DeveloperCacheLocations?
     private static var cachedEnvironment: [String: String]?
@@ -137,7 +157,7 @@ struct DeveloperCacheLocations: Equatable {
     }
 
     static func current(home: String = NSHomeDirectory(), environment: [String: String]? = nil) -> DeveloperCacheLocations {
-        let environment = environment ?? ProcessInfo.processInfo.environment
+        let environment = environment ?? processEnvironment
         lock.lock()
         if let overrideValue { lock.unlock(); return overrideValue }
         if cachedEnvironment == environment, cachedHome == home, let cachedValue { lock.unlock(); return cachedValue }
@@ -170,5 +190,205 @@ struct DeveloperCacheLocations: Equatable {
 
     private static func defaultReadText(_ path: String) -> String? {
         try? String(contentsOfFile: path, encoding: .utf8)
+    }
+}
+
+/// Shared discovery and classification catalog. All entries still pass physical,
+/// content, activity and final deletion guards before becoming actionable.
+enum DeveloperCleanupCatalog {
+    struct Entry: Equatable {
+        let path: String
+        let label: String
+    }
+
+    private static let defaults: [(String, String)] = [
+        (".npm/_cacache", "npm Cache"),
+        (".npm/_logs", "npm Logs"),
+        (".swiftpm/cache", "SwiftPM Cache"),
+        (".cache/node/corepack", "Corepack Cache"),
+        ("Library/Caches/org.carthage.CarthageKit", "Carthage Cache"),
+        (".bun/install/cache", "Bun Cache"),
+        ("Library/Caches/pnpm", "pnpm Cache"),
+        ("Library/pnpm/store", "pnpm Store"),
+        (".pnpm-store", "pnpm Store"),
+        (".local/share/pnpm/store", "pnpm Store"),
+        (".yarn/cache", "Yarn Cache"),
+        ("Library/Caches/Yarn", "Yarn Cache"),
+        (".gradle/daemon", "Gradle Cache"),
+        (".gradle/workers", "Gradle Cache"),
+        (".gradle/notifications", "Gradle Cache"),
+        ("Library/Caches/go-build", "Go Build Cache"),
+        ("go/pkg/mod/cache", "Go Download Cache"),
+        (".cargo/registry/cache", "Cargo Cache"),
+        ("Library/Caches/NuGet", "NuGet Cache"),
+        ("Library/Caches/pip", "pip Cache"),
+        (".cache/pip", "pip Cache"),
+        ("Library/Caches/pypoetry/cache", "Poetry Cache"),
+        ("Library/Caches/pypoetry/artifacts", "Poetry Artifacts"),
+        (".cache/uv", "uv Cache"),
+        (".composer/cache", "Composer Cache"),
+        ("Library/Caches/composer", "Composer Cache"),
+        (".cache/bazel", "Bazel Cache"),
+        (".cache/zig", "Zig Cache"),
+        ("Library/Caches/org.swift.swiftpm", "SwiftPM Cache"),
+        ("Library/Caches/Homebrew/downloads", "Homebrew Cache"),
+        ("Library/Caches/node-gyp", "node-gyp Cache"),
+        ("Library/Caches/typescript", "TypeScript Cache"),
+        (".hex/cache", "Hex Cache"),
+        (".tnpm/_cacache", "tnpm Cache"),
+        (".tnpm/_logs", "tnpm Logs"),
+        (".cache/poetry/cache", "Poetry Cache"),
+        (".cache/poetry/artifacts", "Poetry Artifacts"),
+        (".cache/ruff", "Ruff Cache"),
+        (".cache/mypy", "mypy Cache"),
+        (".pytest_cache", "pytest Cache"),
+        (".rbenv/cache", "Ruby Cache"),
+        (".gem/specs", "RubyGems Metadata"),
+        (".bundle/cache", "Bundler Cache"),
+        (".cpan/build", "CPAN Build Cache"),
+        (".kube/cache", "Kubernetes Cache"),
+        (".config/gcloud/logs", "gcloud Logs"),
+        (".azure/logs", "Azure Logs"),
+        (".cache/typescript", "TypeScript Cache"),
+        (".cache/electron", "Electron Cache"),
+        (".cache/node-gyp", "node-gyp Cache"),
+        (".node-gyp", "node-gyp Cache"),
+        (".turbo/cache", "Turborepo Cache"),
+        (".vite/cache", "Vite Cache"),
+        (".cache/vite", "Vite Cache"),
+        (".cache/webpack", "Webpack Cache"),
+        (".parcel-cache", "Parcel Cache"),
+        (".cache/eslint", "ESLint Cache"),
+        (".cache/prettier", "Prettier Cache"),
+        (".android/build-cache", "Android Build Cache"),
+        (".android/cache", "Android Cache"),
+        (".cache/swift-package-manager", "SwiftPM Cache"),
+        (".expo/expo-go", "Expo Cache"),
+        (".expo/android-apk-cache", "Expo Cache"),
+        (".expo/ios-simulator-app-cache", "Expo Cache"),
+        (".expo/native-modules-cache", "Expo Cache"),
+        (".expo/schema-cache", "Expo Cache"),
+        (".expo/template-cache", "Expo Cache"),
+        (".expo/versions-cache", "Expo Cache"),
+        ("Library/Logs/JetBrains", "JetBrains Logs"),
+    ]
+
+    static func entries(home: String) -> [Entry] {
+        let locations = DeveloperCacheLocations.current(home: home)
+        var result = defaults.map { Entry(path: home + "/" + $0.0, label: $0.1) }
+        func add(_ path: String?, _ label: String) {
+            guard let path, isNarrowCacheRoot(path, home: home) else { return }
+            result.append(Entry(path: path, label: label))
+        }
+        add(locations.npmCache, "npm Cache")
+        add(locations.yarnCache, "Yarn Cache")
+        add(locations.pipCache, "pip Cache")
+        add(locations.uvCache, "uv Cache")
+        add(locations.bunCache, "Bun Cache")
+        add(locations.goBuildCache, "Go Build Cache")
+        add(locations.pnpmStore, "pnpm Store")
+        if let poetry = locations.poetryCache {
+            add(poetry + "/cache", "Poetry Cache")
+            add(poetry + "/artifacts", "Poetry Artifacts")
+        }
+        if let brew = locations.homebrewCache { add(brew + "/downloads", "Homebrew Cache") }
+        if let go = locations.goModCache { add(go + "/cache", "Go Download Cache") }
+        if let cargo = locations.cargoHome { add(cargo + "/registry/cache", "Cargo Cache") }
+        if let gradle = locations.gradleUserHome {
+            for leaf in ["daemon", "workers", "notifications"] { add(gradle + "/" + leaf, "Gradle Cache") }
+        }
+        var seen = Set<String>()
+        return result.filter { isNarrowCacheRoot($0.path, home: home) && seen.insert($0.path).inserted }
+    }
+
+    /// A configured cache must never authorize a whole user or document root.
+    static func isNarrowCacheRoot(_ path: String, home: String) -> Bool {
+        guard path.hasPrefix(home + "/"),
+              !path.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+              path == URL(fileURLWithPath: path).standardizedFileURL.path else { return false }
+        let components = path.split(separator: "/")
+        guard !components.contains(".."), !components.contains(".") else { return false }
+        let broad = ["Library", "Library/Caches", "Library/Application Support", "Documents", "Desktop",
+                     "Downloads", "Pictures", "Music", "Movies", "Projects", "Code", ".cache", ".config", ".local"]
+        return !broad.contains { path == home + "/" + $0 }
+    }
+
+    static func goDownloadRoots(home: String) -> [String] {
+        toolStateBoundary(home: home).goRoots.map { $0 + "/cache" }
+    }
+
+    private struct ToolStateBoundary {
+        let locations: DeveloperCacheLocations
+        let retained: [String]
+        let brewRoots: [String]
+        let goRoots: [String]
+        let dependencyRoots: [String]
+        let gradleHomes: [String]
+    }
+    private static let boundaryLock = NSLock()
+    private static var boundaryCache: [String: ToolStateBoundary] = [:]
+
+    /// Reuse immutable boundaries during a traversal; do no filesystem work per
+    /// payload. Native scans refresh the location snapshot and shell guards
+    /// resolve aliases again immediately before deletion.
+    private static func toolStateBoundary(home: String) -> ToolStateBoundary {
+        let locations = DeveloperCacheLocations.current(home: home)
+        boundaryLock.lock()
+        defer { boundaryLock.unlock() }
+        if let cached = boundaryCache[home], cached.locations == locations { return cached }
+        var retained = [home + "/Library/Caches/deno", home + "/.cache/deno", home + "/.deno",
+                        home + "/.aws/cli/cache", home + "/.jupyter/runtime",
+                        home + "/Library/Caches/org.R-project.R/R/renv",
+                        home + "/Library/Caches/pypoetry/virtualenvs", home + "/.cache/poetry/virtualenvs"]
+        retained += locations.retainedPhysicalRoots
+        if let deno = locations.denoCache { retained.append(deno) }
+        if let poetry = locations.poetryCache { retained.append(poetry + "/virtualenvs") }
+        let brewRoots = [home + "/Library/Caches/Homebrew"] + locations.homebrewPhysicalRoots
+            + (locations.homebrewCache.map { [$0] } ?? [])
+        let goRoots = [home + "/go/pkg/mod"] + locations.goModPhysicalRoots
+            + (locations.goModCache.map { [$0] } ?? [])
+        var dependencyRoots = [home + "/.m2/repository", home + "/.ivy2/cache", home + "/.gradle/caches",
+                               home + "/.nuget/packages", home + "/.pub-cache", home + "/.cargo/git",
+                               home + "/.cargo/registry/src", home + "/.cabal/packages", home + "/.cpan/sources",
+                               home + "/.sbt/boot", home + "/.sbt/launchers"] + goRoots
+        let gradleHomes = [home + "/.gradle"] + (locations.gradleUserHome.map { [$0] } ?? [])
+        if let gradle = locations.gradleUserHome { dependencyRoots.append(gradle + "/caches") }
+        if let cargo = locations.cargoHome { dependencyRoots += [cargo + "/registry/src", cargo + "/git"] }
+        let boundary = ToolStateBoundary(locations: locations, retained: Array(Set(retained)),
+                                         brewRoots: Array(Set(brewRoots)), goRoots: Array(Set(goRoots)),
+                                         dependencyRoots: Array(Set(dependencyRoots)), gradleHomes: gradleHomes)
+        boundaryCache[home] = boundary
+        return boundary
+    }
+
+    static func dependencyStoreRoots(home: String) -> [String] {
+        toolStateBoundary(home: home).dependencyRoots
+    }
+
+    static func isDependencyStoreContent(_ path: String, home: String) -> Bool {
+        let boundary = toolStateBoundary(home: home)
+        guard let owner = boundary.dependencyRoots.filter({ path == $0 || path.hasPrefix($0 + "/") })
+            .max(by: { $0.count < $1.count }) else { return false }
+        // The most specific owner wins when a configured store is nested in
+        // another tool's cache. A broad cache exception cannot erase ownership.
+        if boundary.goRoots.contains(owner) {
+            return path != owner + "/cache" && !path.hasPrefix(owner + "/cache/")
+        }
+        if boundary.gradleHomes.contains(where: { owner == $0 + "/caches" }) {
+            let prefix = owner + "/"
+            if path.hasPrefix(prefix),
+               String(path.dropFirst(prefix.count)).split(separator: "/").first?.hasPrefix("build-cache-") == true { return false }
+        }
+        return true
+    }
+
+    /// Cache-looking paths that contain live runtime/origin state or credentials.
+    static func isRetainedToolState(_ path: String, home: String) -> Bool {
+        let boundary = toolStateBoundary(home: home)
+        if boundary.retained.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) { return true }
+        return boundary.brewRoots.contains { root in
+            (path == root || path.hasPrefix(root + "/"))
+                && path != root + "/downloads" && !path.hasPrefix(root + "/downloads/")
+        }
     }
 }

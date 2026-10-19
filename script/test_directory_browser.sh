@@ -12,6 +12,7 @@ cp "$ROOT_DIR/SimpleMole/L10n/TablesDirectory.swift" \
     "$ROOT_DIR/SimpleMole/Services/DirectorySizeCache.swift" \
     "$ROOT_DIR/SimpleMole/Services/DirectorySizeWatcher.swift" \
     "$ROOT_DIR/SimpleMole/Services/DirectoryBrowserModel.swift" \
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift" \
     "$ROOT_DIR/script/DirectoryBrowserTests.swift" "$DIRECTORY_MODEL_TEST_DIR/sources/"
 swiftc -parse-as-library -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -module-cache-path "$DIRECTORY_MODEL_TEST_DIR/cache" -framework AppKit -framework CoreServices -lsqlite3 \

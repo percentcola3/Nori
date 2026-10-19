@@ -10,7 +10,6 @@ struct CleanupTabView: View {
     @State private var userCollapsed: Set<CleanupGroupBucket>?
     /// 从可再生缓存行发起的自动清理规则创建。
     @State private var autoCleanIntent: AutoCleanupIntent?
-    @State private var showsOutcomeDetails = false
     @State private var confirmingAppData = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -75,7 +74,6 @@ struct CleanupTabView: View {
     private var presentationPhase: Int {
         if state.isApplying || state.isCleanupScanning { return 1 }
         if state.cleanupOutcomeMood == .success { return state.cleanupCelebrating ? 3 : 5 }
-        if state.cleanupOutcomeMood == .attention { return 4 }
         return showsCleanupResults ? 2 : 0
     }
 
@@ -116,14 +114,6 @@ struct CleanupTabView: View {
                         } catch { return }
                         state.finishCleanupCelebration(feedbackID: feedbackID)
                     }
-            } else if state.cleanupOutcomeMood == .attention {
-                NoriCleanupTaskStage(phase: .attention,
-                                     statusText: state.statusText,
-                                     details: state.cleanupOutcomeDetails,
-                                     applications: state.cleanupFailureApplications,
-                                     feedbackID: state.cleanupFeedbackID,
-                                     scanDisabled: state.isCleanupTaskBusy || state.cleanupQueued,
-                                     onScan: { state.requestScanAccess(.quickOptimize) })
             } else if !showsCleanupResults {
                 NoriPlaceholderStage { size in
                     NoriIdlePlaceholder(state: state, size: size)
@@ -132,7 +122,6 @@ struct CleanupTabView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        cleanupOutcomeDetails
                         ForEach(groupedCategories) { group in
                             VStack(spacing: 8) {
                                 cleanupGroupHeader(group)
@@ -185,9 +174,6 @@ struct CleanupTabView: View {
         // 扫描完成后体检系统数据库（原系统优化页分流能力，DR-11）。
         .onChange(of: state.cleanupScanComplete) { done in
             if done { state.scanSystemMaintenance() }
-        }
-        .onChange(of: state.cleanupFeedbackID) { _ in
-            showsOutcomeDetails = false
         }
         // 扫描中 → 结果/空态 的整块互换走弹簧过渡，而不是硬切。
     }
@@ -301,30 +287,6 @@ struct CleanupTabView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
-    }
-
-    @ViewBuilder
-    private var cleanupOutcomeDetails: some View {
-        if state.cleanupOutcomeMood == .attention {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(l10n.t("cleanup.execution.review"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                if !state.cleanupOutcomeDetails.isEmpty {
-                    DisclosureGroup(l10n.t("cleanup.execution.details"), isExpanded: $showsOutcomeDetails) {
-                        Text(state.cleanupOutcomeDetails.joined(separator: "\n\n"))
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .font(.system(size: 11))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .modifier(ListRowSurface())
-        }
     }
 
     private var applyLabel: String {

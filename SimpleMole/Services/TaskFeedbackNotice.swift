@@ -10,6 +10,9 @@ struct TaskFeedbackNotice: Identifiable {
     var details: [String] = []
     var detailsAreLocalized = false
     var applicationNames: [String] = []
+    var recoveryLabel: String? = nil
+    var recoveryMessage: String? = nil
+    var recoveryIsDestructive = false
     var onRetry: (() -> Void)? = nil
 
     /// Detached tool panels report to the same queue as main-window tasks.
@@ -24,4 +27,6 @@ struct TaskFeedbackNotice: Identifiable {
 extension Notification.Name {
     static let noriTaskFailure = Notification.Name("NoriTaskFailure")
     static let smOpenMainWindow = Notification.Name("SMOpenMainWindow")
+    static let smOpenPage = Notification.Name("SMOpenPage")
+    static let smShortcutRecordingChanged = Notification.Name("SMShortcutRecordingChanged")
 }

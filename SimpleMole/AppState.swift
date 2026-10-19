@@ -95,6 +95,23 @@ final class AppState: ObservableObject {
         var id: String { rawValue }
         var titleKey: String { self == .settings ? "settings.title" : "tab.\(rawValue)" }
 
+        /// 按页面身份固定快捷键；隐藏页面不会改变其他页面的编号。
+        var defaultKeyEquivalent: String {
+            switch self {
+            case .cleanup: return "1"
+            case .agents: return "2"
+            case .analyze: return "3"
+            case .directory: return "4"
+            case .uninstall: return "5"
+            case .devenv: return "6"
+            case .processes: return "7"
+            case .ports: return "8"
+            case .traffic: return "9"
+            case .clipboard: return "0"
+            case .settings: return ","
+            }
+        }
+
         /// 剪贴板页由功能开关控制，设置页始终保留。
         static var configurableCases: [PageKey] {
             allCases.filter { $0 != .clipboard && $0 != .settings }
@@ -115,6 +132,52 @@ final class AppState: ObservableObject {
     }
 
     @Published var selectedTab = 0
+    @Published private(set) var pageShortcutPreferences = PageShortcutPreferences.load()
+    private var shortcutRecordingOwner: UUID?
+    var isRecordingShortcut: Bool { shortcutRecordingOwner != nil }
+    @Published private(set) var pageShortcutRegistrationFailures: Set<PageKey> = []
+
+    func beginRecordingShortcut(owner: UUID) {
+        shortcutRecordingOwner = owner
+        registerGlobalHotKeys()
+        NotificationCenter.default.post(name: .smShortcutRecordingChanged, object: owner)
+    }
+
+    func endRecordingShortcut(owner: UUID) {
+        guard shortcutRecordingOwner == owner else { return }
+        shortcutRecordingOwner = nil
+        registerGlobalHotKeys()
+    }
+
+    func pageShortcut(for page: PageKey) -> PageKeyboardShortcut? {
+        pageShortcutPreferences.shortcut(for: page.rawValue, defaultKey: page.defaultKeyEquivalent)
+    }
+
+    func pageShortcutError(_ shortcut: PageKeyboardShortcut, for page: PageKey) -> String? {
+        guard shortcut.isValid else { return l10n.t("settings.pageShortcuts.invalid") }
+        if shortcut.isReserved { return l10n.t("settings.pageShortcuts.reserved") }
+        if let other = PageKey.allCases.first(where: { $0 != page && pageShortcut(for: $0) == shortcut }) {
+            return l10n.tf("settings.pageShortcuts.conflict", l10n.t(other.titleKey))
+        }
+        return nil
+    }
+
+    @discardableResult
+    func setPageShortcut(_ shortcut: PageKeyboardShortcut?, for page: PageKey) -> String? {
+        if let shortcut, let error = pageShortcutError(shortcut, for: page) { return error }
+        var next = pageShortcutPreferences
+        next.set(shortcut, for: page.rawValue)
+        pageShortcutPreferences = next
+        next.store()
+        registerGlobalHotKeys()
+        return nil
+    }
+
+    func resetPageShortcuts() {
+        pageShortcutPreferences = PageShortcutPreferences()
+        pageShortcutPreferences.store()
+        registerGlobalHotKeys()
+    }
     /// 用户隐藏的页面（UserDefaults 持久化）。
     @Published var hiddenPages: Set<String> = []
     @Published var mainWindowVisible = false
@@ -218,6 +281,7 @@ final class AppState: ObservableObject {
         } else {
             selectedTab = min(selectedTab, max(0, visiblePages.count - 1))
         }
+        registerGlobalHotKeys()
     }
 
     // MARK: Agent 专清
@@ -614,12 +678,13 @@ final class AppState: ObservableObject {
             let wasSettings = selectedTab == previousSettingsIndex
             if wasSettings { jump(to: .settings) }
             else { selectedTab = min(selectedTab, max(0, visiblePages.count - 1)) }
+            registerGlobalHotKeys()
         }
     }
     @Published var screenshotHotKeyEnabled: Bool {
         didSet {
             UserDefaults.standard.set(screenshotHotKeyEnabled, forKey: "SMShotHotKey")
-            registerScreenshotHotKey()
+            registerGlobalHotKeys()
         }
     }
     /// 截图全局快捷键的组合（默认 ⇧⌘S，可自定义并持久化）。
@@ -627,7 +692,7 @@ final class AppState: ObservableObject {
         didSet {
             guard oldValue != screenshotHotKey else { return }
             screenshotHotKey.store()
-            registerScreenshotHotKey()
+            registerGlobalHotKeys()
         }
     }
     @Published private(set) var screenshotHotKeyRegistrationFailed = false
@@ -636,24 +701,25 @@ final class AppState: ObservableObject {
     @Published var ratioCaptureHotKeyEnabled: Bool {
         didSet {
             UserDefaults.standard.set(ratioCaptureHotKeyEnabled, forKey: "SMShotRatioHotKey")
-            registerScreenshotHotKey()
+            registerGlobalHotKeys()
         }
     }
     @Published var ratioCaptureHotKey = HotKeyCombo.loadRatio() {
         didSet {
             guard oldValue != ratioCaptureHotKey else { return }
             ratioCaptureHotKey.storeRatio()
-            registerScreenshotHotKey()
+            registerGlobalHotKeys()
         }
     }
     @Published private(set) var ratioCaptureHotKeyRegistrationFailed = false
 
     /// 统一的快捷键注册收口：任一开关或组合变化都整体重注册。
-    func registerScreenshotHotKey() {
+    func registerGlobalHotKeys() {
         HotKeyCenter.shared.unregister()
         screenshotHotKeyRegistrationFailed = false
         ratioCaptureHotKeyRegistrationFailed = false
-        guard screenshotHotKeyEnabled || ratioCaptureHotKeyEnabled else { return }
+        pageShortcutRegistrationFailures = []
+        guard !isRecordingShortcut else { return }
         if screenshotHotKeyEnabled {
             screenshotHotKeyRegistrationFailed = !HotKeyCenter.shared.register(
                 id: "screenshot",
@@ -670,6 +736,20 @@ final class AppState: ObservableObject {
                 NotificationCenter.default.post(name: .smTakeRatioScreenshot, object: nil)
             }
         }
+        let keyCodes = PageShortcutKeyCodeMap.current()
+        var failed: Set<PageKey> = []
+        for page in visiblePages {
+            guard let shortcut = pageShortcut(for: page) else { continue }
+            guard let combo = shortcut.hotKeyCombo(using: keyCodes),
+                  HotKeyCenter.shared.register(id: "page-" + page.rawValue,
+                      keyCode: combo.keyCode, modifiers: combo.modifiers, handler: {
+                          NotificationCenter.default.post(name: .smOpenPage, object: page.rawValue)
+                      }) else {
+                failed.insert(page)
+                continue
+            }
+        }
+        pageShortcutRegistrationFailures = failed
     }
 
     // MARK: 权限中心
@@ -1164,7 +1244,9 @@ final class AppState: ObservableObject {
 
     func startAwakeSession() {
         requestAwakeNotificationAuthorizationIfNeeded()
-        _ = awake.start(mode: awakePreferences.defaultMode)
+        if !awake.start(mode: awakePreferences.defaultMode), let error = awake.errorMessage {
+            presentTaskFailure(message: error)
+        }
     }
 
     func endAwakeSession() {
@@ -1385,6 +1467,7 @@ final class AppState: ObservableObject {
     }
 
     private var uninstallConfirmationGeneration = UUID()
+    private var pendingAgentRemovalReviews = AgentRemovalReviewQueue()
 
     func previewUninstall(_ app: UninstallApp) {
         guard softwareUpdatingID == nil else { return }
@@ -1470,6 +1553,13 @@ final class AppState: ObservableObject {
             action()
             return
         }
+        let reviewIDs = pendingAgentRemovalReviews.takeIfReady(hasUninstallWork: uninstallQueue.hasWork,
+            isBlocked: isStoppingUninstallQueue || isUninstallMutationBlocked || isAgentTaskBusy
+                || confirmation != nil || isDispatchingConfirmation || taskNotice != nil)
+        if !reviewIDs.isEmpty {
+            offerAgentAssociatedDataCleanup(agentIDs: reviewIDs)
+            return
+        }
         // Preserve mutual exclusion at the disk mutation edge while allowing
         // more confirmed requests to join the queue from any visible row.
         let blocked = isUninstallMutationBlocked || confirmation != nil || isDispatchingConfirmation
@@ -1509,23 +1599,28 @@ final class AppState: ObservableObject {
             }
         }
         let result: NativeCore.ApplySummary
+        let recoveryPlan: UninstallPlan?
         switch outcome {
         case .processesCouldNotStop:
             finishUninstall(job, succeeded: false,
                 message: l10n.tf("status.uninstallPartial", target.name),
-                details: ["Uninstall processes could not be stopped."])
+                details: ["Uninstall processes could not be stopped."],
+                recoveryPlan: job.forceCleanup ? job.plan : nil)
             return
         case .planUnavailable:
             finishUninstall(job, succeeded: false, message: l10n.tf("log.uninstallPreviewFail", target.name))
             return
-        case .applied(let summary):
+        case .applied(let summary, let plan):
             result = summary
+            recoveryPlan = plan
         }
         if result.succeeded { uninstallDataSelections[target.id] = nil }
         if !result.messages.isEmpty { log(result.messages.joined(separator: "\n")) }
         if result.removed > 0 { CleanupCache.invalidate() }
         uninstallInventoryGeneration += 1
         if result.succeeded {
+            pendingAgentRemovalReviews.record(agentIDs: AgentSoftwareInventory.agentIDs(for: target),
+                installationWasRemoved: result.removedPaths.contains(target.path))
             installedApps.removeAll { $0.id == target.id && $0.appIdentity == target.appIdentity }
             uninstallPlans.removeValue(forKey: target.id)
             persistUninstallInventory()
@@ -1553,17 +1648,32 @@ final class AppState: ObservableObject {
             }
             finishUninstall(job, succeeded: false,
                             message: l10n.tf("status.uninstallPartial", target.name) + "\n" + detail,
-                            details: reasons + result.remainingPaths)
+                            details: reasons + result.remainingPaths, recoveryPlan: recoveryPlan)
         }
     }
 
-    private func finishUninstall(_ job: UninstallJob, succeeded: Bool, message: String, details: [String] = []) {
+    private func finishUninstall(_ job: UninstallJob, succeeded: Bool, message: String,
+                                 details: [String] = [], recoveryPlan: UninstallPlan? = nil) {
         uninstallQueue.finish(job.id, succeeded: succeeded, message: message)
         noteHeaderReaction(succeeded ? .success : .attention)
         resampleAfterMutation()
-        appListStatus = message
+        appListStatus = ""
         log(message)
-        if !succeeded { presentTaskFailure(message: message, details: details) }
+        if !succeeded {
+            var notice = TaskFeedbackNotice(message: message, details: details)
+            if let recoveryPlan {
+                notice.recoveryLabel = l10n.t("uninstall.recovery.action")
+                notice.recoveryMessage = l10n.t("uninstall.recovery.message")
+                notice.recoveryIsDestructive = true
+                notice.onRetry = { [weak self] in
+                    guard let self, self.authorize(.uninstall(app: job.app), presentingPermissionCenter: true),
+                          self.uninstallQueue.enqueue(app: job.app, plan: recoveryPlan,
+                            dataPaths: job.dataPaths, scope: job.scope, forceCleanup: true) != nil else { return }
+                    self.startNextUninstallIfPossible()
+                }
+            }
+            presentTaskNotice(notice)
+        }
     }
 
     /// Watches the roots where app installs and uninstalls become visible.

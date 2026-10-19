@@ -34,15 +34,17 @@
 | --- | --- | --- |
 | 应用/浏览器/IM 可再生缓存、日志、崩溃报告 | 无年龄门 | 由运行态守卫 + 执行前身份/占用复核把关 |
 | 开发者缓存与构建产物（npm/pnpm/Yarn/Bun/pip/uv/Cargo/Go/Gradle build-cache/SwiftPM/DerivedData/各前端构建缓存…） | 7 天 | DerivedData 与 Gradle 按子目录单元；自定义位置见下 |
-| 依赖仓库（Maven local、Gradle modules、NuGet packages、pub-cache、cargo registry/src） | 只读复核 | 永不进入一键清理；`toolCommand` 路由交给工具自身的清理命令 |
+| 依赖仓库（Go 已解压模块树、Maven local、Gradle modules、NuGet packages、pub-cache、cargo registry/src） | 只读复核 | 永不进入一键清理；`toolCommand` 路由交给工具自身的清理命令 |
 | IM：Telegram 媒体缓存 / 飞书文档预览 / 各 IM 容器与 App Support 缓存叶子 | 无年龄门 | messenger 守卫按具体应用收窄：微信在跑不冻结 Telegram |
 | 聊天数据库、账号状态、凭据、会话 | 保护 | `isProtectedContent` 名单（Keychains、sessions、模型权重等） |
 | 卸载残留（废纸篓中的 App + 深度扫描下未安装应用的容器） | 无年龄门 | 仅缓存/日志叶子可回收，按 Bundle ID 精确归属 |
 | 废纸篓、诊断报告、设备固件、Messages 预览缓存 | 无年龄门 | macOS 可再生 |
 
-**自定义缓存位置**（`DeveloperCacheLocations`，只读解析、进程内复用）：`~/.npmrc cache=`、`.yarnrc.yml cacheFolder`、`pip.conf cache-dir`、`POETRY_CACHE_DIR`，以及 `GRADLE_USER_HOME / CARGO_HOME / GOMODCACHE / GOCACHE / NPM_CONFIG_CACHE / YARN_CACHE_FOLDER / PIP_CACHE_DIR` 环境变量。发现层与策略层共用同一解析，杜绝“扫得到却被保护规则拦下”（Gradle 冲突回归有测试）。`XDG_CACHE_HOME` 整体重定向暂不支持（已知边界）。
+**自定义缓存位置**（`DeveloperCacheLocations`，只读解析、进程内复用）：`~/.npmrc cache=`、`.yarnrc.yml cacheFolder`、`pip.conf cache-dir`、`POETRY_CACHE_DIR / UV_CACHE_DIR / BUN_INSTALL_CACHE_DIR / HOMEBREW_CACHE / PNPM_STORE_DIR`，以及 `GRADLE_USER_HOME / CARGO_HOME / GOMODCACHE / GOCACHE / NPM_CONFIG_CACHE / YARN_CACHE_FOLDER / PIP_CACHE_DIR` 环境变量。发现层与策略层共用同一解析，杜绝“扫得到却被保护规则拦下”（Gradle 冲突回归有测试）。`XDG_CACHE_HOME` 整体重定向暂不支持（已知边界）。
 
-**保护名单**：`~/.config/mole/whitelist`（literal / `~` / `$HOME` / glob）在发现、执行两层生效；受保护子目录会保护其父目录不被整体提供。
+Go 的 `GOMODCACHE` 只发现 `cache` 下载子树，已解压模块树保持复核；Poetry 只发现 `cache`、`artifacts`，虚拟环境保留。Homebrew 只认下载子树，API、bootsnap、锁与整个父目录保留。配置不能把整个 Home、Documents、Downloads、Library 等大范围目录升级为安全缓存。
+
+**保护名单**：`~/.config/mole/whitelist`（literal / `~` / `$HOME` / glob）在发现、执行两层生效；受保护子目录会保护其父目录不被整体提供。已有白名单无法读取或编码无效时，停止候选扫描并保护所有删除目标，不回退到默认名单。
 
 ## 4. 磁盘分析范围
 
@@ -70,3 +72,52 @@
 - `script/CleanupScanTests.swift`：目录目录、分组、白名单、取消、部分结果、硬链接；**7 天门扫描级**（旧项目推荐/新项目保留、执行前复核、GRADLE_USER_HOME / npmrc 自定义位置发现与策略一致性）。
 - `script/CleanupRiskPolicyTests.swift`：风险默认值、路由、运行态守卫（messenger 按应用收窄）、**年龄边界**（恰好 7 天/差一秒/缺失/未来）、**处置解码兼容**、长尾合并。
 - `script/test_disk_analysis.sh`：深度遍历、目录层级、稀疏文件、取消与缓存导航。
+
+## 8. Mole 策略对照与补缺（2026-10-18）
+
+对照上游 [`8c55e8c07f3b34eeeb0352753b660f823468cd43`](https://github.com/tw93/Mole/tree/8c55e8c07f3b34eeeb0352753b660f823468cd43)，保留现有 vendored revision 与本地执行器补丁，按能力移植规则，未整库覆盖。
+
+| 范围 | 本次处理 | 保持的边界 |
+| --- | --- | --- |
+| 开发缓存 | `DeveloperCleanupCatalog` 统一发现与风险分类；补齐原先只被策略认可、未被扫描的 Hex、Ruby、Bundler、CPAN、Kubernetes、云工具日志、Expo 等叶子；支持 uv、Bun、Homebrew 的配置位置 | 仍需完整遍历、7 天活动证据、文件身份、保护名单与运行态复核 |
+| 类缓存持久状态 | Deno 默认/自定义目录及其物理别名、AWS CLI 凭证缓存、Jupyter 连接状态保留；renv 升为不可被自定义白名单覆盖的硬保护 | “位于 Caches”或名称带 cache 不能覆盖这些规则；Swift 分类与 shell 最终删除层均检查 |
+| 项目产物 | 34 个候选目录名按语言生态、manifest 或结构判定；项目内有效 `CACHEDIR.TAG` 提供通用缓存声明 | Git 跟踪文件、嵌套仓库、`*-keypair.json`、超时及证据缺失均保留；依赖内部产物不重复扫描；始终手动复核、默认不选 |
+| 安装包 | 扫描与执行共享根、深度、类型和 ZIP 分类；有全局截止；完整扫描后一次返回候选，ZIP 须完整列举成功再识别前 50 条 | 权限不可达子树可跳过；其他扫描故障不返回半份候选；候选须用户选中；执行时重新核对类型、身份、白名单和占用 |
+
+项目 `bin` 限 .NET 输出结构；`vendor` 限 Composer 且排除 Go/Rails；`venv/.venv` 需真实 `pyvenv.cfg`。同名 `build/dist` 不能单独证明目录可丢弃。Agent 的安装版本、会话、工作树仍走 Agent 专用归属与保留规则，未扩大通用清理的权限。
+
+未直接照搬的策略：安装包年龄/已安装版本并无通用可靠证据，仍作为待审候选；任意未知应用的数据目录、模型、SDK、Docker 镜像不能依据占用或年龄升级为垃圾；`XDG_CACHE_HOME` 整体泛扫与 Agent worktree 的项目产物清理留待独立归属验证。名单之外由磁盘分析帮助发现占用，不代表允许自动删除。
+
+回归入口：`test_cleanup_risk_policy.sh`、`test_cleanup_scan.sh`、`test_project_artifact_policy.sh`、`test_installer_policy.sh`、`test_developer_state_guard.sh`。所有新增删除测试仅操作一次性夹具。
+
+## 9. 废纸篓扫描与容量复用
+
+废纸篓的扫描展示与删除前复核分开：顶层丢弃条目先走 `FTS_PHYSICAL | FTS_XDEV` 元数据计量，只读取已分配 blocks、inode 与删除权限，不打开普通文件或分析内容。已知占用、白名单、锁、权限异常或不完整子树回退到原来的安全细分遍历。硬链接按设备与 inode 去重，符号链接只统计链接自身，不跨卷。
+
+容量快照仅驻留内存，使用前冲刷 FSEvents 并核对条目身份；文件变化、事件丢失、根目录变化或挂载变化会使快照失效，快照有效期为 5 分钟，过期后在下次扫描时重新计量；超出内存预算的大树仍完成轻量统计，但不保留容量快照。缓存只加速扫描展示，新的占用和白名单每次重新核对；删除执行始终绕开容量缓存，重新进行完整身份、权限、内容与占用复核。扫描日志的 `trashCached` / `trashMeasured` 分别记录复用与重新计量的条目数。
+
+macOS 的 `totalFileAllocatedSize` 表示单个文件各数据 fork 的已分配空间，并不是递归目录大小；目前没有可直接返回整个废纸篓容量的公开接口。首次精确计量仍须读取目录树元数据。文件名搜索索引没有 blocks/权限/完整性数据，且排除废纸篓，因此不能直接作为垃圾容量或可删除性的证据。
+
+## 10. 内置规则的目录级计量快照
+
+已知开发缓存、Xcode 产物、浏览器/Electron 缓存叶子，以及 macOS Caches / Logs / DiagnosticReports 规则使用目录级快照：首次完整验证后，只缓存整棵树均符合规则的结果。再次扫描时，未变化的目录直接复用总量与分类，不重新枚举子目录、打开文件或读取内容。含受保护文件、数据库、占用、白名单或不完整统计的混合目录继续走细分检查；父路径本身不是跳过内容规则的证据。
+
+同一用户目录由一个 FSEvents 订阅覆盖；事件按物理路径只使受影响的计量根失效。丢事件、根变化及挂载变化使整个快照失效并重新订阅。多个规则不会互相切换订阅或因无关目录变化而一起失效；单个废纸篓文件直接使用 stat 中的 blocks，不建立树快照。
+
+有 7 天活跃门的规则保留已验证的平面文件清单，复用容量时只做平面时间戳核对，避免重新递归枚举。纯访问时间变化不一定产生 FSEvents，因此不能只依赖事件判断活跃；本进程分类读取造成的 atime 变化仍按精确 I/O 证据归因，真实外部访问继续生效。时效与归属按单文件实时判断的系统目录暂不使用目录快照。所有删除执行都保持独立实时复核。
+
+扫描日志增加 `ruleCached` / `ruleMeasured`，用于区分内置规则的快照命中与完整计量。首次遇到的新树仍需建立完整总量；目录自身的 stat 大小不能替代子树容量。
+
+## 11. 横向候选发现的性能与取消
+
+大量废纸篓顶层条目与大量精确规则同时存在时，发现阶段不能对每个条目再遍历全部 URL 规则。扫描开始时先把精确规则转换为字面路径集合，预计算被精确规则覆盖的宽泛根直接子项，发现时使用集合查询。Agent / 全局缓存规则也按当前根的可能覆盖范围提前剪枝，保持原有归属裁决。
+
+发现阶段的内层逐项循环与外层根循环都检查取消和总预算，避免停在某个宽泛目录时越过 45 秒快速扫描限时。进度定期报告实际子项；统一日志记录废纸篓的顶层条目数、规则数及发现耗时，扫描汇总增加 `trashEntries`、`trashDiscovery`、`rules`，将候选发现与后续容量计量区分开。
+
+回归包含 1500 个废纸篓顶层条目与 300 个项目规则共存、2000 条规则上的 20000 次字面路径查询、括号/前缀边界，以及在发现内层取消后不再访问剩余条目。
+
+文件占用列表与已覆盖根同样预先生成字面祖先集合。容量预览通过集合查询判断根或后代是否被占用，避免每个废纸篓条目重复遍历完整 lsof 列表；删除仍使用当次实时占用证据。回归包含 10000 个占用路径与 20000 次查询，以及重复斜杠、括号、Unicode 和前缀相似路径。
+
+快速扫描转深度补扫时，页面也使用按路径层级的已完成根查询，不能在主线程为每条结果再次遍历全部完成根。回归覆盖 100000 个完成根上的 40000 次父目录/相似前缀查询。
+
+容量缓存最多接纳 1024 个计量根和 100000 个平面路径。超出预算的新根不写入缓存，保留已接纳快照，避免大型顺序扫描不断清空整个缓存。观察表只淘汰未缓存根；每次重新接纳路径分配新的修订号，使已淘汰的在途计量票据不能写回旧结果。回归覆盖 2200 个规则根跨越容量上限与旧票据重接纳场景。

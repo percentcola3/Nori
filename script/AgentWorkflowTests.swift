@@ -195,6 +195,10 @@ final class WorkflowFixture {
     var reportForRemovedAgents: AgentScanReport?
     var cli: [AgentCLIInstallation] = []
     var cleanup = AgentCleanupExecutor.Outcome(summary: .init(removed: 1), refused: 0)
+    var removalPlan: AgentRemovalService.Plan?
+    var remainingRemovalPlan: AgentRemovalService.Plan?
+    var removalItems: [DeletionPlan.Item] = []
+    var removalRequests = 0
     var uninstall = AgentCLIService.Outcome(removed: 1, failed: 0, messages: [])
     var uninstallByID: [String: AgentCLIService.Outcome] = [:]
     var dependencyOwners = ["FixtureHost", "test.nori.fixture"]
@@ -275,7 +279,41 @@ enum NativeCore {
         var messages: [String] = []
         var removedPaths: Set<String> = []
         var remainingPaths: [String] = []
+        var retainedPaths: [String] = []
         var reclaimedBytes: UInt64 = 0
+    }
+}
+
+/// The complete-removal UI is exercised without linking its filesystem sink.
+/// Plans are immutable, and a successful fixture execution removes its roots
+/// from the subsequent verification plan.
+enum AgentRemovalService {
+    struct Plan: @unchecked Sendable {
+        let agentIDs: Set<String>
+        let items: [DeletionPlan.Item]
+        let retainedPaths: [String]
+        let messages: [String]
+    }
+    static func plan(agentIDs: Set<String>, home: String) -> Plan {
+        precondition(home == workflowHome)
+        let fixture = WorkflowFixture.current
+        if fixture.removalRequests > 0 {
+            return fixture.remainingRemovalPlan ?? .init(agentIDs: agentIDs, items: [], retainedPaths: [], messages: [])
+        }
+        if let plan = fixture.removalPlan { return plan }
+        let report = fixture.reportForRemovedAgents ?? fixture.report
+        let items = report.categories.flatMap { category in
+            category.paths.map { DeletionPlan.Item(record: $0, identity: category.pathIdentities[$0] ?? "fixture-identity") }
+        } + report.skills.map { DeletionPlan.Item(record: $0.path, identity: $0.identity) }
+        return .init(agentIDs: agentIDs, items: items, retainedPaths: [], messages: [])
+    }
+    static func execute(_ plan: Plan, running: RunningApplicationSnapshot, home: String) -> NativeCore.ApplySummary {
+        precondition(home == workflowHome)
+        let fixture = WorkflowFixture.current
+        fixture.removalRequests += 1
+        fixture.removalItems = plan.items
+        fixture.cleanupGate.pause()
+        return fixture.cleanup.summary
     }
 }
 enum AgentCleanupExecutor {
@@ -342,7 +380,8 @@ enum AgentCLIService {
     static func uninstall(_ installation: AgentCLIInstallation, home: String,
                           running: RunningApplicationSnapshot, permanent: Bool = false,
                           onCurrentFile: ((String) -> Void)? = nil) -> Outcome {
-        precondition(home == workflowHome && running.isComplete && permanent)
+        precondition(home == workflowHome && running.isComplete && !permanent,
+                     "Native CLI removal must keep the reversible Trash route")
         let fixture = WorkflowFixture.current
         fixture.recordUninstall(installation)
         onCurrentFile?(installation.executablePaths.first ?? "")
@@ -585,31 +624,35 @@ struct AgentWorkflowTests {
     }
 
     @MainActor private static func attention(_ state: AppState, retry: Bool = true) {
-        if state.agentCompletedCount > 0 {
-            precondition(!state.agentApplying && state.agentOutcomeMood == .success && !state.agentCelebrating
-                         && state.agentCleanupHasFeedback && state.agentCleanupProgress == nil
-                         && state.agentOutcomeDetails.isEmpty && state.agentFailureApplications.isEmpty
-                         && state.taskNotice == nil && state.agentRetryAvailable == retry,
-                         "Partial deletion must keep a persistent success result and a retry without failure UI")
-            return
-        }
-        precondition(!state.agentApplying && state.agentOutcomeMood == .attention
-                     && state.agentCleanupHasFeedback && !state.agentCelebrating
-                     && state.agentCleanupProgress == nil)
-        precondition(state.taskNotice == nil
-                     && (!state.agentOutcomeDetails.isEmpty || !state.agentFailureApplications.isEmpty),
-                     "Agent failures must stay actionable on the page without a second modal")
+        precondition(!state.agentApplying && !state.agentCelebrating
+                     && state.agentCleanupHasFeedback && state.agentCleanupProgress == nil)
+        precondition(state.agentOutcomeMood == (state.agentCompletedCount > 0 ? .success : .attention))
+        guard let notice = state.taskNotice else { preconditionFailure("Incomplete Agent tasks need a modal") }
+        precondition(!notice.message.isEmpty && notice.onRetry != nil,
+                     "The result dialog must retain a recovery action without expanding the inventory")
         precondition(state.agentRetryAvailable == retry)
+        // Subsequent fixture actions model a user dismissing the result first.
+        state.dismissTaskNotice()
     }
 
-    @MainActor private static func successAndRefreshed(_ state: AppState, removed: Int) {
+    @MainActor private static func retryAgentRecovery(_ state: AppState) {
+        if let notice = state.taskNotice {
+            state.retryTaskNotice(notice)
+        } else {
+            state.retryFailedAgentCleanup()
+        }
+    }
+
+    @MainActor private static func successAndRefreshed(_ state: AppState, removed: Int, line: UInt = #line) {
         precondition(!state.agentApplying && state.agentOutcomeMood == .success
                      && !state.agentCelebrating && state.agentCompletedCount == removed)
-        precondition(state.taskNotice == nil && !state.agentRetryAvailable && state.agentCleanupProgress == nil,
-                     "Confirmed success must remain on the current page without a result popup: removed=\(removed), retry=\(state.agentRetryAvailable), scanComplete=\(state.agentScanComplete), progress=\(String(describing: state.agentCleanupProgress))")
+        precondition((state.taskNotice == nil) == WorkflowFixture.current.report.complete
+                     && !state.agentRetryAvailable && state.agentCleanupProgress == nil,
+                     "Confirmed success at line \(line) must remain on the current page without a result popup: notice=\(String(describing: state.taskNotice?.message)), removed=\(removed), retry=\(state.agentRetryAvailable), scanComplete=\(state.agentScanComplete), progress=\(String(describing: state.agentCleanupProgress))")
         precondition(state.agentHasScanned && state.agentScanComplete == WorkflowFixture.current.report.complete
                      && WorkflowFixture.current.scanCount > 0 && state.agentSelectedCount == 0,
                      "Cleanup must refresh the inventory and clear selection before finishing")
+        if state.taskNotice != nil { state.dismissTaskNotice() }
     }
 
     @MainActor static func main() async throws {
@@ -660,7 +703,13 @@ struct AgentWorkflowTests {
         try await associatedDataMutationPreflight(kind: "incomplete")
         try await associatedDataMutationPreflight(kind: "idle")
         try await associatedDataMutationGuards()
-        print("Agent workflow: inline prerequisites/errors, frozen and proven CLI retries, owner/runtime guards, partial refresh, CLI + data progress, per-attempt reclaimed bytes, success without popups passed")
+        try await completeRemovalIncludesProtectedData()
+        try await completeRemovalReportsRetainedData()
+        try await completeRemovalEmptyPlanSucceedsWithoutFailurePopup()
+        try await completeRemovalReportsPartialResult()
+        try await bulkCLIOffersSeparateCompleteRemoval()
+        try await bulkLinkDoesNotOfferCompleteRemoval()
+        print("Agent workflow: modal prerequisites/errors, frozen and proven CLI retries, owner/runtime guards, partial refresh, CLI + data progress, per-attempt reclaimed bytes, success without popups passed")
     }
 
     @MainActor private static func perAgentRetentionStaysScoped() {
@@ -884,7 +933,8 @@ struct AgentWorkflowTests {
                 if gate == "software-update" { state.softwareUpdatingID = "other-update" }
                 consent.onConfirm()
                 precondition(!state.agentApplying && state.agentProgramBusyID == nil
-                             && state.snapshots == 0 && f.cleanupCount == 0 && f.uninstallCount == 0,
+                             && state.snapshots == 0 && f.cleanupCount == 0 && f.uninstallCount == 0
+                             && f.removalRequests == 0,
                              "Associated data consent crossed a shared mutation before process close or deletion")
             }
         }
@@ -922,13 +972,123 @@ struct AgentWorkflowTests {
                          "Incomplete fresh process evidence cannot authorize data cleanup")
         } else {
             try await waitUntil { f.cleanupGate.started }
-            precondition(!f.submittedPaths.contains(workflowHome + "/new-data")
-                         && f.submittedPaths.contains(workflowHome + "/cache")
-                         && f.submittedSkillIdentities == ["fixture-identity"],
+            precondition(!f.removalItems.map(\.record).contains(workflowHome + "/new-data")
+                         && f.removalItems.map(\.record).contains(workflowHome + "/cache")
+                         && f.removalItems.contains { $0.record == workflowHome + "/skill" && $0.identity == "fixture-identity" }
+                         && f.cleanupCount == 0,
                          "A fresh idle process probe preserves the confirmed data envelope")
             f.cleanupGate.release()
-            try await waitUntil { !state.agentApplying }
+            try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         }
+    }
+
+    @MainActor private static func completeRemovalIncludesProtectedData() async throws {
+        let (state, fixture) = prepare()
+        let root = workflowHome + "/protected-agent-home"
+        fixture.removalPlan = .init(agentIDs: ["fixture"],
+            items: [.init(record: root, identity: "reviewed-root")], retainedPaths: [], messages: [])
+        state.agentCategories = [.init(name: "Credentials and history", paths: [root], bytes: 8192,
+            pathIdentities: [root: "reviewed-root"], selected: false, risk: .protected)]
+        state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
+        try await waitUntil { state.confirmation != nil }
+        precondition(state.confirmation!.message.contains(root)
+                     && state.confirmation!.title == L10n.shared.t("agents.data.confirm.title")
+                     && fixture.removalRequests == 0 && fixture.cleanupCount == 0,
+                     "Protected roots require an exact-path complete-removal preview, not ordinary cleanup selection")
+        let consent = state.confirmation!
+        state.confirmation = nil
+        consent.onConfirm()
+        try await waitUntil { fixture.cleanupGate.started }
+        precondition(fixture.removalItems.map(\.record) == [root] && fixture.cleanupCount == 0,
+                     "Complete removal must use its dedicated Trash service, including protected exclusive roots")
+        fixture.cleanupGate.release()
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
+        precondition(state.agentOutcomeMood == .success && state.taskNotice == nil)
+    }
+
+    @MainActor private static func completeRemovalReportsRetainedData() async throws {
+        let (state, fixture) = prepare()
+        let root = workflowHome + "/shared-agent-home"
+        fixture.removalPlan = .init(agentIDs: ["fixture"], items: [], retainedPaths: [root],
+                                   messages: ["Another installation still uses this data."])
+        state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
+        try await waitUntil { state.taskNotice != nil }
+        precondition(state.confirmation == nil && fixture.removalRequests == 0
+                     && state.taskNotice!.details.contains(root)
+                     && state.taskNotice!.details.contains("Another installation still uses this data."),
+                     "An empty deletion plan with retained data must explain its location and reason")
+    }
+
+    @MainActor private static func completeRemovalEmptyPlanSucceedsWithoutFailurePopup() async throws {
+        let (state, fixture) = prepare()
+        fixture.removalPlan = .init(agentIDs: ["fixture"], items: [], retainedPaths: [], messages: [])
+        state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
+        try await waitUntil { state.agentProgramBusyID == nil && state.agentOutcomeMood == .success }
+        precondition(state.taskNotice == nil && state.confirmation == nil
+                     && fixture.removalRequests == 0
+                     && state.agentStatus == L10n.shared.t("agents.data.empty"),
+                     "No known residuals is a successful refresh without a failure popup")
+    }
+
+    @MainActor private static func bulkCLIOffersSeparateCompleteRemoval() async throws {
+        let (state, fixture) = prepare()
+        fixture.removalPlan = .init(agentIDs: ["fixture"],
+            items: [.init(record: workflowHome + "/exclusive-agent-home", identity: "reviewed-root")],
+            retainedPaths: [], messages: [])
+        startCLI(state)
+        try await waitUntil { fixture.uninstallGate.started }
+        fixture.uninstallGate.release()
+        try await waitUntil { fixture.cleanupGate.started }
+        fixture.cleanupGate.release()
+        try await waitUntil { !state.agentApplying && state.confirmation != nil }
+        precondition(fixture.uninstallCount == 1 && fixture.cleanupCount == 1 && fixture.removalRequests == 0
+                     && state.confirmation!.message.contains(workflowHome + "/exclusive-agent-home"),
+                     "A successful bulk CLI action may offer complete removal only after ordinary cleanup, with fresh separate consent")
+    }
+
+    @MainActor private static func completeRemovalReportsPartialResult() async throws {
+        let (state, fixture) = prepare()
+        let removed = workflowHome + "/removed-home", retained = workflowHome + "/retained-home"
+        fixture.removalPlan = .init(agentIDs: ["fixture"], items: [
+            .init(record: removed, identity: "reviewed-removed"),
+            .init(record: retained, identity: "reviewed-retained")], retainedPaths: [], messages: [])
+        fixture.remainingRemovalPlan = .init(agentIDs: ["fixture"], items: [], retainedPaths: [retained],
+                                             messages: ["A shared owner still uses this root."])
+        fixture.cleanup = .init(summary: .init(removed: 1, skipped: 1, messages: ["Retained shared data."],
+            removedPaths: [removed], remainingPaths: [retained], retainedPaths: [retained]), refused: 0)
+        state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
+        try await waitUntil { state.confirmation != nil }
+        let consent = state.confirmation!
+        state.confirmation = nil
+        consent.onConfirm()
+        try await waitUntil { fixture.cleanupGate.started }
+        fixture.cleanupGate.release()
+        try await waitUntil { state.taskNotice != nil && !state.agentApplying }
+        precondition(state.agentOutcomeMood == .attention && state.agentCompletedCount == 1
+                     && state.agentStatus.contains("agents.data.result.partial")
+                     && state.taskNotice!.details.contains(retained)
+                     && state.taskNotice!.onRetry != nil,
+                     "One successful Trash move must not hide remaining or shared data behind a success result")
+    }
+
+    @MainActor private static func bulkLinkDoesNotOfferCompleteRemoval() async throws {
+        let (state, fixture) = prepare()
+        state.agentCLIInstallations[0].onlyUnlinksExecutable = true
+        fixture.cli = state.agentCLIInstallations
+        fixture.removalPlan = .init(agentIDs: ["fixture"],
+            items: [.init(record: workflowHome + "/still-installed-source-data", identity: "source")],
+            retainedPaths: [], messages: [])
+        startCLI(state)
+        try await waitUntil { fixture.uninstallGate.started }
+        fixture.uninstallGate.release()
+        try await waitUntil { fixture.cleanupGate.started }
+        precondition(fixture.submittedRemovalID == nil,
+                     "Unlinking a launcher must not grant removed-product privileges to everyday data cleanup")
+        fixture.cleanupGate.release()
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        precondition(state.confirmation == nil && fixture.removalRequests == 0,
+                     "Successful launcher unlinking must not offer complete data removal while its source remains")
     }
 
     @MainActor private static func scanKeepsInventoryRecommendations(complete: Bool) async throws {
@@ -1010,8 +1170,9 @@ struct AgentWorkflowTests {
                          && state.agentOutcomeDetails == ["log.scanPartial"] && !state.agentRetryAvailable,
                          "Partial scanning must stay reviewable and cannot leave a runnable default selection")
         }
-        precondition(f.scanCount == 1 && f.cleanupCount == 0 && f.uninstallCount == 0 && state.taskNotice == nil,
-                     "Scan fixtures must never initiate cleanup, uninstall, or popup work")
+        precondition(f.scanCount == 1 && f.cleanupCount == 0 && f.uninstallCount == 0 && (state.taskNotice == nil) == complete,
+                     "Partial scans need a result dialog and must never initiate cleanup or uninstall")
+        if !complete { state.dismissTaskNotice() }
         print("Agent scan defaults: \(complete ? "complete" : "partial") report preserved the expected selection, bytes, risk, and manual resource state")
     }
 
@@ -1057,7 +1218,7 @@ struct AgentWorkflowTests {
         precondition(state.agentCleanupProgress?.completed == 0 && state.agentCleanupProgress?.total == 1,
                      "Leaf activity may report the actual file but cannot invent completed target units")
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 1)
     }
 
@@ -1075,7 +1236,7 @@ struct AgentWorkflowTests {
         f.report.skills = [AgentSkill(path: "\(workflowHome)/skill", name: "Skill", agentID: "fixture",
             bytes: 1, identity: "new-inventory-identity", linked: false)]
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         if !runtimeAvailable {
             precondition(state.agentOutcomeMood == .success && state.agentOutcomeDetails.isEmpty)
@@ -1083,14 +1244,14 @@ struct AgentWorkflowTests {
         }
         precondition(state.agentFailureApplications.isEmpty)
         f.setRunning(RunningApplicationSnapshot())
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         try await waitUntil { f.cleanupCount == 2 }
         precondition(f.submittedSkillIdentities == ["fixture-identity"],
                      "Refresh may prove presence but cannot replace an accepted sensitive identity")
         precondition(f.submittedPaths == (retainedCache ? ["\(workflowHome)/cache"] : []),
                      "Retry may reclaim retained/new cache contents but must exclude absent completed targets")
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 1)
     }
 
@@ -1103,7 +1264,7 @@ struct AgentWorkflowTests {
         f.report.skills = []
         f.report.categories = []
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         precondition(f.cleanupCount == 1)
         successAndRefreshed(state, removed: 1)
     }
@@ -1116,17 +1277,17 @@ struct AgentWorkflowTests {
         state.applyAgentCleanup()
         try await waitUntil { f.cleanupGate.started }
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(state.agentOutcomeMood == .success && state.agentOutcomeDetails.isEmpty)
         f.setRunning(RunningApplicationSnapshot())
         f.cleanup = .init(summary: .init(removed: 2), refused: 0)
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         try await waitUntil { f.cleanupCount == 2 }
         precondition(f.submittedPaths == ["\(workflowHome)/cache"] && f.submittedSkillPaths == ["\(workflowHome)/skill"],
                      "Unresolved cache content must remain in the sensitive-resource retry")
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 2)
     }
 
@@ -1134,25 +1295,25 @@ struct AgentWorkflowTests {
         let (state, f) = prepare()
         f.setRunning(RunningApplicationSnapshot(bundleIdentifiers: ["test.nori.fixture"], processNames: ["FixtureHost"]))
         state.applyAgentCleanup()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(state.agentFailureApplications == ["Fixture Desktop"] && state.agentSelectedCount == 4)
         precondition(f.cleanupCount == 0 && f.scanCount == 0 && f.uninstallCount == 0 && state.resamples == 0)
         let token = state.agentFeedbackID
-        state.retryFailedAgentCleanup()
-        try await waitUntil { !state.agentApplying }
+        retryAgentRecovery(state)
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         precondition(state.agentStatus == "task.closeApps.changed" && state.agentFeedbackID > token
                      && f.preflightCount == 2 && state.snapshots == 2)
         state.clearAgentSelection()
         state.agentCategories[0].setPathSelected("\(workflowHome)/untouched", selected: true)
         f.setRunning(RunningApplicationSnapshot())
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         try await waitUntil { f.cleanupGate.started }
         precondition(f.submittedPaths == ["\(workflowHome)/cache"] && f.submittedSkillPaths == ["\(workflowHome)/skill"]
                      && f.submittedServerIDs == ["server"] && f.submittedInstallationIDs == ["installation"],
                      "Changing UI selections cannot substitute a different accepted retry scope")
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 1)
     }
 
@@ -1160,7 +1321,7 @@ struct AgentWorkflowTests {
         let (state, f) = prepare()
         f.setRunning(RunningApplicationSnapshot(processNames: ["FixtureHost"]))
         state.applyAgentCleanup()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(state.agentHasScanned && state.agentSelectedCount == 4 && state.resamples == 0
                      && f.cleanupCount == 0 && f.uninstallCount == 0,
@@ -1172,27 +1333,27 @@ struct AgentWorkflowTests {
             let (state, f) = prepare()
             f.setRunning(RunningApplicationSnapshot(processNames: ["FixtureHost"]))
             state.applyAgentCleanup()
-            try await waitUntil { !state.agentApplying }
+            try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
             f.setRunning(RunningApplicationSnapshot())
             if active { state.uninstallQueue.activeJob = "active-uninstall" }
             else { state.uninstallQueue.pendingJobs = ["pending-uninstall"] }
             state.cleanupQueued = true
             state.externallyBusy = true
-            state.retryFailedAgentCleanup()
+            retryAgentRecovery(state)
             if active {
                 precondition(!state.agentApplying && state.snapshots == 1 && state.agentRetryAvailable,
                              "App uninstall and Agent data deletion must not mutate shared support data together")
                 state.uninstallQueue.activeJob = nil
-                state.retryFailedAgentCleanup()
+                retryAgentRecovery(state)
             }
             try await waitUntil { f.cleanupGate.started }
             precondition(state.isBusy && state.queueStarts == 0 && f.cleanupCount == 1,
                          "Unrelated cleanup, queued software, or another tab blocked the frozen Agent data retry")
             state.applyAgentCleanup()
-            state.retryFailedAgentCleanup()
+            retryAgentRecovery(state)
             precondition(f.cleanupCount == 1, "Agent reentry duplicated the active data cleanup")
             f.cleanupGate.release()
-            try await waitUntil { !state.agentApplying }
+            try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
             successAndRefreshed(state, removed: 1)
         }
 
@@ -1211,13 +1372,13 @@ struct AgentWorkflowTests {
             let (state, f) = prepare()
             f.setRunning(RunningApplicationSnapshot(processNames: ["FixtureHost"]))
             state.applyAgentCleanup()
-            try await waitUntil { !state.agentApplying }
+            try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
             precondition(state.agentRetryAvailable && state.agentRetryAction != nil)
             f.setRunning(RunningApplicationSnapshot())
             if kind == "cleanup" { state.isCleanupMutationBusy = true }
             if kind == "cli-uninstall" { state.commandLineToolBusyID = "other-tool" }
             if kind == "software-update" { state.softwareUpdatingID = "other-update" }
-            state.retryFailedAgentCleanup()
+            retryAgentRecovery(state)
             state.applyAgentCleanup()
             state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
             precondition(!state.agentApplying && state.agentProgramBusyID == nil
@@ -1227,11 +1388,11 @@ struct AgentWorkflowTests {
             state.isCleanupMutationBusy = false
             state.commandLineToolBusyID = nil
             state.softwareUpdatingID = nil
-            state.retryFailedAgentCleanup()
+            retryAgentRecovery(state)
             try await waitUntil { f.cleanupGate.started }
             precondition(f.cleanupCount == 1)
             f.cleanupGate.release()
-            try await waitUntil { !state.agentApplying }
+            try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         }
     }
 
@@ -1240,31 +1401,31 @@ struct AgentWorkflowTests {
         f.dependencyOwners = []
         f.setRunning(RunningApplicationSnapshot(processNames: ["FixtureCLI"]))
         startCLI(state)
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(f.uninstallCount == 0 && f.cleanupCount == 0 && state.agentFailureApplications == ["FixtureCLI"])
         f.dependencyOwners = ["FixtureHost", "test.nori.fixture"]
         f.setSnapshots([RunningApplicationSnapshot(), RunningApplicationSnapshot(processNames: ["FixtureHost"])])
         f.setRunning(RunningApplicationSnapshot(processNames: ["FixtureHost"]))
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         try await waitUntil { f.uninstallGate.started }
         f.uninstallGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(f.uninstallCount == 1 && f.cleanupCount == 0 && state.agentSelectedCLIInstallations.isEmpty)
-        state.retryFailedAgentCleanup()
-        try await waitUntil { !state.agentApplying }
+        retryAgentRecovery(state)
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         precondition(state.agentStatus == "task.closeApps.changed" && f.uninstallCount == 1)
         state.clearAgentSelection()
         f.setRunning(RunningApplicationSnapshot())
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         try await waitUntil { f.cleanupGate.started }
         precondition(Set(f.submittedPaths) == ["\(workflowHome)/cache", "\(workflowHome)/untouched"]
                      && f.submittedRemovalID == "fixture" && f.uninstallCount == 1)
         precondition(state.agentCleanupProgress?.completed == 1 && state.agentCleanupProgress?.total == 6,
                      "Data-only retry must keep the completed CLI in the overall progress")
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 1)
     }
 
@@ -1282,19 +1443,19 @@ struct AgentWorkflowTests {
         f.report.skills = [AgentSkill(path: "\(workflowHome)/skill", name: "Skill", agentID: "fixture",
             bytes: 1, identity: "new-scan-identity", linked: false)]
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         if !runtimeAvailable {
             precondition(state.agentOutcomeMood == .success && state.agentOutcomeDetails.isEmpty)
             return
         }
         f.setRunning(RunningApplicationSnapshot())
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         try await waitUntil { f.cleanupCount == 2 }
         precondition(f.uninstallCount == 1 && f.submittedPaths.isEmpty && f.submittedSkillIdentities == ["fixture-identity"]
                      && f.submittedServerIDs == ["server"] && f.submittedRemovalID == "fixture")
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 1)
     }
 
@@ -1307,7 +1468,7 @@ struct AgentWorkflowTests {
             try await waitUntil { f.uninstallGate.started }
             f.uninstallGate.release()
         }
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(state.agentStatus == "task.failure.runtimeUnknown" && state.agentHasScanned && f.cleanupCount == 0)
         precondition(f.uninstallCount == (afterCLI ? 1 : 0))
@@ -1339,7 +1500,7 @@ struct AgentWorkflowTests {
             orphaned: false, categoryIDs: [refreshedCategory.id], skillIDs: [], serverIDs: [], bytes: 2)]
         state.agentCLIBodySizes["stale-installation"] = .init(bytes: 1, complete: true)
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         precondition(state.resamples == 1 && f.scanCount == 1)
         precondition(state.agentCategories.map(\.id) == [refreshedCategory.id]
                      && state.agentSkills.isEmpty && state.agentServers.isEmpty
@@ -1374,7 +1535,7 @@ struct AgentWorkflowTests {
                      && f.submittedCLIIDs.isEmpty,
                      "Manual orphan selection must carry only its own residual scope and selected paths")
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 1)
     }
 
@@ -1396,7 +1557,7 @@ struct AgentWorkflowTests {
         precondition(state.agentApplying && state.agentHasScanned && state.agentCleanupProgress?.phase == .verifying,
                      "The refreshing inventory must remain part of the cleanup lifecycle")
         f.scanGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(state.agentSelectedSkills == ["\(workflowHome)/skill"] && state.agentSelectedServers == ["server"])
         if kind == "partial" {
@@ -1406,7 +1567,7 @@ struct AgentWorkflowTests {
         } else if kind == "failed" { precondition(state.agentSelectedCount == 4 && state.agentOutcomeDetails == f.cleanup.summary.messages) }
         else { precondition(state.agentSelectedCount == 4 && state.agentOutcomeDetails == ["agents.result.noReason"]) }
         precondition(state.agentOutcomeMood == (kind == "partial" ? .success : .attention) && state.agentHasScanned,
-                     "The inline result must preserve the current inventory")
+                     "The result dialog must preserve the current inventory")
     }
 
     @MainActor private static func failedCLI(noop: Bool) async throws {
@@ -1417,7 +1578,7 @@ struct AgentWorkflowTests {
         try await waitUntil { f.uninstallGate.started }
         precondition(state.agentApplying && state.agentHasScanned)
         f.uninstallGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(f.cleanupCount == 0 && state.agentSelectedCLIInstallations == ["cli"],
                      "A failed or no-op CLI phase cannot authorize removal of its associated data")
@@ -1445,7 +1606,7 @@ struct AgentWorkflowTests {
         precondition(Set(f.submittedPaths) == ["\(workflowHome)/cache", "\(workflowHome)/untouched"]
                      && f.submittedRemovalID == "fixture")
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         precondition(!state.cleanupScanComplete && state.progressHistory.contains { $0.phase == .verifying })
         precondition(state.agentReclaimedBytes == 6144,
                      "CLI and data cleanup must merge only their confirmed reclaimed allocation")
@@ -1479,7 +1640,7 @@ struct AgentWorkflowTests {
         precondition(state.agentCleanupProgress?.completed == 7 && state.agentCleanupProgress?.total == 7,
                      "All remaining data plus CLI-covered paths must reach real 100% completion")
         f.cleanupCompletionGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 2)
     }
 
@@ -1494,7 +1655,7 @@ struct AgentWorkflowTests {
         f.uninstallGate.release()
         try await waitUntil { f.cleanupGate.started }
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(f.includedAgentIDs == ["fixture"] && state.agentCLIInstallations.isEmpty
                      && !state.agentGroups.isEmpty && state.agentSelectedCLIInstallations.isEmpty,
@@ -1517,7 +1678,7 @@ struct AgentWorkflowTests {
         f.uninstallGate.release()
         try await waitUntil { f.uninstallCount == 2 }
         f.uninstallGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(f.cleanupCount == 0 && state.agentSelectedCLIInstallations == ["cli-two"])
         var refreshed = second
@@ -1525,7 +1686,7 @@ struct AgentWorkflowTests {
         state.agentCLIInstallations = [refreshed]
         f.cli = [refreshed]
         f.uninstallByID = [:]
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         try await waitUntil { f.uninstallCount == 3 }
         precondition(f.submittedCLIIDs == ["cli", "cli-two", "cli-two"]
                      && f.submittedCLIIdentities.last == "original-second-identity",
@@ -1534,7 +1695,7 @@ struct AgentWorkflowTests {
         try await waitUntil { f.cleanupGate.started }
         precondition(state.agentCleanupProgress?.completed == 2 && state.agentCleanupProgress?.total == 7)
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 2)
     }
 
@@ -1550,7 +1711,7 @@ struct AgentWorkflowTests {
         startCLI(state)
         try await waitUntil { f.uninstallCount == 1 }
         f.uninstallGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(state.agentCLIInstallations.isEmpty && state.agentRetryAvailable
                      && state.agentReclaimedBytes == 2048 && f.cleanupCount == 0,
@@ -1558,7 +1719,7 @@ struct AgentWorkflowTests {
 
         f.uninstall = .init(removed: 0, failed: 1, messages: ["Package body is still locked."],
             retryInstallation: proven)
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         precondition(state.agentCompletedCount == 0 && state.agentReclaimedBytes == 0,
                      "A new click must reset the previous attempt's deletion count and bytes")
         try await waitUntil { f.uninstallCount == 2 }
@@ -1566,7 +1727,7 @@ struct AgentWorkflowTests {
                      && f.submittedCLIIdentities == ["original-cli-identity", proven.identity],
                      "Fresh empty inventory cannot discard or rebind the service-proven CLI retry")
         f.uninstallGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(state.agentOutcomeMood == .attention && state.agentCompletedCount == 0
                      && state.agentReclaimedBytes == 0 && f.cleanupCount == 0,
@@ -1574,7 +1735,7 @@ struct AgentWorkflowTests {
 
         f.uninstall = .init(removed: 1, failed: 0, messages: [], reclaimedBytes: 1024)
         f.cleanup = .init(summary: .init(removed: 2, reclaimedBytes: 4096), refused: 0)
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         try await waitUntil { f.uninstallCount == 3 }
         precondition(f.submittedCLIIdentities.last == proven.identity && f.cleanupCount == 0)
         f.uninstallGate.release()
@@ -1583,7 +1744,7 @@ struct AgentWorkflowTests {
                      && !f.submittedPaths.isEmpty && state.agentHasScanned && state.agentApplying,
                      "Associated data may run only after the same accepted CLI phase succeeds")
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 3)
         precondition(state.agentReclaimedBytes == 5120,
                      "One click must aggregate its CLI and data bytes without recounting an earlier partial pass")
@@ -1599,12 +1760,12 @@ struct AgentWorkflowTests {
         startCLI(state)
         try await waitUntil { f.uninstallGate.started }
         f.uninstallGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state, retry: false)
         precondition(f.cleanupCount == 0 && f.submittedCLIIdentities == ["original-cli-identity"]
                      && state.agentCompletedCount == 0 && state.agentReclaimedBytes == 0,
                      "An unproved replacement cannot authorize a CLI retry or its associated data cleanup")
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         precondition(!state.agentApplying && f.uninstallCount == 1,
                      "A required rescan must not leave a hidden retry closure for the changed installation")
     }
@@ -1615,26 +1776,26 @@ struct AgentWorkflowTests {
         state.applyAgentCleanup()
         try await waitUntil { f.cleanupGate.started }
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(state.agentCompletedCount == 1 && state.agentReclaimedBytes == 8192)
 
         f.cleanup = .init(summary: .init(failed: 4, messages: ["No pending files could be removed."]), refused: 0)
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         precondition(state.agentCompletedCount == 0 && state.agentReclaimedBytes == 0)
         try await waitUntil { f.cleanupCount == 2 }
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         attention(state)
         precondition(state.agentOutcomeMood == .attention && state.agentCompletedCount == 0
                      && state.agentReclaimedBytes == 0 && state.agentOutcomeDetails == f.cleanup.summary.messages,
                      "A fully failed click must not inherit an earlier success, released space, or hidden errors")
 
         f.cleanup = .init(summary: .init(removed: 2, reclaimedBytes: 2048), refused: 0)
-        state.retryFailedAgentCleanup()
+        retryAgentRecovery(state)
         try await waitUntil { f.cleanupCount == 3 }
         f.cleanupGate.release()
-        try await waitUntil { !state.agentApplying }
+        try await waitUntil { !state.agentApplying && state.agentProgramBusyID == nil }
         successAndRefreshed(state, removed: 2)
         precondition(state.agentReclaimedBytes == 2048,
                      "A successful retry must show only space actually released during its current click")

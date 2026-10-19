@@ -50,7 +50,7 @@ struct ProcessSamplerTests {
         let app = makeSample(pid: 100, ppid: 1, name: "Test", cpu: 10, bytes: 1_000)
         let helper = makeSample(pid: 101, ppid: 100, name: "Test Helper", cpu: 5, bytes: 500)
         let grandchild = makeSample(pid: 102, ppid: 101, name: "node", path: "/usr/local/bin/node", cpu: 1, bytes: 250)
-        let orphan = makeSample(pid: 200, ppid: 1, name: "orphan", cpu: 99, bytes: 9_999)
+        let orphan = makeSample(pid: 200, ppid: 1, name: "orphan", path: "/opt/unrelated/background", cpu: 99, bytes: 9_999)
         let groups = ProcessAggregator.groups(
             samples: [app, helper, grandchild, orphan],
             applications: [(pid: 100, name: "Test", startIdentity: "abc")],

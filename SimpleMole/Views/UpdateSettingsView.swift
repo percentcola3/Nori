@@ -14,12 +14,12 @@ struct UpdateSettingsView: View {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(l10n.tf("updates.current", version))
-                        if updater.status != .idle {
+                        if !statusText.isEmpty {
                             Text(statusText)
                                 .font(.system(size: 10))
-                                .foregroundStyle(isFailure ? Color.warning : Color.secondary)
+                                .foregroundStyle(.secondary)
                                 .lineLimit(2)
-                                .help(errorDetail)
+                                .help(statusText)
                         }
                     }
                     Spacer(minLength: 8)
@@ -47,17 +47,8 @@ struct UpdateSettingsView: View {
         case .updateAvailable(let version): return l10n.tf("updates.available", version)
         case .upToDate: return l10n.t("updates.latest")
         case .deferred: return l10n.t("updates.busy")
-        case .failed: return l10n.t("updates.failed")
+        case .failed: return ""
         }
     }
 
-    private var isFailure: Bool {
-        if case .failed = updater.status { return true }
-        return false
-    }
-
-    private var errorDetail: String {
-        if case .failed(let detail) = updater.status { return detail }
-        return statusText
-    }
 }

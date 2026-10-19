@@ -41,7 +41,6 @@ final class HotKeyCenter {
         combinations.removeAll()
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         localMonitor = nil
-        nextID = 0
     }
 
     private func installEventHandlerIfNeeded() -> Bool {
@@ -86,8 +85,10 @@ final class HotKeyCenter {
     }
 
     private func fire(slot: UInt32) {
-        guard let handler = handlers[slot] else { return }
-        Task { @MainActor in handler() }
+        Task { @MainActor [weak self] in
+            guard let handler = self?.handlers[slot] else { return }
+            handler()
+        }
     }
 }
 

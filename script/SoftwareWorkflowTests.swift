@@ -42,6 +42,8 @@ private final class UninstallTrace {
     var includedData = Set<String>()
     var appWasRemoved = false
     var appliedPlan: UninstallPlan?
+    var absent = false
+    var noProcesses = true
 
     var dependencies: UninstallWorkflow.Dependencies {
         .init(stop: { app in
@@ -53,13 +55,13 @@ private final class UninstallTrace {
         }, elevate: { _ in
             self.events.append("elevate")
             return self.elevated
-        }, apply: { _, plan, data, removed in
+        }, apply: { app, plan, data, removed in
             self.events.append("apply")
             self.appliedPlan = plan
             self.includedData = data
             self.appWasRemoved = removed
-            return .init(removed: 1, skipped: 0, failed: 0, messages: [])
-        })
+            return .init(removed: 1, skipped: 0, failed: 0, messages: [], removedPaths: [app.path])
+        }, isAbsent: { _ in self.absent }, hasNoProcesses: { _ in self.noProcesses })
     }
 }
 
@@ -68,8 +70,36 @@ struct SoftwareWorkflowTests {
     static func main() async throws {
         await testUpdateScheduling()
         await testUninstallExecution()
+        testAgentRemovalReviewQueue()
         try await testInstallationOnlyNativePlan()
         print("Software workflow tests passed")
+    }
+
+    private static func testAgentRemovalReviewQueue() {
+        var uninstall = UninstallQueue()
+        var reviews = AgentRemovalReviewQueue()
+        let first = UninstallApp(name: "First", bundleID: "fixture.first", source: "Fixture",
+            path: "/fixture/First.app", size: "1 KB", appIdentity: "first", infoIdentity: "first-info")
+        let second = UninstallApp(name: "Second", bundleID: "fixture.second", source: "Fixture",
+            path: "/fixture/Second.app", size: "1 KB", appIdentity: "second", infoIdentity: "second-info")
+        uninstall.enqueue(app: first, plan: nil)
+        uninstall.enqueue(app: second, plan: nil)
+        let firstJob = uninstall.startNext(blocked: false)!
+        reviews.record(agentIDs: ["first-agent"], installationWasRemoved: true)
+        uninstall.finish(firstJob.id, succeeded: true, message: "Removed first")
+        precondition(reviews.takeIfReady(hasUninstallWork: uninstall.hasWork, isBlocked: false).isEmpty,
+                     "A queued desktop uninstall must finish before any complete-data review")
+        let secondJob = uninstall.startNext(blocked: false)!
+        reviews.record(agentIDs: ["failed-agent"], installationWasRemoved: false)
+        uninstall.finish(secondJob.id, succeeded: false, message: "Kept second")
+        precondition(reviews.takeIfReady(hasUninstallWork: uninstall.hasWork, isBlocked: true).isEmpty,
+                     "A removal review cannot replace an uninstall failure notice")
+        reviews.record(agentIDs: ["first-agent", "another-removed-agent"], installationWasRemoved: true)
+        precondition(reviews.takeIfReady(hasUninstallWork: uninstall.hasWork, isBlocked: false)
+                     == ["first-agent", "another-removed-agent"],
+                     "Batch review includes proven successful removals once, excluding failed installations")
+        precondition(reviews.takeIfReady(hasUninstallWork: false, isBlocked: false).isEmpty,
+                     "Dismissal must not repeatedly offer the same data review")
     }
 
     private static func testUpdateScheduling() async {
@@ -99,7 +129,7 @@ struct SoftwareWorkflowTests {
     @MainActor
     private static func testUninstallExecution() async {
         let app = UninstallApp(name: "Workflow Fixture", bundleID: "com.example.workflow", source: "Fixture",
-            path: "/fixture/Workflow.app", size: "1 KB", appIdentity: "captured-app", infoIdentity: "captured-info")
+            path: "/Applications/Workflow.app", size: "1 KB", appIdentity: "captured-app", infoIdentity: "captured-info")
         let dataPath = "/fixture/data"
         func plan(admin: Bool = false, cask: Bool = false, protectedData: Bool = true) -> UninstallPlan {
             .init(files: [.init(bytes: 1, label: "app", path: app.path),
@@ -121,7 +151,7 @@ struct SoftwareWorkflowTests {
             case .removing: trace.events.append("removing")
             }
         }
-        guard case .applied(let result) = outcome else { preconditionFailure("Expected execution") }
+        guard case .applied(let result, _) = outcome else { preconditionFailure("Expected execution") }
         precondition(result.succeeded && trace.events == ["closing", "stop:captured-app", "planning",
             "plan:captured-app", "stop:captured-app", "removing", "apply"])
         precondition(trace.includedData == [dataPath] && !trace.appWasRemoved)
@@ -151,7 +181,7 @@ struct SoftwareWorkflowTests {
             refused.freshPlan = plan(admin: true)
             refused.elevated = elevated
             let result = await UninstallWorkflow(dependencies: refused.dependencies).execute(job) { _ in }
-            guard case .applied(let summary) = result else { preconditionFailure("Expected elevation result") }
+            guard case .applied(let summary, _) = result else { preconditionFailure("Expected elevation result") }
             precondition(!summary.succeeded, "A replacement elevation dependency must prove removal of the captured app")
             precondition(!refused.events.contains("apply"), "Residues require proven removal of the captured app")
         }
@@ -166,6 +196,39 @@ struct SoftwareWorkflowTests {
         _ = await UninstallWorkflow(dependencies: cask.dependencies).execute(job) { _ in }
         precondition(!cask.appWasRemoved && !cask.events.contains("elevate"),
                      "Package-managed apps retain their existing uninstall route")
+
+        let recoveryPlan = plan(admin: true, cask: true)
+        let recoveryJob = UninstallJob(id: UUID(), app: app, plan: recoveryPlan,
+            dataPaths: [dataPath, "/fixture/unselected-new-data"], forceCleanup: true)
+        let recovery = UninstallTrace()
+        recovery.freshPlan = emptyPlan // Recovery must not read a broader/new inventory.
+        recovery.elevated.removedPaths = [app.path]
+        let recovered = await UninstallWorkflow(dependencies: recovery.dependencies).execute(recoveryJob) { _ in }
+        guard case .applied(_, let retainedPlan) = recovered else { preconditionFailure("Expected recovery") }
+        precondition(retainedPlan == recoveryPlan && !recovery.events.contains("plan:captured-app")
+                     && recovery.events.contains("elevate") && recovery.appWasRemoved
+                     && recovery.appliedPlan?.isBrewCask == false && recovery.includedData == [dataPath],
+                     "Force cleanup must preserve the approved scope, elevate, and bypass only the failed package-manager route")
+        let residuesOnly = UninstallTrace()
+        residuesOnly.absent = true
+        let residues = await UninstallWorkflow(dependencies: residuesOnly.dependencies).execute(recoveryJob) { _ in }
+        guard case .applied(let residueResult, _) = residues else { preconditionFailure("Expected residue recovery") }
+        precondition(residuesOnly.appWasRemoved && !residuesOnly.events.contains("elevate")
+                     && !residuesOnly.events.contains("stop:captured-app")
+                     && residueResult.removed == 0 && !residueResult.removedPaths.contains(app.path),
+                     "Recovery after bundle removal must not require a new app or count its removal twice")
+        let occupiedResidues = UninstallTrace()
+        occupiedResidues.absent = true
+        occupiedResidues.noProcesses = false
+        let occupied = await UninstallWorkflow(dependencies: occupiedResidues.dependencies).execute(recoveryJob) { _ in }
+        guard case .processesCouldNotStop = occupied else { preconditionFailure("Unproven process state was accepted") }
+        precondition(!occupiedResidues.events.contains("apply") && !occupiedResidues.events.contains("elevate"),
+                     "A missing app must never authorize process termination or cleanup while its path remains occupied")
+        let noPlan = UninstallJob(id: UUID(), app: app, plan: nil, dataPaths: [], forceCleanup: true)
+        let refusedRecovery = UninstallTrace()
+        let refusal = await UninstallWorkflow(dependencies: refusedRecovery.dependencies).execute(noPlan) { _ in }
+        guard case .planUnavailable = refusal else { preconditionFailure("Unreviewed force cleanup was accepted") }
+        precondition(!refusedRecovery.events.contains("apply") && !refusedRecovery.events.contains("elevate"))
 
         let bodyJob = UninstallJob(id: UUID(), app: app, plan: nil, dataPaths: [dataPath], scope: .installationOnly)
         let bodyOnly = UninstallTrace()
@@ -257,7 +320,7 @@ struct SoftwareWorkflowTests {
         })
         let job = UninstallJob(id: UUID(), app: selected, plan: original, dataPaths: Set(original.dataPaths), scope: .installationOnly)
         let result = await UninstallWorkflow(dependencies: dependencies).execute(job) { _ in }
-        guard case .applied(let summary) = result else { preconditionFailure("Expected native installation-only result") }
+        guard case .applied(let summary, _) = result else { preconditionFailure("Expected native installation-only result") }
         precondition(summary.succeeded && summary.removedPaths == [selected.path]
                      && !fm.fileExists(atPath: selected.path) && stops == 2 && nativeApplies == 1,
                      "The captured body was not removed through the guarded native workflow")

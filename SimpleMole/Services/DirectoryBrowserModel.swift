@@ -41,7 +41,13 @@ final class DirectoryBrowserModel: ObservableObject {
     @Published private(set) var isSearching = false
     @Published private(set) var isWorking = false
     @Published private(set) var isIndexing = false
-    @Published var errorMessage: String?
+    @Published var errorMessage: String? {
+        didSet {
+            if let errorMessage {
+                TaskFeedbackNotice.reportFailure(details: [errorMessage], detailsAreLocalized: true)
+            }
+        }
+    }
     @Published private(set) var statusMessage: String?
     @Published private(set) var canPaste = false
     @Published private(set) var copiedPath: String?

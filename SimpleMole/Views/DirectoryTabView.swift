@@ -290,17 +290,6 @@ struct DirectoryTabView: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 5) {
-            if let error = model.errorMessage {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "exclamationmark.circle").foregroundStyle(Color.warning)
-                    Text(error).foregroundStyle(Color.warning).textSelection(.enabled)
-                    Spacer(minLength: 0)
-                    Button(action: model.clearError) { Image(systemName: "xmark") }
-                        .buttonStyle(.plain).help(l10n.t("dir.dismiss"))
-                        .accessibilityLabel(l10n.t("dir.dismiss"))
-                }
-                .font(.system(size: 10))
-            }
             if let status = model.statusMessage {
                 Text(status).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
             }

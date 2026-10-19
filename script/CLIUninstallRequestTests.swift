@@ -135,12 +135,17 @@ final class AppState {
     var resamples = 0
     var failures = 0
     var logs: [String] = []
+    var associatedDataRequests: [(Set<String>, String?)] = []
     let l10n = L10n.shared
     func uninstallAgentTool(_ tool: CommandLineTool) {
         preconditionFailure("Generic CLI requests cannot enter the Agent-removal adapter")
     }
     func ensureAgentStorageFootprints(for ids: Set<String>) {
         preconditionFailure("A request test cannot start storage discovery")
+    }
+    func offerAgentAssociatedDataCleanup(agentIDs: Set<String>, programName: String? = nil) {
+        precondition(commandLineToolBusyID == nil, "Data review must wait until program removal releases its busy state")
+        associatedDataRequests.append((agentIDs, programName))
     }
     func presentTaskFailure(message: String = "", details: [String] = [], detailsAreLocalized: Bool = false) {
         failures += 1; taskNotice = message
@@ -247,10 +252,28 @@ struct CLIUninstallRequestTests {
                          "An obsolete generation or removed row cannot authorize mutation")
         }
     }
+    static func knownAgentWithoutLauncher() async throws {
+        for succeeded in [false, true] {
+            let fixture = state()
+            fixture.commandLineTools[0].agentID = "fixture-agent"
+            CLIUninstallWorkflow.result = .finished(.init(succeeded: succeeded))
+            fixture.uninstallCommandLineTool(fixture.commandLineTools[0])
+            try await waitUntil { fixture.confirmation != nil }
+            consent(fixture)
+            try await waitUntil { !CLIUninstallWorkflow.calls.isEmpty && fixture.commandLineToolBusyID == nil }
+            precondition(fixture.associatedDataRequests.count == (succeeded ? 1 : 0),
+                         "Only successful known-Agent package removal can offer complete associated-data review")
+            if succeeded {
+                precondition(fixture.associatedDataRequests[0].0 == ["fixture-agent"]
+                             && fixture.associatedDataRequests[0].1 == "Selected CLI")
+            }
+        }
+    }
     static func main() async throws {
         try await mutationGuards()
         try await independentReadOnlyWork()
         try await staleAndCancellation()
+        try await knownAgentWithoutLauncher()
         print("PASS: production generic CLI request/consent excludes overlapping writes, permits independent scans and rejects stale consent")
     }
 }

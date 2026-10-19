@@ -139,7 +139,7 @@ struct UninstallTabView: View {
                 }
             } else {
                 if !state.appListStatus.isEmpty {
-                    Text(state.appListStatus)
+                    Text(l10n.t("uninstall.status.scanning"))
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }

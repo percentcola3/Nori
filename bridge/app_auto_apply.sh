@@ -29,6 +29,7 @@ has_unsafe_path_syntax() {
 
 is_protected_auto_content_path() {
     local value="$1" lower leaf extension
+    simplemole_forbidden_automatic_path "$value" && return 0
     lower=$(printf '%s' "$value" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 0
     leaf="${lower##*/}"
     extension="${leaf##*.}"
@@ -70,6 +71,8 @@ is_protected_auto_content_path() {
 # 0 = protected content found, 1 = complete scan and none found, 2 = unknown.
 automatic_content_state() {
     local candidate="$1" listing="" item=""
+    simplemole_refresh_developer_state_paths || return 2
+    local _SIMPLEMOLE_DEVELOPER_STATE_TRAVERSAL="true"
     if is_protected_auto_content_path "$candidate"; then
         return 0
     fi

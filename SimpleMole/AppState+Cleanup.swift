@@ -100,7 +100,7 @@ extension AppState {
                 async let runtime = captureRunningApplicationSnapshot()
                 let preflight = await Task.detached(priority: .utility) {
                     NativeCore.shared.preflightCleanupCategories(cached.categories, control: control,
-                        includingAdministratorRequired: true)
+                        includingAdministratorRequired: true, usingScanInventoryCache: true)
                 }.value
                 let snapshot = await runtime
                 categories = finalizedCleanupCategories(
@@ -186,7 +186,7 @@ extension AppState {
                 statusText = l10n.t("cleanup.scan.deepFollowUp")
                 let completedCategories = scan.categories.compactMap { category in
                     category.retainingPaths(category.paths.filter { path in
-                        scan.completedRoots.contains { path == $0 || path.hasPrefix($0 + "/") }
+                        NativeCore.isCoveredByScannedRoot(path, roots: scan.completedRoots)
                     })
                 }
                 scanCleanup(force: true, mode: .deep, excludingScannedRoots: scan.completedRoots,
@@ -854,8 +854,7 @@ extension AppState {
     private func recordRemainingCleanup(_ categories: [CleanupCategory], owners: [String]) {
         guard !categories.isEmpty else { return }
         cleanupFailureApplications = Array(Set(cleanupFailureApplications + Self.blockingApplicationNames(owners))).sorted()
-        // 所有未完成路径已经保存在页面的清理重试里。成功反馈保持可见，
-        // 用户下一次点击清理才提交剩余项，不再弹关闭应用/重试窗口。
+        // The captured retry remains available in the task-result dialog.
     }
 
     private func refreshCleanupInventory(after family: CleanupFamily) async -> Bool {
@@ -917,6 +916,15 @@ extension AppState {
             ? l10n.tf("cleanup.task.reclaimed", ByteFormat.format(combined.reclaimedBytes))
             : l10n.t("task.failure.message")
         log(summary)
+        if combined.skipped > 0 || combined.failed > 0 || combined.executionFailed
+            || !verified || !waitingApplications.isEmpty {
+            var details = combined.messages.filter { !$0.hasPrefix("Open-file check ") }
+            if !verified { details.append(l10n.t("cleanup.execution.verificationIncomplete")) }
+            var notice = TaskFeedbackNotice(message: summary.isEmpty ? statusText : summary,
+                details: details, applicationNames: waitingApplications)
+            notice.onRetry = cleanupRuntime.retryAction
+            presentTaskNotice(notice)
+        }
     }
 
     private func localizedCleanupDetail(_ detail: String) -> String {

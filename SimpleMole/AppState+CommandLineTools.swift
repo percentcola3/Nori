@@ -106,7 +106,13 @@ extension AppState {
             if outcome.succeeded {
                 commandLineTools.removeAll { $0.id == tool.id }
                 softwareUpdateResults.removeValue(forKey: SoftwareUpdateService.toolKey(tool))
-                if tool.agentID != nil { agentHasScanned = false }
+                if let agentID = tool.agentID {
+                    agentHasScanned = false
+                    // Some package-manager rows have a known Agent owner but
+                    // no launcher-backed Agent installation record. They need
+                    // the same separate, complete-data review after success.
+                    offerAgentAssociatedDataCleanup(agentIDs: [agentID], programName: tool.name)
+                }
                 resampleAfterMutation()
             } else {
                 presentTaskFailure(message: l10n.tf("cli.status.failed", tool.name),

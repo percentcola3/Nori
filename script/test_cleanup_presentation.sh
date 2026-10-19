@@ -41,6 +41,10 @@ CLEANUP_PRESENTATION_SOURCES=(
     "$ROOT_DIR/SimpleMole/Views/NoriStatusAnimation.swift"
     "$ROOT_DIR/SimpleMole/Views/NoriCleanupTaskStage.swift"
     "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift"
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift"
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackQueue.swift"
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackDiagnostic.swift"
+    "$ROOT_DIR/SimpleMole/Views/TaskFeedbackView.swift"
     "$ROOT_DIR/script/CleanupPresentationFixtureState.swift"
     "$ROOT_DIR/script/CleanupPresentationTests.swift"
 )

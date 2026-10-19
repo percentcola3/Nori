@@ -9,6 +9,7 @@ struct AgentCLIInstallation: Equatable, Sendable {
     let executablePaths: [String]
     let managedPaths: [String]
     let identities: [String: String]
+    var onlyUnlinksExecutable = false
 }
 struct CommandLineTool: Equatable, Sendable {
     let agentInstallation: AgentCLIInstallation?
@@ -83,10 +84,11 @@ enum NativeCore {
     struct ApplySummary { let succeeded: Bool; let removedPaths: Set<String>; var messages: [String] = [] }
 }
 enum UninstallExecutionPhase { case closing, planning, removing }
+struct UninstallPlan {}
 enum UninstallExecutionOutcome {
     case processesCouldNotStop
     case planUnavailable
-    case applied(NativeCore.ApplySummary)
+    case applied(NativeCore.ApplySummary, plan: UninstallPlan? = nil)
 }
 struct UninstallJob {
     enum Scope { case applicationAndResidues, installationOnly }
@@ -109,6 +111,7 @@ enum CleanupCache {
     static var invalidations = 0
     static func invalidate() { invalidations += 1 }
 }
+enum NoriMood { case success }
 final class L10n {
     static let shared = L10n()
     func t(_ key: String) -> String { key }
@@ -161,6 +164,9 @@ final class AppState {
     var failures: [String] = []
     var dataOffers: [DataOffer] = []
     var logs: [String] = []
+    var agentStatus = ""
+    var agentCleanupHasFeedback = false
+    var agentOutcomeMood: NoriMood?
     let l10n = L10n.shared
     let uninstallExecutor = ProgramExecutorFixture()
     func presentTaskFailure(message: String = "", details: [String] = [], detailsAreLocalized: Bool = false) {
@@ -243,6 +249,27 @@ struct AgentProgramRemovalTests {
         precondition(CLIUninstallWorkflow.calls.count == 1
                      && CLIUninstallWorkflow.calls[0].installationID == selected.id
                      && CLIUninstallWorkflow.calls[0].identity == DeletionPlan.identity(at: selected.managedPaths[0]))
+    }
+    static func selectedLinkKeepsSourceAndData(_ fixture: URL) async throws {
+        let (state, original, neighbor, other) = seededCLI(fixture)
+        var selected = original
+        selected.onlyUnlinksExecutable = true
+        state.agentCLIInstallations = [selected, neighbor, other]
+        state.commandLineTools = state.agentCLIInstallations.map { AgentSoftwareInventory.commandLineTool(for: $0) }
+        let source = fixture.appendingPathComponent("link-source")
+        try Data("retained source".utf8).write(to: source)
+        CLIUninstallWorkflow.results = [.finished(.init(succeeded: true))]
+        state.uninstallAgentCLI(selected)
+        try await waitUntil { state.confirmation != nil }
+        precondition(state.confirmation!.message.contains("agents.cli.confirmLink")
+                     && state.confirmation!.confirmLabel == "agents.cli.unlink")
+        consent(state)
+        try await waitUntil { state.agentProgramBusyID == nil && !CLIUninstallWorkflow.calls.isEmpty }
+        precondition(state.dataOffers.isEmpty && state.taskNotice == nil
+                     && state.agentStatus.contains("agents.cli.unlinked") && state.agentOutcomeMood == .success
+                     && !CLIUninstallWorkflow.calls[0].mayClose
+                     && (try? Data(contentsOf: source)) == Data("retained source".utf8),
+                     "Unlink-only removal must keep its source and data, explain retention and never offer complete removal")
     }
     static func cliFaultsAndRenewedConsent(_ fixture: URL) async throws {
         for result in [CLIUninstallWorkflow.Result.failed(reasonKey: "fixture.changed"),
@@ -442,6 +469,7 @@ struct AgentProgramRemovalTests {
             try Data("owned fixture metadata".utf8).write(to: contents.appendingPathComponent("Info.plist"))
         }
         try await cliSuccessAndCancel(fixture)
+        try await selectedLinkKeepsSourceAndData(fixture)
         try await cliFaultsAndRenewedConsent(fixture)
         try await runningAndSoftwareEntry(fixture)
         try await desktop(fixture, success: true)

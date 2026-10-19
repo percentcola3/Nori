@@ -77,6 +77,7 @@ cp "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" "$TEST_DIR/sources/"
 swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \

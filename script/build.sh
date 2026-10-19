@@ -276,6 +276,11 @@ for arch in $BUILD_ARCHS; do
     }
 
     # Remove local symbols before signing this architecture's executable.
+    # Keep an optional local symbol copy for profiling the installed binary.
+    if [[ -n "${SM_SYMBOL_OUTPUT_DIR:-}" ]]; then
+        mkdir -p "$SM_SYMBOL_OUTPUT_DIR/$arch"
+        cp "$CONTENTS/MacOS/Nori" "$SM_SYMBOL_OUTPUT_DIR/$arch/Nori.unstripped"
+    fi
     /usr/bin/strip -x "$CONTENTS/MacOS/Nori"
 
     cp "$SWIFT_SOURCE_DIR/Support/Info.plist" "$CONTENTS/Info.plist"
