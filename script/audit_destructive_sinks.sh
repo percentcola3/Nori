@@ -7,6 +7,7 @@
 #    .nori-slim- 临时输出，被替换的原件一律移入废纸篓。新增的 Shell 编辑器
 #    与 Agent CLI 日志只按具体调用语句豁免自建临时文件，不豁免整个文件。
 #    目录管理只允许原生 Trash 与自建复制暂存路径清理，不允许永久删除用户文件。
+#    Agent 完整移除只允许复核已确认的独占目录后移入 Trash，且只豁免确切调用。
 # 2. bridge 脚本：mole_delete 必须显式传入身份参数（第三个参数）；rm -rf
 #    只允许作用于引号包裹的变量（脚本自建目录），字面量路径一律拒绝。
 set -euo pipefail
@@ -37,6 +38,8 @@ SimpleMole/Services/CleanupCache.swift|SimpleMole/Services/MediaSlimmer.swift) r
             [[ "$2" == 'defer { try? FileManager.default.removeItem(at: file) }' ]] && return 0 ;;
         SimpleMole/Services/AgentCLIService.swift)
             [[ "$2" == 'defer { try? handle.close(); try? FileManager.default.removeItem(at: output) }' ]] && return 0 ;;
+        SimpleMole/Services/AgentRemovalService.swift)
+            [[ "$2" == 'try FileManager.default.trashItem(at: url, resultingItemURL: &destination)' ]] && return 0 ;;
         SimpleMole/Services/AdministratorCleanupService.swift|\
 SimpleMole/Services/AdministratorUninstallService.swift|\
 SimpleMole/Services/DeveloperShellProfiler.swift)
@@ -86,6 +89,28 @@ done < <(grep -rnE 'removeItem\(|trashItem\(|unlinkat\(|unlink\(|rmdir\(' \
     "$ROOT_DIR/SimpleMole" --include='*.swift' || true)
 
 directory_service="$ROOT_DIR/SimpleMole/Services/DirectoryFileService.swift"
+agent_removal_service="$ROOT_DIR/SimpleMole/Services/AgentRemovalService.swift"
+# The complete-removal exception is reversible and bound to the original plan.
+# It cannot become a generic recursive or permanent user-data deletion outlet.
+for contract in \
+    'DeletionPlan.normalizedPathLiteral(home) == plan.home,' \
+    'running.isComplete else {' \
+    'for item in plan.items {' \
+    'let fresh = eligibleRoots(agentIDs: plan.agentIDs, home: home, presence: presence)' \
+    'guard let finalOpenFiles = core.agentRemovalOpenFiles(),' \
+    '!core.matchesWhitelist(path, entries: whitelist),' \
+    'treeMatchesWhitelist(path, entries: whitelist, core: core) == false,' \
+    'eligibleRoots(agentIDs: plan.agentIDs, home: home, presence: presence).roots.contains(path),' \
+    'physicalOwnedRoot(path, home: home),' \
+    'DeletionPlan.Metadata.read(path) == item.metadata,'; do
+    grep -Fq "$contract" "$agent_removal_service" || fail 'Complete Agent removal lost its reviewed-plan or Trash-boundary guard'
+done
+for contract in 'treeFingerprint(path) == expectedTree' 'DeletionPlan.identity(at: path) == item.identity'; do
+    [[ "$(grep -Fc "$contract" "$agent_removal_service")" -ge 2 ]] || \
+        fail 'Complete Agent removal must revalidate tree and identity again at the Trash boundary'
+done
+[[ "$(grep -Fc 'trashItem(' "$agent_removal_service")" -eq 1 ]] || \
+    fail 'Complete Agent removal must have exactly one audited reversible Trash call'
 clipboard_service="$ROOT_DIR/SimpleMole/Services/ClipboardHistoryManager.swift"
 for contract in \
     '.appendingPathComponent(historyURL.deletingPathExtension().lastPathComponent + "-images", isDirectory: true)' \
