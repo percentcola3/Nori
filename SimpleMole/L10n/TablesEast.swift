@@ -4,6 +4,16 @@ import Foundation
 
 extension L10nTables {
     static let zhHant: [String: String] = [
+        "settings.pageShortcuts.title": "頁面快速鍵",
+        "settings.pageShortcuts.hint": "點擊快速鍵後按下新組合，Esc 取消。全域生效，靈動島收起時也可直接開啟頁面；隱藏頁面不回應。",
+        "settings.pageShortcuts.globalConflict": "全域快速鍵註冊失敗，可能已被其他應用程式佔用，請換一個組合。",
+        "settings.pageShortcuts.resetAll": "回復預設",
+        "settings.pageShortcuts.unset": "未設定",
+        "settings.pageShortcuts.record": "設定%@的快速鍵",
+        "settings.pageShortcuts.clear": "清除%@的快速鍵",
+        "settings.pageShortcuts.invalid": "請同時按下 ⌘、⌥ 或 ⌃ 與另一個按鍵。",
+        "settings.pageShortcuts.reserved": "此快速鍵已用於現有應用程式操作或系統操作。",
+        "settings.pageShortcuts.conflict": "已被「%@」使用，請換一個組合。",
         "window.title": "Nori",
         "header.task.cleaning": "清理中…",
         "header.task.uninstalling": "正在解除安裝 %@",
@@ -145,6 +155,7 @@ extension L10nTables {
         "menu.about": "關於 Nori",
         "menu.quit": "結束 Nori",
         "menu.edit": "編輯",
+        "menu.navigate": "前往",
         "menu.copy": "拷貝",
         "menu.selectAll": "全選",
         "menu.undo": "還原",
@@ -359,6 +370,7 @@ extension L10nTables {
         "menu.about": "Nori について",
         "menu.quit": "Nori を終了",
         "menu.edit": "編集",
+        "menu.navigate": "移動",
         "menu.copy": "コピー",
         "menu.selectAll": "すべて選択",
         "menu.undo": "取り消す",

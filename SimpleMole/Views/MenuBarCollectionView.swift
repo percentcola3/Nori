@@ -62,11 +62,10 @@ struct MenuBarCollectionSettingsView: View {
                     }
                 }.font(.system(size: 10.5))
             }
-            if let error = controller.error {
-                Text(error).font(.system(size: 10.5)).foregroundStyle(Color.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }.frame(maxWidth: .infinity, alignment: .leading)
+        .onReceive(controller.$error.removeDuplicates()) { error in
+            if let error { TaskFeedbackNotice.reportFailure(details: [error], detailsAreLocalized: true) }
+        }
         .onAppear { if !controller.collapsed { controller.refreshCandidates(clearError: false) } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if !controller.collapsed { controller.refreshCandidates(clearError: false) }

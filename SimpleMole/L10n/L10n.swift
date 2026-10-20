@@ -184,7 +184,7 @@ final class L10n: ObservableObject {
         let withSoftwareUpdates = withUpdates.merging(L10nSoftwareUpdateTables.table(for: language)) { _, value in value }
         let withTaskFeedback = withSoftwareUpdates.merging(L10nTaskFeedbackTables.table(for: language)) { _, value in value }
         var result = withTaskFeedback.merging(L10nCleanupTaskTables.table(for: language)) { _, value in value }
-        for feature in [L10nDeveloperShellTables.table(for: language), L10nDeveloperNetworkTables.table(for: language),
+        for feature in [L10nProcessExitTables.table(for: language), L10nDeveloperShellTables.table(for: language), L10nDeveloperNetworkTables.table(for: language),
                         L10nDeveloperExistingTables.table(for: language), L10nDeveloperWorkspaceTables.table(for: language),
                         L10nDeveloperSSHGitTables.table(for: language), L10nLocalizationAuditTables.table(for: language),
                         L10nDirectoryTables.table(for: language), L10nMenuBarCollectionTables.table(for: language), L10nIslandNetworkTables.table(for: language)] {

@@ -5,7 +5,7 @@ TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-uninstall-tests.XXXXXX")"
 FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/.uninstall-residue-fixture.XXXXXX")"
 trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 swiftc -target "$(uname -m)-apple-macos13.0" \
-    -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework IOKit \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \

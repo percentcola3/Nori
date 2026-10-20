@@ -6,7 +6,7 @@ source "$ROOT_DIR/script/test_developer_toolchain.sh"
 DEV_FEATURE_TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-workspace-feature-tests.XXXXXX")"
 trap 'rm -rf "$DEV_FEATURE_TEST_DIR"' EXIT
 swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$DEV_FEATURE_TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$DEV_FEATURE_TEST_DIR/cache}" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCLIService.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperTerminalEnvironment.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperToolchainService.swift" \

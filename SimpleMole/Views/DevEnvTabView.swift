@@ -69,6 +69,9 @@ struct DevEnvTabView: View {
             state.scanGc(force: true)
             Task { await refreshPanels(); updateIssues() }
         }
+        .onChange(of: workspace.packages.failures) { failures in
+            if !failures.isEmpty { state.presentTaskFailure(details: Array(Set(failures)).sorted()) }
+        }
         .onChange(of: workspace.operationError) { message in
             operationNotice = message.map { TaskFeedbackNotice(message: $0) }
         }

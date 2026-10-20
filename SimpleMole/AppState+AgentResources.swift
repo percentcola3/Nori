@@ -104,6 +104,7 @@ extension AppState {
             agentApplying = false
             if summary.removed > 0 { CleanupCache.invalidate(); cleanupScanComplete = false; resampleAfterMutation() }
             noteHeaderReaction(agentOutcomeMood)
+            if agentOutcomeMood == .attention { presentAgentTaskFailure() }
         }
     }
 }

@@ -17,9 +17,9 @@ struct CommandLineTool: Equatable, Sendable {
     var installationSource: String? = nil
     var agentInstallation: FixtureAgentInstallation? = nil
     var canUninstall = true
-    var uninstallDataOwner: UninstallDataOwner { .init(name: name) }
+    var uninstallDataOwner: UninstallDataOwner { .init(name: name, agentIDs: Set([agentID].compactMap { $0 })) }
 }
-struct UninstallDataOwner: Sendable { let name: String }
+struct UninstallDataOwner: Equatable, Sendable { let name: String; var agentIDs: Set<String> = [] }
 enum NativeCore {
     struct Service: Sendable {
         func rememberUninstallDataOwners(_ owners: [UninstallDataOwner], homeDirectory: String = "") {}
@@ -144,16 +144,26 @@ final class AppState {
     var agentHasScanned = true
     var cleanupScanComplete = true
     var dataOffers: [String] = []
-    func offerUninstallDataCleanup(owner: UninstallDataOwner) { dataOffers.append(owner.name) }
+    var dataOwners: [UninstallDataOwner] = []
+    func offerUninstallDataCleanup(owner: UninstallDataOwner) {
+        precondition(commandLineToolBusyID == nil, "Data review must wait for program removal")
+        dataOffers.append(owner.name)
+        dataOwners.append(owner)
+    }
     var resamples = 0
     var failures = 0
     var logs: [String] = []
+    var associatedDataRequests: [(Set<String>, String?)] = []
     let l10n = L10n.shared
     func uninstallAgentTool(_ tool: CommandLineTool) {
         preconditionFailure("Generic CLI requests cannot enter the Agent-removal adapter")
     }
     func ensureAgentStorageFootprints(for ids: Set<String>) {
         preconditionFailure("A request test cannot start storage discovery")
+    }
+    func offerAgentAssociatedDataCleanup(agentIDs: Set<String>, programName: String? = nil) {
+        precondition(commandLineToolBusyID == nil, "Data review must wait until program removal releases its busy state")
+        associatedDataRequests.append((agentIDs, programName))
     }
     func presentTaskFailure(message: String = "", details: [String] = [], detailsAreLocalized: Bool = false) {
         failures += 1; taskNotice = message
@@ -261,10 +271,29 @@ struct CLIUninstallRequestTests {
                          "An obsolete generation or removed row cannot authorize mutation")
         }
     }
+    static func knownAgentWithoutLauncher() async throws {
+        for succeeded in [false, true] {
+            let fixture = state()
+            fixture.commandLineTools[0].agentID = "fixture-agent"
+            CLIUninstallWorkflow.result = .finished(.init(succeeded: succeeded))
+            fixture.uninstallCommandLineTool(fixture.commandLineTools[0])
+            try await waitUntil { fixture.confirmation != nil }
+            consent(fixture)
+            try await waitUntil { !CLIUninstallWorkflow.calls.isEmpty && fixture.commandLineToolBusyID == nil }
+            precondition(fixture.dataOwners.count == (succeeded ? 1 : 0)
+                         && fixture.associatedDataRequests.isEmpty,
+                         "A successful known-Agent package removal must offer exactly one shared data review")
+            if succeeded {
+                precondition(fixture.dataOwners[0].agentIDs == ["fixture-agent"]
+                             && fixture.dataOwners[0].name == "Selected CLI")
+            }
+        }
+    }
     static func main() async throws {
         try await mutationGuards()
         try await independentReadOnlyWork()
         try await staleAndCancellation()
+        try await knownAgentWithoutLauncher()
         print("PASS: production generic CLI request/consent excludes overlapping writes, permits independent scans and rejects stale consent")
     }
 }

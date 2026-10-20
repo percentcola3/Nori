@@ -9,7 +9,6 @@ struct CleanupTabView: View {
     @State private var userCollapsed: Set<CleanupGroupBucket>?
     /// 从可再生缓存行发起的自动清理规则创建。
     @State private var autoCleanIntent: AutoCleanupIntent?
-    @State private var showsOutcomeDetails = false
     @State private var confirmingAppData = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -17,17 +16,8 @@ struct CleanupTabView: View {
         state.categories.filter { $0.isAppDataReview && $0.selected }
     }
 
-    private var collapsedGroups: Set<CleanupGroupBucket> {
-        userCollapsed ?? defaultCollapsedGroups
-    }
-
-    private var defaultCollapsedGroups: Set<CleanupGroupBucket> {
-        let groups = groupedCategories
-        guard groups.count > 1 else { return [] }
-        return Set(groups.dropFirst().map(\.kind))
-    }
-
-    private func toggleCollapsed(_ kind: CleanupGroupBucket) {
+    private func toggleCollapsed(_ kind: CleanupGroupBucket,
+                                 in collapsedGroups: Set<CleanupGroupBucket>) {
         withAnimation(reduceMotion ? nil : MoleMotion.panel) {
             var next = collapsedGroups
             if next.contains(kind) { next.remove(kind) } else { next.insert(kind) }
@@ -74,7 +64,6 @@ struct CleanupTabView: View {
     private var presentationPhase: Int {
         if state.isApplying || state.isCleanupScanning { return 1 }
         if state.cleanupOutcomeMood == .success { return state.cleanupCelebrating ? 3 : 5 }
-        if state.cleanupOutcomeMood == .attention { return 4 }
         return showsCleanupResults ? 2 : 0
     }
 
@@ -115,26 +104,22 @@ struct CleanupTabView: View {
                         } catch { return }
                         state.finishCleanupCelebration(feedbackID: feedbackID)
                     }
-            } else if state.cleanupOutcomeMood == .attention {
-                NoriCleanupTaskStage(phase: .attention,
-                                     statusText: state.statusText,
-                                     details: state.cleanupOutcomeDetails,
-                                     applications: state.cleanupFailureApplications,
-                                     feedbackID: state.cleanupFeedbackID,
-                                     scanDisabled: state.isCleanupTaskBusy || state.cleanupQueued,
-                                     onScan: { state.requestScanAccess(.quickOptimize) })
             } else if !showsCleanupResults {
                 NoriPlaceholderStage { size in
                     NoriIdlePlaceholder(state: state, size: size)
                     scanButton
                 }
             } else {
+                // Classify the inventory once per render. Each header and
+                // lazy row must share this result instead of rewalking all
+                // paths to derive the initial collapse state.
+                let groups = groupedCategories
+                let collapsedGroups = userCollapsed ?? Set(groups.dropFirst().map(\.kind))
                 ScrollView {
                     LazyVStack(spacing: 12) {
-                        cleanupOutcomeDetails
-                        ForEach(groupedCategories) { group in
+                        ForEach(groups) { group in
                             VStack(spacing: 8) {
-                                cleanupGroupHeader(group)
+                                cleanupGroupHeader(group, collapsedGroups: collapsedGroups)
                                 if !collapsedGroups.contains(group.kind) {
                                     LazyVStack(spacing: 8) {
                                         ForEach(group.categoryIDs, id: \.self) { categoryID in
@@ -184,9 +169,6 @@ struct CleanupTabView: View {
         // 扫描完成后体检系统数据库（原系统优化页分流能力，DR-11）。
         .onChange(of: state.cleanupScanComplete) { done in
             if done { state.scanSystemMaintenance() }
-        }
-        .onChange(of: state.cleanupFeedbackID) { _ in
-            showsOutcomeDetails = false
         }
         // 扫描中 → 结果/空态 的整块互换走弹簧过渡，而不是硬切。
     }
@@ -302,30 +284,6 @@ struct CleanupTabView: View {
         .padding(.vertical, 10)
     }
 
-    @ViewBuilder
-    private var cleanupOutcomeDetails: some View {
-        if state.cleanupOutcomeMood == .attention {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(l10n.t("cleanup.execution.review"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                if !state.cleanupOutcomeDetails.isEmpty {
-                    DisclosureGroup(l10n.t("cleanup.execution.details"), isExpanded: $showsOutcomeDetails) {
-                        Text(state.cleanupOutcomeDetails.joined(separator: "\n\n"))
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .font(.system(size: 11))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .modifier(ListRowSurface())
-        }
-    }
-
     private var applyLabel: String {
         if state.cleanupQueued { return l10n.t("cleanup.queued") }
         if state.isApplying { return l10n.t("cleanup.apply.busy") }
@@ -358,7 +316,8 @@ struct CleanupTabView: View {
     }
 
     @ViewBuilder
-    private func cleanupGroupHeader(_ group: CleanupPresentationGroup) -> some View {
+    private func cleanupGroupHeader(_ group: CleanupPresentationGroup,
+                                    collapsedGroups: Set<CleanupGroupBucket>) -> some View {
         HStack(spacing: 0) {
             Toggle(isOn: groupSelection(group)) {
                 HStack(spacing: 8) {
@@ -379,7 +338,7 @@ struct CleanupTabView: View {
             .toggleStyle(MoleRowSelectionToggleStyle(horizontalPadding: 10))
             .disabled(!state.cleanupScanComplete || state.isApplying)
             .accessibilityIdentifier("cleanup-group-select-" + group.kind.rawValue)
-            Button { toggleCollapsed(group.kind) } label: {
+            Button { toggleCollapsed(group.kind, in: collapsedGroups) } label: {
                 Image(systemName: "chevron.down")
                     .rotationEffect(.degrees(collapsedGroups.contains(group.kind) ? -90 : 0))
             }

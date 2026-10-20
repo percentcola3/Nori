@@ -1,0 +1,20 @@
+name: Save public compiler modules
+description: Keep SDK compilation reusable without caching apps, test results or signing keys
+inputs:
+  path:
+    description: Compiler module directory
+    required: true
+  key:
+    description: Exact toolchain and architecture cache key
+    required: true
+  cache-hit:
+    description: Whether the exact cache is already present
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache/save@v4
+      if: success() && github.event_name != 'pull_request' && inputs.cache-hit != 'true'
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.key }}

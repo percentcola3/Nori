@@ -66,6 +66,7 @@ struct SettingsTabView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 pagesSection
+                PageShortcutsSettingsView(state: state)
                 islandSection
                 menuBarCollectionSection
                 awakeSection
@@ -136,12 +137,7 @@ struct SettingsTabView: View {
                         }
                         .buttonStyle(SecondaryButtonStyle())
                     }
-                    if let error = loginItem.errorMessage {
-                        Text(l10n.tf("settings.launchAtLogin.failed", error))
-                            .font(.system(size: 10))
-                            .foregroundStyle(Color.warning)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+
                 }
             }
 
@@ -363,7 +359,7 @@ struct SettingsTabView: View {
             .tint(Color.moleAccentText)
             Spacer(minLength: 8)
             if isOn.wrappedValue {
-                HotKeyRecorderRow(combo: combo, defaultCombo: defaultCombo)
+                HotKeyRecorderRow(state: state, combo: combo, defaultCombo: defaultCombo)
             }
         }
     }
@@ -504,9 +500,11 @@ struct SettingsTabView: View {
 /// 快捷键录制行：点按钮进入监听，按下新组合立即生效；Esc 取消。
 /// 仅 ⇧ 或无修饰键的组合会被拒绝（全局热键会在打字时误触发）。
 private struct HotKeyRecorderRow: View {
+    @ObservedObject var state: AppState
     @Binding var combo: HotKeyCombo
     let defaultCombo: HotKeyCombo
     @State private var recording = false
+    @State private var recordingID = UUID()
     @State private var monitor: Any?
     @State private var needsModifierHint = false
     @ObservedObject private var l10n = L10n.shared
@@ -538,12 +536,19 @@ private struct HotKeyRecorderRow: View {
                 tint: recording ? Color.moleAccentText : nil))
         }
         .onDisappear { stopRecording() }
+        .onReceive(NotificationCenter.default.publisher(for: .smShortcutRecordingChanged)) { notification in
+            if notification.object as? UUID != recordingID { stopRecording() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            stopRecording()
+        }
     }
 
     private func startRecording() {
         guard monitor == nil else { return }
         recording = true
         needsModifierHint = false
+        state.beginRecordingShortcut(owner: recordingID)
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             if event.keyCode == UInt16(kVK_Escape) {
                 stopRecording()
@@ -562,9 +567,11 @@ private struct HotKeyRecorderRow: View {
     }
 
     private func stopRecording() {
+        let wasRecording = recording
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         recording = false
         needsModifierHint = false
+        if wasRecording { state.endRecordingShortcut(owner: recordingID) }
     }
 }

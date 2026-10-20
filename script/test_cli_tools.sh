@@ -21,7 +21,7 @@ SOURCES+=(
 # Freeze the explicit inputs, including the owned process-fault fixtures.
 mkdir -p "$TEST_DIR/sources"
 cp "${SOURCES[@]}" "$TEST_DIR/sources/"
-swiftc -target "$(uname -m)-apple-macos13.0" -module-cache-path "$TEST_DIR/module-cache" \
+swiftc -target "$(uname -m)-apple-macos13.0" -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" \
     -framework AppKit -framework IOKit "$TEST_DIR/sources/"*.swift \
     -o "$TEST_DIR/CommandLineToolInventoryTests"
 "$TEST_DIR/CommandLineToolInventoryTests" "$FIXTURE_DIR"

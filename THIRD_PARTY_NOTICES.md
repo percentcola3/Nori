@@ -19,6 +19,10 @@ The vendored timeout helper includes local changes for prompt child-exit
 wakeups under macOS background timer coalescing. Process-group shutdown,
 owner-death checks and terminal handoff are retained.
 
+The cleanup policy audit additionally references Mole revision
+`8c55e8c07f3b34eeeb0352753b660f823468cd43` for project artifact, installer
+and mandatory renv protection rules; the vendored base revision above is unchanged.
+
 Nori is distributed under the GNU General Public License v3.0. The complete
 license is included in [`LICENSE`](LICENSE), and Mole's original copyright
 and license notices remain in the vendored source.

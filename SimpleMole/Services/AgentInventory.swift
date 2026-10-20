@@ -833,8 +833,14 @@ enum AgentInventory {
 
     static func jsonServers(at path: String, keyPath: String)
         -> [(scope: String?, name: String, config: [String: Any])]? {
-        guard let data = FileManager.default.contents(atPath: path),
-              let root = (try? JSONSerialization.jsonObject(with: data, options: [.json5Allowed]))
+        guard let data = FileManager.default.contents(atPath: path) else { return nil }
+        return jsonServers(data: data, keyPath: keyPath)
+    }
+
+    /// Pure parser for callers that already captured one verified file object.
+    static func jsonServers(data: Data, keyPath: String)
+        -> [(scope: String?, name: String, config: [String: Any])]? {
+        guard let root = (try? JSONSerialization.jsonObject(with: data, options: [.json5Allowed]))
                 as? [String: Any] else { return nil }
         var result: [(scope: String?, name: String, config: [String: Any])] = []
         func collect(_ object: [String: Any], scope: String?) {
@@ -862,8 +868,14 @@ enum AgentInventory {
     /// 只解析 MCP 段需要的 TOML 子集，跨行字符串和数组不会产生伪段头。
     static func tomlServers(at path: String, table: String)
         -> [(scope: String?, name: String, config: [String: Any])]? {
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8),
-              let statements = AgentTOMLStatements.read(text) else { return nil }
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        return tomlServers(text: text, table: table)
+    }
+
+    /// Pure parser paired with descriptor-based, bounded configuration reads.
+    static func tomlServers(text: String, table: String)
+        -> [(scope: String?, name: String, config: [String: Any])]? {
+        guard let statements = AgentTOMLStatements.read(text) else { return nil }
         var order: [String] = []
         var configs: [String: [String: Any]] = [:]
         var currentName: String?

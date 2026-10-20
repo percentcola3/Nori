@@ -41,12 +41,16 @@ CLEANUP_PRESENTATION_SOURCES=(
     "$ROOT_DIR/SimpleMole/Views/NoriStatusAnimation.swift"
     "$ROOT_DIR/SimpleMole/Views/NoriCleanupTaskStage.swift"
     "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift"
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift"
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackQueue.swift"
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackDiagnostic.swift"
+    "$ROOT_DIR/SimpleMole/Views/TaskFeedbackView.swift"
     "$ROOT_DIR/script/CleanupPresentationFixtureState.swift"
     "$ROOT_DIR/script/CleanupPresentationTests.swift"
 )
 cp "${CLEANUP_PRESENTATION_SOURCES[@]}" "$TEST_DIR/sources/"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework SwiftUI -framework WebKit -framework IOKit \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" -framework AppKit -framework SwiftUI -framework WebKit -framework IOKit \
     "$TEST_DIR/sources/"*.swift \
     -o "$FIXTURE_APP/Contents/MacOS/CleanupPresentationTests"
 "$FIXTURE_APP/Contents/MacOS/CleanupPresentationTests"

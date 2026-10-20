@@ -132,7 +132,7 @@ xcrun clang -fobjc-arc -isysroot "$SDKROOT" -target "$(uname -m)-apple-macos13.0
     -o "$TEST_DIR/menu-bar.o"
 echo "Compiling isolated real-view island presentation checks…"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" \
     -import-objc-header "$ROOT_DIR/SimpleMole/Support/MenuBarCollection/NoriMenuBarVisibility.h" \
     "$TEST_DIR/menu-bar.o" \
     -F "$SPARKLE_DIR" -framework Sparkle -Xlinker -rpath -Xlinker "$SPARKLE_DIR" \

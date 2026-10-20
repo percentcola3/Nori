@@ -71,6 +71,9 @@ private struct AgentCleanupProgress {
     var messages: [String] = []
     var completedCLIUnits = 0
     var totalUnits = 0
+    /// These IDs authorize offering a separate complete-data review only.
+    /// Ordinary data selection never grants complete-removal consent.
+    var removedCLIAgentIDs: Set<String> = []
 
     mutating func merge(_ uninstall: AgentCLIService.Outcome) {
         removed += uninstall.removed
@@ -172,6 +175,7 @@ extension AppState {
                 agentCleanupHasFeedback = true
                 agentStatus = message
                 recordAgentAttention()
+                presentAgentTaskFailure()
             } else {
                 agentCodexThreadStoreCompression = enabled ? .enabled : .disabled
                 agentOutcomeMood = nil
@@ -412,6 +416,7 @@ extension AppState {
                 : L10n.shared.tf("agents.status.storage", agentCount,
                     ByteFormat.format(totals.identifiedDataBytes), ByteFormat.format(totals.reclaimableBytes),
                     ByteFormat.format(totals.preservedBytes)))
+            if !report.complete { presentAgentTaskFailure(message: L10n.shared.t("log.scanPartial")) }
         }
     }
 
@@ -509,9 +514,8 @@ extension AppState {
         startAgentAction(.init(selection: selection))
     }
 
-    /// Installation removal and user-data removal have separate consent.
-    /// Refresh the data preview after closing its trusted consumers, so the
-    /// final confirmation binds the post-shutdown file identities.
+    /// Complete removal is separate from everyday cache/history cleanup.
+    /// All program and orphaned-data entry points share the same consent.
     func offerAgentAssociatedDataCleanup(agentIDs: Set<String>, programName: String? = nil) {
         guard !agentIDs.isEmpty else { return }
         offerUninstallDataCleanup(owner: .init(kind: .agent,
@@ -620,6 +624,7 @@ extension AppState {
             agentStatus = L10n.shared.t("task.failure.runtimeUnknown")
             agentOutcomeDetails = [agentStatus]
             recordAgentAttention()
+            presentAgentTaskFailure(recovery: { [weak self] in self?.startAgentAction(action, rechecking: true) })
             return false
         }
         let blockers = await Task.detached(priority: .utility) {
@@ -664,6 +669,7 @@ extension AppState {
             agentStatus = L10n.shared.t("task.failure.runtimeUnknown")
             agentOutcomeDetails = [agentStatus]
             recordAgentAttention()
+            presentAgentTaskFailure(recovery: { [weak self] in self?.startAgentAction(action, rechecking: true) })
             return false
         }
         guard !owners.isEmpty else { return true }
@@ -673,6 +679,7 @@ extension AppState {
         agentStatus = L10n.shared.t(rechecking ? "task.closeApps.changed" : "task.closeApps.message")
         agentOutcomeDetails = [agentStatus]
         recordAgentAttention(applications: names)
+        presentAgentTaskFailure(recovery: { [weak self] in self?.startAgentAction(action, rechecking: true) })
         return false
     }
 
@@ -704,13 +711,14 @@ extension AppState {
                 let fresh = index == 0 ? snapshot : await captureRunningApplicationSnapshot()
                 let outcome = await Task.detached(priority: .utility) {
                     AgentCLIService.uninstall(installation, home: home, running: fresh,
-                        permanent: true, onCurrentFile: { path in
+                        permanent: false, onCurrentFile: { path in
                             onProgress(index, selection.count, path)
                         })
                 }.value
                 progress.merge(outcome)
                 if outcome.succeeded {
                     succeededIDs.insert(installation.id)
+                    if !installation.onlyUnlinksExecutable { progress.removedCLIAgentIDs.insert(installation.agentID) }
                     confirmedCLIPaths.formUnion(installation.managedPaths + installation.executablePaths)
                     progress.completedCLIUnits += 1
                 } else {
@@ -723,7 +731,7 @@ extension AppState {
             var remainder = selection
             remainder.cliInstallations = selection.cliInstallations.compactMap { retryInstallations[$0.id] }
             remainder.removedAgentIDs.formUnion(selection.cliInstallations.filter {
-                succeededIDs.contains($0.id)
+                succeededIDs.contains($0.id) && !$0.onlyUnlinksExecutable
             }.map(\.agentID))
             let remainingData = remainder.excludingCoveredPaths(confirmedCLIPaths)
             progress.completedCLIUnits += max(0, remainder.count - remainingData.count)
@@ -735,7 +743,8 @@ extension AppState {
                     reclaimedBytes: progress.reclaimedBytes,
                     failed: progress.failed, messages: progress.messages,
                     pendingAction: .init(selection: remainder, progress: progress),
-                    retryRequiresScan: retryRequiresScan)
+                    retryRequiresScan: retryRequiresScan,
+                    removalAgentIDs: progress.removedCLIAgentIDs)
                 return
             }
             // Package managers may run for a while. Recheck owners again at
@@ -768,14 +777,22 @@ extension AppState {
         await finishAgentMutation(removed: progress.removed, skipped: progress.skipped,
             reclaimedBytes: progress.reclaimedBytes,
             failed: progress.failed, messages: progress.messages,
-            pendingAction: incomplete ? .init(selection: selection, progress: progress) : nil)
+            pendingAction: incomplete ? .init(selection: selection, progress: progress) : nil,
+            removalAgentIDs: progress.removedCLIAgentIDs)
     }
 
     private func finishAgentMutation(removed: Int, skipped: Int, reclaimedBytes: UInt64, failed: Int, messages: [String],
                                      pendingAction: AgentTaskAction? = nil,
                                      pendingOwners: [String] = [], runtimeAvailable: Bool = true,
-                                     retryRequiresScan: Bool = false) async {
-        defer { agentApplying = false }
+                                     retryRequiresScan: Bool = false,
+                                     removalAgentIDs: Set<String> = []) async {
+        var completedRemovalIDs: Set<String> = []
+        defer {
+            agentApplying = false
+            if !completedRemovalIDs.isEmpty {
+                offerAgentAssociatedDataCleanup(agentIDs: completedRemovalIDs)
+            }
+        }
         agentCleanupProgress = .init(phase: .verifying)
         agentCompletedCount = removed
         agentReclaimedBytes = reclaimedBytes
@@ -806,6 +823,7 @@ extension AppState {
         guard skipped > 0 || failed > 0 || pendingAction != nil else {
             if report.complete {
                 completeAgentMutation(summary: summary, removed: removed, skipped: skipped, failed: failed)
+                completedRemovalIDs = removalAgentIDs
             } else {
                 clearAgentSelection()
                 agentRetryAction = nil
@@ -814,6 +832,7 @@ extension AppState {
                 recordAgentAttention()
                 agentOutcomeDetails = [L10n.shared.t("log.scanPartial")]
                 noteHeaderReaction(removed > 0 ? .success : .attention)
+                presentAgentTaskFailure(message: L10n.shared.t("log.scanPartial"))
             }
             return
         }
@@ -826,6 +845,7 @@ extension AppState {
         agentSelectedCLIInstallations = Set(remaining.cliInstallations.map(\.id))
         if report.complete && remaining.count == 0 && skipped == 0 && failed == 0 {
             completeAgentMutation(summary: summary, removed: removed, skipped: skipped, failed: failed)
+            completedRemovalIDs = removalAgentIDs
             return
         }
         agentOutcomeDetails = removed > 0 ? [] : messages.filter { !$0.hasPrefix("Open-file check ") }
@@ -849,6 +869,20 @@ extension AppState {
             agentRetryAction = nil
             agentRetryAvailable = false
         }
+        presentAgentTaskFailure(message: removed > 0 ? L10n.shared.t("task.failure.partial") : nil,
+                               details: messages.filter { !$0.hasPrefix("Open-file check ") })
+    }
+
+    /// Failures and recovery actions belong to one modal, never a growing
+    /// inventory header. Capture the retry before another task can replace it.
+    func presentAgentTaskFailure(message: String? = nil, details: [String]? = nil,
+                                 recovery: (() -> Void)? = nil) {
+        let retry = recovery ?? agentRetryAction
+        var notice = TaskFeedbackNotice(message: message ?? agentStatus,
+            details: details ?? agentOutcomeDetails, applicationNames: agentFailureApplications)
+        notice.recoveryLabel = L10n.shared.t(retry == nil ? "agents.rescan" : "cleanup.task.retry")
+        notice.onRetry = retry ?? { [weak self] in self?.scanAgents() }
+        presentTaskNotice(notice)
     }
 
     private func completeAgentMutation(summary: String, removed: Int, skipped: Int, failed: Int) {

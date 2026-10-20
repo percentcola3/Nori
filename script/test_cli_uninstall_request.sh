@@ -10,6 +10,6 @@ cp "$ROOT_DIR/SimpleMole/AppState+CommandLineTools.swift" \
    "$ROOT_DIR/SimpleMole/AppState+TaskActivity.swift" \
    "$ROOT_DIR/script/CLIUninstallRequestTests.swift" "$REQUEST_WORK/sources/"
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$REQUEST_WORK/module-cache" "$REQUEST_WORK/sources/"*.swift \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$REQUEST_WORK/module-cache}" "$REQUEST_WORK/sources/"*.swift \
     -o "$REQUEST_WORK/tests"
 "$REQUEST_WORK/tests"

@@ -97,10 +97,31 @@ enum AgentCLIService {
                 }
             }
         }
+        if agent.id == "hermes" {
+            // The public pipx/uv aliases can be removed independently of the
+            // package environment. Inspect only known package roots and require
+            // distribution evidence before considering their internal entries.
+            for relative in [".local/share/pipx/venvs/hermes-agent", ".local/pipx/venvs/hermes-agent",
+                             ".local/share/uv/tools/hermes-agent"] {
+                let root = home + "/" + relative
+                guard !hermesPythonToolProof(root: root).isEmpty else { continue }
+                for name in hermesScripts.keys {
+                    let path = root + "/bin/" + name
+                    if regularPhysicalFile(path), AgentCatalog.isExecutableCommandFile(path) { candidates.insert(path) }
+                }
+            }
+        }
 
         var byID: [String: AgentCLIInstallation] = [:]
+        if agent.id == "hermes", let native = hermesNativeInstallation(agent: agent, home: home,
+                                                                        searchPath: context.searchPath) {
+            byID[native.id] = native
+        }
         for path in candidates.sorted() {
-            let resolved = resolvedPath(path)
+            // A verified Hermes installer wrapper is a command entry, not the
+            // program itself. Never execute it to discover its destination.
+            if agent.id == "hermes", byID.values.contains(where: { $0.executablePaths.contains(path) }) { continue }
+            let resolved = agent.id == "hermes" ? hermesWrapperTarget(path) ?? resolvedPath(path) : resolvedPath(path)
             guard !resolved.contains(".app/Contents/"), safeAncestors(path) else { continue }
             let record = managedInstallation(agent: agent, launcher: path, resolved: resolved,
                                              searchPath: context.searchPath, home: home)
@@ -302,7 +323,8 @@ enum AgentCLIService {
         "claude-code": ["claude"], "codex": ["codex"], "cursor-cli": ["cursor-agent"],
         "copilot": ["copilot"], "gemini": ["gemini"], "opencode": ["opencode"],
         "grok": ["grok"], "pi": ["pi"], "kimi": ["kimi", "kimi-cli"],
-        "factory": ["droid"], "amp": ["amp"], "crush": ["crush"]
+        "factory": ["droid"], "amp": ["amp"], "crush": ["crush"],
+        "hermes": ["hermes", "hermes-agent", "hermes-acp"]
     ]
     private static let nativeRoots: [String: [String]] = [
         "claude-code": [".local/share/claude/versions"],
@@ -315,7 +337,7 @@ enum AgentCLIService {
         "copilot": ["@github/copilot", "@githubnext/github-copilot-cli"],
         "gemini": ["@google/gemini-cli"], "opencode": ["opencode-ai"],
         "pi": ["@mariozechner/pi-coding-agent", "@earendil-works/pi-coding-agent"], "kimi": ["kimi-cli"],
-        "amp": ["@sourcegraph/amp"]
+        "amp": ["@sourcegraph/amp"], "hermes": ["hermes-agent"]
     ]
 
     static func ownsNPMPackage(_ name: String) -> Bool {
@@ -365,12 +387,168 @@ enum AgentCLIService {
             let suffix = resolved[range.upperBound...].split(separator: "/")
             guard let first = suffix.first, packages[agent.id, default: []].contains(String(first)) else { continue }
             let root = String(resolved[..<range.upperBound]) + first
+            if agent.id == "hermes" {
+                guard hermesScripts.keys.contains(where: { resolved == root + "/bin/" + $0 }),
+                      regularPhysicalFile(resolved), !hermesPythonToolProof(root: root).isEmpty else { continue }
+            }
             return make(agent: agent, launchers: [launcher], paths: [root], manager: type,
                         managerExecutable: manager(command, preferred: home + "/.local/bin/" + command,
                                                    searchPath: searchPath, home: home),
                         package: String(first), idRoot: root)
         }
         return nil
+    }
+
+    private static let hermesScripts = [
+        "hermes": "hermes_cli.main:main",
+        "hermes-agent": "run_agent:main",
+        "hermes-acp": "acp_adapter.entry:main"
+    ]
+
+    /// The official source installer keeps code and a virtual environment in
+    /// this one child. ~/.hermes itself contains user history and credentials.
+    private static func hermesNativeInstallation(agent: AgentDefinition, home: String,
+                                                 searchPath: [String]) -> AgentCLIInstallation? {
+        let root = home + "/.hermes/hermes-agent"
+        let proof = hermesNativeProof(root: root)
+        guard !proof.isEmpty else { return nil }
+        let environments = ["venv", ".venv"].map { root + "/" + $0 }
+            .filter { regularPhysicalFile($0 + "/pyvenv.cfg") }
+        let entries = environments.flatMap { environment in
+            hermesScripts.keys.map { environment + "/bin/" + $0 }
+        }
+        var launchers = Set(entries.filter { safeAncestors($0) && AgentCatalog.isExecutableCommandFile($0) })
+        for directory in Set(searchPath + [home + "/.local/bin"]) {
+            for command in hermesScripts.keys {
+                let path = directory + "/" + command
+                guard safeAncestors(path) else { continue }
+                if AgentCatalog.isSymlink(path) {
+                    // Resolving a dangling final link does not always retain
+                    // its lexical target, so inspect the link without running it.
+                    guard let raw = try? FileManager.default.destinationOfSymbolicLink(atPath: path) else { continue }
+                    let target = URL(fileURLWithPath: (raw as NSString).isAbsolutePath ? raw : directory + "/" + raw)
+                        .standardizedFileURL.path
+                    if entries.contains(target) || entries.contains(resolvedPath(path)) { launchers.insert(path) }
+                } else if AgentCatalog.isExecutableCommandFile(path),
+                          let target = hermesWrapperTarget(path), entries.contains(target) {
+                    launchers.insert(path)
+                }
+            }
+        }
+        return make(agent: agent, launchers: Array(launchers), paths: [root], manager: .native,
+                    managerExecutable: nil, package: nil, idRoot: root)
+    }
+
+    private static func hermesNativeProof(root: String) -> [String] {
+        let marker = root + "/.hermes-bootstrap-complete"
+        let manifest = root + "/pyproject.toml"
+        let sources = ["hermes_cli/main.py", "run_agent.py", "acp_adapter/entry.py"].map { root + "/" + $0 }
+        guard safeAncestors(root), AgentCatalog.isDirectory(root), !AgentCatalog.isSymlink(root),
+              regularPhysicalFile(marker), sources.allSatisfy(regularPhysicalFile),
+              let text = boundedPhysicalText(manifest), let statements = AgentTOMLStatements.read(text) else { return [] }
+        var table: [String] = []
+        var name: String?
+        var scripts: [String: String] = [:]
+        for statement in statements {
+            if let header = AgentTOMLStatements.header(statement.text) {
+                table = header.array ? [] : header.path
+            } else if let item = AgentTOMLStatements.assignment(statement.text) {
+                let key = table + item.path
+                if key == ["project", "name"] { name = AgentTOMLStatements.stringValue(item.value) }
+                if key.count == 3, key.prefix(2).elementsEqual(["project", "scripts"]),
+                   hermesScripts[key[2]] != nil {
+                    scripts[key[2]] = AgentTOMLStatements.stringValue(item.value)
+                }
+            }
+        }
+        let environments = ["venv", ".venv"].map { root + "/" + $0 + "/pyvenv.cfg" }
+            .filter(regularPhysicalFile)
+        guard name == "hermes-agent", scripts == hermesScripts, !environments.isEmpty else { return [] }
+        return [marker, manifest] + sources + environments
+    }
+
+    /// pipx/uv directory spelling alone is insufficient: bind the package's
+    /// metadata and all declared console entry points before invoking a manager.
+    private static func hermesPythonToolProof(root: String) -> [String] {
+        guard safeAncestors(root), AgentCatalog.isDirectory(root), !AgentCatalog.isSymlink(root),
+              regularPhysicalFile(root + "/pyvenv.cfg") else { return [] }
+        let library = root + "/lib"
+        guard safeAncestors(library), !AgentCatalog.isSymlink(library) else { return [] }
+        for python in AgentCatalog.childNames(of: library)
+        where python.range(of: "^python[0-9]+\\.[0-9]+$", options: .regularExpression) != nil {
+            let site = library + "/" + python + "/site-packages"
+            guard safeAncestors(site), !AgentCatalog.isSymlink(site) else { continue }
+            for name in AgentCatalog.childNames(of: site)
+            where name.hasPrefix("hermes_agent-") && name.hasSuffix(".dist-info") {
+                let metadata = site + "/" + name + "/METADATA"
+                let entryPoints = site + "/" + name + "/entry_points.txt"
+                guard let information = boundedPhysicalText(metadata),
+                      let entries = boundedPhysicalText(entryPoints) else { continue }
+                let names = information.components(separatedBy: .newlines).prefix { !$0.isEmpty }
+                    .filter { $0.hasPrefix("Name:") }
+                guard names == ["Name: hermes-agent"] else { continue }
+                var console = false
+                var scripts: [String: String] = [:]
+                var valid = true
+                for raw in entries.components(separatedBy: .newlines) {
+                    let line = raw.trimmingCharacters(in: .whitespaces)
+                    if line.hasPrefix("[") { console = line == "[console_scripts]"; continue }
+                    guard console, !line.isEmpty, !line.hasPrefix("#") else { continue }
+                    let parts = line.split(separator: "=", maxSplits: 1).map {
+                        $0.trimmingCharacters(in: .whitespaces)
+                    }
+                    guard parts.count == 2 else { valid = false; break }
+                    if hermesScripts[parts[0]] != nil {
+                        if scripts[parts[0]] != nil { valid = false; break }
+                        scripts[parts[0]] = parts[1]
+                    }
+                }
+                if valid, scripts == hermesScripts { return [root + "/pyvenv.cfg", metadata, entryPoints] }
+            }
+        }
+        return []
+    }
+
+    /// Only the installer shape is accepted, including its two exact Python
+    /// environment unsets. Extra shell statements, expansion, redirection or
+    /// command substitution cannot confer ownership of a tree.
+    private static func hermesWrapperTarget(_ path: String) -> String? {
+        guard let text = boundedPhysicalText(path, maximumBytes: 16_384) else { return nil }
+        let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }
+        let shells = ["#!/bin/bash", "#!/bin/sh", "#!/bin/zsh",
+                      "#!/usr/bin/env bash", "#!/usr/bin/env sh", "#!/usr/bin/env zsh"]
+        guard let first = lines.first, shells.contains(first) else { return nil }
+        let statements = lines.dropFirst().filter { !$0.isEmpty && !$0.hasPrefix("#") }
+        guard let statement = statements.last else { return nil }
+        let unsets = Array(statements.dropLast())
+        guard unsets.allSatisfy({ $0 == "unset PYTHONPATH" || $0 == "unset PYTHONHOME" }),
+              Set(unsets).count == unsets.count else { return nil }
+        let prefix = "exec \"", suffix = "\" \"$@\""
+        guard statement.hasPrefix(prefix), statement.hasSuffix(suffix) else { return nil }
+        let target = String(statement.dropFirst(prefix.count).dropLast(suffix.count))
+        guard (target as NSString).isAbsolutePath, !target.contains(where: { "\"\\$`\n\r".contains($0) }),
+              DeletionPlan.isLexicallySafePath(target), safeAncestors(target),
+              URL(fileURLWithPath: target).standardizedFileURL.path == target else { return nil }
+        return target
+    }
+
+    private static func regularPhysicalFile(_ path: String) -> Bool {
+        guard safeAncestors(path) else { return false }
+        var metadata = stat()
+        return lstat(path, &metadata) == 0 && metadata.st_mode & S_IFMT == S_IFREG
+    }
+
+    private static func boundedPhysicalText(_ path: String, maximumBytes: Int = 1_048_576) -> String? {
+        guard safeAncestors(path) else { return nil }
+        let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG,
+              metadata.st_size >= 0, metadata.st_size <= maximumBytes,
+              let data = try? FileHandle(fileDescriptor: descriptor, closeOnDealloc: false).read(upToCount: maximumBytes + 1),
+              data.count <= maximumBytes else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     private static func nativeInstallation(agent: AgentDefinition, launcher: String, resolved: String,
@@ -406,7 +584,10 @@ enum AgentCLIService {
                              package: String?, idRoot: String, explicitID: Bool = false) -> AgentCLIInstallation {
         let commands = launchers + (managerExecutable.map { [$0] } ?? [])
         let manifests = paths.map { $0 + "/package.json" }.filter(AgentCatalog.exists)
-        let boundPaths = Array(Set(commands + commands.map(resolvedPath) + paths + manifests)).sorted()
+        let hermesProof = agent.id == "hermes" ? paths.flatMap { root in
+            manager == .native ? hermesNativeProof(root: root) : hermesPythonToolProof(root: root)
+        } : []
+        let boundPaths = Array(Set(commands + commands.map(resolvedPath) + paths + manifests + hermesProof)).sorted()
         let identities = Dictionary(uniqueKeysWithValues: boundPaths.compactMap { path in
             DeletionPlan.identity(at: path).map { (path, $0) }
         })
@@ -479,14 +660,18 @@ enum AgentCLIService {
             items: links, homeDirectory: home,
             allowedDirectories: Array(Set(links.map { ($0.record as NSString).deletingLastPathComponent })))
         let removed = result.removed + unlinked.removed
-        let retry = removed > 0 && unlinked.failed + unlinked.skipped > 0
+        let remaining = Array(Set(installation.managedPaths + installation.executablePaths))
+            .filter { !isAbsent($0) }.sorted()
+        let failures = unlinked.failed + unlinked.skipped + remaining.count
+        let retry = removed > 0 && failures > 0
             ? partialRetryInstallation(installation, allocation: allocation) : nil
         return .init(removed: removed,
-                     failed: unlinked.failed + unlinked.skipped,
-                     messages: result.messages + unlinked.messages,
+                     failed: failures,
+                     messages: result.messages + unlinked.messages + (remaining.isEmpty ? []
+                        : ["CLI uninstall left installation paths in place: " + remaining.joined(separator: "\n")]),
                      reclaimedBytes: result.reclaimedBytes &+ unlinked.reclaimedBytes,
                      retryInstallation: retry,
-                     requiresRescan: removed > 0 && unlinked.failed + unlinked.skipped > 0 && retry == nil)
+                     requiresRescan: removed > 0 && failures > 0 && retry == nil)
     }
 
     private struct AllocationIdentity: Hashable {

@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 import Combine
+import Carbon.HIToolbox
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     let appState = AppState()
     private var statusItem: NSStatusItem?
     private var mainWindow: NSWindow?
@@ -38,6 +39,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.showMainWindow()
         }
         setupMenu()
+        appState.$pageShortcutPreferences
+            .dropFirst()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.setupMenu() }
+            .store(in: &observables)
         NSApp.servicesProvider = self
         NSUpdateDynamicServices()
         updateStatusItem()
@@ -76,7 +82,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         runtimeTimer?.tolerance = 0.2
         setupScreenshotPipeline()
-        appState.registerScreenshotHotKey()
+        NotificationCenter.default.publisher(for: .smOpenPage)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                guard let self, let rawValue = notification.object as? String,
+                      let page = AppState.PageKey(rawValue: rawValue),
+                      self.appState.visiblePages.contains(page) else { return }
+                // 对话框阻止切页时仍唤起窗口，让用户能处理当前提示。
+                if self.canNavigatePages { self.appState.jump(to: page) }
+                self.showMainWindow()
+            }
+            .store(in: &observables)
+        appState.registerGlobalHotKeys()
+        DistributedNotificationCenter.default().publisher(for:
+            Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String))
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.appState.registerGlobalHotKeys() }
+            .store(in: &observables)
         // 自动目录规则由应用常驻进程调度；AppState 内部按六小时最小间隔限频。
         autoCleanupTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -278,7 +300,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(.separator())
         let settingsItem = appMenu.addItem(withTitle: L10n.shared.t("settings.title"),
                                            action: #selector(openSettings(_:)),
-                                           keyEquivalent: ",")
+                                           keyEquivalent: appState.pageShortcut(for: .settings)?.keyEquivalent ?? "")
+        settingsItem.keyEquivalentModifierMask = appState.pageShortcut(for: .settings)?.modifiers ?? []
         settingsItem.target = self
         let updateItem = appMenu.addItem(withTitle: L10n.shared.t("updates.check"),
                                         action: #selector(AppUpdateController.checkForUpdatesFromMenu(_:)),
@@ -303,10 +326,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
+        let navigationMenuItem = NSMenuItem()
+        let navigationMenu = NSMenu(title: L10n.shared.t("menu.navigate"))
+        for page in AppState.PageKey.allCases where page != .settings {
+            let shortcut = appState.pageShortcut(for: page)
+            let item = navigationMenu.addItem(withTitle: L10n.shared.t(page.titleKey),
+                                              action: #selector(openPage(_:)),
+                                              keyEquivalent: shortcut?.keyEquivalent ?? "")
+            item.keyEquivalentModifierMask = shortcut?.modifiers ?? []
+            item.representedObject = page.rawValue
+            item.target = self
+        }
+        navigationMenuItem.submenu = navigationMenu
+        mainMenu.addItem(navigationMenuItem)
+
         NSApp.menu = mainMenu
     }
 
+    /// 与主导航相同，执行 Agent 操作或呈现对话框时不能从快捷键绕过禁用状态。
+    private var canNavigatePages: Bool {
+        !appState.isRecordingShortcut && !appState.agentApplying && appState.taskNotice == nil
+            && !appState.showPermissionCenter && !appState.showAutoCleanupSheet
+            && !appState.showWhitelistSheet && appState.confirmation == nil
+            && appState.administratorCleanupPrompt == nil && NSApp.modalWindow == nil
+            && !NSApp.windows.contains(where: { $0.attachedSheet != nil })
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(openPage(_:)) {
+            guard let rawValue = menuItem.representedObject as? String,
+                  let page = AppState.PageKey(rawValue: rawValue) else { return false }
+            let pages = appState.visiblePages
+            menuItem.state = pages.indices.contains(appState.selectedTab)
+                && pages[appState.selectedTab] == page ? .on : .off
+            return canNavigatePages && pages.contains(page)
+        }
+        if menuItem.action == #selector(openSettings(_:)) { return canNavigatePages }
+        return true
+    }
+
+    @objc private func openPage(_ sender: NSMenuItem) {
+        guard canNavigatePages,
+              let rawValue = sender.representedObject as? String,
+              let page = AppState.PageKey(rawValue: rawValue),
+              appState.visiblePages.contains(page) else { return }
+        appState.jump(to: page)
+        showMainWindow()
+    }
+
     @objc private func openSettings(_ sender: Any?) {
+        guard canNavigatePages else { return }
         appState.jump(to: .settings)
         showMainWindow()
     }

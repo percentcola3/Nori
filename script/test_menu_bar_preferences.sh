@@ -10,7 +10,7 @@ cleanup() {
 }
 trap cleanup EXIT
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
     "$ROOT_DIR/SimpleMole/Services/MenuBarCollectionPreferences.swift" \
     "$ROOT_DIR/script/MenuBarCollectionPreferencesTests.swift" -o "$TEST_DIR/tests"
 # Each phase starts a fresh process, without AppKit or touching Nori's defaults.

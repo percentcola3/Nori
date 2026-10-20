@@ -1,6 +1,6 @@
 # Agent 清理研究与实施索引
 
-核对日期：2026-10-01。当前 [AgentCatalog](../../SimpleMole/Services/AgentCatalog.swift) 有 **30 个定义：29 个产品/服务及 Shared 技能组**。本文区分当前代码中的规则、研究建议及未支持范围；目录里存在某份研究不表示相关功能已经实现。各子文档的“当前差异”记录取证时的实现，后续已实施项以本矩阵和代码为准。
+核对日期：2026-10-18。当前覆盖以 [AgentCatalog](../../SimpleMole/Services/AgentCatalog.swift) 为准。本文区分当前代码中的规则、研究建议及未支持范围；目录里存在某份研究不表示相关功能已经实现。各子文档的“当前差异”记录取证时的实现，后续已实施项以本矩阵和代码为准。
 
 ## 研究入口
 
@@ -10,6 +10,8 @@
 | [official-session-apis.md](official-session-apis.md) | 官方会话删除 API、原生命令、保留策略与云端/桌面范围；按产品核对可接入能力 |
 | [history-adapters.md](history-adapters.md) | 首批 OpenCode/Copilot/Gemini 适配代码与后续校验事项；当前入口关闭 |
 | [validation-handoff.md](validation-handoff.md) | 其他机器的验证顺序、现有脚本、启用前缺口及回传要求 |
+| [whole-app-data-removal.md](whole-app-data-removal.md) | 软件、CLI、Agent 共用默认不勾选的数据审查，以及卸载垃圾扫描与真实项目保护 |
+| [complete-removal.md](complete-removal.md) | 全产品卸载后的独占数据确认、共享资源/白名单边界、Hermes 安装证据与废纸篓恢复 |
 | [open-source-cli.md](open-source-cli.md) | OpenCode、Gemini CLI、两代 Kimi、pi、Crush；固定源码，含凭据/数据库 schema 与项目 registry |
 | [other-cli-and-extensions.md](other-cli-and-extensions.md) | Claude Code、Copilot、Cursor CLI、Grok Build、Factory、Amp、Cline、Continue，以及尚未支持的 Roo；固定源码/文档、安装器和版本化现场证据 |
 | [desktop-agents.md](desktop-agents.md) | Cursor、Windsurf/Devin、Zed、Warp、Qoder、Kiro、Trae、Antigravity、Claude Desktop、Chrome DevTools MCP；固定开源实现、官方文档与闭源软件证据边界 |
@@ -36,6 +38,7 @@ S = 默认可选的缓存/日志/旧版本；R = 需要审查的产物；H = 配
 | Cline `cline` | R 新会话附件/日志、旧宿主 tasks/checkpoints/cache；H 新 state/secrets/DB/settings 与旧 MCP settings | 专属及共享技能、四个 JSON MCP 源；扩展宿主 presence | [扩展研究](other-cli-and-extensions.md#7-cline-扩展与新-sdk)。支持 `CLINE_DATA_DIR`/`CLINE_DIR`；其他细粒度 DB/文件 override 与 SecretStorage 未全覆盖 |
 | Continue `continue` | R 单会话、派生 SQLite/vector 索引、dev_data/logs/runtime；H OAuth context、配置与 `.env` | 技能；扩展宿主/`cn` presence | [扩展研究](other-cli-and-extensions.md#9-continue-扩展)。支持 `CONTINUE_GLOBAL_DIR`；保留 sessions.json，MCP 多文件多格式不做编辑 |
 | OpenCode `opencode` | S XDG cache/log；R runtime、snapshot、tool-output、plans、旧 storage/state、Git 状态核验的 repos worktree；H opencode*.db 族、provider/MCP 授权 | 配置技能、JSON/JSONC MCP；CLI | [开源 CLI](open-source-cli.md#opencode)。DB **含 credential**；支持 XDG 与 worktree 安全门。`OPENCODE_DB`、系统 temp、单数 skill、额外路径与插件登记仍有缺口 |
+| Hermes `hermes` | R 日志/cache/bootstrap-cache；H 配置、认证、state.db、会话、记忆和用户音频/图像 | 专属技能；原生/pipx/uv CLI | [完整移除](complete-removal.md)。程序与 `.hermes` 数据分开确认；未知 `HERMES_HOME` 不猜测归属 |
 | Grok CLI `grok` | S 旧版本、marketplace-cache/日志；R sessions；H worktrees 库/目录、两版 memory、auth/MCP credentials | 技能、TOML MCP；CLI | [官方 Grok Build](other-cli-and-extensions.md#4-官方-grok-build)。marketplace-cache/日志未逐版本证明；不混同第三方 grok-cli。Grove、自定义 memory/auth、项目 rewind、兼容 scope 和会话搜索库独立分组未完整处理 |
 | pi `pi` | R sessions；S pi-debug.log、tmp/extensions；H auth/MCP auth、settings/models | 技能、mcp.json；CLI | [开源 CLI](open-source-cli.md#pi)。支持新旧 npm 包名识别；npm/git Pi package 本体和 settings packages/skills 声明级联、session-dir 覆盖未完整支持 |
 | Kimi `kimi` | 两代 `.kimi` / `.kimi-code`：S 日志/新版 cache；R 会话、输入历史、旧 plans、paste-cache、新 blobs；H store/index、两代凭据和配置 | 两代技能/MCP；CLI | [开源 CLI](open-source-cli.md#kimi旧-cli-与新-kimi-code)。根覆盖语义已区分；旧 plans 保持真实 home。旧版迁移完成状态、插件与索引 tombstone 协调未自动实现 |

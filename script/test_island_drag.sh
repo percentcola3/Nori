@@ -8,7 +8,7 @@ trap 'rm -rf "$TEST_DIR"' EXIT
 cp "$ROOT_DIR/SimpleMole/Views/IslandWindow.swift" "$TEST_DIR/IslandWindow.swift"
 cp "$ROOT_DIR/script/IslandDragTests.swift" "$TEST_DIR/IslandDragTests.swift"
 swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework SwiftUI \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" -framework AppKit -framework SwiftUI \
     "$TEST_DIR/IslandWindow.swift" "$TEST_DIR/IslandDragTests.swift" \
     -o "$TEST_DIR/IslandDragTests"
 "$TEST_DIR/IslandDragTests"

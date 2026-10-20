@@ -131,6 +131,14 @@ struct CleanupScanTests {
                                   withDestinationURL: outside)
 
         let installedPresence = AgentPresenceContext(applicationDirs: [home.path + "/Applications"], searchPath: [])
+        let catalogLeaves = [".hex/cache", ".rbenv/cache", ".gem/specs", ".bundle/cache", ".cpan/build",
+                             ".kube/cache", ".config/gcloud/logs", ".azure/logs", ".npm/_logs",
+                             "Library/Caches/pypoetry/cache", "Library/Caches/pypoetry/artifacts"]
+        for leaf in catalogLeaves { try write(leaf + "/entry") }
+        let retainedLeaves = ["Library/Caches/deno", "Library/Caches/Homebrew/api",
+                              "Library/Caches/Homebrew/bootsnap", "Library/Caches/org.R-project.R/R/renv",
+                              "Library/Caches/pypoetry/virtualenvs", ".aws/cli/cache", ".jupyter/runtime"]
+        for leaf in retainedLeaves { try write(leaf + "/entry") }
         let quick = await NativeCore.shared.scanCleanup(homeDirectory: home.path, agentPresence: installedPresence)
         let quickPaths = quick.categories.flatMap(\.paths)
         // AI Agent 的缓存与会话归 Agent 专清页，磁盘清理默认流程一律不收。
@@ -142,6 +150,17 @@ struct CleanupScanTests {
         expect(quick.succeeded && quick.deferredPaths.isEmpty, "quick fixture did not complete")
         expect(quickPaths.contains(home.path + "/Library/Caches/com.example.ordinary"), "ordinary cache group lost")
         expect(quickPaths.contains(home.path + "/Library/Caches/com.example.second"), "sibling cache group lost")
+        for leaf in catalogLeaves {
+            let path = home.path + "/" + leaf
+            expect(quickPaths.contains(path), "shared catalog cache not discovered: " + path)
+            expect(quick.categories.contains { $0.paths.contains(path) && $0.retention == CleanupAgePolicy.developerRetention },
+                   "new cache bypassed developer activity retention: " + path)
+        }
+        for leaf in retainedLeaves {
+            let path = home.path + "/" + leaf
+            expect(!quickPaths.contains { $0 == path || $0.hasPrefix(path + "/") || path.hasPrefix($0 + "/") },
+                   "retained tool state or its ancestor offered: " + path)
+        }
         expect(!quickPaths.contains { $0 == home.path + "/Library/Caches/shared-agent-storage"
                 || $0.hasPrefix(home.path + "/Library/Caches/shared-agent-storage/") },
                "custom Agent storage leaked through ordinary cache parent cleanup")
@@ -638,6 +657,62 @@ struct CleanupScanTests {
         expect(CleanupRiskPolicy.core(section: "Cache", path: home.path + "/.npm-custom",
                                       homeDirectory: home.path).risk == .safe,
                "npmrc cache= location must be recognized by the policy")
+
+        // Configured aliases must protect their actual targets even when the
+        // target is independently visible to the broad Library/Caches sweep.
+        for leaf in ["deno-real/origin/state", "brew-real/api/metadata", "brew-real/bootsnap/entry",
+                     "poetry-real/virtualenvs/python", "go-real/example/module/source.go"] {
+            try write("Library/Caches/" + leaf)
+        }
+        let aliases = [("deno-alias", "deno-real"), ("brew-alias", "brew-real"),
+                       ("poetry-alias", "poetry-real"), ("go-alias", "go-real")]
+        for (alias, target) in aliases {
+            try fm.createSymbolicLink(atPath: home.path + "/" + alias,
+                                      withDestinationPath: home.path + "/Library/Caches/" + target)
+        }
+        try write("Library/Caches/venvs-real/interpreter")
+        try fm.removeItem(atPath: home.path + "/Library/Caches/pypoetry/virtualenvs")
+        try fm.createSymbolicLink(atPath: home.path + "/Library/Caches/pypoetry/virtualenvs",
+                                  withDestinationPath: home.path + "/Library/Caches/venvs-real")
+        DeveloperCacheLocations.override = DeveloperCacheLocations.resolve(home: home.path, environment: [
+            "DENO_DIR": home.path + "/deno-alias", "HOMEBREW_CACHE": home.path + "/brew-alias",
+            "POETRY_CACHE_DIR": home.path + "/poetry-alias", "GOMODCACHE": home.path + "/go-alias"
+        ], readText: { _ in nil })
+        let aliasScan = await NativeCore(cleanupOpenFileProbe: { [] }).scanCleanup(homeDirectory: home.path)
+        let aliasPaths = aliasScan.categories.flatMap(\.paths)
+        for target in ["deno-real", "brew-real", "poetry-real", "go-real", "venvs-real"] {
+            let path = home.path + "/Library/Caches/" + target
+            expect(!aliasPaths.contains { $0 == path || $0.hasPrefix(path + "/") || path.hasPrefix($0 + "/") },
+                   "configured live store alias leaked through a broad root: " + path)
+        }
+        DeveloperCacheLocations.override = nil
+
+        // An unreadable/malformed saved policy must stop cleanup rather than
+        // silently replacing the user's exclusions with convenience defaults.
+        let policyFailureHome = fixture.appendingPathComponent("policy-failure-home")
+        let policyFailure = policyFailureHome.appendingPathComponent(".config/mole/whitelist")
+        let protectedCache = policyFailureHome.appendingPathComponent("Library/Caches/example/payload")
+        try fm.createDirectory(at: protectedCache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("keep".utf8).write(to: protectedCache)
+        try fm.createDirectory(at: policyFailure, withIntermediateDirectories: true)
+        let failedPolicyCore = NativeCore(cleanupOpenFileProbe: { [] })
+        let blockedPolicy = failedPolicyCore.loadWhitelist(homeDirectory: policyFailureHome.path)
+        expect(failedPolicyCore.matchesWhitelist(protectedCache.path, entries: blockedPolicy)
+               && failedPolicyCore.matchesWhitelist("/private/tmp/example/payload", entries: blockedPolicy),
+               "unreadable saved whitelist did not protect both user and system targets")
+        let failedPolicyScan = await failedPolicyCore.scanCleanup(homeDirectory: policyFailureHome.path)
+        expect(!failedPolicyScan.succeeded && failedPolicyScan.categories.isEmpty,
+               "unreadable saved whitelist did not fail the scan")
+        let failedPolicyApply = failedPolicyCore.applyCleanup(
+            items: DeletionPlan(paths: [protectedCache.path]).items, permanent: true,
+            homeDirectory: policyFailureHome.path)
+        expect(failedPolicyApply.removed == 0 && fm.fileExists(atPath: protectedCache.path),
+               "unreadable saved whitelist was ignored during deletion")
+        try fm.removeItem(at: policyFailure)
+        try Data([0xff, 0xfe, 0xff]).write(to: policyFailure)
+        expect(failedPolicyCore.matchesWhitelist(protectedCache.path,
+                   entries: failedPolicyCore.loadWhitelist(homeDirectory: policyFailureHome.path)),
+               "malformed saved whitelist was interpreted as absent")
 
         // ---- 词法校验（删除漏斗第一道）----
         expect(DeletionPlan.isLexicallySafePath(home.path + "/Library/Caches/ok")
@@ -1229,13 +1304,24 @@ struct CleanupScanTests {
         try writeData("Code/no-marker/node_modules/stray.js", bytes: 30 * 1024 * 1024)
         try writeData("Code/py/.venv/pyvenv.cfg", bytes: 32)
         try writeData("Code/py/.venv/lib/site.py", bytes: 64)
+        try writeData("Code/build/package.json", bytes: 32)
+        try writeData("Code/build/node_modules/package/index.js", bytes: 64)
+        try writeData("Code/tagged/package.json", bytes: 32)
+        let tag = dataHome.appendingPathComponent("Code/tagged/.custom-cache/CACHEDIR.TAG")
+        try fm.createDirectory(at: tag.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("Signature: 8a477f597d28d172789f06886806bc55\n".utf8).write(to: tag)
+        try writeData("Code/tagged/.custom-cache/payload", bytes: 64)
+        try writeData("Code/authored/Cargo.toml", bytes: 32)
+        try writeData("Code/authored/target/deploy/test-keypair.json", bytes: 64)
         try writeData("Library/Application Support/Tool/project/package.json", bytes: 32)
         let artifactPaths = Set(NativeCore.shared.projectArtifactPaths(home: dataHome))
         expect(artifactPaths == Set([
                    dataHome.appendingPathComponent("Code/web-a/node_modules").path,
                    dataHome.appendingPathComponent("Code/clients/web-b/node_modules").path,
-                   dataHome.appendingPathComponent("Code/py/.venv").path]),
-               "project artifacts need their marker and must not descend into nested artifacts: \(artifactPaths)")
+                   dataHome.appendingPathComponent("Code/py/.venv").path,
+                   dataHome.appendingPathComponent("Code/build/node_modules").path,
+                   dataHome.appendingPathComponent("Code/tagged/.custom-cache").path]),
+               "project discovery needs context, supports tags, prunes dependencies and protects authored content: \(artifactPaths)")
         let reviewCategories = NativeCore.shared.appDataReviewCategories(
             home: dataHome, offered: [], whitelist: [])
         let leftover = reviewCategories.first { $0.name == gone + " leftovers" }
@@ -1335,9 +1421,331 @@ struct CleanupScanTests {
                    "paths outside app data shapes must be refused at execution")
         }
 
+        try await testDiscardedPreview(in: fixture)
+        try await testRuleInventory(in: fixture)
+        try testInventoryCapacity(in: fixture)
+        try await testWideTrashDiscovery(in: fixture)
         print(String(format: "PASS: catalog, grouping, deep scan, manual Agent residuals, exclusions, cancellation, partial sizes, hardlinks, pipe output, 7-day gate, sizing activity, custom locations, lexical guards, secure fd-walk deletion, leaf-level live caches, protected descendants, stable directory identity, open-file retry, scan-delete-rescan; 10000 files in %.3fs", benchmark.elapsed))
         print(quick.diagnostics)
         print(deep.diagnostics)
         print(aged.diagnostics)
+    }
+
+    private static func testDiscardedPreview(in fixture: URL) async throws {
+        let fm = FileManager.default
+        let home = fixture.appendingPathComponent("trash-preview-home")
+        let root = home.appendingPathComponent(".Trash/discarded-folder")
+        let nested = root.appendingPathComponent("inner/deep")
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        for number in 0..<1000 {
+            try Data(repeating: 3, count: 4096).write(to: nested.appendingPathComponent("file-\(number)"))
+        }
+        let leaf = nested.appendingPathComponent("file-0")
+        let oldSeconds = Int(Date().addingTimeInterval(-10 * 86400).timeIntervalSince1970)
+        var times = [timeval(tv_sec: oldSeconds, tv_usec: 0), timeval(tv_sec: oldSeconds, tv_usec: 0)]
+        expect(utimes(leaf.path, &times) == 0, "could not prepare discarded-file timestamps")
+        try fm.linkItem(at: leaf, to: nested.appendingPathComponent("hardlink"))
+        let external = home.appendingPathComponent("outside")
+        try Data(repeating: 9, count: 1024 * 1024).write(to: external)
+        try fm.createSymbolicLink(at: nested.appendingPathComponent("link"), withDestinationURL: external)
+        let policy = CleanupRiskPolicy.recommendedTrash()
+        let category = CleanupCategory(name: "Trash", paths: [root.path], bytes: 1, selected: true,
+            source: policy.source, risk: policy.risk, disposal: policy.disposal,
+            applyRoute: policy.applyRoute, activityGuard: policy.activityGuard, reasonKey: policy.reasonKey)
+        var occupied = Set<String>()
+        let core = NativeCore(cleanupOpenFileProbe: { occupied })
+        func scan(_ control: CleanupScanControl, visit: ((String) -> Void)? = nil) -> NativeCore.CleanupScan {
+            core.preflightCleanupCategories([category], homeDirectory: home.path, control: control,
+                usingScanInventoryCache: true, onVisit: visit)
+        }
+        let cold = CleanupScanControl(mode: .deep)
+        let first = scan(cold)
+        let coldSeconds = cold.elapsed
+        expect(first.categories.flatMap(\.paths) == [root.path] && cold.discardedPreviewCounts.measured == 1,
+               "Discarded tree did not use metadata-only preview")
+        var after = stat()
+        expect(lstat(leaf.path, &after) == 0 && after.st_atimespec.tv_sec == oldSeconds,
+               "Trash capacity preview read file contents")
+        let full = core.preflightCleanupCategories([category], homeDirectory: home.path)
+        expect(full.categories.map(\.bytes) == first.categories.map(\.bytes),
+               "Metadata preview changed hardlink/symlink allocated-byte accounting")
+        let bounded = CleanupScanWorker.discardedInventory(root.path, control: .init(mode: .deep),
+            retainedPathLimit: 8, inspect: { _, _ in false })
+        expect(bounded?.isCacheable == false && bounded?.paths.isEmpty == true
+               && bounded?.measurement.bytes == first.categories.first?.bytes,
+               "Large discarded trees stopped sizing when their cache memory budget was reached")
+        var warm = CleanupScanControl(mode: .deep)
+        var visited: [String] = []
+        var second = scan(warm, visit: { visited.append($0) })
+        // Newly created fixtures can still have creation events in the system
+        // journal. Conservative invalidation may require one more cold pass.
+        let warmDeadline = Date().addingTimeInterval(5)
+        while warm.discardedPreviewCounts.cached == 0 && Date() < warmDeadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            warm = CleanupScanControl(mode: .deep)
+            visited = []
+            second = scan(warm, visit: { visited.append($0) })
+        }
+        let warmSeconds = warm.elapsed
+        expect(second.categories.map(\.bytes) == first.categories.map(\.bytes)
+               && warm.discardedPreviewCounts.cached == 1 && visited == [root.path],
+               "Unchanged Trash scan recursively revisited children instead of reusing capacity")
+
+        occupied.insert(leaf.path)
+        let busy = scan(.init(mode: .deep))
+        expect(!busy.categories.flatMap(\.paths).contains(root.path)
+               && !busy.categories.flatMap(\.paths).contains(leaf.path),
+               "Cached Trash capacity hid a newly occupied descendant")
+        occupied.removeAll()
+        let whitelist = home.appendingPathComponent(".config/mole/whitelist")
+        try fm.createDirectory(at: whitelist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data((leaf.path + "\n").utf8).write(to: whitelist)
+        let protected = scan(.init(mode: .deep))
+        expect(!protected.categories.flatMap(\.paths).contains(root.path)
+               && !protected.categories.flatMap(\.paths).contains(leaf.path),
+               "Cached Trash capacity ignored a new descendant whitelist")
+        try fm.removeItem(at: whitelist)
+
+        let oldBytes = first.categories.reduce(UInt64(0)) { $0 + $1.bytes }
+        try Data(repeating: 4, count: 256 * 1024).write(to: leaf)
+        var changed = scan(.init(mode: .deep))
+        let eventDeadline = Date().addingTimeInterval(5)
+        while changed.categories.reduce(UInt64(0), { $0 + $1.bytes }) <= oldBytes && Date() < eventDeadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            changed = scan(.init(mode: .deep))
+        }
+        expect(changed.categories.reduce(UInt64(0), { $0 + $1.bytes }) > oldBytes,
+               "Nested in-place writes failed to invalidate the cached Trash size")
+        let live = core.preflightCleanupCategories([category], homeDirectory: home.path)
+        expect(live.categories.map(\.bytes) == changed.categories.map(\.bytes), "Event refresh produced stale capacity")
+
+        // Execution must not trust a warm preview, including an occupied file
+        // introduced after the scan. This deletes only this disposable fixture.
+        occupied.insert(leaf.path)
+        let applied = core.applyCleanup(items: DeletionPlan(paths: [root.path]).items,
+            permanent: true, homeDirectory: home.path)
+        expect(applied.removed == 0 && fm.fileExists(atPath: leaf.path),
+               "Deletion reused display cache instead of checking live occupancy")
+        print(String(format: "PASS: Trash preview 1000 files: cold %.3fs, cached %.3fs; no content reads, hardlinks, no-follow links, live occupancy/whitelist, nested FSEvents invalidation and uncached deletion", coldSeconds, warmSeconds))
+    }
+
+    private static func testRuleInventory(in fixture: URL) async throws {
+        let fm = FileManager.default
+        let home = fixture.appendingPathComponent("rule-inventory-home")
+        let npm = home.appendingPathComponent(".npm/_cacache")
+        let slack = home.appendingPathComponent("Library/Application Support/Slack/Cache")
+        let old = Int(Date().addingTimeInterval(-9 * 86400).timeIntervalSince1970)
+        var oldTimes = [timeval(tv_sec: old, tv_usec: 0), timeval(tv_sec: old, tv_usec: 0)]
+        for root in [npm, slack] {
+            let nested = root.appendingPathComponent("inner/deep")
+            try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+            for number in 0..<500 {
+                let leaf = nested.appendingPathComponent("file-\(number)")
+                try Data(repeating: 3, count: 4096).write(to: leaf)
+                expect(utimes(leaf.path, &oldTimes) == 0, "could not age rule fixture")
+            }
+        }
+        expect(CleanupRiskPolicy.permitsInventoryReuse(npm.path, homeDirectory: home.path)
+               && CleanupRiskPolicy.permitsInventoryReuse(slack.path, homeDirectory: home.path)
+               && !CleanupRiskPolicy.permitsInventoryReuse(home.path + "/Library/Caches", homeDirectory: home.path)
+               && !CleanupRiskPolicy.permitsInventoryReuse(home.path + "/Library/Application Support/Slack", homeDirectory: home.path),
+               "Inventory reuse expanded beyond precise built-in cache rules")
+        func category(_ root: URL, retention: TimeInterval) -> CleanupCategory {
+            let policy = CleanupRiskPolicy.core(section: "Cache", path: root.path, homeDirectory: home.path)
+            return CleanupCategory(name: root.lastPathComponent, paths: [root.path], bytes: 1, selected: true,
+                source: policy.source, risk: policy.risk, disposal: policy.disposal, applyRoute: policy.applyRoute,
+                activityGuard: policy.activityGuard, retention: retention, reasonKey: policy.reasonKey)
+        }
+        let categories = [category(npm, retention: CleanupAgePolicy.developerRetention), category(slack, retention: 0)]
+        var occupied = Set<String>()
+        let core = NativeCore(cleanupOpenFileProbe: { occupied })
+        func scan(_ control: CleanupScanControl, visit: ((String) -> Void)? = nil) -> NativeCore.CleanupScan {
+            core.preflightCleanupCategories(categories, homeDirectory: home.path, control: control,
+                usingScanInventoryCache: true, onVisit: visit)
+        }
+        let cold = CleanupScanControl(mode: .deep)
+        let initial = scan(cold)
+        let coldSeconds = cold.elapsed
+        expect(initial.categories.flatMap(\.paths).count == 2 && cold.rulePreviewCounts.measured == 2,
+               "Built-in cache roots were not validated for reuse")
+        var warm = CleanupScanControl(mode: .deep)
+        var visits: [String] = []
+        var reused = scan(warm, visit: { visits.append($0) })
+        let deadline = Date().addingTimeInterval(5)
+        while warm.rulePreviewCounts.cached < 2 && Date() < deadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            warm = CleanupScanControl(mode: .deep); visits = []
+            reused = scan(warm, visit: { visits.append($0) })
+        }
+        let warmSeconds = warm.elapsed
+        expect(warm.rulePreviewCounts.cached == 2 && Set(visits) == Set([npm.path, slack.path])
+               && reused.categories.map(\.bytes).sorted() == initial.categories.map(\.bytes).sorted(),
+               "Rule reuse re-enumerated children, lost totals, or restarted watching for every root")
+        let stale = await core.scanCleanup(homeDirectory: home.path)
+        expect(stale.categories.first { $0.paths.contains(npm.path) }?.isPathSelected(npm.path) == true,
+               "Our own cache-classification read refreshed the developer activity gate")
+        let npmLeaf = npm.appendingPathComponent("inner/deep/file-0")
+        var activeTimes = [timeval(tv_sec: Int(Date().timeIntervalSince1970), tv_usec: 0),
+                           timeval(tv_sec: old, tv_usec: 0)]
+        expect(utimes(npmLeaf.path, &activeTimes) == 0, "could not simulate access-only activity")
+        let active = await core.scanCleanup(homeDirectory: home.path)
+        expect(active.categories.first { $0.paths.contains(npm.path) }?.isPathSelected(npm.path) == false,
+               "Reused capacity hid recent file access from the developer age gate")
+
+        let slackLeaf = slack.appendingPathComponent("inner/deep/file-0")
+        occupied.insert(slackLeaf.path)
+        let busy = scan(.init(mode: .deep))
+        expect(!busy.categories.flatMap(\.paths).contains(slack.path)
+               && !busy.categories.flatMap(\.paths).contains(slackLeaf.path), "Reused rule inventory ignored live occupancy")
+        occupied.removeAll()
+        let whitelist = home.appendingPathComponent(".config/mole/whitelist")
+        try fm.createDirectory(at: whitelist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data((slackLeaf.path + "\n").utf8).write(to: whitelist)
+        let protected = scan(.init(mode: .deep))
+        expect(!protected.categories.flatMap(\.paths).contains(slack.path)
+               && !protected.categories.flatMap(\.paths).contains(slackLeaf.path), "Reused rule inventory ignored a new whitelist")
+        try fm.removeItem(at: whitelist)
+
+        let before = reused.categories.first { $0.paths.contains(npm.path) }!.bytes
+        try Data(repeating: 4, count: 128 * 1024).write(to: npmLeaf)
+        var refreshed = scan(.init(mode: .deep))
+        let refreshDeadline = Date().addingTimeInterval(5)
+        while (refreshed.categories.first { $0.paths.contains(npm.path) }?.bytes ?? 0) <= before && Date() < refreshDeadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            refreshed = scan(.init(mode: .deep))
+        }
+        expect((refreshed.categories.first { $0.paths.contains(npm.path) }?.bytes ?? 0) > before,
+               "Nested rule-cache changes were not remeasured")
+        let independent = CleanupScanControl(mode: .deep)
+        _ = scan(independent)
+        expect(independent.rulePreviewCounts.cached >= 1, "Changing one rule root invalidated every unrelated rule inventory")
+
+        // A new disguised database must force fresh classification; deletion
+        // also rechecks it independently from all preview cache results.
+        let database = slack.appendingPathComponent("inner/deep/opaque-record")
+        try (Data("SQLite format 3\0".utf8) + Data(repeating: 0, count: 4096)).write(to: database)
+        var split = scan(.init(mode: .deep))
+        let splitDeadline = Date().addingTimeInterval(5)
+        while split.categories.flatMap(\.paths).contains(slack.path) && Date() < splitDeadline {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            split = scan(.init(mode: .deep))
+        }
+        expect(!split.categories.flatMap(\.paths).contains(slack.path)
+               && !split.categories.flatMap(\.paths).contains(database.path), "Changed built-in root bypassed content protection")
+        _ = core.applyCleanup(items: DeletionPlan(paths: [slack.path]).items, permanent: true, homeDirectory: home.path)
+        expect(fm.fileExists(atPath: database.path), "Deletion trusted a cached built-in rule over fresh database protection")
+        print(String(format: "PASS: 1000 built-in rule files: cold %.3fs, cached %.3fs; multiple roots, scoped invalidation, flat activity refresh, own-read attribution, occupancy/whitelist and fresh database/deletion protection", coldSeconds, warmSeconds))
+    }
+
+    private static func testInventoryCapacity(in fixture: URL) throws {
+        let home = fixture.appendingPathComponent("inventory-capacity-home")
+        let roots = (0..<2200).map { home.appendingPathComponent("rule-\($0)").path }
+        for root in roots { try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true) }
+        let cache = CleanupPathInventoryCache()
+        let inventory = CleanupScanWorker.MetadataInventory(measurement: .init(), paths: [], requiresAdministrator: false)
+        func metadata(_ path: String) -> stat {
+            var info = stat()
+            expect(lstat(path, &info) == 0, "Could not read capacity fixture identity")
+            return info
+        }
+        for root in roots {
+            let ticket = cache.begin(root, metadata: metadata(root), watching: home.path)
+            cache.store(inventory, ticket: ticket)
+        }
+        expect(cache.begin(roots[0], metadata: metadata(roots[0]), watching: home.path).cached != nil,
+               "A wide rule scan cleared earlier validated snapshots at capacity")
+        expect(cache.begin(roots[1023], metadata: metadata(roots[1023]), watching: home.path).cached != nil,
+               "A wide rule scan failed to retain its admitted snapshot budget")
+        cache.invalidate()
+        let retired = cache.begin(roots[0], metadata: metadata(roots[0]), watching: home.path)
+        for root in roots.dropFirst() { _ = cache.begin(root, metadata: metadata(root), watching: home.path) }
+        let current = cache.begin(roots[0], metadata: metadata(roots[0]), watching: home.path)
+        cache.store(inventory, ticket: retired)
+        expect(cache.begin(roots[0], metadata: metadata(roots[0]), watching: home.path).cached == nil,
+               "A retired in-flight ticket reused a newly observed path revision")
+        cache.store(inventory, ticket: current)
+        expect(cache.begin(roots[0], metadata: metadata(roots[0]), watching: home.path).cached != nil,
+               "Current path ticket could not store after observation pruning")
+        print("PASS: 2200 rule roots retain admitted snapshots at capacity; retired tickets cannot publish after path readmission")
+    }
+
+    private static func testWideTrashDiscovery(in fixture: URL) async throws {
+        let fm = FileManager.default
+        let home = fixture.appendingPathComponent("wide-trash-home")
+        let trash = home.appendingPathComponent(".Trash")
+        let cache = home.appendingPathComponent("Library/Caches")
+        let literal = cache.appendingPathComponent("cache[1]")
+        let roots = [cache.path, trash.path, literal.appendingPathComponent("nested").path,
+            cache.appendingPathComponent("other").path]
+        let broad = Set([cache.path, trash.path])
+        let indexed = NativeCore.shadowedCleanupChildren(roots: roots, broadRoots: broad)
+        expect(indexed == Set([literal.path, cache.appendingPathComponent("other").path])
+               && !indexed.contains(cache.appendingPathComponent("cache1").path)
+               && !indexed.contains(literal.path + "-sibling"), "Discovery index changed literal or prefix boundaries")
+        let manyRules = roots + (0..<2000).map { cache.appendingPathComponent("rule-\($0)/leaf").path }
+        let indexStart = Date()
+        let largeIndex = NativeCore.shadowedCleanupChildren(roots: manyRules, broadRoots: broad)
+        for number in 0..<20000 {
+            expect(!largeIndex.contains(trash.appendingPathComponent("entry-\(number)").path),
+                   "Unrelated Trash entries were shadowed by cache rules")
+        }
+        let indexSeconds = Date().timeIntervalSince(indexStart)
+        let openPaths: Set<String> = ["/cache[1]/nested/file", "/cache1/sibling", "/double//leaf/", "/文件/数据"]
+        let blocked = NativeCore.cleanupPreviewBlockedPaths(openPaths)
+        for path in ["/cache[1]", "/cache", "/cache1", "/double", "/double/", "/double//leaf",
+                     "/double//leaf/", "/文件", "/文件/数", "/文件/数据", "/unrelated"] {
+            expect(blocked.contains(path) == openPaths.contains(where: { $0 == path || $0.hasPrefix(path + "/") }),
+                   "Preview occupancy index changed literal descendant semantics")
+        }
+        let manyOpenPaths = Set((0..<10000).map { home.appendingPathComponent("busy/app-\($0)/data").path })
+        let occupancyStart = Date()
+        let occupancyIndex = NativeCore.cleanupPreviewBlockedPaths(manyOpenPaths)
+        for number in 0..<20000 {
+            expect(!occupancyIndex.contains(trash.appendingPathComponent("entry-\(number)").path),
+                   "Unrelated open files blocked Trash preview")
+        }
+        let occupancySeconds = Date().timeIntervalSince(occupancyStart)
+        let completedRoots = Set((0..<100000).map { trash.appendingPathComponent("completed-\($0)").path })
+        let continuationStart = Date()
+        for number in 0..<20000 {
+            expect(NativeCore.isCoveredByScannedRoot(trash.appendingPathComponent("completed-\(number)/nested").path,
+                                                   roots: completedRoots), "Continuation lost a completed parent")
+            expect(!NativeCore.isCoveredByScannedRoot(trash.appendingPathComponent("completed-\(number)-sibling").path,
+                                                    roots: completedRoots), "Continuation covered a prefix sibling")
+        }
+        let continuationSeconds = Date().timeIntervalSince(continuationStart)
+        try fm.createDirectory(at: trash, withIntermediateDirectories: true)
+        for number in 0..<1500 {
+            try Data(repeating: 3, count: 1024).write(to: trash.appendingPathComponent("entry-\(number)"))
+        }
+        for number in 0..<300 {
+            let project = home.appendingPathComponent("Library/Developer/Xcode/DerivedData/Project-\(number)")
+            try fm.createDirectory(at: project, withIntermediateDirectories: true)
+            try Data(repeating: 4, count: 1024).write(to: project.appendingPathComponent("artifact"))
+        }
+        var probeCount = 0
+        let core = NativeCore(cleanupOpenFileProbe: { probeCount += 1; return manyOpenPaths })
+        let report = await core.scanCleanup(homeDirectory: home.path)
+        expect(report.succeeded && report.deferredPaths.isEmpty
+               && report.categories.flatMap(\.paths).filter { $0.hasPrefix(trash.path + "/") }.count == 1500,
+               "Wide Trash discovery lost entries or exhausted its budget")
+        expect(report.diagnostics.contains("trashEntries=1500") && report.diagnostics.contains("trashDiscovery="),
+               "Wide discovery has no real entry/time diagnostics")
+        let cancel = CleanupScanControl(mode: .deep)
+        let probesBeforeCancel = probeCount
+        var childrenSeen = 0
+        let progress = CleanupScanProgressSink(minimumInterval: 0) { event in
+            if event.phase == "discovery", event.currentPath.hasPrefix(trash.path + "/") {
+                childrenSeen += 1
+                cancel.cancel()
+            }
+        }
+        let stopped = await core.scanCleanup(homeDirectory: home.path, progress: progress, mode: .deep, control: cancel)
+        expect(!stopped.succeeded && childrenSeen == 1 && probeCount == probesBeforeCancel,
+               "Cancelling inside discovery still visited the remaining Trash entries")
+        print(String(format: "PASS: discovery index 2000 rules × 20000 Trash lookups in %.3fs; 1500 top-level items × 300 project rules and inner-loop cancellation", indexSeconds))
+        print(String(format: "PASS: preview occupancy index 10000 open files × 20000 Trash lookups in %.3fs", occupancySeconds))
+        print(String(format: "PASS: continuation membership 100000 completed roots × 40000 lookups in %.3fs", continuationSeconds))
+        print(report.diagnostics)
     }
 }

@@ -91,10 +91,6 @@ private struct DeveloperShellFilePanel: View {
                     includedSection(profile)
                     otherSection(profile)
                 }
-                if let failure = model.failure {
-                    DevDivider()
-                    DevNotice(symbol: "exclamationmark.triangle", text: DeveloperShellCopy.failure(failure), color: .danger)
-                }
                 if let savedName = model.savedName {
                     DevDivider()
                     savedNotice(savedName)

@@ -7,7 +7,7 @@ trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 source "$ROOT_DIR/script/test_developer_toolchain.sh"
 bash -n "$ROOT_DIR/bridge/app_cleanup_admin.sh"
 swiftc -O -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework IOKit \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \

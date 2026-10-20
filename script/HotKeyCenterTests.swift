@@ -35,9 +35,17 @@ struct HotKeyCenterTests {
 
         precondition(center.register(id: "replacement", keyCode: UInt32(kVK_F18),
                                      modifiers: modifiers) { calls.append("replacement") })
-        precondition(send(slot: 0) == noErr)
+        _ = send(slot: 0)
+        pump()
+        precondition(calls == before, "Old events must not open a different page after re-registration")
+        precondition(send(slot: 2) == noErr)
         pump()
         precondition(calls == before + ["replacement"], "Re-registration must route to the new callback")
+        let afterReplacement = calls
+        precondition(send(slot: 2) == noErr)
+        center.unregister()
+        pump()
+        precondition(calls == afterReplacement, "Recording or disabling must cancel already queued callbacks")
         print("PASS: application-level hotkey routing, independent shortcuts, disable and re-registration")
     }
 

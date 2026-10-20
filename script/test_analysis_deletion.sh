@@ -10,7 +10,7 @@ source "$ROOT_DIR/script/test_developer_toolchain.sh"
 /usr/bin/sed 's/let fileManager = FileManager.default/let fileManager = AnalysisFixtureFileManager()/' \
     "$ROOT_DIR/SimpleMole/Services/NativeCore.swift" > "$WORK/NativeCore.swift"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
-    -module-cache-path "$WORK/module-cache" -framework AppKit -framework IOKit \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$WORK/module-cache}" -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \

@@ -5,7 +5,7 @@ source "$ROOT_DIR/script/test_developer_toolchain.sh"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-screenshot-editor-tests.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" -framework AppKit -framework SwiftUI \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" -framework AppKit -framework SwiftUI \
     "$ROOT_DIR"/SimpleMole/L10n/*.swift \
     "$ROOT_DIR/SimpleMole/Services/ScreenshotPreset.swift" \
     "$ROOT_DIR/SimpleMole/Services/ScreenshotEditorSizing.swift" \

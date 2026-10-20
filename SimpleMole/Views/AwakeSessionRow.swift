@@ -45,11 +45,7 @@ struct AwakeSessionRow: View {
                     .buttonStyle(MoleIconButtonStyle(size: 20))
                 }
             }
-            if let error = awake.errorMessage, awake.session == nil {
-                Text(error)
-                    .font(.system(size: 9.5, weight: .medium))
-                    .foregroundStyle(Color.warning)
-            }
+
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

@@ -37,6 +37,87 @@ struct CleanupRiskPolicyTests {
         try testMoleParity(home: policyHome)
         try testExpandedAuditedCoverage(home: policyHome)
         try testNoriOwnedStorage(home: policyHome, fixture: fixture)
+        try testDeveloperCatalog(home: policyHome)
+    }
+
+    private static func testDeveloperCatalog(home: String) throws {
+        var locations = DeveloperCacheLocations.resolve(home: home, environment: [:], readText: { _ in nil })
+        locations.uvCache = home + "/custom/uv"
+        locations.bunCache = home + "/custom/bun"
+        locations.homebrewCache = home + "/custom/brew"
+        locations.goModCache = home + "/custom/go-mod"
+        locations.poetryCache = home + "/custom/poetry"
+        locations.denoCache = home + "/Library/Caches/custom-deno"
+        locations.retainedPhysicalRoots = [home + "/Library/Caches/real-deno"]
+        DeveloperCacheLocations.override = locations
+        defer { DeveloperCacheLocations.override = nil }
+        let paths = Set(DeveloperCleanupCatalog.entries(home: home).map(\.path))
+        for leaf in [".hex/cache", ".rbenv/cache", ".gem/specs", ".bundle/cache", ".cpan/build",
+                     ".kube/cache", ".config/gcloud/logs", ".azure/logs", ".npm/_logs",
+                     "Library/Caches/pypoetry/cache", "Library/Caches/pypoetry/artifacts",
+                     "custom/uv", "custom/bun", "custom/brew/downloads", "custom/go-mod/cache",
+                     "custom/poetry/cache", "custom/poetry/artifacts"] {
+            let path = home + "/" + leaf
+            try expect(paths.contains(path), "catalog missed cache: " + path)
+            try expect(CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home).risk == .safe,
+                       "discovery and policy disagree: " + path)
+        }
+        for leaf in ["Library/Caches/deno", "Library/Caches/custom-deno", "Library/Caches/real-deno",
+                     ".cache/deno", ".deno", ".aws/cli/cache", ".jupyter/runtime",
+                     "Library/Caches/org.R-project.R/R/renv", "Library/Caches/pypoetry/virtualenvs",
+                     "custom/poetry/virtualenvs", "Library/Caches/Homebrew/api",
+                     "Library/Caches/Homebrew/bootsnap", "custom/brew/api"] {
+            let path = home + "/" + leaf
+            for candidate in [path, path + "/entry"] {
+                try expect(CleanupRiskPolicy.core(section: "Cache", path: candidate, homeDirectory: home).risk == .protected,
+                           "live tool state entered cache rule: " + candidate)
+                try expect(CleanupRiskPolicy.isProtectedCleanupPath(candidate, homeDirectory: home),
+                           "content traversal missed tool state: " + candidate)
+            }
+            try expect(!paths.contains(path), "retained tool state in catalog: " + path)
+        }
+        for leaf in ["go/pkg/mod", "custom/go-mod"] {
+            let descriptor = CleanupRiskPolicy.developerCache(path: home + "/" + leaf + "/example/module",
+                                                               homeDirectory: home)
+            try expect(descriptor.risk == .warning && descriptor.reasonKey == "cleanup.risk.dependencyStore",
+                       "extracted Go module store became an automatic cache")
+        }
+        locations.goModCache = home + "/Library/Caches/custom-go-mod"
+        DeveloperCacheLocations.override = locations
+        for suffix in ["", "/example/module"] {
+            let path = locations.goModCache! + suffix
+            try expect(CleanupRiskPolicy.core(section: "Cache", path: path, homeDirectory: home).risk == .warning,
+                       "broad Library/Caches fallback promoted extracted Go modules")
+            try expect(CleanupRiskPolicy.isProtectedCleanupPath(path, homeDirectory: home),
+                       "ancestor traversal could delete extracted Go modules")
+        }
+        try expect(CleanupRiskPolicy.core(section: "Cache", path: locations.goModCache! + "/cache",
+                                         homeDirectory: home).risk == .safe,
+                   "Go download leaf lost its cache policy")
+        for leaf in ["", "Documents", "Downloads", "Library", "Library/Caches", ".cache", ".config"] {
+            let path = leaf.isEmpty ? home : home + "/" + leaf
+            try expect(!DeveloperCleanupCatalog.isNarrowCacheRoot(path, home: home),
+                       "broad custom cache root accepted: " + path)
+        }
+        for nested in [home + "/go/pkg/mod/cache/custom-store", home + "/.gradle/caches/build-cache-1/custom-store"] {
+            locations.goModCache = nested
+            DeveloperCacheLocations.override = locations
+            try expect(CleanupRiskPolicy.core(section: "Cache", path: nested + "/example/module",
+                                             homeDirectory: home).risk == .warning,
+                       "broader cache exception overrode a nested module store")
+            try expect(CleanupRiskPolicy.isProtectedCleanupPath(nested + "/example/module", homeDirectory: home),
+                       "content probe lost the more specific module owner")
+            try expect(CleanupRiskPolicy.core(section: "Cache", path: nested + "/cache",
+                                             homeDirectory: home).risk == .safe,
+                       "nested module owner's download cache lost its precise policy")
+        }
+        locations.npmCache = home + "/Documents"
+        DeveloperCacheLocations.override = locations
+        try expect(!DeveloperCleanupCatalog.entries(home: home).contains { $0.path == home + "/Documents" },
+                   "custom cache declaration authorized Documents")
+        try expect(CleanupRiskPolicy.core(section: "Cache", path: home + "/Documents/notes.txt",
+                                         homeDirectory: home).risk != .safe,
+                   "broad declaration authorized a document")
     }
 
     private static func testReviewPresentation(home: String) throws {

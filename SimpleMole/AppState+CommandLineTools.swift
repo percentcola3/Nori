@@ -112,7 +112,9 @@ extension AppState {
             if outcome.succeeded {
                 commandLineTools.removeAll { $0.id == tool.id }
                 softwareUpdateResults.removeValue(forKey: SoftwareUpdateService.toolKey(tool))
-                if tool.agentID != nil { agentHasScanned = false }
+                if tool.agentID != nil {
+                    agentHasScanned = false
+                }
                 resampleAfterMutation()
                 CleanupCache.invalidate()
                 cleanupScanComplete = false

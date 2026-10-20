@@ -178,11 +178,12 @@ enum CleanupGroupBucket: String, Hashable, CaseIterable {
 
     private static func isTrash(_ category: CleanupCategory,
                                 homeDirectory: String) -> Bool {
-        let root = URL(fileURLWithPath: homeDirectory)
-            .appendingPathComponent(".Trash", isDirectory: true)
-            .standardizedFileURL.path + "/"
+        // Display grouping must never stat every Trash item on the main
+        // thread. Scanner paths are absolute; only lexical normalization is
+        // needed here, while deletion performs its own filesystem checks.
+        let root = DeletionPlan.normalizedPathLiteral(homeDirectory + "/.Trash") + "/"
         return !category.paths.isEmpty && category.paths.allSatisfy { path in
-            URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(root)
+            path.hasPrefix("/") && DeletionPlan.normalizedPathLiteral(path).hasPrefix(root)
         }
     }
 }

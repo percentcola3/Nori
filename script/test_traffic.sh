@@ -14,14 +14,15 @@ sources=(
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift"
     "$ROOT_DIR/SimpleMole/Services/Parsers.swift"
     "$ROOT_DIR/SimpleMole/Services/TrafficAttribution.swift"
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift"
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift"
 )
 for suite in TrafficAttribution; do
-    swiftc -target "$arch-apple-macos13.0" -module-cache-path "$TRAFFIC_TEST_ROOT/module-cache" \
+    swiftc -target "$arch-apple-macos13.0" -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TRAFFIC_TEST_ROOT/module-cache}" \
         "${sources[@]}" "$ROOT_DIR/script/${suite}Tests.swift" -o "$TRAFFIC_TEST_ROOT/$suite"
     "$TRAFFIC_TEST_ROOT/$suite"
 done
-swiftc -target "$arch-apple-macos13.0" -module-cache-path "$TRAFFIC_TEST_ROOT/module-cache" \
+swiftc -target "$arch-apple-macos13.0" -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TRAFFIC_TEST_ROOT/module-cache}" \
     "${sources[@]}" "$ROOT_DIR/SimpleMole/Services/TrafficMonitor.swift" \
     "$ROOT_DIR/script/TrafficStoreTestStubs.swift" "$ROOT_DIR/script/TrafficStoreTests.swift" \
     -o "$TRAFFIC_TEST_ROOT/TrafficStore"

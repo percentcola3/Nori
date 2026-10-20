@@ -113,7 +113,9 @@ struct DeveloperSSHGitPanel: View {
             keysCard
             configCard
             gitCard
-            if let failure = model.failure { DevNotice(symbol: "exclamationmark.triangle", text: failure, color: .danger) }
+        }
+        .onReceive(model.$failure) { message in
+            if let message { TaskFeedbackNotice.reportFailure(details: [message], detailsAreLocalized: true) }
         }
         .task(id: workspace.refreshRevision) {
             await model.refresh(environment: workspace.terminal.environment)

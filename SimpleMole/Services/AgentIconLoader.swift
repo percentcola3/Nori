@@ -24,7 +24,7 @@ enum AgentIconCatalog {
         case "antigravity":
             return .init(bundleIDs: ["com.google.antigravity"], bundleNames: ["Antigravity"])
         case "opencode": return .init(bundleNames: ["OpenCode", "opencode"], assetName: "opencode")
-        case "grok": return .init()
+        case "grok", "hermes": return .init()
         case "pi": return .init(assetName: "pi")
         case "kimi": return .init(assetName: "kimi")
         case "factory", "droid": return .init(bundleNames: ["Factory"], assetName: "factory")

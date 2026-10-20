@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d /private/tmp/nori-similar-image-tests.XXXXXX)"
 trap 'rm -rf "$TEST_DIR"' EXIT
 swiftc -O -target "$(uname -m)-apple-macos13.0" \
-    -module-cache-path "$TEST_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
     "$ROOT_DIR/SimpleMole/Services/DuplicateScanner.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
     "$ROOT_DIR/SimpleMole/Services/SimilarImageScanner.swift" \

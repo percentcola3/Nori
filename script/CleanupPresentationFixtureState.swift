@@ -163,6 +163,7 @@ final class AppState: ObservableObject {
     func toggleAgentSkillBinding(_ binding: AgentResourceCatalog.SkillBinding) {}
     func toggleAgentSkillBindings(_ bindings: [AgentResourceCatalog.SkillBinding]) {}
     func requestAgentResourceChanges(_ changes: AgentResourceChanges) { cleanupRequests += 1 }
+    func presentTaskFailure(message: String = "", details: [String] = [], detailsAreLocalized: Bool = false) {}
     func scanAgents() { scanRequests += 1 }
     func applyAgentCleanup() { cleanupRequests += 1 }
     func retryFailedAgentCleanup() { retryRequests += 1 }

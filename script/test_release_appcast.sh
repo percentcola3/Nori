@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/nori-appcast-tests.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-swiftc -O -framework CryptoKit -module-cache-path "$WORK/module-cache" \
+swiftc -O -framework CryptoKit -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$WORK/module-cache}" \
     "$ROOT_DIR/script/AppcastSignatureVerifier.swift" -o "$WORK/verify-signature"
 cat > "$WORK/fixture-signing.swift" <<'SWIFT'
 import CryptoKit
@@ -26,6 +26,6 @@ if args.count == 2 && args[0] == "fixture-key" {
     exit(2)
 }
 SWIFT
-swiftc -O -framework CryptoKit -module-cache-path "$WORK/module-cache" \
+swiftc -O -framework CryptoKit -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$WORK/module-cache}" \
     "$WORK/fixture-signing.swift" -o "$WORK/fixture-signing"
 python3 "$ROOT_DIR/script/ReleaseAppcastTests.py" "$ROOT_DIR" "$WORK/verify-signature" "$WORK/fixture-signing"

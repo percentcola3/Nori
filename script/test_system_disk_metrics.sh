@@ -15,7 +15,7 @@ assert 'struct MetricsSnapshot:' in snapshot
 (destination / 'MetricsSnapshot.swift').write_text(snapshot)
 PY
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$SYSTEM_DISK_METRICS_DIR/cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$SYSTEM_DISK_METRICS_DIR/cache}" \
     "$SYSTEM_DISK_METRICS_DIR/MetricsSnapshot.swift" \
     "$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift" \
     "$ROOT_DIR/SimpleMole/Services/SensorMetrics.swift" \

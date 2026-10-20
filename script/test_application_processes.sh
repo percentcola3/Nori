@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/script/test_developer_toolchain.sh"
+TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-application-processes.XXXXXX")"
+FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/.application-process-fixture.XXXXXX")"
+trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
+swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" -framework AppKit \
+    "$ROOT_DIR/SimpleMole/Models.swift" \
+    "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
+    "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
+    "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
+    "$ROOT_DIR/SimpleMole/Services/ProcessSampler.swift" \
+    "$ROOT_DIR/SimpleMole/Services/ApplicationProcessController.swift" \
+    "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
+    "$ROOT_DIR/script/OwnedProcessFixture.swift" \
+    "$ROOT_DIR/script/ApplicationProcessTests.swift" -o "$TEST_DIR/tests"
+"$TEST_DIR/tests" "$FIXTURE_DIR"

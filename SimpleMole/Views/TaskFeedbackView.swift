@@ -22,6 +22,12 @@ struct TaskFeedbackView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .textSelection(.enabled)
             }
+            if let message = notice.recoveryMessage {
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             let details = notice.detailsAreLocalized
                 ? notice.details : TaskFeedbackDiagnostic.localized(notice.details)
             if !details.isEmpty {
@@ -42,11 +48,18 @@ struct TaskFeedbackView: View {
                 Spacer()
                 Button(l10n.t(needsApplicationsClosed ? "task.cancel" : "task.dismiss"), action: dismiss)
                     .buttonStyle(SecondaryButtonStyle())
-                    .keyboardShortcut(needsApplicationsClosed ? .cancelAction : .defaultAction)
-                if needsApplicationsClosed, notice.onRetry != nil {
-                    Button(l10n.t("task.closeApps.check"), action: retry)
-                        .buttonStyle(PrimaryButtonStyle())
-                        .keyboardShortcut(.defaultAction)
+                    .keyboardShortcut(notice.onRetry != nil ? .cancelAction : .defaultAction)
+                if notice.onRetry != nil {
+                    let label = notice.recoveryLabel ?? l10n.t(needsApplicationsClosed
+                        ? "task.closeApps.check" : "cleanup.task.retry")
+                    if notice.recoveryIsDestructive {
+                        Button(label, role: .destructive, action: retry)
+                            .buttonStyle(DangerButtonStyle())
+                    } else {
+                        Button(label, action: retry)
+                            .buttonStyle(PrimaryButtonStyle())
+                            .keyboardShortcut(.defaultAction)
+                    }
                 }
             }
         }

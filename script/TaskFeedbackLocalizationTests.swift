@@ -13,6 +13,14 @@ final class L10n {
 @main
 struct TaskFeedbackLocalizationTests {
     static func main() {
+        let exitEnglish = L10nProcessExitTables.table(for: .en)
+        for language in AppLanguage.allCases where language != .auto {
+            let table = L10nProcessExitTables.table(for: language)
+            expect(Set(table.keys) == Set(exitEnglish.keys) && table.values.allSatisfy { !$0.isEmpty },
+                   "Complete process exit feedback is translated in \(language.rawValue)")
+            expect(table["proc.exit.done"]?.components(separatedBy: "%@").count == 2,
+                   "Process exit result retains the application-name placeholder")
+        }
         let required = Set([
             "task.failure.title", "task.failure.message", "task.failure.partial",
             "task.closeApps.title", "task.closeApps.message", "task.closeApps.changed",

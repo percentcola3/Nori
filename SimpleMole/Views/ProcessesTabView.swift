@@ -158,7 +158,8 @@ struct ProcessesTabView: View {
                                size: 26,
                                fallbackSystemName: "app.fill",
                                fallbackTint: Color.moleAccentText,
-                               validatesNativeStartIdentity: true)
+                               validatesNativeStartIdentity: true,
+                               bundlePath: group.bundlePath)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(group.app.name)
@@ -173,6 +174,11 @@ struct ProcessesTabView: View {
                                 .frame(height: 17)
                                 .background(Capsule().fill(Color.surface3))
                         }
+                        if group.isBackgroundOnly {
+                            Text(l10n.t("proc.background"))
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(Color.warning)
+                        }
                         if group.app.lifecycle != .normal {
                             ProcessLifecycleBadge(lifecycle: group.app.lifecycle)
                         }
@@ -180,7 +186,7 @@ struct ProcessesTabView: View {
                     Text(group.app.detail)
                         .font(.system(size: 10).monospacedDigit())
                         .foregroundStyle(.secondary)
-                    if let feedback = state.processQuitFeedback[group.app.signalToken] {
+                    if let feedback = state.processQuitFeedback[group.app.signalToken], feedback == .waiting {
                         Text(l10n.t(feedbackKey(feedback)))
                             .font(.system(size: 10))
                             .foregroundStyle(feedback == .waiting ? Color.accentText : Color.warning)
@@ -199,10 +205,7 @@ struct ProcessesTabView: View {
                               isElevated: group.app.mem >= 20)
                 quitButton(group.app)
                 Menu {
-                    Button(l10n.t("proc.forceQuit"), role: .destructive) { state.terminateProcess(group.app) }
-                    if !group.children.isEmpty {
-                        Button(l10n.t("proc.endGroup"), role: .destructive) { state.endProcessGroup(group) }
-                    }
+                    Button(l10n.t("proc.endGroup"), role: .destructive) { state.endProcessGroup(group) }
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 11, weight: .semibold))
@@ -261,6 +264,7 @@ struct ProcessesTabView: View {
         }
         .buttonStyle(SecondaryButtonStyle(tint: needsForce ? .danger : .accentText))
         .disabled(waiting)
+        .help(l10n.t("proc.exit.help"))
     }
 
     private func childRow(_ child: ProcessRow) -> some View {

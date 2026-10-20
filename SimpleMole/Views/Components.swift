@@ -357,6 +357,7 @@ struct PillPicker: View {
     let items: [String]
     @Binding var selection: Int
     let alignment: Alignment
+    let helpTexts: [String]
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -368,10 +369,12 @@ struct PillPicker: View {
 
     private var itemHorizontalPadding: CGFloat { items.count >= 8 ? 10 : 14 }
 
-    init(items: [String], selection: Binding<Int>, alignment: Alignment = .center) {
+    init(items: [String], selection: Binding<Int>, alignment: Alignment = .center,
+         helpTexts: [String] = []) {
         self.items = items
         _selection = selection
         self.alignment = alignment
+        self.helpTexts = helpTexts
         let initialSelection = selection.wrappedValue
         _previousSelection = State(initialValue: initialSelection)
         _settledSelection = State(initialValue: initialSelection)
@@ -427,6 +430,7 @@ struct PillPicker: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .help(helpText(for: index))
             }
         }
         .padding(4)
@@ -478,6 +482,7 @@ struct PillPicker: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .help(helpText(for: index))
                     .zIndex(selected ? 1 : 0)
                 }
             }
@@ -508,6 +513,7 @@ struct PillPicker: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .help(helpText(for: index))
                 .anchorPreference(key: PillBoundsPreferenceKey.self, value: .bounds) {
                     [index: $0]
                 }
@@ -545,6 +551,10 @@ struct PillPicker: View {
             }
             animateFallback(from: settledSelection, to: next)
         }
+    }
+
+    private func helpText(for index: Int) -> String {
+        helpTexts.indices.contains(index) ? helpTexts[index] : items[index]
     }
 
     private func select(_ index: Int) {

@@ -8,7 +8,7 @@ trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 case "${1:---all}" in --unit|--e2e|--all) ;; *) echo "usage: test_cache_cleanup.sh [--unit|--e2e|--all]" >&2; exit 2 ;; esac
 source "$ROOT_DIR/script/test_developer_toolchain.sh"
 swiftc -O -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" \
     -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \

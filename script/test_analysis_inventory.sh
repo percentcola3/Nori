@@ -24,5 +24,5 @@ for source in "${SOURCES[@]}"; do
     cp "$source" "$TEST_DIR/sources/$(basename "$source")"
 done
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$TEST_DIR/module-cache" "$TEST_DIR"/sources/*.swift -o "$TEST_DIR/tests"
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" "$TEST_DIR"/sources/*.swift -o "$TEST_DIR/tests"
 "$TEST_DIR/tests" "$TEST_DIR/fixture"

@@ -133,20 +133,6 @@ private struct AgentResourceManagementView: View {
                     Button(action: selectSources) { Text(l10n.t("agents.manage.selectSources")) }
                         .buttonStyle(SecondaryButtonStyle()).disabled(state.isAgentTaskBusy)
                 }.padding(12)
-                if !state.isAgentTaskBusy && (state.agentCleanupHasFeedback || !state.agentScanComplete) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(state.agentStatus).foregroundStyle(state.agentOutcomeMood == .attention ? Color.warning : Color.success)
-                        if !state.agentOutcomeDetails.isEmpty {
-                            DisclosureGroup(l10n.t("agents.result.details")) {
-                                ScrollView {
-                                    Text(TaskFeedbackDiagnostic.localized(state.agentOutcomeDetails).joined(separator: "\n"))
-                                        .textSelection(.enabled).foregroundStyle(.secondary)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }.frame(maxHeight: 120)
-                            }
-                        }
-                    }.font(.system(size: 11)).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12)
-                }
                 ScrollView {
                     LazyVStack(spacing: 10) {
                         if skills {

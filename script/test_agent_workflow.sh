@@ -22,6 +22,7 @@ WORKFLOW_SOURCES=(
     "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift"
     "$ROOT_DIR/SimpleMole/Services/TaskFeedbackQueue.swift"
     "$ROOT_DIR/SimpleMole/AppState+Agents.swift"
+    "$ROOT_DIR/SimpleMole/AppState+AgentRemoval.swift"
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift"
     "$ROOT_DIR/script/AgentWorkflowTests.swift"
 )
@@ -32,7 +33,7 @@ if [[ "${NORI_AGENT_SELECTION_BENCHMARK:-0}" == 1 ]]; then
 fi
 swiftc ${WORKFLOW_COMPILER_FLAGS[@]+"${WORKFLOW_COMPILER_FLAGS[@]}"} -target "$(uname -m)-apple-macos13.0" \
     -sdk "$SDKROOT" \
-    -module-cache-path "$WORKFLOW_TEST_DIR/module-cache" \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$WORKFLOW_TEST_DIR/module-cache}" \
     "$WORKFLOW_TEST_DIR/sources/"*.swift \
     -o "$WORKFLOW_TEST_DIR/tests"
 "$WORKFLOW_TEST_DIR/tests"

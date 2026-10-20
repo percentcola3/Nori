@@ -10,6 +10,6 @@ if [[ "$1" == check-version ]]; then
 fi
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/nori-appcast-verify.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-swiftc -O -framework CryptoKit -module-cache-path "$WORK/module-cache" \
+swiftc -O -framework CryptoKit -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$WORK/module-cache}" \
     "$ROOT_DIR/script/AppcastSignatureVerifier.swift" -o "$WORK/verify-signature"
 python3 "$ROOT_DIR/script/release_appcast.py" "$@" --signature-verifier "$WORK/verify-signature"

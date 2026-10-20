@@ -70,15 +70,6 @@ struct TrafficTabView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 8)
 
-            if store.historySaveFailed {
-                Text(l10n.t("netmon.history.saveFailed"))
-                    .font(.system(size: 10))
-                    .foregroundStyle(Color.warning)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-            }
-
             if store.rows.isEmpty {
                 EmptyStateView(symbol: "antenna.radiowaves.left.and.right",
                                title: l10n.t("netmon.empty.title"),

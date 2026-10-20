@@ -73,6 +73,7 @@ private final class PageStateFixture {
     var selectedCount: Int { categories.compactMap(\.selectedSubset).reduce(0) { $0 + $1.paths.count } }
     var headerMood: NoriMood?
     var popupCount = 0
+    var taskNotice: TaskFeedbackNotice?
     var statusText = ""
     var attempts: [Attempt] = []
 
@@ -96,6 +97,10 @@ private final class PageStateFixture {
     }
     func presentTaskFailure(message: String = "", details: [String] = [],
                             detailsAreLocalized: Bool = false) { popupCount += 1 }
+    func presentTaskNotice(_ notice: TaskFeedbackNotice) {
+        popupCount += 1
+        taskNotice = notice
+    }
     static func blockingApplicationNames(_ owners: [String]) -> [String] { owners.sorted() }
 
     // APPSTATE_CLEANUP_PAGE_METHODS
@@ -120,7 +125,7 @@ struct CleanupPageStateTests {
         testStartupPermissions()
         testGarbageTotal()
         try await testMutationBoundaries()
-        print("Cleanup page state: partial success, actual bytes, inline failure, remaining retries and startup permissions passed")
+        print("Cleanup page state: partial success, actual bytes, modal failure, remaining retries and startup permissions passed")
     }
 
     private static func category(_ paths: [String]) -> CleanupCategory {
@@ -220,8 +225,9 @@ struct CleanupPageStateTests {
         precondition(page.cleanupReclaimedBytes == 4096
             && page.statusText == "cleanup.task.reclaimed:" + ByteFormat.format(4096),
             "Cleanup displayed an estimate rather than the executor's released bytes")
-        precondition(page.cleanupOutcomeDetails.isEmpty && page.popupCount == 0,
-                     "Partial success still displays failure diagnostics or a popup")
+        precondition(page.cleanupOutcomeDetails.isEmpty && page.popupCount == 1
+                     && page.taskNotice?.onRetry != nil && page.taskNotice?.applicationNames == ["Browser"],
+                     "Partial success must explain remaining items and retain recovery in a dialog")
         precondition(page.cleanupRetryAvailable && page.cleanupRuntime.retryAction != nil,
                      "Success feedback discarded the remaining cleanup action")
         precondition(page.isApplying && page.cleanupTaskProgress == nil && page.cleanupCelebrating,
@@ -283,11 +289,12 @@ struct CleanupPageStateTests {
         let page = PageStateFixture()
         page.reportCleanupResult(.init(failed: 2, messages: ["Permission denied"], executionFailed: true),
             permanently: true, verified: false, waitingApplications: ["Browser"])
-        precondition(page.cleanupOutcomeMood == .attention && page.popupCount == 0,
-                     "Complete failure escaped inline feedback")
+        precondition(page.cleanupOutcomeMood == .attention && page.popupCount == 1
+                     && page.taskNotice?.details.contains("Permission denied") == true,
+                     "Complete failure must display diagnostics in a dialog")
         precondition(page.cleanupOutcomeDetails.contains("localized:Permission denied")
             && page.cleanupOutcomeDetails.contains("cleanup.execution.verificationIncomplete")
-            && page.cleanupOutcomeDetails.contains("Browser"), "Inline failure reasons were lost")
+            && page.cleanupOutcomeDetails.contains("Browser"), "Failure diagnostics were lost")
         precondition(page.cleanupReclaimedBytes == 0 && page.isApplying,
                      "Failure invented released bytes or ended the caller's busy state")
     }

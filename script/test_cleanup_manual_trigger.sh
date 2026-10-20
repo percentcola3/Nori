@@ -59,9 +59,12 @@ remaining_feedback=$(/usr/bin/awk '
     capture { print }
     capture && /^    }/ { exit }
 ' "$APP_STATE")
-if /usr/bin/grep -Eq 'presentTaskFailure\(|presentTaskNotice\(|confirmation[[:space:]]*=' \
-    <<< "$cleanup_feedback$remaining_feedback"; then
-    fail "cleanup feedback still presents a popup"
+/usr/bin/grep -Fq 'presentTaskNotice(notice)' <<< "$cleanup_feedback" || \
+    fail "incomplete cleanup no longer reports its result in a dialog"
+/usr/bin/grep -Fq 'notice.onRetry = cleanupRuntime.retryAction' <<< "$cleanup_feedback" || \
+    fail "cleanup dialog lost its captured remaining-item recovery"
+if /usr/bin/grep -Eq 'phase: \.attention|DisclosureGroup.*cleanup.execution.details' "$CLEANUP_VIEW"; then
+    fail "cleanup failures still expand inside the page"
 fi
 /usr/bin/grep -Fq 'cleanupOutcomeMood = combined.removed > 0 ? .success : .attention' \
     <<< "$cleanup_feedback" || fail "partial deletion does not show successful cleanup"

@@ -98,10 +98,6 @@ struct AgentInventoryView: View {
         return state.agentHasScanned ? 2 : 0
     }
 
-    private var showsCleanupFailure: Bool {
-        state.agentCleanupHasFeedback && state.agentOutcomeMood == .attention
-    }
-
     var body: some View {
         NoriPageTransition(phase: presentationPhase) {
             VStack(spacing: 0) {
@@ -118,9 +114,6 @@ struct AgentInventoryView: View {
                 } else if !state.agentHasScanned {
                     emptyState
                 } else {
-                    if !state.isAgentTaskBusy && (showsCleanupFailure || !state.agentScanComplete || state.agentRetryAvailable || !state.agentOutcomeDetails.isEmpty) {
-                        statusRow
-                    }
                     resourceList
                     Divider()
                     actions
@@ -148,38 +141,8 @@ struct AgentInventoryView: View {
         NoriPlaceholderStage { size in
             NoriIdlePlaceholder(state: state, size: size)
             scanButton
-            if state.agentOutcomeMood != nil {
-                Text(state.agentStatus)
-                    .font(.system(size: 11))
-                    .foregroundStyle(state.agentOutcomeMood == .attention ? Color.warning : Color.secondary)
-                    .multilineTextAlignment(.center).frame(maxWidth: 420)
-            }
-        }
-    }
 
-    private var statusRow: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(state.agentStatus, systemImage: "exclamationmark.triangle.fill")
-                .foregroundStyle(Color.warning)
-            if !state.agentFailureApplications.isEmpty {
-                Text(state.agentFailureApplications.joined(separator: "、"))
-                    .foregroundStyle(.secondary)
-            }
-            if !state.agentOutcomeDetails.isEmpty {
-                DisclosureGroup(l10n.t("agents.result.details")) {
-                    ScrollView {
-                        Text(TaskFeedbackDiagnostic.localized(state.agentOutcomeDetails).joined(separator: "\n\n"))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .frame(maxHeight: 120)
-                }
-                .foregroundStyle(.secondary)
-            }
         }
-        .font(.system(size: 11))
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16).padding(.bottom, 6)
     }
 
     private var resourceList: some View {
@@ -275,7 +238,7 @@ struct AgentInventoryView: View {
             .accessibilityValue(l10n.t(collapsed.contains(group.id) ? "agents.collapsed" : "agents.expanded"))
             if group.orphaned {
                 Button { state.offerAgentAssociatedDataCleanup(agentIDs: [group.id]) } label: {
-                    Label(l10n.t("agents.program.residuals"), systemImage: "sparkles")
+                    Label(l10n.t("agents.program.residuals"), systemImage: "trash")
                 }
                 .buttonStyle(SecondaryButtonStyle()).controlSize(.small)
                 .disabled(state.isAgentTaskBusy || state.isUninstallMutationBlocked || state.uninstallQueue.activeJob != nil)
@@ -500,12 +463,7 @@ struct AgentInventoryView: View {
                 if state.agentCleanupHasFeedback && state.agentOutcomeMood == .success {
                     Text(state.agentStatus).font(.system(size: 11)).foregroundStyle(Color.success).lineLimit(1)
                 }
-                if state.agentRetryAvailable {
-                    Button(action: state.retryFailedAgentCleanup) {
-                        Label(l10n.t("cleanup.task.retry"), systemImage: "arrow.clockwise")
-                    }
-                    .buttonStyle(SecondaryButtonStyle()).disabled(state.isAgentTaskBusy)
-                }
+
             }
             Spacer()
             let unbindings = state.selectedAgentUnbindings

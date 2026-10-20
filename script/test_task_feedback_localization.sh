@@ -7,7 +7,8 @@ fi
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-task-feedback.XXXXXX")"
 trap 'rm -rf "$TEST_DIR"' EXIT
 swiftc -Onone -target "$(uname -m)-apple-macos13.0" \
-    -sdk "$(xcrun --sdk macosx --show-sdk-path)" -module-cache-path "$TEST_DIR/cache" \
+    -sdk "$(xcrun --sdk macosx --show-sdk-path)" -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
+    "$ROOT_DIR/SimpleMole/L10n/TablesProcessExit.swift" \
     "$ROOT_DIR/SimpleMole/L10n/TablesTaskFeedback.swift" \
     "$ROOT_DIR/SimpleMole/Services/TaskFeedbackDiagnostic.swift" \
     "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift" \

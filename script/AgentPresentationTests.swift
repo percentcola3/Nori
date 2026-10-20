@@ -122,6 +122,9 @@ struct AgentPresentationTests {
             state.setAgentRetention(.never, for: .conversations, agentID: "cursor")
             state.setAgentRetention(.days(180), for: .artifacts, agentID: "cursor")
             render("results-per-agent-retention")
+            state.agentGroups = [.init(id: "codex", name: "Codex", documented: true,
+                categoryIDs: [category.id], orphaned: true)]
+            render("results-complete-leftover-removal")
             let preservedBytes: UInt64 = 3_000_000_000
             let preserved = CleanupCategory(name: "保留的会话与状态", paths: ["/fixture/agent/sessions"],
                 bytes: preservedBytes, pathIdentities: [:], selected: false, source: .aiSession, risk: .protected,

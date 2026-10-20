@@ -349,9 +349,6 @@ struct DeveloperPackagesPanel: View {
                 if workspace.isLoadingPackages { ProgressView().controlSize(.small) }
                 DevLinkButton(title: l10n.t("dev.packages.check"), symbol: "arrow.clockwise") { Task { await workspace.loadPackages(checkUpdates: true) } }.disabled(workspace.isLoadingPackages)
             } content: {
-                if !workspace.packages.failures.isEmpty {
-                    DevNotice(symbol: "exclamationmark.triangle", text: l10n.tf("dev.packages.partial", Array(Set(workspace.packages.failures)).sorted().joined(separator: " · ")), color: .warning)
-                }
                 if workspace.packages.packages.isEmpty { DevNotice(symbol: "shippingbox", text: l10n.t("dev.packages.empty")) }
                 ForEach(workspace.packages.packages) { package in
                     DevDivider()

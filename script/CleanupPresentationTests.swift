@@ -113,6 +113,35 @@ struct CleanupPresentationTests {
         print("Cleanup selection interaction: title/blank area, checkbox, scheduling, expand, child paths, partial selection, busy and protected guards passed")
     }
 
+    @MainActor private static func verifyFailureDialog(output: URL) {
+        var notices = TaskFeedbackQueue()
+        var recoveryCount = 0
+        let notice = TaskFeedbackNotice(message: "Fixture 应用卸载未完成",
+            details: ["/Applications/Fixture.app", "/fixture/selected-data"],
+            detailsAreLocalized: true, recoveryLabel: L10n.shared.t("uninstall.recovery.action"),
+            recoveryMessage: L10n.shared.t("uninstall.recovery.message"), recoveryIsDestructive: true,
+            onRetry: { recoveryCount += 1 })
+        notices.enqueue(notice)
+        for size in [CGSize(width: 760, height: 620), CGSize(width: 560, height: 520)] {
+            let view = TaskFeedbackView(notice: notice, dismiss: { notices.dismiss() }, retry: {
+                notices.dismiss()
+                notice.onRetry?()
+            }).background(Color.glassOpaque).frame(width: size.width, height: size.height)
+            let host = NSHostingView(rootView: view)
+            host.frame = CGRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+                preconditionFailure("Recovery dialog must render")
+            }
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try! bitmap.representation(using: .png, properties: [:])!.write(
+                to: output.appendingPathComponent("uninstall-recovery-\(Int(size.width)).png"))
+            precondition(notices.active?.id == notice.id && recoveryCount == 0,
+                         "Presenting or resizing a failure dialog must never start force cleanup")
+        }
+        print("Recovery dialog rendered at standard and constrained sizes without executing cleanup")
+    }
+
     @MainActor static func main() {
         _ = NSApplication.shared
         NSApp.appearance = NSAppearance(named: .darkAqua)
@@ -122,6 +151,7 @@ struct CleanupPresentationTests {
         let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["NORI_PRESENTATION_OUTPUT"]
                          ?? NSTemporaryDirectory() + "nori-cleanup-presentation-renders", isDirectory: true)
         try! FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        verifyFailureDialog(output: output)
         let state = AppState()
         let host = NSHostingView(rootView: CleanupPresentationRoot(state: state))
         host.sizingOptions = []
@@ -191,6 +221,26 @@ struct CleanupPresentationTests {
         click(at: CGPoint(x: size.width * 0.6, y: groupY), in: window)
         precondition(state.categories[0].allSelected, "Group selection must remain independent")
         verifySelection(output: output)
+
+        let smallInventory = state.categories
+        let trashPaths = (0..<100_000).map { NSHomeDirectory() + "/.Trash/presentation-fixture-\($0).cache" }
+        let largeTrash = CleanupCategory(name: "Large Trash fixture", paths: trashPaths,
+            bytes: 100_000, pathIdentities: [:], selected: true, source: .core,
+            risk: .safe, disposal: .permanentDelete, activityGuard: .none)
+        precondition(CleanupGroupBucket(category: largeTrash) == .trash,
+                     "A large Trash inventory keeps its display bucket")
+        var escapedTrash = largeTrash
+        escapedTrash.paths = [NSHomeDirectory() + "/.Trash/../keep.cache"]
+        precondition(CleanupGroupBucket(category: escapedTrash) != .trash,
+                     "A normalized path outside Trash cannot enter the Trash group")
+        let renderStarted = ProcessInfo.processInfo.systemUptime
+        state.categories = [largeTrash] + smallInventory
+        render("large-trash-results")
+        let renderSeconds = ProcessInfo.processInfo.systemUptime - renderStarted
+        precondition(renderSeconds < 15,
+                     "100000-item results must render without blocking for tens of seconds: \(renderSeconds)s")
+        print("100000-item Trash result render: \(renderSeconds)s")
+        state.categories = smallInventory
 
         state.isApplying = true
         state.statusText = "Fixture cleanup in progress"

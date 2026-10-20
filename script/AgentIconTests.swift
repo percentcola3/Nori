@@ -13,7 +13,7 @@ struct AgentIconTests {
         defer { try? FileManager.default.removeItem(at: fixture) }
 
         let recognized = ["claude-code", "claude-desktop", "codex", "codex-app", "cursor", "cursor-cli",
-            "copilot", "gemini", "antigravity", "opencode", "grok", "pi", "kimi", "factory", "devin",
+            "copilot", "gemini", "antigravity", "opencode", "hermes", "grok", "pi", "kimi", "factory", "devin",
             "windsurf", "chrome-devtools-mcp", "qoder", "kiro", "trae", "zed", "warp", "amp", "crush", "shared"]
         for id in recognized { precondition(AgentIconCatalog.descriptor(for: id) != nil, "Missing \(id)") }
         precondition(AgentIconCatalog.descriptor(for: "unknown-agent") == nil)

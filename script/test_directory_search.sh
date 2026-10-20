@@ -9,7 +9,7 @@ cp "$ROOT_DIR/SimpleMole/Services/DirectorySearchService.swift" "$ROOT_DIR/scrip
     "$ROOT_DIR/SimpleMole/L10n/TablesDirectory.swift" "$ROOT_DIR/script/DirectoryBrowserTestSupport.swift" \
     "$DIRECTORY_SEARCH_TEST_DIR/sources/"
 swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
-    -module-cache-path "$DIRECTORY_SEARCH_TEST_DIR/module-cache" -lsqlite3 \
+    -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$DIRECTORY_SEARCH_TEST_DIR/module-cache}" -lsqlite3 \
     "$DIRECTORY_SEARCH_TEST_DIR/sources/DirectorySearchService.swift" \
     "$DIRECTORY_SEARCH_TEST_DIR/sources/DirectorySearchTests.swift" \
     "$DIRECTORY_SEARCH_TEST_DIR/sources/TablesDirectory.swift" \
