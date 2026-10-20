@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// 硬盘清理只呈现可确认、可直接删除的垃圾。
-/// 需要判断的大文件、应用与受保护内容统一交给“磁盘分析”。
+/// 可再生垃圾默认推荐；卸载数据需要手动勾选并确认移入废纸篓。
 struct CleanupTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
@@ -396,14 +395,15 @@ struct CleanupTabView: View {
         Binding(
             get: {
                 let categories = state.categories.filter {
-                    group.categoryIDs.contains($0.id) && (!$0.isAppDataReview || group.kind == .appData)
+                    group.categoryIDs.contains($0.id)
+                        && (!$0.isAppDataReview || group.kind == .appData || group.kind == .leftovers)
                 }
                 return !categories.isEmpty && categories.allSatisfy(\.allSelected)
             },
             set: { selected in
                 for index in state.categories.indices
                     where group.categoryIDs.contains(state.categories[index].id)
-                        && (!selected || !state.categories[index].isAppDataReview) {
+                        && (!selected || !state.categories[index].isAppDataReview || group.kind == .leftovers) {
                     state.categories[index].selected = selected
                 }
             }

@@ -187,6 +187,7 @@ struct DirectoryBrowserTests {
         try await settle { !model.isCalculatingSizes }
         try await testUnifiedSearch(in: root, defaults: defaults, clipboard: clipboard)
         try await testTargetedPaste(in: root, defaults: defaults, clipboard: clipboard)
+        try await testSorting(in: root, clipboard: clipboard)
         try await testBackgroundSizes(in: root, defaults: defaults, clipboard: clipboard)
         try await testIdleSizeRelease(in: root, defaults: defaults, clipboard: clipboard)
         try await testVisibleSizeCacheCapacity(in: root, defaults: defaults, clipboard: clipboard)
@@ -341,6 +342,66 @@ struct DirectoryBrowserTests {
             && model.historyPosition == initialPosition && model.query == "unique-global-paste-anchor",
             "Targeted paste altered global search navigation or history")
         print("Directory targeted paste: selected child destination, unchanged navigation/history and explicit target over global breadcrumb passed")
+    }
+
+    static func testSorting(in root: URL, clipboard: NSPasteboard) async throws {
+        let fm = FileManager.default
+        let parent = root.appendingPathComponent("sort-workspace")
+        let small = parent.appendingPathComponent("Alpha folder")
+        let large = parent.appendingPathComponent("Zulu folder")
+        for directory in [small, large] { try fm.createDirectory(at: directory, withIntermediateDirectories: true) }
+        try Data(repeating: 1, count: 8192).write(to: small.appendingPathComponent("data"))
+        try Data(repeating: 2, count: 131072).write(to: large.appendingPathComponent("data"))
+        let suite = "nori-directory-sort-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let model = DirectoryBrowserModel(defaults: defaults, homeDirectory: parent, initialDirectory: parent,
+            indexDatabaseURL: root.appendingPathComponent("sort-index/files.sqlite"), pasteboard: clipboard,
+            sizeCacheURL: root.appendingPathComponent("sort-cache/sizes.json"))
+        defer { model.suspend(); model.stopSizeBackgroundWork() }
+        model.start()
+        try await settle { model.entries.count == 2 && model.sizeStates[small.path] == .complete
+            && model.sizeStates[large.path] == .complete && !model.isCalculatingSizes }
+        model.select(entry: model.entries.first!, extending: false)
+        let selection = model.selectedIDs
+        model.sort(by: .size)
+        precondition(!model.sortAscending && model.entries.first?.id == large.path)
+        model.sort(by: .size)
+        precondition(model.sortAscending && model.entries.first?.id == small.path && model.selectedIDs == selection,
+                     "sorting must toggle direction without changing selection")
+        model.sort(by: .modified)
+        precondition(!model.sortAscending, "modification time must default to newest first")
+        model.sort(by: .kind)
+        precondition(model.sortAscending, "type must default to ascending")
+        model.sort(by: .name)
+        model.sort(by: .name)
+        precondition(!model.sortAscending && model.entries.first?.id == large.path)
+        model.sort(by: .size)
+        let reopened = DirectoryBrowserModel(defaults: defaults, homeDirectory: parent, initialDirectory: parent,
+            indexDatabaseURL: root.appendingPathComponent("sort-reopened/files.sqlite"), pasteboard: clipboard,
+            sizeCacheURL: root.appendingPathComponent("sort-reopened/sizes.json"))
+        precondition(reopened.sortField == .size && !reopened.sortAscending,
+                     "a restarted browser must restore the chosen sort")
+        model.refresh()
+        try await settle { !model.isLoading && !model.isCalculatingSizes && model.entries.first?.id == large.path }
+        model.suspend()
+        try Data(repeating: 3, count: 1048576).write(to: small.appendingPathComponent("data"))
+        try await settle { model.entries.first?.id == small.path && model.sizeStates[small.path] == .complete }
+        precondition(!model.isLoading && model.selectedIDs == selection,
+                     "background size changes must reorder rows without reloading or dropping selection")
+        model.start()
+        try await settle { !model.isLoading }
+        model.query = small.path
+        try await settle { !model.isSearching && model.entries.first?.id == small.path }
+        precondition(model.isRelevanceOrder, "search must initially preserve relevance despite a saved size sort")
+        model.sort(by: .name)
+        precondition(!model.isRelevanceOrder && model.sortAscending,
+                     "a column click must explicitly override search relevance")
+        model.query = ""
+        model.navigate(to: large)
+        try await settle { !model.isLoading }
+        precondition(model.sortField == .name && model.sortAscending, "navigation must retain the chosen sort")
+        print("Directory sorting: columns, direction, persistence, selection, background sizes and search relevance passed")
     }
 
     static func testBackgroundSizes(in root: URL, defaults: UserDefaults, clipboard: NSPasteboard) async throws {

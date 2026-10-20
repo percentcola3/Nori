@@ -21,6 +21,7 @@ import Foundation
     var agentScanning = false
     var agentApplying = false
     var agentProgramBusyID: String?
+    var uninstallDataReview: UUID?
     var isScanningApps = false
     var isScanningCommandLineTools = false
     var isCheckingSoftwareUpdates = false
@@ -86,6 +87,10 @@ enum ProtectedOperation {
         precondition(state.isAgentTaskBusy && state.isUninstallMutationBlocked && !state.isSoftwareTaskBusy)
         precondition(state.isAgentMutationBusy && state.isCleanupMutationBlocked)
         state.agentProgramBusyID = nil
+        state.uninstallDataReview = UUID()
+        precondition(state.isAgentTaskBusy && state.isUninstallMutationBlocked && state.isCleanupMutationBlocked,
+                     "An open data review must gate other destructive requests")
+        state.uninstallDataReview = nil
         state.commandLineToolBusyID = "software-cli"
         precondition(state.isSoftwareTaskBusy && state.isUninstallMutationBlocked && !state.isAgentTaskBusy)
         state.commandLineToolBusyID = nil

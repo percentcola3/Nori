@@ -6,6 +6,14 @@ import Foundation
 /// inline in app rows and the current operation status.
 enum L10nUninstallQueueTables {
     static let en: [String: String] = [
+        "uninstall.data.reviewTitle": "Review uninstall data",
+        "uninstall.data.reviewHint": "Nothing is selected by default. Selected history, snapshots, settings and extensions move to the Trash. Shared resources and real projects are retained. Quit processes still using these files before removing them.",
+        "uninstall.data.agentReason": "App data, including history and settings. Only moved to the Trash when explicitly checked.",
+        "uninstall.data.keep": "Keep data",
+        "uninstall.data.removeSelected": "Move %@ to Trash",
+        "uninstall.data.sharedReason": "Another installation uses this data. Retained to keep that app working.",
+        "uninstall.data.protectedReason": "Contains shared resources, real projects or data whose exclusive ownership could not be confirmed. Retained.",
+        "uninstall.data.protectedSize": "Protected data retained: %@",
         "uninstall.retained": "Retained %d app data, shared, or system items for review:",
         "uninstall.remaining": "%d items could not be cleaned:",
         "uninstall.resultDetails": "View uninstall result and remaining files",
@@ -22,6 +30,14 @@ enum L10nUninstallQueueTables {
     ]
 
     static let zhHans: [String: String] = [
+        "uninstall.data.reviewTitle": "深度清理卸载数据",
+        "uninstall.data.reviewHint": "默认不勾选。选中的历史、快照、配置和扩展会移入废纸篓；共享资源和真实项目会保留。请先退出仍在使用这些文件的进程。",
+        "uninstall.data.agentReason": "包含历史和配置等应用数据；仅在明确勾选后移入废纸篓。",
+        "uninstall.data.keep": "保留数据",
+        "uninstall.data.removeSelected": "移入废纸篓 %@",
+        "uninstall.data.sharedReason": "其他已安装应用仍在使用这些数据，卸载时保留。",
+        "uninstall.data.protectedReason": "包含共享资源、真实项目或无法确认独占归属的数据，暂时保留。",
+        "uninstall.data.protectedSize": "受保护数据保留：%@",
         "uninstall.retained": "已保留 %d 项应用数据、共享或系统项目，供复核：",
         "uninstall.remaining": "以下 %d 项未能清理：",
         "uninstall.resultDetails": "查看卸载结果与保留文件",
@@ -38,6 +54,14 @@ enum L10nUninstallQueueTables {
     ]
 
     static let zhHant: [String: String] = [
+        "uninstall.data.reviewTitle": "清理已解除安裝應用程式的資料",
+        "uninstall.data.reviewHint": "預設不勾選。選取的歷史、快照、設定和擴充功能會移到垃圾桶；共用資源和真實專案會保留。請先結束仍在使用這些檔案的程序。",
+        "uninstall.data.agentReason": "包含歷史與設定等應用程式資料；僅在明確勾選後移到垃圾桶。",
+        "uninstall.data.keep": "保留資料",
+        "uninstall.data.removeSelected": "移到垃圾桶 %@",
+        "uninstall.data.sharedReason": "其他已安裝應用程式仍在使用這些資料，解除安裝時保留。",
+        "uninstall.data.protectedReason": "包含共用資源、真實專案或無法確認獨佔歸屬的資料，暫時保留。",
+        "uninstall.data.protectedSize": "受保護資料保留：%@",
         "uninstall.loading": "正在準備應用程式列表…",
         "uninstall.queue.cancel": "取消排隊",
         "uninstall.queue.waiting": "排隊中 · 第 %d 位",

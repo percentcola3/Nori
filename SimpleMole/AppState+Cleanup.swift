@@ -382,19 +382,11 @@ extension AppState {
 
 
     /// 原生扫描和缓存预检先产出当前可删除的文件单元，再按最新运行态
-    /// 实际裁剪展示路径。清空选择不能把受保护的兄弟路径留在清单中。
+    /// 实际裁剪垃圾路径；应用数据复核项保留展示与默认不选的状态。
     /// 执行前仍使用新的文件占用、身份与权限检查复核。
     private func finalizedCleanupCategories(_ source: [CleanupCategory],
                                              running snapshot: RunningApplicationSnapshot) -> [CleanupCategory] {
-        let candidates = CleanupCategory.safeCleanupCandidates(from: source)
-        let available = candidates.compactMap { category -> CleanupCategory? in
-            let reviewed = category.selectingPaths(category.paths)
-            return CleanupRiskPolicy.runtimeEligibleSubset(reviewed, running: snapshot)?
-                .selectedSubset?.selectingPaths(Array(category.selectedPaths))
-        }
-        return CleanupCategory.mergingLongTail(
-            available
-        ).sorted(by: CleanupCategory.sizeDescending)
+        CleanupRiskPolicy.presentationCategories(source, running: snapshot)
     }
 
     /// 开发工具扫描：包管理器卸载命令，Warning 项留给人工判断。
@@ -975,7 +967,8 @@ extension AppState {
             let applied = await Task.detached(priority: .utility) {
                 let home = NSHomeDirectory()
                 let agentLeftovers = directCategories.filter { $0.reasonKey == "cleanup.risk.agentLeftover" }
-                let appDataCategories = directCategories.filter(\.isAppDataReview)
+                let residueCategories = directCategories.filter { $0.uninstallDataOwner != nil }
+                let appDataCategories = directCategories.filter { $0.isAppDataReview && $0.uninstallDataOwner == nil }
                 let genericCategories = directCategories.filter {
                     $0.reasonKey != "cleanup.risk.agentLeftover" && !$0.isAppDataReview
                 }
@@ -984,6 +977,7 @@ extension AppState {
                     .filter { !NoriOwnedStorage.isManagedPath($0, home: home) }
                 let genericUnits = DeletionPlan.nonOverlappingPaths(nativePaths).count
                 let appData = NativeCore.shared.applyAppDataReview(appDataCategories, homeDirectory: home)
+                let residues = NativeCore.shared.applyUninstallResidues(residueCategories, homeDirectory: home)
                 let routeUnits = agentUnits + genericUnits + administratorUnits + managedUnits
                 let agentOutcome = agentLeftovers.isEmpty
                     ? AgentCleanupExecutor.Outcome(summary: .init(removed: 0, skipped: 0, failed: 0, messages: []), refused: 0)
@@ -1016,12 +1010,12 @@ extension AppState {
                         })
                 let agent = agentOutcome.summary
                 return (agentUnits + genericUnits, NativeCore.ApplySummary(
-                    removed: generic.removed + agent.removed + appData.removed,
-                    skipped: generic.skipped + agent.skipped + agentOutcome.refused + appData.skipped,
-                    failed: generic.failed + agent.failed + appData.failed,
-                    messages: generic.messages + agent.messages + appData.messages,
-                    removedPaths: generic.removedPaths.union(agent.removedPaths).union(appData.removedPaths),
-                    reclaimedBytes: generic.reclaimedBytes &+ agent.reclaimedBytes &+ appData.reclaimedBytes))
+                    removed: generic.removed + agent.removed + appData.removed + residues.removed,
+                    skipped: generic.skipped + agent.skipped + agentOutcome.refused + appData.skipped + residues.skipped,
+                    failed: generic.failed + agent.failed + appData.failed + residues.failed,
+                    messages: generic.messages + agent.messages + appData.messages + residues.messages,
+                    removedPaths: generic.removedPaths.union(agent.removedPaths).union(appData.removedPaths).union(residues.removedPaths),
+                    reclaimedBytes: generic.reclaimedBytes &+ agent.reclaimedBytes &+ appData.reclaimedBytes &+ residues.reclaimedBytes))
             }.value
             let nativeHandled = applied.0
             let routeUnits = nativeHandled + managedUnits

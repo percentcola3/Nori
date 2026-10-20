@@ -44,4 +44,12 @@ struct CommandLineTool: Identifiable, Equatable, Sendable {
         manager.rawValue + ":" + name + ":" + URL(fileURLWithPath: installationRoot).resolvingSymlinksInPath().path
     }
     var canUninstall: Bool { (manager != .local || agentInstallation != nil) && dependents.isEmpty }
+
+    var uninstallDataOwner: UninstallDataOwner {
+        let commands = executablePaths.map { URL(fileURLWithPath: $0).lastPathComponent }
+        let package = name.split(separator: "/").last.map(String.init) ?? name
+        return .init(kind: .cli, name: name, installationPath: installationRoot,
+                     names: Array(Set([package] + commands)).sorted(), commands: commands.isEmpty ? [package] : commands,
+                     agentIDs: agentID.map { [$0] } ?? [])
+    }
 }

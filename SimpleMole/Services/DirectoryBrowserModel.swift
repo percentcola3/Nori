@@ -12,14 +12,20 @@ enum DirectorySizeState: Equatable {
 @MainActor
 final class DirectoryBrowserModel: ObservableObject {
     private static let showHiddenKey = "NoriDirectoryShowHidden"
+    private static let sortFieldKey = "NoriDirectorySortField"
+    private static let sortAscendingKey = "NoriDirectorySortAscending"
     @Published private(set) var currentDirectory: URL
     @Published private(set) var currentDirectoryIsGitRepository = false
     @Published private(set) var gitStatusRevision = 0
     @Published private(set) var entries: [DirectoryEntry] = []
+    @Published private(set) var sortField: DirectorySortField
+    @Published private(set) var sortAscending: Bool
+    @Published private var searchSortChosen = false
     @Published var selectedIDs: Set<String> = []
     @Published var query = "" {
         didSet {
             guard query != oldValue else { return }
+            searchSortChosen = false
             statusMessage = nil
             updateSearch()
         }
@@ -107,6 +113,9 @@ final class DirectoryBrowserModel: ObservableObject {
          sizeCacheURL: URL? = nil, sizeCalibrationInterval: TimeInterval = 6 * 3600,
          sizeIdleReleaseDelay: TimeInterval = 120) {
         self.defaults = defaults
+        let savedSort = defaults.string(forKey: Self.sortFieldKey).flatMap(DirectorySortField.init(rawValue:)) ?? .name
+        self.sortField = savedSort
+        self.sortAscending = defaults.object(forKey: Self.sortAscendingKey) as? Bool ?? savedSort.defaultAscending
         self.homeDirectory = homeDirectory
         self.pasteboard = pasteboard
         self.sizeCache = DirectorySizeCache(cacheURL: sizeCacheURL)
@@ -145,6 +154,7 @@ final class DirectoryBrowserModel: ObservableObject {
 
     var hasSearchQuery: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var isPathQuery: Bool { DirectoryPathQuery(query, home: homeDirectory) != nil }
+    var isRelevanceOrder: Bool { hasSearchQuery && !searchSortChosen }
     var isBreadcrumbPathCopied: Bool { copiedPath == breadcrumbDirectory.path }
 
     var canGoBack: Bool { historyPosition > 0 }
@@ -213,6 +223,20 @@ final class DirectoryBrowserModel: ObservableObject {
     }
 
     func clearError() { errorMessage = nil }
+    func sort(by field: DirectorySortField) {
+        let ascending = field == sortField && !isRelevanceOrder ? !sortAscending : field.defaultAscending
+        sortField = field
+        sortAscending = ascending
+        if hasSearchQuery { searchSortChosen = true }
+        defaults.set(field.rawValue, forKey: Self.sortFieldKey)
+        defaults.set(ascending, forKey: Self.sortAscendingKey)
+        entries = orderedEntries(entries)
+    }
+
+    private func orderedEntries(_ source: [DirectoryEntry]) -> [DirectoryEntry] {
+        isRelevanceOrder ? source : sortField.sorted(source, ascending: sortAscending)
+    }
+
     func selectAll() { selectedIDs = Set(entries.map(\.id)) }
     func copyBreadcrumbPath() { copyPath(breadcrumbDirectory) }
     func copyPath(_ url: URL) {
@@ -381,7 +405,7 @@ final class DirectoryBrowserModel: ObservableObject {
             && (term.isEmpty || $0.name.localizedStandardContains(term)) }
         // Current-folder matches appear synchronously, including when the global
         // indexes are empty or unavailable. An empty query remains folder browsing.
-        entries = currentMatches
+        entries = orderedEntries(currentMatches)
         selectedIDs.formIntersection(Set(entries.map(\.id)))
         measureDirectories(calibrate: calibrateSizes)
         guard !term.isEmpty else { isSearching = false; return }
@@ -474,7 +498,7 @@ final class DirectoryBrowserModel: ObservableObject {
             return matches
         }.value
         guard searchGeneration == ticket, !Task.isCancelled else { return }
-        entries = result.prefix(100).map { $0.entry }
+        entries = orderedEntries(result.prefix(100).map { $0.entry })
         pathMatchScores = Dictionary(uniqueKeysWithValues: result.prefix(100).map { ($0.entry.id, $0.score) })
         selectedIDs.formIntersection(Set(entries.map(\.id)))
         measureDirectories()
@@ -496,7 +520,7 @@ final class DirectoryBrowserModel: ObservableObject {
             return DirectorySearchRanking.sorted(items, query: query, directory: directory)
         }.value
         guard searchGeneration == ticket, !Task.isCancelled else { return }
-        entries = Array(result.prefix(300))
+        entries = orderedEntries(Array(result.prefix(300)))
         selectedIDs.formIntersection(Set(entries.map(\.id)))
         measureDirectories()
     }
@@ -689,6 +713,7 @@ final class DirectoryBrowserModel: ObservableObject {
                 states[item.id] = unavailableSizeIDs.contains(item.id) ? .unavailable : .pending
             }
         }
+        if sortField == .size && !isRelevanceOrder { displayed = orderedEntries(displayed) }
         if entries != displayed { entries = displayed }
         if sizeStates != states { sizeStates = states }
         if sizeUpdatedAt != timestamps { sizeUpdatedAt = timestamps }

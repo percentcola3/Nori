@@ -14,6 +14,7 @@ struct CleanupRiskPolicyTests {
         let fixture = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: true)
         let policyHome = "/Users/simplemole-risk-test"
+        try testReviewPresentation(home: policyHome)
         try testDefaults()
         try testCoreClassification(home: policyHome)
         try testSourceMappings(home: policyHome)
@@ -36,6 +37,39 @@ struct CleanupRiskPolicyTests {
         try testMoleParity(home: policyHome)
         try testExpandedAuditedCoverage(home: policyHome)
         try testNoriOwnedStorage(home: policyHome, fixture: fixture)
+    }
+
+    private static func testReviewPresentation(home: String) throws {
+        let owner = "com.example.nori-uninstalled"
+        let descriptor = CleanupRiskPolicy.appDataReview(leftover: true)
+        var review = CleanupCategory(name: "Uninstalled app", paths: [home + "/Library/WebKit/" + owner],
+            bytes: 4096, selected: false, source: descriptor.source, risk: descriptor.risk,
+            disposal: descriptor.disposal, applyRoute: descriptor.applyRoute,
+            activityGuard: descriptor.activityGuard, reasonKey: descriptor.reasonKey)
+        review.activityOwners = [owner]
+        let cache = CleanupCategory(name: "Cache", paths: [home + "/Library/Caches/com.example.fixture"],
+            bytes: 8192, source: .core, risk: .safe, disposal: .permanentDelete,
+            applyRoute: .genericTrash, activityGuard: .openFile, reasonKey: "cleanup.risk.rebuildableCache")
+        let unsupported = CleanupCategory(name: "Unreviewed", paths: [home + "/Downloads/only-copy.dmg"],
+            bytes: 1024, selected: false, source: .installer, risk: .warning,
+            disposal: .permanentDelete, applyRoute: .installerTrash, activityGuard: .unsupported)
+        for snapshot in [RunningApplicationSnapshot(), .unavailable,
+                         RunningApplicationSnapshot(bundleIdentifiers: [owner])] {
+            let visible = CleanupRiskPolicy.presentationCategories([review, cache, unsupported],
+                running: snapshot, homeDirectory: home)
+            try expect(Set(visible.map(\.id)) == [review.id, cache.id],
+                       "scan publication discarded manual leftovers or admitted unsupported data")
+            let displayed = visible.first { $0.id == review.id }!
+            try expect(!displayed.selected && displayed.paths == review.paths
+                       && displayed.risk == .warning && !displayed.quickCleanEligible
+                       && CleanupGroupBucket(category: displayed, homeDirectory: home) == .leftovers,
+                       "leftovers must stay visible, unselected and outside quick cleanup")
+        }
+        try expect(CleanupRiskPolicy.isAppDataRoot(home + "/Library/Application Scripts/" + owner,
+                                                  homeDirectory: home)
+                   && !CleanupRiskPolicy.isAppDataRoot(home + "/Library/Application Scripts/com.apple.finder",
+                                                       homeDirectory: home),
+                   "Application Scripts review must admit app IDs while retaining Apple protection")
     }
 
     /// Nori 自身可再生缓存：四个文件树根与过期 .sb- 孤儿走 .safe 的原生

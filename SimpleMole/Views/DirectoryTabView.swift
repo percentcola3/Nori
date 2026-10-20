@@ -206,16 +206,20 @@ struct DirectoryTabView: View {
 
     private var fileList: some View {
         VStack(spacing: 5) {
-            if model.isPathQuery {
+            if model.isPathQuery && model.isRelevanceOrder {
                 Text(l10n.t("dir.path.match.hint"))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack(spacing: 12) {
-                Text(l10n.t("dir.column.name")).frame(maxWidth: .infinity, alignment: .leading)
-                Text(l10n.t("dir.column.kindBranch")).frame(width: 174, alignment: .leading)
-                Text(l10n.t(model.isPathQuery ? "dir.path.match" : "dir.column.modified")).frame(width: 122, alignment: .leading)
-                Text(l10n.t("dir.column.disk")).frame(width: 112, alignment: .trailing)
+                sortHeader(.name, titleKey: "dir.column.name").frame(maxWidth: .infinity, alignment: .leading)
+                sortHeader(.kind, titleKey: "dir.column.kindBranch").frame(width: 174, alignment: .leading)
+                if model.isPathQuery {
+                    Text(l10n.t("dir.path.match")).frame(width: 122, alignment: .leading)
+                } else {
+                    sortHeader(.modified, titleKey: "dir.column.modified").frame(width: 122, alignment: .leading)
+                }
+                sortHeader(.size, titleKey: "dir.column.disk", trailing: true).frame(width: 112, alignment: .trailing)
                 Color.clear.frame(width: 28, height: 1).accessibilityHidden(true)
             }
             .font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
@@ -286,6 +290,30 @@ struct DirectoryTabView: View {
         }
         .frame(maxHeight: .infinity)
         .accessibilityIdentifier("directory-file-list")
+    }
+
+    private func sortHeader(_ field: DirectorySortField, titleKey: String, trailing: Bool = false) -> some View {
+        let active = model.sortField == field && !model.isRelevanceOrder
+        let title = l10n.t(titleKey)
+        return Button { model.sort(by: field) } label: {
+            HStack(spacing: 4) {
+                if trailing { Spacer(minLength: 0) }
+                Text(title)
+                if active {
+                    Image(systemName: model.sortAscending ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(Color.moleAccentText)
+                        .accessibilityHidden(true)
+                }
+                if !trailing { Spacer(minLength: 0) }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(l10n.tf("dir.sort.hint", title))
+        .accessibilityLabel(title)
+        .accessibilityValue(active ? l10n.t(model.sortAscending ? "dir.sort.ascending" : "dir.sort.descending") : "")
+        .accessibilityIdentifier("directory-sort-" + field.rawValue)
     }
 
     private var footer: some View {
@@ -475,13 +503,7 @@ private struct DirectoryFileRow<MenuContent: View>: View {
     @ObservedObject private var l10n = L10n.shared
     @State private var isDropTarget = false
 
-    private var kind: String {
-        if entry.isSymbolicLink { return l10n.t("dir.kind.link") }
-        if entry.isGitRepository { return l10n.t("dir.git.repository") }
-        if entry.isDirectory { return l10n.t("dir.kind.folder") }
-        let fileExtension = entry.url.pathExtension
-        return fileExtension.isEmpty ? l10n.t("dir.kind.file") : fileExtension.uppercased()
-    }
+    private var kind: String { entry.kindLabel }
 
     var body: some View {
         HStack(spacing: 12) {

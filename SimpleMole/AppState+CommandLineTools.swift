@@ -1,7 +1,7 @@
 import Foundation
 
 /// 软件页「命令行工具」：Homebrew / npm / pnpm / pipx / uv / cargo / go 安装的工具。
-/// Agent 的 CLI 与此处是同一条记录；它的数据仍在 Agent 页处理。
+/// CLI 与 Agent 共用卸载后的数据审查，默认不选择应用数据。
 @MainActor
 extension AppState {
     var filteredCommandLineTools: [CommandLineTool] {
@@ -23,7 +23,9 @@ extension AppState {
         let home = NSHomeDirectory()
         Task {
             let tools = await Task.detached(priority: .utility) {
-                CommandLineToolInventory.scan(home: home)
+                let tools = CommandLineToolInventory.scan(home: home)
+                NativeCore.shared.rememberUninstallDataOwners(tools.map(\.uninstallDataOwner), homeDirectory: home)
+                return tools
             }.value
             commandLineTools = tools
             softwareUpdateResults = softwareUpdateResults.filter { !$0.key.hasPrefix("cli:") }
@@ -92,6 +94,10 @@ extension AppState {
 
     private func performCommandLineToolUninstall(_ tool: CommandLineTool, identity: String?,
                                                 generation: UUID, mayClose: Bool) async {
+        let owner = tool.uninstallDataOwner
+        await Task.detached(priority: .utility) {
+            NativeCore.shared.rememberUninstallDataOwners([owner])
+        }.value
         let result = await CLIUninstallWorkflow.execute(tool, identity: identity, mayClose: mayClose)
         guard commandLineToolUninstallGeneration == generation else { return }
         commandLineToolBusyID = nil
@@ -108,6 +114,9 @@ extension AppState {
                 softwareUpdateResults.removeValue(forKey: SoftwareUpdateService.toolKey(tool))
                 if tool.agentID != nil { agentHasScanned = false }
                 resampleAfterMutation()
+                CleanupCache.invalidate()
+                cleanupScanComplete = false
+                offerUninstallDataCleanup(owner: owner)
             } else {
                 presentTaskFailure(message: l10n.tf("cli.status.failed", tool.name),
                                    details: outcome.messages.filter { !$0.isEmpty })

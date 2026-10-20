@@ -187,6 +187,28 @@ enum CleanupGroupBucket: String, Hashable, CaseIterable {
     }
 }
 
+/// Durable ownership metadata, never a saved deletion authorization. Paths are
+/// derived again and installations/sharing are checked at each Trash edge.
+struct UninstallDataOwner: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable { case application, cli, agent }
+    let kind: Kind
+    let name: String
+    var bundleID: String = ""
+    var installationPath: String = ""
+    var names: [String] = []
+    var groups: [String] = []
+    var commands: [String] = []
+    var agentIDs: Set<String> = []
+
+    var id: String {
+        switch kind {
+        case .application: return "app:" + bundleID
+        case .cli: return "cli:" + name + ":" + installationPath
+        case .agent: return "agent:" + agentIDs.sorted().joined(separator: ",")
+        }
+    }
+}
+
 /// 清理类别：同一分组中的路径共享风险、处置方式和执行路由。
 struct CleanupCategory: Identifiable, Equatable {
     let id: UUID
@@ -219,6 +241,7 @@ struct CleanupCategory: Identifiable, Equatable {
     var reasonKey: String
     /// `.aiAgent` 敏感资源的归属者；可再生缓存另用实际文件占用检查。
     var activityOwners: [String] = []
+    var uninstallDataOwner: UninstallDataOwner?
 
     init(id: UUID = UUID(),
          name: String,
@@ -323,6 +346,12 @@ struct CleanupCategory: Identifiable, Equatable {
 
     mutating func setPathSelected(_ path: String, selected: Bool) {
         guard canSelect, paths.contains(path) else { return }
+        if uninstallDataOwner != nil,
+           let base = UninstallFile(bytes: 0, label: "agentData", path: path).sqliteFamilyBase {
+            let family = paths.filter { UninstallFile(bytes: 0, label: "agentData", path: $0).sqliteFamilyBase == base }
+            if selected { selectedPaths.formUnion(family) } else { selectedPaths.subtract(family) }
+            return
+        }
         if selected {
             selectedPaths.insert(path)
         } else {
@@ -832,16 +861,32 @@ struct UninstallApp: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
-/// 卸载预览的单个文件条目。label 是稳定的分类键（app/related/review/manual）。
+/// 卸载预览的单个文件条目。label 是稳定的分类键（app/related/review/protected/manual）。
 struct UninstallFile: Identifiable, Codable, Equatable, Sendable {
     let bytes: UInt64
     let label: String
     let path: String
 
     var id: String { "\(label)\u{1F}\(path)" }
-    var informational: Bool { label == "review" || label == "manual" }
-    var isOptionalData: Bool { label == "review" }
+    var informational: Bool { isOptionalData || label == "manual" || isProtectedData }
+    var isOptionalData: Bool { label == "review" || label == "agentData" }
+    var isAgentData: Bool { label == "agentData" }
+    var isProtectedData: Bool { label == "protected" || isSharedData }
+    var isSharedData: Bool { label == "shared" }
     var isAppBundle: Bool { label == "app" }
+
+    var sqliteFamilyBase: String? {
+        var base = path
+        for suffix in ["-wal", "-shm", "-journal"] where base.hasSuffix(suffix) { base = String(base.dropLast(suffix.count)) }
+        return ["db", "db3", "sqlite", "sqlite3", "vscdb"].contains((base as NSString).pathExtension.lowercased()) ? base : nil
+    }
+
+    static func databaseFamilies(_ files: [Self], selecting paths: Set<String>) -> [[String]]? {
+        let rows = files.filter { $0.isAgentData && $0.sqliteFamilyBase != nil }
+        let groups = Dictionary(grouping: rows, by: { $0.sqliteFamilyBase! }).values.map { $0.map(\.path) }
+            .filter { !paths.isDisjoint(with: $0) }
+        return groups.allSatisfy { Set($0).isSubset(of: paths) } ? groups : nil
+    }
 
     /// Only cache roots accepted by the shared risk policy, plus explicit
     /// sandbox cache folders, are shown as cleanable cache. Containers, WebKit,
@@ -931,7 +976,7 @@ struct UninstallPlan: Codable, Equatable, Sendable {
     func includingData(_ paths: Set<String>) -> UninstallPlan {
         guard !paths.isEmpty else { return self }
         let files = files.map { file in
-            file.label == "review" && paths.contains(file.path)
+            file.isOptionalData && paths.contains(file.path)
                 ? UninstallFile(bytes: file.bytes, label: "data", path: file.path) : file
         }
         return UninstallPlan(files: files, fileIdentities: fileIdentities, needsAdmin: needsAdmin,
@@ -966,13 +1011,15 @@ struct UninstallSpaceBreakdown: Equatable, Sendable {
     let dataBytes: UInt64
     /// 需勾选才删除的应用数据（review）：不计入默认可回收量，但计入占用总量。
     let optionalDataBytes: UInt64
+    /// 受保护历史及其他安装仍在使用的共享数据，不允许通过卸载复选框删除。
+    let protectedDataBytes: UInt64
 
     var totalBytes: UInt64 {
         Self.saturatedSum([appBytes, cacheBytes, dataBytes])
     }
 
     var footprintBytes: UInt64 {
-        Self.saturatedSum([totalBytes, optionalDataBytes])
+        Self.saturatedSum([totalBytes, optionalDataBytes, protectedDataBytes])
     }
 
     init(files: [UninstallFile], homeDirectory: String = NSHomeDirectory()) {
@@ -987,6 +1034,7 @@ struct UninstallSpaceBreakdown: Equatable, Sendable {
             }
 
         var coveredPaths: [String] = []
+        var coveredFiles: [UninstallFile] = []
         var appFiles: [UninstallFile] = []
         var cacheFiles: [UninstallFile] = []
         var dataFiles: [UninstallFile] = []
@@ -998,6 +1046,7 @@ struct UninstallSpaceBreakdown: Equatable, Sendable {
             }
             guard !isCovered else { continue }
             coveredPaths.append(path)
+            coveredFiles.append(file)
 
             if file.isAppBundle {
                 appFiles.append(file)
@@ -1011,17 +1060,27 @@ struct UninstallSpaceBreakdown: Equatable, Sendable {
         appBytes = Self.saturatedSum(appFiles.map(\.bytes))
         cacheBytes = Self.saturatedSum(cacheFiles.map(\.bytes))
         dataBytes = Self.saturatedSum(dataFiles.map(\.bytes))
-        var optional: [UninstallFile] = []
-        for file in files.filter(\.isOptionalData).sorted(by: {
+        var retained: [UninstallFile] = []
+        var optionalSizes: [UInt64] = []
+        var protectedSizes: [UInt64] = []
+        for file in files.filter({ $0.isOptionalData || $0.isProtectedData }).sorted(by: {
             ($0.standardizedPath as NSString).pathComponents.count < ($1.standardizedPath as NSString).pathComponents.count
         }) {
             let path = file.standardizedPath
             guard !coveredPaths.contains(where: { path == $0 || path.hasPrefix($0 + "/") }),
-                  !optional.contains(where: { path == $0.standardizedPath || path.hasPrefix($0.standardizedPath + "/") })
+                  !retained.contains(where: { path == $0.standardizedPath || path.hasPrefix($0.standardizedPath + "/") })
             else { continue }
-            optional.append(file)
+            retained.append(file)
+            // A retained parent already includes its cleanable cache leaves.
+            let automaticBytes = Self.saturatedSum(coveredFiles.filter {
+                $0.standardizedPath.hasPrefix(path + "/")
+            }.map(\.bytes))
+            let bytes = file.bytes > automaticBytes ? file.bytes - automaticBytes : 0
+            if file.isProtectedData { protectedSizes.append(bytes) }
+            else { optionalSizes.append(bytes) }
         }
-        optionalDataBytes = Self.saturatedSum(optional.map(\.bytes))
+        optionalDataBytes = Self.saturatedSum(optionalSizes)
+        protectedDataBytes = Self.saturatedSum(protectedSizes)
     }
 
     private static func saturatedSum(_ values: [UInt64]) -> UInt64 {

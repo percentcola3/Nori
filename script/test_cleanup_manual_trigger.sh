@@ -95,6 +95,8 @@ fi
 /usr/bin/grep -Fq 'categories = finalizedCleanupCategories(' "$APP_STATE" \
     && /usr/bin/grep -Fq 'appendNoriManagedPaths(to: preflight.categories), running: snapshot' \
     "$APP_STATE" || fail "cached cleanup display bypasses native eligibility or runtime filtering"
+/usr/bin/grep -Fq 'CleanupRiskPolicy.presentationCategories(source, running: snapshot)' "$APP_STATE" || \
+    fail "cleanup display bypasses the tested cache/manual-review publication boundary"
 /usr/bin/grep -Fq 'cleanupScanComplete = preflight.succeeded && !control.isCancelled' \
     "$APP_STATE" || fail "unverified cached cleanup enables execution"
 [[ $(/usr/bin/grep -Fc 'includingAdministratorRequired: true' "$APP_STATE") -ge 2 ]] || \

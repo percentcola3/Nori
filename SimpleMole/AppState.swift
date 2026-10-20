@@ -390,6 +390,7 @@ final class AppState: ObservableObject {
     @Published var installedApps: [UninstallApp] = []
     @Published private(set) var uninstallPlans: [String: UninstallPlan] = [:]
     @Published var uninstallDataSelections: [String: Set<String>] = [:]
+    @Published var uninstallDataReview: NativeCore.UninstallDataPlan?
     @Published var uninstallSegment = 0
     @Published var commandLineTools: [CommandLineTool] = []
     @Published var isScanningCommandLineTools = false
@@ -1413,6 +1414,11 @@ final class AppState: ObservableObject {
             guard uninstallConfirmationGeneration == generation, confirmation == nil,
                   taskNotice == nil, !uninstallQueue.containsPendingOrActive(app) else { return }
             var message = l10n.t("uninstall.confirm.message")
+            if let plan, plan.files.contains(where: { $0.isAgentData && dataPaths.contains($0.path) }) {
+                message += "\n\n" + l10n.t("uninstall.data.agentReason")
+                message += "\n" + plan.files.filter { $0.isAgentData && dataPaths.contains($0.path) }
+                    .map { $0.path + " · " + ByteFormat.format($0.bytes) }.joined(separator: "\n")
+            }
             if !processes.isEmpty {
                 message += "\n\n" + l10n.tf("uninstall.confirm.running", app.name)
                 message += "\n" + Set(processes.map(\.name)).sorted().joined(separator: ", ")
@@ -1433,10 +1439,11 @@ final class AppState: ObservableObject {
     }
 
     /// Agent rows use the same audited executor without navigating to the
-    /// software queue. Associated Agent data is a separate confirmed request.
+    /// software queue. Disposable caches follow the ordinary uninstall plan;
+    /// associated Agent user data is a separate confirmed request.
     func executeAgentApplicationRemoval(_ app: UninstallApp,
                                          progress: (UninstallExecutionPhase) -> Void) async -> UninstallExecutionOutcome {
-        let job = UninstallJob(id: UUID(), app: app, plan: nil, dataPaths: [], scope: .installationOnly)
+        let job = UninstallJob(id: UUID(), app: app, plan: nil, dataPaths: [], scope: .applicationAndResidues)
         return await uninstallExecutor.execute(job, progress: progress)
     }
 

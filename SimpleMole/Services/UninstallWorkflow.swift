@@ -57,6 +57,13 @@ struct UninstallWorkflow: UninstallExecuting {
         progress(.planning)
         guard let freshPlan = await dependencies.plan(app), !freshPlan.files.isEmpty,
               freshPlan.includesProtectedAppData else { return .planUnavailable }
+        // An opt-in to history/configuration binds the exact reviewed data,
+        // rather than accepting a replacement folder at the same path.
+        for path in job.dataPaths where freshPlan.files.contains(where: { $0.path == path && $0.isAgentData }) {
+            guard let identity = job.plan?.fileIdentities[path], identity == freshPlan.fileIdentities[path] else {
+                return .planUnavailable
+            }
+        }
         let plan: UninstallPlan
         switch job.scope {
         case .applicationAndResidues:

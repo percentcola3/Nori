@@ -245,15 +245,14 @@ struct CleanupScanTests {
                    "overlapping deep scan work under \(path)")
         }
         expect(deepPaths.contains(home.path + "/Library/Application Support/Example/Cache"), "deep support cache missing")
-        // 未安装应用（含已不在废纸篓）的沙盒容器按“历史残留”整叶呈现：
-        // Caches/Logs 叶子可回收，容器根与其余数据保持复核态。
-        expect(deepPaths.contains(home.path + "/Library/Containers/com.example.other/Data/Library/Caches"),
-               "deep orphan container cache missing")
+        // 已卸载软件的数据整体进入卸载垃圾，用户明确选择后移入废纸篓。
+        expect(deep.categories.contains { $0.paths.contains(home.path + "/Library/Containers/com.example.other")
+            && $0.source == .appLeftover && $0.risk == .warning && !$0.selected },
+               "deep orphan container data missing from manual uninstall garbage")
         expect(!deepPaths.contains(home.path + "/Library/Containers/com.example.other/Data/Library/Caches/entry"),
                "orphan container cache must not be double-listed per child")
 
-        // Uninstalled Agent data includes user history and credentials; the
-        // ordinary junk scan must not offer it under an orphan-data label.
+        // Uninstalled Agent data is an explicit, unselected Trash review.
         let orphanHome = fixture.appendingPathComponent("agent-residual-home")
         func writeResidual(_ relative: String) throws {
             let url = orphanHome.appendingPathComponent(relative)
@@ -274,14 +273,14 @@ struct CleanupScanTests {
                                                               agentPresence: orphanPresence)
         expect(residualScan.succeeded && residualScan.deferredPaths.isEmpty,
                "isolated Agent residual scan did not complete")
-        expect(residualScan.categories.flatMap(\.paths).allSatisfy {
-            $0 == orphanHome.path + "/Library/Application Support/Cursor/Cache"
-        } && !residualScan.categories.isEmpty, "uninstalled Agent data entered junk scan outside audited cache")
+        expect(!residualScan.categories.isEmpty && residualScan.categories.allSatisfy {
+            $0.source == .appLeftover && $0.risk == .warning && !$0.selected && !$0.quickCleanEligible
+        }, "uninstalled Agent data must enter manual uninstall garbage, never default cleanup")
         let residualDeep = await NativeCore.shared.scanCleanup(homeDirectory: orphanHome.path,
             mode: .deep, agentPresence: orphanPresence)
-        expect(residualDeep.categories.flatMap(\.paths).allSatisfy {
-            $0 == orphanHome.path + "/Library/Application Support/Cursor/Cache"
-        }, "deep scan admitted Agent data outside audited cache")
+        expect(residualDeep.categories.contains { $0.paths.contains(orphanHome.path + "/Library/Application Support/Cursor") }
+            && residualDeep.categories.allSatisfy { !$0.selected && $0.uninstallDataOwner != nil },
+               "deep scan omitted Agent user data or selected it implicitly")
 
         // 真实账户 T/X 目录的只读预检：用户 T/C 子项 24 小时门槛生效，
         // X 只认 *.code_sign_clone。夹具建在真实 T/X 下，用完即删，
@@ -295,11 +294,11 @@ struct CleanupScanTests {
         let xDir = (realT as NSString).deletingLastPathComponent + "/X"
         let cloneDir = xDir + "/nori-scan-" + UUID().uuidString + ".code_sign_clone"
         let plainDir = xDir + "/nori-scan-" + UUID().uuidString + "-plain"
+        defer { for dir in [freshTDir, staleTDir, cloneDir, plainDir] { try? fm.removeItem(atPath: dir) } }
         for dir in [freshTDir, staleTDir, cloneDir, plainDir] {
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
             try Data(repeating: 97, count: 128).write(to: URL(fileURLWithPath: dir + "/payload"))
         }
-        defer { for dir in [freshTDir, staleTDir, cloneDir, plainDir] { try? fm.removeItem(atPath: dir) } }
         let freshDate = Date().addingTimeInterval(-23 * 3600)
         let staleDate = Date().addingTimeInterval(-25 * 3600)
         for (dir, date) in [(freshTDir, freshDate), (staleTDir, staleDate)] {
@@ -1204,6 +1203,22 @@ struct CleanupScanTests {
         try writeData("Library/Application Support/\(gone)/state.db")
         try writeData("Library/Containers/\(gone)/Data/Library/Cookies/Cookies.binarycookies")
         try writeData("Library/Preferences/\(gone).plist", bytes: 512)
+        try writeData("Library/Group Containers/ABCDE12345.\(gone)/data")
+        try writeData("Library/WebKit/\(gone)/data")
+        try writeData("Library/HTTPStorages/\(gone).binarycookies", bytes: 512)
+        try writeData("Library/Application Scripts/\(gone)/script.scpt", bytes: 512)
+        let present = "org.nori-leftover-fixture.present"
+        try writeData("Applications/Present.app/Contents/Info.plist", bytes: 0)
+        try (["CFBundleIdentifier": present, "CFBundleName": "Present"] as NSDictionary)
+            .write(to: dataHome.appendingPathComponent("Applications/Present.app/Contents/Info.plist"))
+        try writeData("Library/Application Scripts/\(present)/keep", bytes: 512)
+        try writeData("Library/Group Containers/ABCDE12345.\(present)/keep", bytes: 512)
+        let warpGroup = "Library/Group Containers/2BBY89MBSN.dev.warp"
+        try writeData(warpGroup + "/Library/Application Support/dev.warp.Warp-Stable/warp.sqlite")
+        try writeData("Library/Application Scripts/com.apple.private-fixture/keep", bytes: 512)
+        let scriptLink = dataHome.appendingPathComponent("Library/Application Scripts/com.example.linked-script").path
+        try fm.createSymbolicLink(atPath: scriptLink,
+                                  withDestinationPath: dataHome.appendingPathComponent("Library/WebKit/\(gone)").path)
         try writeData("Library/Application Support/com.apple.private-fixture/keep", bytes: 2 * 1024 * 1024)
         try writeData("Library/Application Support/com.example.tiny-gone/keep", bytes: 64)
         for project in ["Code/web-a", "Code/clients/web-b"] {
@@ -1228,11 +1243,27 @@ struct CleanupScanTests {
                && Set(leftover?.paths ?? []) == Set([
                    dataHome.appendingPathComponent("Library/Application Support/\(gone)").path,
                    dataHome.appendingPathComponent("Library/Containers/\(gone)").path,
-                   dataHome.appendingPathComponent("Library/Preferences/\(gone).plist").path]),
+                   dataHome.appendingPathComponent("Library/Preferences/\(gone).plist").path,
+                   dataHome.appendingPathComponent("Library/Group Containers/ABCDE12345.\(gone)").path,
+                   dataHome.appendingPathComponent("Library/WebKit/\(gone)").path,
+                   dataHome.appendingPathComponent("Library/HTTPStorages/\(gone).binarycookies").path,
+                   dataHome.appendingPathComponent("Library/Application Scripts/\(gone)").path]),
                "an uninstalled app's full data set must be offered as one unselected review item")
+        let publishedReview = CleanupRiskPolicy.presentationCategories(reviewCategories,
+            running: RunningApplicationSnapshot(), homeDirectory: dataHome.path)
+        expect(publishedReview.contains { $0.id == leftover?.id && !$0.selected },
+               "native leftovers disappeared before reaching the cleanup page")
+        expect(NativeCore.appDataOwnerToken(dataHome.path + "/Library/HTTPStorages/\(gone).binarycookies") == gone,
+               "HTTP cookie sidecar did not retain its application's owner")
         expect(!reviewCategories.contains { category in
-            category.paths.contains { $0.contains("com.apple.") }
-        }, "Apple data must not be offered")
+            category.paths.contains { $0.contains("com.apple.") || $0.contains(present)
+                || $0.hasPrefix(dataHome.path + "/" + warpGroup) || $0 == scriptLink }
+        }, "Apple, installed/shared app, Agent-managed data or symlink was offered as an orphan")
+        let excludedScript = dataHome.appendingPathComponent("Library/Application Scripts/\(gone)").path
+        let whitelistedReview = NativeCore.shared.appDataReviewCategories(
+            home: dataHome, offered: [], whitelist: [excludedScript])
+        expect(!whitelistedReview.flatMap(\.paths).contains(excludedScript),
+               "Application Scripts discovery ignored the whitelist")
         let offeredOrphanCache = dataHome.appendingPathComponent(
             "Library/Containers/\(gone)/Data/Library/Caches/unused")
         try writeData("Library/Containers/\(gone)/Data/Library/Caches/unused")

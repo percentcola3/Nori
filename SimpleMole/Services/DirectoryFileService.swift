@@ -1,6 +1,39 @@
 import Darwin
 import Foundation
 
+enum DirectorySortField: String, CaseIterable, Sendable {
+    case name, kind, modified, size
+
+    var defaultAscending: Bool { self == .name || self == .kind }
+
+    func sorted(_ entries: [DirectoryEntry], ascending: Bool) -> [DirectoryEntry] {
+        entries.sorted { left, right in
+            switch self {
+            case .name:
+                if left.isDirectory != right.isDirectory { return left.isDirectory }
+            case .kind:
+                let order = left.kindLabel.localizedStandardCompare(right.kindLabel)
+                if order != .orderedSame { return ascending ? order == .orderedAscending : order == .orderedDescending }
+            case .modified:
+                if left.modifiedAt != right.modifiedAt {
+                    guard let lhs = left.modifiedAt else { return false }
+                    guard let rhs = right.modifiedAt else { return true }
+                    return ascending ? lhs < rhs : lhs > rhs
+                }
+            case .size:
+                if left.allocatedBytes != right.allocatedBytes {
+                    guard let lhs = left.allocatedBytes else { return false }
+                    guard let rhs = right.allocatedBytes else { return true }
+                    return ascending ? lhs < rhs : lhs > rhs
+                }
+            }
+            let order = left.name.localizedStandardCompare(right.name)
+            if order == .orderedSame { return left.id < right.id }
+            return self == .name && !ascending ? order == .orderedDescending : order == .orderedAscending
+        }
+    }
+}
+
 /// A single filesystem entry. Directory sizes are measured asynchronously;
 /// nil means unknown rather than zero. A directory symlink remains navigable,
 /// while its allocated size measures the link itself, never its target.
@@ -15,6 +48,14 @@ struct DirectoryEntry: Identifiable, Hashable, Sendable {
     var allocatedBytes: Int64?
     let modifiedAt: Date?
     var isGitRepository: Bool = false
+
+    var kindLabel: String {
+        if isSymbolicLink { return L10n.shared.t("dir.kind.link") }
+        if isGitRepository { return L10n.shared.t("dir.git.repository") }
+        if isDirectory { return L10n.shared.t("dir.kind.folder") }
+        let fileExtension = url.pathExtension
+        return fileExtension.isEmpty ? L10n.shared.t("dir.kind.file") : fileExtension.uppercased()
+    }
 
     static func metadata(url: URL) throws -> DirectoryEntry {
         let url = try DirectoryFileService.fileURL(url)

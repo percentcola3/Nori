@@ -6,7 +6,7 @@ enum CleanupCache {
     // Only current, fully inspected deletion units may be displayed. Older
     // snapshots can contain broad parents covering occupied/protected files.
     // Every restored snapshot still receives a fresh native preflight.
-    private static let version = 25
+    private static let version = 27
     private static let maximumAge: TimeInterval = 5 * 60
 
     private static var cacheURL: URL {
@@ -33,6 +33,8 @@ enum CleanupCache {
             var activityGuard: CleanupActivityGuard
             var reasonKey: String
             var activityOwners: [String] = []
+            var uninstallDataOwner: UninstallDataOwner?
+            var pathIdentities: [String: String]?
             /// 年龄门（秒）。旧缓存缺省 0 = 不按活跃时间过滤。
             var retention: TimeInterval = 0
         }
@@ -57,6 +59,8 @@ enum CleanupCache {
                                         disposal: $0.disposal, applyRoute: $0.applyRoute,
                                         activityGuard: $0.activityGuard, reasonKey: $0.reasonKey,
                                         activityOwners: $0.activityOwners,
+                                        uninstallDataOwner: $0.uninstallDataOwner,
+                                        pathIdentities: $0.pathIdentities,
                                         retention: $0.retention)
                               },
                               signatures: signatures(for: categories))
@@ -98,6 +102,8 @@ enum CleanupCache {
                             activityGuard: saved.activityGuard, retention: saved.retention,
                             reasonKey: saved.reasonKey)
             category.activityOwners = saved.activityOwners
+            category.uninstallDataOwner = saved.uninstallDataOwner
+            if let identities = saved.pathIdentities { category.pathIdentities = identities }
             return category
         }
         return (categories, age)

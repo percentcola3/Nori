@@ -183,6 +183,14 @@ struct SoftwareWorkflowTests {
                      && ordinary.appliedPlan!.files.contains { $0.path == "/fixture/cache" && !$0.informational }
                      && ordinary.includedData == [dataPath],
                      "The default software uninstall lost its ordinary cache/selected-data behavior")
+        let history = UninstallTrace()
+        history.freshPlan = UninstallPlan(files: [.init(bytes: 10, label: "app", path: app.path),
+            .init(bytes: 20, label: "agentData", path: dataPath)],
+            fileIdentities: [app.path: "captured-app", dataPath: "new-data-identity"],
+            needsAdmin: false, isBrewCask: false, caskToken: "", includesProtectedAppData: true, scannedAt: .distantPast)
+        let replacedData = await UninstallWorkflow(dependencies: history.dependencies).execute(job) { _ in }
+        guard case .planUnavailable = replacedData else { preconditionFailure("History consent rebound to a replaced data root") }
+        precondition(!history.events.contains("apply") && !history.events.contains("elevate"))
         let malformedBody = UninstallTrace()
         malformedBody.freshPlan = UninstallPlan(files: [.init(bytes: 1, label: "cache", path: "/fixture/cache")],
             fileIdentities: ["/fixture/cache": "captured-cache"], needsAdmin: false, isBrewCask: false,

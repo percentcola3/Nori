@@ -62,7 +62,12 @@ extension AppState {
 
     private func showAgentProgramRemovalConfirmation(_ selection: AgentProgramSelection, identity: String?,
                                                      processes: SoftwareUpdateProcesses.Probe) {
-        var message = l10n.tf("agents.program.confirm.message", selection.path)
+        let messageKey: String
+        switch selection {
+        case .app: messageKey = "agents.program.appConfirm.message"
+        case .cli: messageKey = "agents.program.confirm.message"
+        }
+        var message = l10n.tf(messageKey, selection.path)
         let running = !processes.processes.isEmpty
         if running {
             message += "\n\n" + l10n.tf("cli.uninstall.confirm.running", selection.name)
@@ -145,6 +150,10 @@ extension AppState {
         CleanupCache.invalidate()
         cleanupScanComplete = false
         resampleAfterMutation()
-        offerAgentAssociatedDataCleanup(agentIDs: selection.agentIDs, programName: selection.name)
+        switch selection {
+        case .cli(let installation):
+            offerCommandLineToolAssociatedDataCleanup(AgentSoftwareInventory.commandLineTool(for: installation))
+        case .app(let app): offerApplicationAssociatedDataCleanup(app)
+        }
     }
 }

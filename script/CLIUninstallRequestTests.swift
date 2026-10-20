@@ -17,7 +17,16 @@ struct CommandLineTool: Equatable, Sendable {
     var installationSource: String? = nil
     var agentInstallation: FixtureAgentInstallation? = nil
     var canUninstall = true
+    var uninstallDataOwner: UninstallDataOwner { .init(name: name) }
 }
+struct UninstallDataOwner: Sendable { let name: String }
+enum NativeCore {
+    struct Service: Sendable {
+        func rememberUninstallDataOwners(_ owners: [UninstallDataOwner], homeDirectory: String = "") {}
+    }
+    static let shared = Service()
+}
+enum CleanupCache { static func invalidate() {} }
 enum DeletionPlan {
     static func identity(at path: String) -> String? { "fixture:" + path }
 }
@@ -111,6 +120,7 @@ final class AppState {
     var agentScanning = false
     var agentApplying = false
     var agentProgramBusyID: String?
+    var uninstallDataReview: String?
     var isScanningApps = false
     var isScanningCommandLineTools = false
     var isCheckingSoftwareUpdates = false
@@ -132,6 +142,9 @@ final class AppState {
     var taskNotice: String?
     var softwareUpdateResults: [String: Int] = [:]
     var agentHasScanned = true
+    var cleanupScanComplete = true
+    var dataOffers: [String] = []
+    func offerUninstallDataCleanup(owner: UninstallDataOwner) { dataOffers.append(owner.name) }
     var resamples = 0
     var failures = 0
     var logs: [String] = []
@@ -224,7 +237,8 @@ struct CLIUninstallRequestTests {
             precondition(CLIUninstallWorkflow.calls.count == 1 && CLIUninstallWorkflow.calls[0].toolID == selected.id
                          && CLIUninstallWorkflow.calls[0].identity == DeletionPlan.identity(at: selected.path)
                          && independent.commandLineTools[0].id == "neighbor" && independent.isBusy
-                         && independent.softwareUpdateResults == ["cli:neighbor": 2] && independent.resamples == 1,
+                         && independent.softwareUpdateResults == ["cli:neighbor": 2] && independent.resamples == 1
+                         && independent.dataOffers == [selected.name] && !independent.cleanupScanComplete,
                          "Read-only work must remain independent while the selected installation is removed")
         }
     }

@@ -42,7 +42,44 @@ struct DirectoryFileServiceTests {
         try String(contentsOf: url, encoding: .utf8)
     }
 
+    static func testSorting() {
+        func entry(_ name: String, bytes: Int64? = nil, time: Double? = nil,
+                   directory: Bool = false, git: Bool = false) -> DirectoryEntry {
+            let url = URL(fileURLWithPath: "/sort-fixture/" + name)
+            return DirectoryEntry(id: url.path, url: url, name: name, isDirectory: directory,
+                isSymbolicLink: false, isHidden: false, logicalBytes: bytes,
+                allocatedBytes: bytes, modifiedAt: time.map(Date.init(timeIntervalSince1970:)), isGitRepository: git)
+        }
+        let small = entry("File2.txt", bytes: 8, time: 10)
+        let large = entry("File10.png", bytes: 64, time: 20)
+        let empty = entry("Empty.txt", bytes: 0, time: 10)
+        let unknown = entry("Unknown.txt")
+        let files = [unknown, large, small, empty]
+        expect(DirectorySortField.name.sorted([large, small], ascending: true).map(\.name)
+               == [small.name, large.name], "name order must use natural numeric comparison")
+        expect(DirectorySortField.name.sorted([large, small], ascending: false).map(\.name)
+               == [large.name, small.name], "name order must reverse")
+        expect(DirectorySortField.kind.sorted([small, large], ascending: true).map(\.name)
+               == [large.name, small.name], "type order must group PNG before TXT")
+        expect(DirectorySortField.kind.sorted([small, large], ascending: false).map(\.name)
+               == [small.name, large.name], "type order must reverse")
+        expect(DirectorySortField.size.sorted(files, ascending: true).map(\.name)
+               == [empty.name, small.name, large.name, unknown.name], "unknown sizes must follow real zero and known sizes")
+        expect(DirectorySortField.size.sorted(files, ascending: false).map(\.name)
+               == [large.name, small.name, empty.name, unknown.name], "unknown sizes must stay last in descending order")
+        expect(DirectorySortField.modified.sorted(files, ascending: true).map(\.name)
+               == [empty.name, small.name, large.name, unknown.name], "date ties must use stable natural names")
+        expect(DirectorySortField.modified.sorted(files, ascending: false).map(\.name)
+               == [large.name, empty.name, small.name, unknown.name], "newest-first order must keep unknown dates last")
+        let folder = entry("Folder", directory: true)
+        let repository = entry("Repository", directory: true, git: true)
+        expect(folder.kindLabel != repository.kindLabel, "type order must distinguish Git repositories from folders")
+        expect(DirectorySortField.name.sorted([small, folder], ascending: false).first?.id == folder.id,
+               "name ordering must preserve folders first")
+    }
+
     static func main() throws {
+        testSorting()
         let manager = FileManager.default
         let fixture = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try manager.createDirectory(at: fixture, withIntermediateDirectories: true)

@@ -254,8 +254,12 @@ private struct UninstallAppRow: View {
                     breakdown
                 }
                 SizeBadge(text: totalText, prominent: plan != nil)
-                    .help(isAgentApp ? "" : space.map { L10n.shared.tf("uninstall.space.footprint",
-                        ByteFormat.format($0.totalBytes), ByteFormat.format($0.optionalDataBytes)) } ?? "")
+                    .help(isAgentApp ? "" : space.map {
+                        L10n.shared.tf("uninstall.space.footprint",
+                            ByteFormat.format($0.totalBytes), ByteFormat.format($0.optionalDataBytes))
+                        + ($0.protectedDataBytes > 0 ? "\n" + L10n.shared.tf("uninstall.data.protectedSize",
+                            ByteFormat.format($0.protectedDataBytes)) : "")
+                    } ?? "")
                 disclosureButton
                 if update?.state == .available {
                     Button(action: onUpdate) {
@@ -345,7 +349,7 @@ private struct UninstallAppRow: View {
                            bytes: space?.cacheBytes, accented: true)
             BreakdownValue(symbol: "archivebox.fill",
                            label: L10n.shared.t("uninstall.space.data"),
-                           bytes: space.map { $0.dataBytes &+ $0.optionalDataBytes })
+                           bytes: space.map { $0.dataBytes &+ $0.optionalDataBytes &+ $0.protectedDataBytes })
         }
         .frame(width: 270)
     }
@@ -514,7 +518,12 @@ private struct UninstallFileDrawer: View {
                     if file.isOptionalData {
                         Toggle(isOn: Binding(
                             get: { selection.contains(file.path) },
-                            set: { if $0 { selection.insert(file.path) } else { selection.remove(file.path) } })) {
+                            set: { enabled in
+                                let linked = file.isAgentData && file.sqliteFamilyBase != nil
+                                    ? Set(files.filter { $0.isAgentData && $0.sqliteFamilyBase == file.sqliteFamilyBase }.map(\.path))
+                                    : Set([file.path])
+                                if enabled { selection.formUnion(linked) } else { selection.subtract(linked) }
+                            })) {
                             fileLabel(file, chosen: chosen)
                         }
                         .toggleStyle(MoleRowSelectionToggleStyle(horizontalPadding: 9, minHeight: 40))
@@ -551,12 +560,24 @@ private struct UninstallFileDrawer: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if file.isProtectedData {
+                    Text(L10n.shared.t(file.isSharedData
+                        ? "uninstall.data.sharedReason" : "uninstall.data.protectedReason"))
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if file.isAgentData {
+                    Text(L10n.shared.t("uninstall.data.agentReason"))
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color.warning)
+                }
             }
             Spacer()
             Text(file.informational && !chosen
                  ? (file.isOptionalData
                     ? ByteFormat.format(file.bytes) + " · " + L10n.shared.t("uninstall.notDeleted")
-                    : L10n.shared.t("uninstall.notDeleted"))
+                    : (file.isProtectedData ? ByteFormat.format(file.bytes) + " · " : "")
+                        + L10n.shared.t("uninstall.notDeleted"))
                  : ByteFormat.format(file.bytes))
                 .font(.system(size: 9).monospacedDigit())
                 .foregroundStyle(file.informational && !chosen ? .tertiary : .secondary)
@@ -569,9 +590,58 @@ private struct UninstallFileDrawer: View {
         case "app": return "app.fill"
         case "system", "diag": return "shield.lefthalf.filled"
         case "review": return "eye"
+        case "agentData": return "externaldrive.badge.person.crop"
+        case "protected": return "lock.shield"
+        case "shared": return "person.2"
         case "brew": return "shippingbox.fill"
         default: return "doc.badge.gearshape"
         }
+    }
+}
+
+/// Explicit whole-app-data consent. A fresh presentation starts unchecked;
+/// protected/shared rows cannot enter the selection.
+struct UninstallDataReviewView: View {
+    @ObservedObject var state: AppState
+    let plan: NativeCore.UninstallDataPlan
+    @ObservedObject private var l10n = L10n.shared
+    @State private var selection = Set<String>()
+
+    private var selectedBytes: UInt64 {
+        UninstallSpaceBreakdown(files: plan.files.map { file in
+            file.isOptionalData && selection.contains(file.path)
+                ? UninstallFile(bytes: file.bytes, label: "data", path: file.path) : file
+        }).totalBytes
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(l10n.t("uninstall.data.reviewTitle"))
+                .font(.system(size: 16, weight: .semibold))
+            Text(l10n.t("uninstall.data.reviewHint"))
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ScrollView {
+                UninstallFileDrawer(files: plan.files, selection: $selection)
+            }
+            .frame(minHeight: 180, maxHeight: 380)
+            HStack {
+                Button(l10n.t("uninstall.data.keep")) { state.uninstallDataReview = nil }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(l10n.tf("uninstall.data.removeSelected", ByteFormat.format(selectedBytes))) {
+                    state.removeReviewedUninstallData(plan, selecting: selection)
+                }
+                .buttonStyle(DangerButtonStyle())
+                .disabled(selection.isEmpty)
+                .accessibilityIdentifier("uninstall-reviewed-data-remove")
+            }
+        }
+        .padding(20)
+        .frame(width: 620)
+        .accessibilityIdentifier("uninstall-data-review")
     }
 }
 

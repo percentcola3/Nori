@@ -10,6 +10,7 @@ struct MainWindowView: View {
 
     private var activeDialog: String? {
         if let notice = state.taskNotice { return "task-" + notice.id.uuidString }
+        if let plan = state.uninstallDataReview { return "uninstall-data-" + plan.id.uuidString }
         if state.showPermissionCenter { return "permissions" }
         if state.showAutoCleanupSheet { return "autoCleanup" }
         if state.showWhitelistSheet { return "whitelist" }
@@ -112,6 +113,8 @@ struct MainWindowView: View {
             TaskFeedbackView(notice: notice, dismiss: { state.dismissTaskNotice() }, retry: {
                 state.retryTaskNotice(notice)
             })
+        } else if let plan = state.uninstallDataReview {
+            UninstallDataReviewView(state: state, plan: plan).id(plan.id)
         } else {
             switch id {
             case "permissions": PermissionCenterView(state: state)
@@ -124,6 +127,7 @@ struct MainWindowView: View {
 
     private func dismissDialog() {
         if state.taskNotice != nil { state.dismissTaskNotice() }
+        else if state.uninstallDataReview != nil { state.uninstallDataReview = nil }
         else if state.showPermissionCenter { state.cancelPermissionCenter() }
         else if state.showAutoCleanupSheet { state.showAutoCleanupSheet = false }
         else { state.showWhitelistSheet = false }

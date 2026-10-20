@@ -185,6 +185,9 @@ final class WorkflowGate {
 
 final class WorkflowFixture {
     static var current = WorkflowFixture()
+    var fullDataFailure = false
+    private(set) var fullDataPaths = Set<String>()
+    func recordFullData(_ paths: Set<String>) { lock.lock(); fullDataPaths = paths; lock.unlock() }
     let cleanupGate = WorkflowGate()
     let cleanupCompletionGate = WorkflowGate()
     let uninstallGate = WorkflowGate()
@@ -268,6 +271,25 @@ final class WorkflowFixture {
 }
 
 enum NativeCore {
+    struct UninstallDataPlan: Identifiable, Sendable {
+        let id = UUID()
+        let files: [UninstallFile]
+    }
+    struct Service: Sendable {
+        func rememberUninstallDataOwners(_ owners: [UninstallDataOwner]) {}
+        func uninstalledDataPlan(owner: UninstallDataOwner) -> UninstallDataPlan {
+            .init(files: [.init(bytes: 4096, label: "agentData", path: workflowHome + "/reviewed-data")])
+        }
+        func uninstallDataOwner(for app: UninstallApp) -> UninstallDataOwner {
+            .init(kind: .application, name: app.name, bundleID: app.bundleID, installationPath: app.path)
+        }
+        func applyUninstalledAgentData(_ plan: UninstallDataPlan, selecting paths: Set<String>) -> ApplySummary {
+            let fixture = WorkflowFixture.current
+            fixture.recordFullData(paths)
+            return fixture.fullDataFailure ? .init(skipped: paths.count) : .init(removed: paths.count)
+        }
+    }
+    static let shared = Service()
     struct ApplySummary {
         var removed = 0
         var skipped = 0
@@ -276,7 +298,12 @@ enum NativeCore {
         var removedPaths: Set<String> = []
         var remainingPaths: [String] = []
         var reclaimedBytes: UInt64 = 0
+        var succeeded: Bool { failed == 0 }
     }
+}
+
+struct CommandLineTool {
+    let uninstallDataOwner: UninstallDataOwner
 }
 enum AgentCleanupExecutor {
     struct Outcome { var summary: NativeCore.ApplySummary; var refused: Int }
@@ -392,6 +419,9 @@ struct WorkflowUninstallQueue {
 
 @MainActor
 final class AppState {
+    struct PermissionFixture { func refresh() -> Bool { true } }
+    let permissionCenter = PermissionFixture()
+    var uninstallDataReview: NativeCore.UninstallDataPlan?
     struct Confirmation: Identifiable {
         let id = UUID()
         let title: String
@@ -480,7 +510,7 @@ final class AppState {
     private var isDispatchingConfirmation = false
     var taskNotice: TaskFeedbackNotice?
     private var taskFeedbackQueue = TaskFeedbackQueue()
-    var isAgentTaskBusy: Bool { agentScanning || agentApplying || agentProgramBusyID != nil }
+    var isAgentTaskBusy: Bool { agentScanning || agentApplying || agentProgramBusyID != nil || uninstallDataReview != nil }
     var isBusyExcludingUninstall: Bool { isAgentTaskBusy || externallyBusy }
     var isBusy: Bool { isBusyExcludingUninstall || uninstallQueue.hasWork || cleanupQueued }
     func log(_ message: String) { logs.append(message) }
@@ -870,64 +900,40 @@ struct AgentWorkflowTests {
     }
 
     @MainActor private static func associatedDataMutationGuards() async throws {
-        for running in [false, true] {
-            for gate in ["cleanup", "app-uninstall", "cli-uninstall", "software-update"] {
-                let (state, f) = prepare()
-                if running { f.setDataProbes([.init(processes: [.init(name: "node")], isComplete: true)]) }
-                state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
-                try await waitUntil { state.confirmation != nil }
-                let consent = state.confirmation!
-                state.confirmation = nil
-                if gate == "cleanup" { state.isCleanupMutationBusy = true }
-                if gate == "app-uninstall" { state.uninstallQueue.activeJob = "other-app" }
-                if gate == "cli-uninstall" { state.commandLineToolBusyID = "other-cli" }
-                if gate == "software-update" { state.softwareUpdatingID = "other-update" }
-                consent.onConfirm()
-                precondition(!state.agentApplying && state.agentProgramBusyID == nil
-                             && state.snapshots == 0 && f.cleanupCount == 0 && f.uninstallCount == 0,
-                             "Associated data consent crossed a shared mutation before process close or deletion")
-            }
+        for gate in ["cleanup", "app-uninstall", "cli-uninstall", "software-update"] {
+            let (state, f) = prepare()
+            state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
+            try await waitUntil { state.uninstallDataReview != nil }
+            let reviewed = state.uninstallDataReview!
+            if gate == "cleanup" { state.isCleanupMutationBusy = true }
+            if gate == "app-uninstall" { state.uninstallQueue.activeJob = "other-app" }
+            if gate == "cli-uninstall" { state.commandLineToolBusyID = "other-cli" }
+            if gate == "software-update" { state.softwareUpdatingID = "other-update" }
+            state.removeReviewedUninstallData(reviewed, selecting: [workflowHome + "/reviewed-data"])
+            precondition(!state.agentApplying && state.agentProgramBusyID == nil && f.fullDataPaths.isEmpty,
+                         "Associated data consent crossed another mutation")
         }
     }
 
     @MainActor private static func associatedDataMutationPreflight(kind: String) async throws {
         let (state, f) = prepare()
         state.offerAgentAssociatedDataCleanup(agentIDs: ["fixture"])
-        try await waitUntil { state.confirmation != nil }
-        precondition(f.cleanupCount == 0 && f.uninstallCount == 0 && state.snapshots == 0,
-                     "Previewing associated data cannot remove anything")
-        let accepted = state.confirmation!
-        state.confirmation = nil
-        if kind == "running" {
-            let running = SoftwareUpdateProcesses.Probe(processes: [.init(name: "node")], isComplete: true)
-            f.setDataProbes([running, running])
-        } else if kind == "incomplete" {
-            f.setDataProbes([.init(processes: [], isComplete: false)])
-        } else {
-            // Later discovery cannot substitute new paths or identities for
-            // the data snapshot that the user has already reviewed.
-            f.report.categories = [CleanupCategory(name: "New unreviewed data",
-                paths: [workflowHome + "/new-data"], bytes: 4096, selected: true)]
-        }
-        accepted.onConfirm()
-        if kind == "running" {
-            try await waitUntil { state.confirmation != nil }
-            precondition(state.confirmation?.title == L10n.shared.t("agents.data.running.title")
-                         && f.cleanupCount == 0 && f.uninstallCount == 0 && state.snapshots == 0,
-                         "A newly started interpreter-hosted CLI requires close consent before any data cleanup")
-            state.confirmation = nil
-        } else if kind == "incomplete" {
-            try await waitUntil { state.taskNotice != nil }
-            precondition(f.cleanupCount == 0 && f.uninstallCount == 0 && state.snapshots == 0,
-                         "Incomplete fresh process evidence cannot authorize data cleanup")
-        } else {
-            try await waitUntil { f.cleanupGate.started }
-            precondition(!f.submittedPaths.contains(workflowHome + "/new-data")
-                         && f.submittedPaths.contains(workflowHome + "/cache")
-                         && f.submittedSkillIdentities == ["fixture-identity"],
-                         "A fresh idle process probe preserves the confirmed data envelope")
-            f.cleanupGate.release()
-            try await waitUntil { !state.agentApplying }
+        try await waitUntil { state.uninstallDataReview != nil }
+        let reviewed = state.uninstallDataReview!
+        precondition(f.cleanupCount == 0 && f.uninstallCount == 0 && f.fullDataPaths.isEmpty,
+                     "Opening the data review cannot remove anything")
+        state.removeReviewedUninstallData(reviewed, selecting: [])
+        precondition(state.uninstallDataReview?.id == reviewed.id && f.fullDataPaths.isEmpty,
+                     "Empty consent must retain the data review and all files")
+        f.fullDataFailure = kind != "idle"
+        f.report.categories = [CleanupCategory(name: "New unreviewed data",
+            paths: [workflowHome + "/new-data"], bytes: 4096, selected: true)]
+        state.removeReviewedUninstallData(reviewed, selecting: [workflowHome + "/reviewed-data"])
+        try await waitUntil { !state.agentApplying && !f.fullDataPaths.isEmpty }
+        precondition(f.fullDataPaths == [workflowHome + "/reviewed-data"],
+                     "Fresh inventory expanded the confirmed whole-app data selection")
+        if kind != "idle" {
+            precondition(state.taskNotice != nil, "Refused runtime/ownership checks must be reported as incomplete cleanup")
         }
     }
 

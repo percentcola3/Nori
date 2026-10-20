@@ -14,7 +14,7 @@ extension AppState {
     }
 
     var isAgentTaskBusy: Bool {
-        agentScanning || agentApplying || agentProgramBusyID != nil
+        agentScanning || agentApplying || agentProgramBusyID != nil || uninstallDataReview != nil
     }
 
     var isSoftwareTaskBusy: Bool {
@@ -35,7 +35,7 @@ extension AppState {
     }
 
     var isAgentMutationBusy: Bool {
-        agentApplying || agentProgramBusyID != nil
+        agentApplying || agentProgramBusyID != nil || uninstallDataReview != nil
     }
 
     /// Mutations outside the cleanup page can share the same application data.

@@ -15,6 +15,7 @@ struct AgentCatalogTests {
             probe(home: CommandLine.arguments[2])
             return
         }
+        try testPhysicalTemporaryTargets()
         let fm = FileManager.default
         let fixture = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
         try fm.createDirectory(at: fixture, withIntermediateDirectories: true)
@@ -1777,6 +1778,50 @@ struct AgentCatalogTests {
     }
 
     /// 只读探针：打印真实 home 下的 Agent 报告，不做任何写入。
+    /// Exercise the real macOS temporary-root spelling without scanning or
+    /// deleting any existing app data. Fixture homes cannot catch /private
+    /// being shortened to /var by Foundation.
+    static func testPhysicalTemporaryTargets() throws {
+        let fm = FileManager.default
+        let home = NSHomeDirectory()
+        let roots = AgentCatalog.temporaryRoots(home: home)
+        expect(roots[.userTemp] != nil, "current account temporary root is unavailable")
+        for kind in [AgentTemporaryRoot.userTemp, .systemTmp] {
+            let root = roots[kind]!
+            guard let resolved = realpath(root, nil) else { fatalError("temporary root cannot resolve") }
+            let physicalRoot = String(cString: resolved)
+            free(resolved)
+            expect(root == physicalRoot,
+                   "Agent temporary root lost its physical spelling: \(root) != \(physicalRoot)")
+
+            let prefix = "codex-project-tool-nori-regression-" + UUID().uuidString
+            let expired = root + "/" + prefix + "-expired.cache"
+            let fresh = root + "/" + prefix + "-fresh.cache"
+            let link = root + "/" + prefix + "-link.cache"
+            defer { for path in [link, fresh, expired] { try? fm.removeItem(atPath: path) } }
+            try Data("fixture".utf8).write(to: URL(fileURLWithPath: expired))
+            try Data("fixture".utf8).write(to: URL(fileURLWithPath: fresh))
+            try fm.createSymbolicLink(atPath: link, withDestinationPath: expired)
+            let seconds = Int(Date().addingTimeInterval(-8 * 24 * 3600).timeIntervalSince1970)
+            var times = [timeval(tv_sec: seconds, tv_usec: 0), timeval(tv_sec: seconds, tv_usec: 0)]
+            expect(utimes(expired, &times) == 0, "could not age temporary fixture")
+
+            let target = AgentTarget(.safe, .temporary(root: kind, prefix: prefix),
+                                     "agents.label.tempFiles", owners: [])
+            let paths = AgentCatalog.targetPaths(target, home: home)
+            expect(Set(paths) == [expired, fresh],
+                   "temporary discovery changed physical paths or followed a symbolic link: \(paths)")
+            let core = NativeCore(cleanupOpenFileProbe: { [] })
+            let result = core.applyCleanup(items: DeletionPlan(paths: paths).items,
+                                           permanent: true, homeDirectory: home)
+            expect(result.removed == 1 && result.skipped == 1 && result.failed == 0
+                   && !fm.fileExists(atPath: expired) && fm.fileExists(atPath: fresh)
+                   && result.removedPaths == [expired],
+                   "temporary discovery/apply disagreed or lost its age gate: \(result.messages)")
+        }
+        print("ok - physical Agent temporary discovery/apply, age and symlink boundaries")
+    }
+
     static func probe(home: String) {
         let report = AgentInventory.scan(home: home)
         func size(_ bytes: UInt64) -> String {

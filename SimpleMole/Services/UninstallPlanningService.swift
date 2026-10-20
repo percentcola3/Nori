@@ -33,6 +33,7 @@ struct UninstallPlanningService: Sendable {
             return nil
         }
         let home = URL(fileURLWithPath: homeDirectory, isDirectory: true).standardizedFileURL
+        UninstallResidueStore.remember([dataOwner(for: app)], home: home.path)
         var files = [UninstallFile(
             bytes: directorySize(appURL), label: "app", path: appURL.path)]
         // Bundle-ID caches are shared by sibling installs. Keep them when
@@ -136,8 +137,20 @@ struct UninstallPlanningService: Sendable {
                                             hasSibling: Bool, otherApps: [URL]) -> [UninstallFile] {
         var candidates: [UninstallFile] = []
         var seen = Set<String>()
+        let managedPaths = AgentCatalog.managedCleanupPaths(home: home.path)
+        let basePresence = AgentCatalog.defaultPresenceContext(home: home.path)
+        var presence = AgentPresenceContext(applicationDirs: Array(Set(basePresence.applicationDirs
+            + applicationRoots(home: home).map { $0.0.path })), searchPath: basePresence.searchPath)
+        for url in otherApps {
+            if let metadata = applicationMetadata(at: url) {
+                presence.applicationPathsByName[metadata.name, default: []].append(url.path)
+            }
+        }
+        let agentData = dataCandidates(for: dataOwner(for: app), home: home.path,
+            presence: presence, excludingApplication: app.path)
         func append(_ url: URL, label: String) {
             let path = CleanupRiskPolicy.normalizedPathLiteral(url.path)
+            if label != "related" && agentData.contains(where: { $0.path.hasPrefix(path + "/") }) { return }
             guard seen.insert(path).inserted,
                   fileManager.fileExists(atPath: path), !isSymlink(url) else { return }
             if label == "related" {
@@ -145,11 +158,23 @@ struct UninstallPlanningService: Sendable {
                       !CleanupRiskPolicy.isProtectedContent(path, homeDirectory: home.path) else { return }
             }
             let bytes = directorySize(url)
-            candidates.append(UninstallFile(bytes: bytes, label: label, path: path))
+            // Match the execution boundary before offering a checkbox. A
+            // parent containing history cannot be removed as ordinary data.
+            let role: String
+            if label == "shared" || hasSibling && label != "manual" { role = "shared" }
+            else if let candidate = agentData.first(where: { $0.path == path }) {
+                role = candidate.removable ? (label == "related" ? "related" : "agentData") : "protected"
+            }
+            else if label != "manual" && AgentCatalog.isManagedCleanupPath(path, protectedPaths: managedPaths) {
+                role = "protected"
+            } else if label == "review" {
+                role = "protected"
+            } else { role = label }
+            candidates.append(UninstallFile(bytes: bytes, label: role, path: path))
         }
 
         if CleanupRiskPolicy.isValidReverseDNSOwner(app.bundleID) {
-            let cacheLabel = hasSibling ? "review" : "related"
+            let cacheLabel = hasSibling ? "shared" : "related"
             append(home.appendingPathComponent("Library/Caches/\(app.bundleID)", isDirectory: true),
                    label: cacheLabel)
             append(home.appendingPathComponent("Library/Logs/\(app.bundleID)", isDirectory: true),
@@ -178,13 +203,15 @@ struct UninstallPlanningService: Sendable {
                           "Service Worker/ScriptCache"]
             for name in supportNames.sorted() {
                 let root = home.appendingPathComponent("Library/Application Support/" + name)
-                append(root, label: "review")
-                let namedCache = home.appendingPathComponent("Library/Caches/" + name)
                 let shared = hasSibling || sharedNames.contains(name.lowercased())
+                append(root, label: shared ? "shared" : "review")
+                let namedCache = home.appendingPathComponent("Library/Caches/" + name)
                 if CleanupRiskPolicy.core(section: "Uninstall cache", path: namedCache.path,
                                           homeDirectory: home.path).risk == .safe {
-                    append(namedCache, label: shared ? "review" : "related")
+                    append(namedCache, label: shared ? "shared" : "related")
                 }
+                append(home.appendingPathComponent("Library/Logs/" + name),
+                       label: shared ? "shared" : "related")
                 guard !shared else { continue }
                 // Chromium/Electron profiles are bounded to known direct children.
                 // Do not recursively search arbitrary user data for cache-like names.
@@ -210,16 +237,41 @@ struct UninstallPlanningService: Sendable {
             ("Library/Application Support/\(app.bundleID)", true),
             ("Library/Preferences/\(app.bundleID).plist", false),
             ("Library/Containers/\(app.bundleID)", true),
-            ("Library/Group Containers/\(app.bundleID)", true),
             ("Library/Saved Application State/\(app.bundleID).savedState", true),
             ("Library/WebKit/\(app.bundleID)", true),
             ("Library/HTTPStorages/\(app.bundleID)", true),
+            ("Library/HTTPStorages/\(app.bundleID).binarycookies", false),
             ("Library/Caches/com.apple.nsurlsessiond/Downloads/\(app.bundleID)", true)
         ]
         for (relative, isDirectory) in reviewRoots {
             append(home.appendingPathComponent(relative, isDirectory: isDirectory), label: "review")
         }
+        if CleanupRiskPolicy.isValidReverseDNSOwner(app.bundleID) {
+            let identifier = NSRegularExpression.escapedPattern(for: app.bundleID)
+            let groups = inventory.applicationGroups(at: URL(fileURLWithPath: app.path))
+            let sharedGroups: Set<String> = groups.isEmpty ? [] : Set(otherApps.flatMap {
+                inventory.applicationGroups(at: $0).intersection(groups)
+            })
+            // Team-prefixed containers are common. Match the complete owner,
+            // never a vendor prefix that could include another product.
+            let groupPattern = "^([A-Z0-9]{10}\\.)?(group\\.)?" + identifier + "$"
+            for relative in ["Library/Group Containers", "Library/Application Scripts"] {
+                for url in directChildren(of: home.appendingPathComponent(relative))
+                    where groups.contains(url.lastPathComponent)
+                        || url.lastPathComponent.range(of: groupPattern, options: .regularExpression) != nil {
+                    append(url, label: sharedGroups.contains(url.lastPathComponent) ? "shared" : "review")
+                }
+            }
+            let hostPattern = "^" + identifier + "\\.[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\\.plist$"
+            for url in directChildren(of: home.appendingPathComponent("Library/Preferences/ByHost"))
+                where url.lastPathComponent.range(of: hostPattern, options: .regularExpression) != nil {
+                append(url, label: "review")
+            }
+        }
         if !hasSibling {
+            for candidate in agentData {
+                append(URL(fileURLWithPath: candidate.path), label: candidate.removable ? "agentData" : "protected")
+            }
             for root in AgentCatalog.uninstallDataRoots(appPath: app.path, appName: app.name, home: home.path) {
                 append(URL(fileURLWithPath: root), label: "review")
             }
@@ -275,6 +327,124 @@ struct UninstallPlanningService: Sendable {
         return candidates
     }
 
+    func dataOwner(for app: UninstallApp) -> UninstallDataOwner {
+        .init(kind: .application, name: app.name, bundleID: app.bundleID, installationPath: app.path,
+              names: uninstallSupportNames(at: URL(fileURLWithPath: app.path), bundleID: app.bundleID).sorted(),
+              groups: inventory.applicationGroups(at: URL(fileURLWithPath: app.path)).sorted(),
+              agentIDs: AgentCatalog.applicationAgentIDs(appPath: app.path, appName: app.name))
+    }
+
+    func ownerIsInstalled(_ owner: UninstallDataOwner, home: String, presence: AgentPresenceContext,
+                          excludingApplication: String? = nil) -> Bool {
+        if owner.kind == .agent {
+            return AgentCatalog.definitions.contains {
+                owner.agentIDs.contains($0.id) && AgentCatalog.isInstalled($0, home: home, presence: presence)
+            }
+        }
+        if !owner.installationPath.isEmpty, owner.installationPath != excludingApplication,
+           fileManager.fileExists(atPath: owner.installationPath) { return true }
+        if owner.commands.contains(where: {
+            AgentCatalog.resolveExecutable($0, searchPath: presence.searchPath, home: home) != nil
+        }) { return true }
+        for root in presence.applicationDirs {
+            for app in directChildren(of: URL(fileURLWithPath: root))
+                where app.pathExtension.lowercased() == "app" && !isSymlink(app) && app.path != excludingApplication {
+                if let excluded = excludingApplication,
+                   applicationDirectoryIdentity(app) == applicationDirectoryIdentity(URL(fileURLWithPath: excluded)) { continue }
+                let metadata = applicationMetadata(at: app)
+                if !owner.bundleID.isEmpty && metadata?.bundleID == owner.bundleID { return true }
+                let names = [app.deletingPathExtension().lastPathComponent, metadata?.name ?? ""].map { $0.lowercased() }
+                if owner.kind == .cli && names.contains(owner.name.lowercased()) { return true }
+            }
+        }
+        return false
+    }
+
+    /// The same derived roots serve application, generic CLI and leftover scans.
+    /// A persisted owner is metadata only; it cannot grant permission to a path.
+    func dataCandidates(for owner: UninstallDataOwner, home: String, presence: AgentPresenceContext,
+                        excludingApplication: String? = nil, protectedRoots: [String] = []) -> [AgentCatalog.UninstallDataCandidate] {
+        if owner.kind == .agent {
+            return AgentCatalog.fullUninstallDataCandidates(agentIDs: owner.agentIDs, home: home,
+                presence: presence, excludingApplication: excludingApplication, protectedRoots: protectedRoots)
+        }
+        var relative: [String] = []
+        let aliases = [owner.name, owner.name.replacingOccurrences(of: " ", with: ""),
+                      owner.name.replacingOccurrences(of: " ", with: "-"), owner.bundleID.split(separator: ".").last.map(String.init) ?? ""]
+        let tokens = Set(owner.names + aliases).filter { name in
+            name.count >= 3 && (owner.kind == .application || !Self.genericDotNames.contains(name.lowercased()))
+                && !["app", "electron", "google", "microsoft", "adobe", "shared"].contains(name.lowercased())
+                && !["Nori", "ForgeSweep"].contains(name)
+                && name.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
+                    !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains(where: { $0.asciiValue.map { $0 < 32 || $0 == 127 } ?? false })
+                }
+        }
+        for token in tokens {
+            for root in ["Library/Application Support", "Library/Caches", "Library/Logs"] {
+                relative.append(root + "/" + token)
+            }
+            let slug = token.lowercased()
+            if !Self.genericDotNames.contains(slug),
+               slug.range(of: #"^[a-z0-9][a-z0-9._-]*$"#, options: .regularExpression) != nil {
+                relative += ["." + slug, ".config/" + slug, ".local/share/" + slug, ".local/state/" + slug, ".cache/" + slug]
+            }
+        }
+        if owner.kind == .application, CleanupRiskPolicy.isValidReverseDNSOwner(owner.bundleID),
+           !owner.bundleID.hasPrefix("com.apple.") {
+            let identifier = owner.bundleID
+            relative += ["Library/Preferences/" + identifier + ".plist", "Library/Containers/" + identifier,
+                         "Library/Saved Application State/" + identifier + ".savedState",
+                         "Library/WebKit/" + identifier, "Library/HTTPStorages/" + identifier,
+                         "Library/HTTPStorages/" + identifier + ".binarycookies",
+                         "Library/Caches/" + identifier + ".ShipIt",
+                         "Library/Caches/com.apple.nsurlsessiond/Downloads/" + identifier]
+            let pattern = "^([A-Z0-9]{10}\\.)?(group\\.)?" + NSRegularExpression.escapedPattern(for: identifier) + "$"
+            for root in ["Library/Group Containers", "Library/Application Scripts"] {
+                for url in directChildren(of: URL(fileURLWithPath: home + "/" + root))
+                    where owner.groups.contains(url.lastPathComponent)
+                        || url.lastPathComponent.range(of: pattern, options: .regularExpression) != nil {
+                    relative.append(root + "/" + url.lastPathComponent)
+                }
+            }
+            let hostPattern = "^" + NSRegularExpression.escapedPattern(for: identifier)
+                + "\\.[0-9A-Fa-f]{8}(-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\\.plist$"
+            for url in directChildren(of: URL(fileURLWithPath: home + "/Library/Preferences/ByHost"))
+                where url.lastPathComponent.range(of: hostPattern, options: .regularExpression) != nil {
+                relative.append("Library/Preferences/ByHost/" + url.lastPathComponent)
+            }
+        }
+        var blocked = protectedRoots
+        let agentRoots = AgentCatalog.definitions.filter { !owner.agentIDs.contains($0.id) }
+            .flatMap { AgentCatalog.dataRoots(for: $0, home: home) }
+            .filter { AgentCatalog.isPhysical($0, home: home) }
+        // Split parents around other Agent data rather than letting a legacy
+        // broad review row bypass the ownership/project checks.
+        blocked += agentRoots
+        let roots = Set(relative.map { home + "/" + $0 })
+        for root in presence.applicationDirs {
+            for app in directChildren(of: URL(fileURLWithPath: root))
+                where app.pathExtension.lowercased() == "app" && !isSymlink(app) && app.path != excludingApplication {
+                if let excluded = excludingApplication,
+                   applicationDirectoryIdentity(app) == applicationDirectoryIdentity(URL(fileURLWithPath: excluded)) { continue }
+                guard let metadata = applicationMetadata(at: app) else { continue }
+                let sharedNames = uninstallSupportNames(at: app, bundleID: metadata.bundleID)
+                for name in tokens where sharedNames.contains(where: { $0.lowercased() == name.lowercased() }) {
+                    for parent in ["Library/Application Support", "Library/Caches", "Library/Logs"] { blocked.append(home + "/" + parent + "/" + name) }
+                }
+                for group in (owner.groups.isEmpty ? [] : inventory.applicationGroups(at: app).intersection(owner.groups)) {
+                    blocked += [home + "/Library/Group Containers/" + group, home + "/Library/Application Scripts/" + group]
+                }
+            }
+        }
+        let candidates = AgentCatalog.fullUninstallDataCandidates(agentIDs: owner.agentIDs, home: home,
+            presence: presence, excludingApplication: excludingApplication,
+            additionalRoots: Array(roots), protectedRoots: blocked)
+        guard !ownerIsInstalled(owner, home: home, presence: presence, excludingApplication: excludingApplication) else {
+            return candidates.map { .init(path: $0.path, removable: false) }
+        }
+        return candidates
+    }
+
     private func uninstallSupportNames(at appURL: URL, bundleID: String) -> Set<String> {
         let bundle = Bundle(url: appURL)
         let metadataNames = [bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String,
@@ -299,4 +469,38 @@ struct UninstallPlanningService: Sendable {
         return names
     }
 
+}
+
+/// Retain names/IDs after external uninstall, including after Trash is emptied.
+/// This file stores no selection or deletion permission.
+enum UninstallResidueStore {
+    private static let lock = NSLock()
+    private static func url(home: String) -> URL {
+        URL(fileURLWithPath: home + "/Library/Application Support/Nori/uninstall-owners.json")
+    }
+    private static func read(home: String) -> [UninstallDataOwner] {
+        guard let data = try? Data(contentsOf: url(home: home)), data.count <= 4 * 1024 * 1024,
+              let owners = try? JSONDecoder().decode([UninstallDataOwner].self, from: data) else { return [] }
+        return owners
+    }
+    static func owners(home: String) -> [UninstallDataOwner] {
+        lock.lock(); defer { lock.unlock() }
+        return read(home: home)
+    }
+    static func remember(_ owners: [UninstallDataOwner], home: String) {
+        guard !owners.isEmpty else { return }
+        lock.lock(); defer { lock.unlock() }
+        var records = Dictionary(read(home: home).map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+        for var owner in owners {
+            if let prior = records[owner.id] {
+                owner.names = Array(Set(owner.names + prior.names)).sorted()
+                owner.groups = Array(Set(owner.groups + prior.groups)).sorted()
+            }
+            records[owner.id] = owner
+        }
+        guard let data = try? JSONEncoder().encode(Array(records.values).sorted { $0.id < $1.id }) else { return }
+        let target = url(home: home)
+        try? FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: target, options: .atomic)
+    }
 }

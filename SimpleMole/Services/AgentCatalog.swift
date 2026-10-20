@@ -83,6 +83,7 @@ struct AgentPresence: Sendable {
 struct AgentPresenceContext: Sendable {
     let applicationDirs: [String]
     let searchPath: [String]
+    var applicationPathsByName: [String: [String]] = [:]
 }
 
 struct AgentDefinition: Sendable {
@@ -964,8 +965,12 @@ enum AgentCatalog {
         guard length > 1, length < 16_384 else { return roots }
         var bytes = [CChar](repeating: 0, count: length)
         guard confstr(Int32(_CS_DARWIN_USER_TEMP_DIR), &bytes, length) > 0 else { return roots }
-        let path = URL(fileURLWithPath: String(cString: bytes))
-            .resolvingSymlinksInPath().standardizedFileURL.path
+        // Keep the physical /private spelling used by native cleanup's
+        // authorized roots and O_NOFOLLOW traversal. Foundation's
+        // standardizedFileURL shortens it back to the /var symlink alias.
+        guard let resolved = realpath(String(cString: bytes), nil) else { return roots }
+        defer { free(resolved) }
+        let path = String(cString: resolved)
         var metadata = stat()
         guard lstat(path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR,
               metadata.st_uid == getuid() else { return roots }
@@ -1205,7 +1210,8 @@ enum AgentCatalog {
         return candidates.filter { !active.contains($0) }.sorted()
     }
 
-    /// 会话与相关索引只能由宿主应用管理；退出或卸载应用也不授权删文件。
+    /// 普通清理与默认卸载不删除会话和索引。用户明确勾选整份应用数据时，
+    /// 专用卸载授权另行复核独占归属、项目保护和文件身份，并只移入废纸篓。
     /// 返回精确根目录/数据库族，支持 CODEX_HOME 与独立 sqlite_home。
     /// 不依赖文件年龄、已安装状态或旧扫描结果的风险标记。
     static func managedCleanupPaths(home: String) -> [String] {
@@ -1278,6 +1284,215 @@ enum AgentCatalog {
         let fnmBins = fnmRoots.flatMap { root in childNames(of: root).map { root + "/" + $0 + "/installation/bin" } }
         var seen = Set<String>()
         return (environment + common + runtimeBins + fnmBins).filter { seen.insert($0).inserted }
+    }
+
+    struct UninstallDataCandidate: Sendable {
+        let path: String
+        let removable: Bool
+    }
+
+    static func applicationAgentIDs(appPath: String, appName: String) -> Set<String> {
+        let stem = URL(fileURLWithPath: appPath).deletingPathExtension().lastPathComponent
+        return Set(definitions.filter {
+            installationPresence(for: $0)?.bundleNames.contains(where: { $0 == stem || $0 == appName }) == true
+        }.map(\.id))
+    }
+
+    /// Whole-application data removal is a separate, explicit Trash request.
+    /// Ordinary cleanup still cannot delete managed history. Shared resources
+    /// and real repositories are split out before offering any selectable root.
+    static func fullUninstallDataCandidates(agentIDs: Set<String>, home: String,
+        presence: AgentPresenceContext? = nil, excludingApplication: String? = nil,
+        additionalRoots: [String] = [], protectedRoots: [String] = []) -> [UninstallDataCandidate] {
+        let context = presence ?? defaultPresenceContext(home: home)
+        let requested = definitions.filter { agentIDs.contains($0.id) && installationPresence(for: $0) != nil }
+        guard requested.count == agentIDs.count, !requested.isEmpty || !additionalRoots.isEmpty else { return [] }
+        func installedElsewhere(_ agent: AgentDefinition) -> Bool {
+            if installationPresence(for: agent)?.bundleNames.contains(where: { name in
+                (context.applicationPathsByName[name] ?? []).contains { $0 != excludingApplication && isDirectory($0) }
+            }) == true { return true }
+            guard let excluded = excludingApplication else {
+                return isInstalled(agent, home: home, presence: context)
+            }
+            guard let installation = installationPresence(for: agent) else { return hasData(agent, home: home) }
+            if installation.bundleNames.contains(where: { name in
+                context.applicationDirs.contains {
+                    let path = $0 + "/" + name + ".app"
+                    return path != excluded && isDirectory(path)
+                }
+            }) { return true }
+            if installation.commands.contains(where: {
+                guard let command = resolveExecutable($0, searchPath: context.searchPath, home: home) else { return false }
+                return !URL(fileURLWithPath: command).resolvingSymlinksInPath().path.hasPrefix(excluded + "/")
+            }) { return true }
+            if agent.id == "codex", AgentHostPresence.integratedCodexOwners(context: context)
+                .contains(where: { $0.hasPrefix("/") && !$0.hasPrefix(excluded + "/") }) { return true }
+            return AgentHostPresence.hasExtension(ids: installation.extensionIDs, home: home, context: context)
+        }
+        let live = definitions.filter(installedElsewhere)
+        var shared = live.flatMap { dataRoots(for: $0, home: home)
+            + $0.implicitSkillDirectories.map { absolute($0, home: home) } }
+        shared += shared.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+        for agent in live {
+            for command in installationPresence(for: agent)?.commands ?? [] {
+                guard let executable = resolveExecutable(command, searchPath: context.searchPath, home: home) else { continue }
+                var body = URL(fileURLWithPath: executable).resolvingSymlinksInPath().deletingLastPathComponent()
+                if body.lastPathComponent == "bin" { body.deleteLastPathComponent() }
+                shared.append(body.path)
+            }
+        }
+        for directory in skillDirectories(home: home) where directory.agentNames.contains(where: { name in
+            live.contains { $0.name == name }
+        }) {
+            shared += childNames(of: directory.path).compactMap { name -> String? in
+                let path = directory.path + "/" + name
+                return isSymlink(path) ? URL(fileURLWithPath: path).resolvingSymlinksInPath().path : nil
+            }
+        }
+        if live.contains(where: { $0.id == "codex" }) { shared += configuredSkillTargets(home: home) }
+        var referenceText: [String] = []
+        var unknownReferences = false
+        func strings(_ value: Any) -> [String] {
+            if let value = value as? String { return [value] }
+            if let values = value as? [Any] { return values.flatMap(strings) }
+            if let values = value as? [String: Any] { return values.values.flatMap(strings) }
+            return []
+        }
+        for source in live.flatMap(\.mcpSources) {
+            let config = absolute(source.path, home: home)
+            guard exists(config) else { continue }
+            shared.append(URL(fileURLWithPath: config).resolvingSymlinksInPath().path)
+            guard let file = FileHandle(forReadingAtPath: config) else { unknownReferences = true; continue }
+            let bytes = try? file.read(upToCount: 1_048_577)
+            try? file.close()
+            guard let bytes, bytes.count <= 1_048_576, let text = String(data: bytes, encoding: .utf8) else {
+                unknownReferences = true; continue
+            }
+            let values: [String]
+            switch source.format {
+            case .json(let keyPath):
+                guard let json = try? JSONSerialization.jsonObject(with: bytes, options: [.json5Allowed]) else {
+                    unknownReferences = true; continue
+                }
+                func scopedStrings(_ value: Any) -> [String] {
+                    if let object = value as? [String: Any] {
+                        var current: Any? = object[keyPath]
+                        if current == nil {
+                            current = object
+                            for key in keyPath.split(separator: ".") { current = (current as? [String: Any])?[String(key)] }
+                        }
+                        return (current.map(strings) ?? []) + object.values.flatMap(scopedStrings)
+                    }
+                    return (value as? [Any])?.flatMap(scopedStrings) ?? []
+                }
+                values = scopedStrings(json)
+            case .toml(let table):
+                // Project trust, UI settings and unrelated paths do not imply
+                // that every application below that directory is shared.
+                var inScope = false
+                var lines: [String] = []
+                for line in text.components(separatedBy: .newlines) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.hasPrefix("[") {
+                        inScope = trimmed.hasPrefix("[" + table + ".") || trimmed.hasPrefix("[" + table + "]")
+                            || trimmed.hasPrefix("[\"" + table + "\".") || trimmed.hasPrefix("[\"" + table + "\"]")
+                    }
+                    if inScope || trimmed.hasPrefix(table + " =") || trimmed.hasPrefix(table + "=") { lines.append(line) }
+                }
+                let scoped = lines.joined(separator: "\n")
+                if scoped.isEmpty && text.contains(table) { unknownReferences = true; continue }
+                // Decode quoted TOML strings too, so escaped absolute paths
+                // receive the same conservative protection as literal paths.
+                let pattern = #"\"(?:\\.|[^\"\\])*\"|'[^']*'"#
+                let matches = (try? NSRegularExpression(pattern: pattern))?.matches(in: scoped,
+                    range: NSRange(scoped.startIndex..., in: scoped)) ?? []
+                values = [scoped] + matches.compactMap { match in
+                    guard let range = Range(match.range, in: scoped) else { return nil }
+                    if scoped[range].first == "'" { return String(scoped[range].dropFirst().dropLast()) }
+                    guard let data = ("[" + scoped[range] + "]").data(using: .utf8) else { return nil }
+                    return ((try? JSONSerialization.jsonObject(with: data)) as? [String])?.first
+                }
+            }
+            referenceText += values
+            for value in values {
+                var path = value
+                for prefix in ["~", "$HOME", "${HOME}"] where value.hasPrefix(prefix + "/") {
+                    path = home + value.dropFirst(prefix.count)
+                }
+                if path.hasPrefix("/") {
+                    shared.append(URL(fileURLWithPath: path).resolvingSymlinksInPath().path)
+                    continue
+                }
+                if value.hasPrefix("./") || value.hasPrefix("../") {
+                    let configURL = URL(fileURLWithPath: config)
+                    for base in [configURL.deletingLastPathComponent(), configURL.resolvingSymlinksInPath().deletingLastPathComponent()] {
+                        shared.append(base.appendingPathComponent(value).standardizedFileURL.resolvingSymlinksInPath().path)
+                    }
+                    continue
+                }
+                guard !value.contains(where: \.isWhitespace) else { continue }
+                if let path = resolveExecutable(value, searchPath: context.searchPath, home: home), path.hasPrefix("/") {
+                    shared.append(URL(fileURLWithPath: path).resolvingSymlinksInPath().path)
+                }
+            }
+        }
+        shared += protectedRoots
+        let roots = Array(Set(requested.flatMap { dataRoots(for: $0, home: home) } + additionalRoots))
+            .filter { $0.hasPrefix(home + "/") && isPhysical($0, home: home) }
+            .sorted { $0.count < $1.count }
+        var retained = definitions.flatMap { agent in
+            agent.targets.compactMap { target -> String? in
+                if case .worktrees(let root, _) = target.kind { return absolute(root, home: home) }
+                return nil
+            }
+        } + [absolute(".codex/worktrees", home: home)]
+        let historyRoots = managedCleanupPaths(home: home)
+        // Metadata-only repository discovery; links are never followed. Known
+        // history/checkpoint stores may themselves use Git as their format.
+        for root in roots where !retained.contains(where: { root == $0 || root.hasPrefix($0 + "/") }) {
+            if historyRoots.contains(root) { continue }
+            if exists(root + "/.git") { retained.append(root); continue }
+            guard isDirectory(root), let walker = FileManager.default.enumerator(at: URL(fileURLWithPath: root),
+                includingPropertiesForKeys: [.isSymbolicLinkKey], options: [.skipsPackageDescendants]) else { continue }
+            let deadline = Date().addingTimeInterval(1)
+            var count = 0
+            for case let url as URL in walker {
+                count += 1
+                if count > 50_000 || Date() > deadline { retained.append(root); break }
+                let path = url.path
+                if isSymlink(path) || historyRoots.contains(path) || retained.contains(path) {
+                    walker.skipDescendants(); continue
+                }
+                if url.lastPathComponent == ".git" {
+                    retained.append(url.deletingLastPathComponent().path)
+                    walker.skipDescendants()
+                }
+            }
+        }
+        func overlap(_ path: String, _ other: String) -> Bool {
+            path == other || path.hasPrefix(other + "/") || other.hasPrefix(path + "/")
+        }
+        func referenced(_ path: String) -> Bool {
+            let relative = path.hasPrefix(home + "/") ? String(path.dropFirst(home.count)) : path
+            let forms = [path, "~" + relative, "$HOME" + relative, "${HOME}" + relative]
+            return referenceText.contains { text in forms.contains(where: text.contains) }
+        }
+        var seen = Set<String>()
+        func partition(_ path: String) -> [UninstallDataCandidate] {
+            guard seen.insert(path).inserted, isPhysical(path, home: home) else { return [] }
+            if unknownReferences || (shared + retained).contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
+                return [.init(path: path, removable: false)]
+            }
+            if (shared + retained).contains(where: { overlap(path, $0) }) || referenced(path) {
+                guard isDirectory(path) else { return [.init(path: path, removable: false)] }
+                let children = childNames(of: path).sorted()
+                guard !children.isEmpty else { return [.init(path: path, removable: false)] }
+                return children.flatMap { partition(path + "/" + $0) }
+            }
+            return [.init(path: path, removable: true)]
+        }
+        let top = roots.filter { root in !roots.contains { $0 != root && root.hasPrefix($0 + "/") } }
+        return top.flatMap(partition).sorted { $0.path < $1.path }
     }
 
     static func uninstallDataRoots(appPath: String, appName: String, home: String,
@@ -1519,8 +1734,9 @@ enum AgentCatalog {
     }
 
     private static func isPhysicalUnder(_ path: String, root: String) -> Bool {
-        let root = URL(fileURLWithPath: root).standardizedFileURL.path
-        var current = URL(fileURLWithPath: path).standardizedFileURL.path
+        // Temporary roots are already physical; preserve their spelling and
+        // reject symlink children rather than resolving them into the root.
+        var current = path
         guard current == root || current.hasPrefix(root + "/") else { return false }
         while true {
             var metadata = stat()

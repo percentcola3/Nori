@@ -25,6 +25,20 @@ struct UninstallSpaceTests {
         expect(breakdown.dataBytes == 10, "app data must remain separate from cache")
         expect(breakdown.totalBytes == 140, "review/manual rows must not enter reclaimable total")
 
+        let protected = UninstallFile(bytes: 1_000, label: "protected",
+            path: "/Users/test/Library/Application Support/Agent")
+        let retained = UninstallSpaceBreakdown(files: [
+            .init(bytes: 100, label: "app", path: "/Applications/Agent.app"), protected,
+            .init(bytes: 100, label: "related", path: protected.path + "/Cache"),
+            .init(bytes: 300, label: "review", path: protected.path + "/User"),
+            .init(bytes: 20, label: "review", path: "/Users/test/Library/Preferences/agent.plist")
+        ], homeDirectory: "/Users/test")
+        expect(protected.informational && protected.isProtectedData && !protected.isOptionalData,
+               "protected rows must remain visible without an uninstall checkbox")
+        expect(retained.totalBytes == 200 && retained.optionalDataBytes == 20
+               && retained.protectedDataBytes == 900 && retained.footprintBytes == 1_120,
+               "protected data must count toward footprint once, excluding its automatic cache leaves")
+
         let duplicatePath = UninstallSpaceBreakdown(files: [
             UninstallFile(bytes: 75, label: "app", path: "/Applications/Same.app"),
             UninstallFile(bytes: 999, label: "related", path: "/Applications/Same.app")
@@ -134,6 +148,18 @@ struct UninstallSpaceTests {
         try! JSONSerialization.data(withJSONObject: oldCache).write(to: cacheURL)
         expect(UninstallInventoryCache.restore(from: cacheURL).isEmpty,
                "old inventories with incorrect administrator permissions must be invalidated")
+        oldCache["version"] = 5
+        try! JSONSerialization.data(withJSONObject: oldCache).write(to: cacheURL)
+        expect(UninstallInventoryCache.restore(from: cacheURL).isEmpty,
+               "old inventories offering protected history as optional data must be invalidated")
+        oldCache["version"] = 6
+        try! JSONSerialization.data(withJSONObject: oldCache).write(to: cacheURL)
+        expect(UninstallInventoryCache.restore(from: cacheURL).isEmpty,
+               "inventories missing standard app data and shared-owner protection must be invalidated")
+        oldCache["version"] = 7
+        try! JSONSerialization.data(withJSONObject: oldCache).write(to: cacheURL)
+        expect(UninstallInventoryCache.restore(from: cacheURL).isEmpty,
+               "inventories predating explicit whole-app data consent must be invalidated")
         UninstallInventoryCache.save([.init(app: fixtureApp, plan: fixturePlan)], to: cacheURL)
         try? FileManager.default.removeItem(at: appURL)
         expect(UninstallInventoryCache.restore(from: cacheURL).isEmpty,

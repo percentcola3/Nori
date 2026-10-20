@@ -65,6 +65,57 @@ final class CleanupScanProgressSink: @unchecked Sendable {
 final class NativeCore: @unchecked Sendable {
     static let shared = NativeCore()
 
+    struct UninstallDataPlan: Identifiable, Sendable {
+        let id = UUID()
+        let files: [UninstallFile]
+        fileprivate let owner: UninstallDataOwner
+        fileprivate let home: String
+        fileprivate let identities: [String: String]
+        fileprivate let presence: AgentPresenceContext?
+    }
+
+    /// Can only be minted in this file for an explicit whole-app-data request.
+    /// It never authorizes permanent deletion or arbitrary cleanup paths.
+    struct UninstallDataAuthorization {
+        fileprivate let owner: UninstallDataOwner
+        fileprivate let core: NativeCore
+        fileprivate let home: String
+        fileprivate let identities: [String: String]
+        fileprivate let presence: AgentPresenceContext?
+
+        fileprivate func permits(_ path: String, identity: String, home: String) -> Bool {
+            guard self.home == home, identities[path] == identity else { return false }
+            if let base = UninstallFile(bytes: 0, label: "agentData", path: path).sqliteFamilyBase {
+                for member in [base, base + "-wal", base + "-shm", base + "-journal"] {
+                    if let current = DeletionPlan.identity(at: member), identities[member] != current { return false }
+                }
+            }
+            return core.uninstallPlanner().dataCandidates(for: owner, home: home,
+                presence: NativeCore.uninstallDataPresence(home: home, overriding: presence))
+                .contains { $0.path == path && $0.removable }
+        }
+    }
+
+    private static func uninstallDataPresence(home: String, overriding context: AgentPresenceContext?) -> AgentPresenceContext {
+        if let context { return context }
+        let base = AgentCatalog.defaultPresenceContext(home: home)
+        let registered = Set(AgentCatalog.definitions.flatMap(\.owners).filter(CleanupRiskPolicy.isValidReverseDNSOwner))
+            .compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+            .map { $0.deletingLastPathComponent().path }
+        let inventory = NativeApplicationInventory()
+        let roots = inventory.roots(home: URL(fileURLWithPath: home)).map { $0.0.path }
+        var result = AgentPresenceContext(applicationDirs: Array(Set(base.applicationDirs + roots + registered)), searchPath: base.searchPath)
+        for root in result.applicationDirs {
+            for url in inventory.children(of: URL(fileURLWithPath: root)) where url.pathExtension.lowercased() == "app" {
+                if let metadata = inventory.metadata(at: url) {
+                    result.applicationPathsByName[metadata.name, default: []].append(url.path)
+                }
+            }
+        }
+        return result
+    }
+
     /// Atime can change during our own header read or directory enumeration.
     /// Keep that observation only in this worker, bound to the exact object;
     /// it is never persisted or accepted from an administrator request.
@@ -275,6 +326,9 @@ final class NativeCore: @unchecked Sendable {
             let roots = self.cleanupRoots(home: home, mode: mode, control: control,
                                           orphanNames: orphanNames)
             let whitelist = self.loadWhitelist(homeDirectory: homeDirectory)
+            let residuePresence = Self.uninstallDataPresence(home: home.path, overriding: agentPresence)
+            let residueCandidates = self.uninstallResidueCandidates(home: home, presence: residuePresence, control: control)
+            let residueRoots = residueCandidates.flatMap { $0.1.map(\.path) }
             let broadRoots = Set(["Library/Caches", "Library/Logs", "Library/DiagnosticReports",
                                   ".cache", ".Trash"].map { home.appendingPathComponent($0).path })
             var candidates: [CleanupScanCandidate] = []
@@ -290,8 +344,7 @@ final class NativeCore: @unchecked Sendable {
             func overlaps(_ path: String, _ roots: [String]) -> Bool {
                 roots.contains { path == $0 || path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/") }
             }
-            // Uninstalled Agent data can contain history and credentials.
-            // Its explicit review flow must never enter the junk inventory.
+            // Exclusive data of absent owners is offered separately, unselected.
             for (root, label, _, _, retention) in roots {
                 guard !control.shouldStop else { break }
                 progress?.send(.init(phase: "discovery", completed: 0, total: 0, currentPath: root.path))
@@ -308,6 +361,7 @@ final class NativeCore: @unchecked Sendable {
                                 && !overlaps(path, agentRetainedPaths))
                             || !overlaps(path, agentDataRoots)),
                           !self.directlyMatchesWhitelist(path, entries: whitelist),
+                          !overlaps(path, residueRoots),
                           !Self.isCoveredByScannedRoot(path, roots: excludingScannedRoots) else { continue }
                     // A precise leaf replaces an overlapping broad parent before
                     // traversal. Never size or offer that parent for deletion.
@@ -480,8 +534,10 @@ final class NativeCore: @unchecked Sendable {
             // snapshot as complete, even if every admitted candidate was sized.
             if discoverySeconds >= control.totalBudget { deferred.append(home.path) }
             let ageGated = candidates.filter { $0.retention > 0 }.count
+            categories += self.uninstallResidueCategories(residueCandidates, home: home,
+                whitelist: whitelist, control: control, deferred: &deferred)
             if !control.isCancelled, deferred.isEmpty {
-                categories += self.appDataReviewCategories(home: home, offered: categories.flatMap(\.paths),
+                categories += self.appDataReviewCategories(home: home, offered: categories.flatMap(\.paths) + residueRoots,
                                                            whitelist: whitelist, scanControl: control)
             }
             return CleanupScan(categories: categories.sorted(by: CleanupCategory.sizeDescending),
@@ -547,7 +603,7 @@ final class NativeCore: @unchecked Sendable {
 
     static func appDataOwnerToken(_ path: String) -> String {
         var name = (path as NSString).lastPathComponent
-        for suffix in [".plist", ".savedState"] where name.hasSuffix(suffix) { name = String(name.dropLast(suffix.count)) }
+        for suffix in [".plist", ".savedState", ".binarycookies"] where name.hasSuffix(suffix) { name = String(name.dropLast(suffix.count)) }
         if name.hasPrefix("group.") { name = String(name.dropFirst("group.".count)) }
         if let range = name.range(of: #"^[A-Z0-9]{10}\."#, options: .regularExpression) {
             name = String(name[range.upperBound...])
@@ -576,7 +632,8 @@ final class NativeCore: @unchecked Sendable {
         }
         let roots = ["Library/Application Support", "Library/Containers", "Library/Group Containers",
                      "Library/HTTPStorages", "Library/WebKit", "Library/Saved Application State",
-                     "Library/Preferences"].map { home.appendingPathComponent($0, isDirectory: true) }
+                     "Library/Preferences", "Library/Application Scripts"]
+            .map { home.appendingPathComponent($0, isDirectory: true) }
         var leftovers: [String: [(String, UInt64)]] = [:]
         var leftoverNames: [String: String] = [:]
         var large: [(path: String, bytes: UInt64, owner: String)] = []
@@ -770,7 +827,7 @@ final class NativeCore: @unchecked Sendable {
         let installed = installedApplications(home: home)
         var refused: [String] = []
         var items: [DeletionPlan.Item] = []
-        for category in categories where category.isAppDataReview {
+        for category in categories where category.isAppDataReview && category.uninstallDataOwner == nil {
             for path in category.paths where category.isPathSelected(path) {
                 let normalized = CleanupRiskPolicy.normalizedPathLiteral(path)
                 let token = Self.appDataOwnerToken(normalized)
@@ -840,6 +897,16 @@ final class NativeCore: @unchecked Sendable {
         var deferred: [String] = []
         var administratorPaths = Set<String>()
         for category in categories where category.isAppDataReview {
+            if let owner = category.uninstallDataOwner {
+                let candidates = uninstallPlanner().dataCandidates(for: owner, home: homeDirectory,
+                    presence: Self.uninstallDataPresence(home: homeDirectory, overriding: nil))
+                let intact = category.paths.filter { path in
+                    candidates.contains { $0.removable && $0.path == path }
+                        && DeletionPlan.identity(at: path) == category.pathIdentities[path]
+                }
+                if let kept = category.retainingPaths(intact) { result.append(kept) }
+                continue
+            }
             let intact = category.paths.filter {
                 CleanupRiskPolicy.reviewTargetKind($0, homeDirectory: homeDirectory) != nil
                     && DeletionPlan.identity(at: $0) == category.pathIdentities[$0]
@@ -2118,6 +2185,7 @@ final class NativeCore: @unchecked Sendable {
                       allowedRoots: [String] = [],
                       allowApplicationBundle: Bool = false,
                       verifiedTargets: Set<String> = [],
+                      uninstallDataAuthorization: UninstallDataAuthorization? = nil,
                       atomicFamilies: [[String]] = [],
                       liveCleanupTargets: Set<String> = [],
                       finalValidation: ((String) -> Bool)? = nil,
@@ -2254,9 +2322,16 @@ final class NativeCore: @unchecked Sendable {
                 outcome.messages.append("Skipped lock file: \(path)")
                 return
             }
-            // Catalog verification, an old selection and uninstall scope must
-            // never bypass the owning application's history/index lifecycle.
-            guard !AgentCatalog.isManagedCleanupPath(path, protectedPaths: managedAgentPaths) else {
+            // Ordinary cleanup cannot delete history. Whole-app-data removal
+            // needs explicit consent and fresh exclusive ownership at this edge.
+            let explicitDataRemoval = !permanent && verifiedTargets.contains(path)
+                && uninstallDataAuthorization?.permits(path, identity: expectedIdentity, home: home) == true
+            if uninstallDataAuthorization?.identities[path] != nil && !explicitDataRemoval {
+                outcome.skipped += coveredCount
+                outcome.messages.append("Kept app data that is shared or no longer belongs to this uninstall: \(path)")
+                return
+            }
+            guard !AgentCatalog.isManagedCleanupPath(path, protectedPaths: managedAgentPaths) || explicitDataRemoval else {
                 outcome.skipped += coveredCount
                 outcome.messages.append("Kept Agent history or state; manage it through the owning application: \(path)")
                 return
@@ -2322,6 +2397,11 @@ final class NativeCore: @unchecked Sendable {
             if let finalValidation, !finalValidation(path) {
                 outcome.skipped += coveredCount
                 outcome.messages.append("Skipped because final content validation failed: \(path)")
+                return
+            }
+            if explicitDataRemoval && uninstallDataAuthorization?.permits(path, identity: expectedIdentity, home: home) != true {
+                outcome.skipped += coveredCount
+                outcome.messages.append("Kept app data whose ownership changed: \(path)")
                 return
             }
 
@@ -3091,6 +3171,140 @@ final class NativeCore: @unchecked Sendable {
         }.value
     }
 
+    func uninstalledAgentDataPlan(agentIDs: Set<String>, homeDirectory: String = NSHomeDirectory(),
+                                 presence: AgentPresenceContext? = nil) -> UninstallDataPlan {
+        uninstalledDataPlan(owner: .init(kind: .agent, name: agentIDs.sorted().joined(separator: ", "), agentIDs: agentIDs),
+                            homeDirectory: homeDirectory, presence: presence)
+    }
+
+    func rememberUninstallDataOwners(_ owners: [UninstallDataOwner], homeDirectory: String = NSHomeDirectory()) {
+        UninstallResidueStore.remember(owners, home: homeDirectory)
+    }
+
+    func uninstallDataOwner(for app: UninstallApp, homeDirectory: String = NSHomeDirectory()) -> UninstallDataOwner {
+        if !fileManager.fileExists(atPath: app.path),
+           let saved = UninstallResidueStore.owners(home: homeDirectory).first(where: { $0.kind == .application && $0.bundleID == app.bundleID }) {
+            return saved
+        }
+        return uninstallPlanner().dataOwner(for: app)
+    }
+
+    func uninstalledDataPlan(owner: UninstallDataOwner, homeDirectory: String = NSHomeDirectory(),
+                             presence: AgentPresenceContext? = nil) -> UninstallDataPlan {
+        let home = CleanupRiskPolicy.normalizedPathLiteral(homeDirectory)
+        let files = uninstallPlanner().dataCandidates(for: owner, home: home,
+            presence: Self.uninstallDataPresence(home: home, overriding: presence)).map {
+            UninstallFile(bytes: directorySize(URL(fileURLWithPath: $0.path)),
+                          label: $0.removable ? "agentData" : "protected", path: $0.path)
+        }
+        let identities = files.reduce(into: [String: String]()) { result, file in
+            if let identity = DeletionPlan.identity(at: file.path) { result[file.path] = identity }
+        }
+        return UninstallDataPlan(files: files, owner: owner, home: home,
+                                 identities: identities, presence: presence)
+    }
+
+    private func uninstallResidueCandidates(home: URL, presence: AgentPresenceContext, control: CleanupScanControl)
+        -> [(UninstallDataOwner, [AgentCatalog.UninstallDataCandidate])] {
+        let planner = uninstallPlanner()
+        let installed = installedApplications(home: home)
+        var owners = UninstallResidueStore.owners(home: home.path)
+        for appURL in directChildren(of: home.appendingPathComponent(".Trash"))
+            where appURL.pathExtension.lowercased() == "app" && !isSymlink(appURL) {
+            if let metadata = applicationMetadata(at: appURL) {
+                let app = UninstallApp(name: metadata.name, bundleID: metadata.bundleID,
+                    source: "Trash", path: appURL.path, size: "0")
+                var owner = planner.dataOwner(for: app)
+                owner.installationPath = ""
+                owners.append(owner)
+            }
+        }
+        // Bundle-ID evidence also finds leftovers never seen by Nori. An
+        // arbitrary ~/.name directory alone is not proof of an uninstall.
+        for root in ["Library/Application Support", "Library/Containers", "Library/Group Containers",
+                     "Library/Preferences", "Library/HTTPStorages", "Library/WebKit", "Library/Application Scripts",
+                     "Library/Saved Application State"] {
+            for url in directChildren(of: home.appendingPathComponent(root)) where !control.shouldStop {
+                let token = Self.appDataOwnerToken(url.path)
+                guard Self.isOrphanedAppToken(token, installed: installed) else { continue }
+                owners.append(.init(kind: .application, name: token, bundleID: token, names: [token]))
+            }
+        }
+        owners += AgentCatalog.definitions.filter { AgentCatalog.installationPresence(for: $0) != nil }
+            .map { .init(kind: .agent, name: $0.name, agentIDs: [$0.id]) }
+        var seenOwners = Set<String>(), claimed: [String] = []
+        var result: [(UninstallDataOwner, [AgentCatalog.UninstallDataCandidate])] = []
+        for owner in owners where !control.shouldStop && seenOwners.insert(owner.id).inserted {
+            guard !planner.ownerIsInstalled(owner, home: home.path, presence: presence) else { continue }
+            let candidates = planner.dataCandidates(for: owner, home: home.path, presence: presence,
+                protectedRoots: claimed)
+            guard !candidates.isEmpty else { continue }
+            // A generic owner can reserve a protected path for legacy-scan
+            // exclusion, but must not hide it from its actual catalog owner.
+            claimed += candidates.filter(\.removable).map(\.path)
+            result.append((owner, candidates))
+        }
+        return result
+    }
+
+    private func uninstallResidueCategories(_ candidates: [(UninstallDataOwner, [AgentCatalog.UninstallDataCandidate])],
+        home: URL, whitelist: [String], control: CleanupScanControl, deferred: inout [String]) -> [CleanupCategory] {
+        var result: [CleanupCategory] = []
+        for (owner, entries) in candidates {
+            var sizes: [String: UInt64] = [:]
+            for entry in entries where entry.removable && !matchesWhitelist(entry.path, entries: whitelist) {
+                guard !control.shouldStop else { deferred.append(entry.path); continue }
+                let measurement = CleanupScanWorker.measure(entry.path, control: control)
+                if !measurement.complete { deferred.append(entry.path) }
+                if measurement.bytes > 0 { sizes[entry.path] = measurement.bytes }
+            }
+            guard !sizes.isEmpty else { continue }
+            var category = CleanupCategory(name: owner.name + " leftovers", paths: sizes.keys.sorted(),
+                bytes: sizes.values.reduce(0, &+), pathBytes: sizes, selected: false, source: .appLeftover,
+                risk: .warning, disposal: .permanentDelete, applyRoute: .genericTrash,
+                activityGuard: .appData, reasonKey: "cleanup.risk.uninstallData")
+            category.activityOwners = Array(Set([owner.name, owner.bundleID] + owner.commands).subtracting([""]))
+            category.uninstallDataOwner = owner
+            result.append(category)
+        }
+        return result
+    }
+
+    /// A fresh scan can refuse a reviewed path, never replace or expand it.
+    func applyUninstallResidues(_ categories: [CleanupCategory], homeDirectory: String = NSHomeDirectory(),
+                               presence: AgentPresenceContext? = nil,
+                               trashHandler: ((URL) throws -> Void)? = nil) -> ApplySummary {
+        var results: [ApplySummary] = []
+        for category in categories where category.isAppDataReview {
+            guard let owner = category.uninstallDataOwner else { continue }
+            let plan = UninstallDataPlan(files: category.paths.map {
+                .init(bytes: category.pathBytes[$0] ?? 0, label: "agentData", path: $0)
+            }, owner: owner, home: homeDirectory, identities: category.pathIdentities, presence: presence)
+            results.append(applyUninstalledAgentData(plan, selecting: category.selectedPaths, trashHandler: trashHandler))
+        }
+        return ApplySummary(removed: results.reduce(0) { $0 + $1.removed },
+            skipped: results.reduce(0) { $0 + $1.skipped }, failed: results.reduce(0) { $0 + $1.failed },
+            messages: results.flatMap(\.messages), removedPaths: results.reduce(into: Set<String>()) { $0.formUnion($1.removedPaths) },
+            reclaimedBytes: results.reduce(0) { $0 &+ $1.reclaimedBytes })
+    }
+
+    func applyUninstalledAgentData(_ plan: UninstallDataPlan, selecting paths: Set<String>,
+                                  trashHandler: ((URL) throws -> Void)? = nil) -> ApplySummary {
+        let selectable = Set(plan.files.filter(\.isAgentData).map(\.path))
+        guard paths.isSubset(of: selectable), let families = UninstallFile.databaseFamilies(plan.files, selecting: paths) else {
+            return .init(removed: 0, skipped: 0, failed: 1, messages: ["Uninstall data selection is not in the reviewed plan."])
+        }
+        let identities = plan.identities.filter { paths.contains($0.key) }
+        let authorization = UninstallDataAuthorization(owner: plan.owner, core: self, home: plan.home,
+            identities: identities, presence: plan.presence)
+        let items = paths.sorted().compactMap { path in identities[path].map { DeletionPlan.Item(record: path, identity: $0) } }
+        guard items.count == paths.count else {
+            return .init(removed: 0, skipped: 0, failed: 1, messages: ["Uninstall data has no confirmed file identity."])
+        }
+        return applyCleanup(items: items, permanent: false, homeDirectory: plan.home,
+            verifiedTargets: paths, uninstallDataAuthorization: authorization, atomicFamilies: families, trashHandler: trashHandler)
+    }
+
     func dotDirectoryCandidates(for app: UninstallApp, home: URL, otherApps: [URL]) -> [URL] {
         uninstallPlanner().dotDirectoryCandidates(for: app, home: home, otherApps: otherApps)
     }
@@ -3106,6 +3320,10 @@ final class NativeCore: @unchecked Sendable {
                         homeDirectory: String = NSHomeDirectory(),
                         appAlreadyRemoved: Bool = false,
                         includingData: Set<String> = []) -> ApplySummary {
+        let dataOwner = uninstallPlanner().dataOwner(for: app)
+        guard let families = UninstallFile.databaseFamilies(reviewedPlan.files, selecting: includingData) else {
+            return .init(removed: 0, skipped: 0, failed: 1, messages: ["Select the complete database family before removing app data."])
+        }
         let plan = reviewedPlan.includingData(includingData)
         if appAlreadyRemoved {
             guard !fileManager.fileExists(atPath: app.path), !isSymlink(URL(fileURLWithPath: app.path)) else {
@@ -3161,9 +3379,14 @@ final class NativeCore: @unchecked Sendable {
                 return verifyUninstallResult(result, files: plan.files)
             }
         }
+        let agentDataPaths = Set(reviewedPlan.files.filter(\.isAgentData).map(\.path)).intersection(includingData)
+        let authorization = UninstallDataAuthorization(
+            owner: dataOwner, core: self, home: home.path,
+            identities: plan.fileIdentities.filter { agentDataPaths.contains($0.key) }, presence: nil)
         let residues = applyCleanup(items: items.filter { $0.record != app.path }, permanent: false,
                                     homeDirectory: homeDirectory,
-                                    verifiedTargets: includingData.intersection(reviewedPlan.dataPaths))
+                                    verifiedTargets: includingData.intersection(reviewedPlan.dataPaths),
+                                    uninstallDataAuthorization: authorization, atomicFamilies: families)
         result = ApplySummary(removed: result.removed + residues.removed,
                               skipped: result.skipped + residues.skipped,
                               failed: result.failed + residues.failed,

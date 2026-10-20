@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Security
 
 struct ApplicationBundleMetadata: Sendable {
     let name: String
@@ -11,8 +12,13 @@ protocol ApplicationInventoryReading: Sendable {
     func roots(home: URL) -> [(URL, String)]
     func children(of directory: URL) -> [URL]
     func metadata(at url: URL) -> ApplicationBundleMetadata?
+    func applicationGroups(at url: URL) -> Set<String>
     func directoryIdentity(_ url: URL) -> String?
     func installedApps(in roots: [(URL, String)]) -> [UninstallApp]
+}
+
+extension ApplicationInventoryReading {
+    func applicationGroups(at url: URL) -> Set<String> { [] }
 }
 
 struct NativeApplicationInventory: ApplicationInventoryReading {
@@ -60,6 +66,21 @@ struct NativeApplicationInventory: ApplicationInventoryReading {
             ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
             ?? url.deletingPathExtension().lastPathComponent
         return .init(name: name, bundleID: bundleID)
+    }
+
+    /// Read group ownership from the embedded signature without launching a
+    /// helper process or recursively enumerating the application bundle.
+    func applicationGroups(at url: URL) -> Set<String> {
+        var code: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess,
+              let code else { return [] }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation),
+                                            &information) == errSecSuccess,
+              let dictionary = information as? [CFString: Any],
+              let entitlements = dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any],
+              let groups = entitlements["com.apple.security.application-groups"] as? [String] else { return [] }
+        return Set(groups.filter(CleanupRiskPolicy.isValidReverseDNSOwner))
     }
 
     func directoryIdentity(_ url: URL) -> String? {

@@ -12,6 +12,9 @@ enum L10nDirectoryTables {
     }
 
     static let en: [String: String] = [
+        "dir.sort.hint": "Sort by %@; click again to reverse the order.",
+        "dir.sort.ascending": "Ascending",
+        "dir.sort.descending": "Descending",
         "dir.git.repository": "Git repository",
         "dir.git.statusUnavailable": "Git status unavailable",
         "dir.git.cachedStatus": "Compared with the last fetched upstream state.",
@@ -156,6 +159,9 @@ enum L10nDirectoryTables {
     ]
 
     static let zhHans: [String: String] = [
+        "dir.sort.hint": "按%@排序，再次点击切换升降序。",
+        "dir.sort.ascending": "升序",
+        "dir.sort.descending": "降序",
         "dir.git.repository": "Git 仓库",
         "dir.git.statusUnavailable": "Git 状态不可用",
         "dir.git.cachedStatus": "与最近一次抓取的上游状态比较。",
@@ -300,6 +306,9 @@ enum L10nDirectoryTables {
     ]
 
     static let zhHant: [String: String] = [
+        "dir.sort.hint": "按%@排序，再按一下切換升降序。",
+        "dir.sort.ascending": "升冪",
+        "dir.sort.descending": "降冪",
         "dir.git.repository": "Git 儲存庫",
         "dir.git.statusUnavailable": "Git 狀態無法使用",
         "dir.git.cachedStatus": "與最近一次擷取的上游狀態比較。",

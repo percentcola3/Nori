@@ -173,6 +173,13 @@ final class AppState {
     func offerAgentAssociatedDataCleanup(agentIDs: Set<String>, programName: String? = nil) {
         dataOffers.append(.init(agentIDs: agentIDs, programName: programName))
     }
+    func offerApplicationAssociatedDataCleanup(_ app: UninstallApp) {
+        offerAgentAssociatedDataCleanup(agentIDs: AgentSoftwareInventory.agentIDs(for: app), programName: app.name)
+    }
+    func offerCommandLineToolAssociatedDataCleanup(_ tool: CommandLineTool) {
+        guard let installation = tool.agentInstallation else { return }
+        offerAgentAssociatedDataCleanup(agentIDs: [installation.agentID], programName: installation.name)
+    }
 }
 
 @main
@@ -321,8 +328,8 @@ struct AgentProgramRemovalTests {
         try await waitUntil { !state.uninstallExecutor.jobs.isEmpty && state.agentProgramBusyID == nil }
         precondition(state.uninstallExecutor.jobs.count == 1 && state.uninstallExecutor.jobs[0].app == selected
                      && state.uninstallExecutor.jobs[0].plan == nil && state.uninstallExecutor.jobs[0].dataPaths.isEmpty
-                     && state.uninstallExecutor.jobs[0].scope == .installationOnly,
-                     "Desktop removal must capture only the chosen app, without implicit data selection")
+                     && state.uninstallExecutor.jobs[0].scope == .applicationAndResidues,
+                     "Desktop uninstall must include its disposable residues without implicit app-data selection")
         if success {
             precondition(state.installedApps == [sameAgent, otherAgent] && state.agentApplications["agent-one"] == [sameAgent]
                          && state.agentApplications["shared-desktop"]!.isEmpty

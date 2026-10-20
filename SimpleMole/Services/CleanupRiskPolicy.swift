@@ -561,7 +561,8 @@ enum CleanupRiskPolicy {
         let parent = (normalized as NSString).deletingLastPathComponent
         switch parent {
         case home + "/Library/Application Support", home + "/Library/Containers",
-             home + "/Library/Group Containers", home + "/Library/HTTPStorages", home + "/Library/WebKit":
+             home + "/Library/Group Containers", home + "/Library/HTTPStorages", home + "/Library/WebKit",
+             home + "/Library/Application Scripts":
             return true
         case home + "/Library/Saved Application State":
             return lower.hasSuffix(".savedstate")
@@ -1113,6 +1114,26 @@ enum CleanupRiskPolicy {
         case .toolCommand, .none:
             return false
         }
+    }
+
+    /// Shared publication boundary for fresh scans and restored inventories.
+    static func presentationCategories(_ source: [CleanupCategory],
+                                       running snapshot: RunningApplicationSnapshot,
+                                       homeDirectory: String = NSHomeDirectory()) -> [CleanupCategory] {
+        let candidates = CleanupCategory.safeCleanupCandidates(from: source)
+            + source.filter(\.isAppDataReview)
+        let available = candidates.compactMap { category -> CleanupCategory? in
+            // Review data is an explicit, unselected inventory, not junk.
+            // Keep its row even when runtime guards clear its selection.
+            if category.isAppDataReview {
+                return runtimeEligibleSubset(category, running: snapshot, homeDirectory: homeDirectory)
+            }
+            let reviewed = category.selectingPaths(category.paths)
+            return runtimeEligibleSubset(reviewed, running: snapshot, homeDirectory: homeDirectory)?
+                .selectedSubset?.selectingPaths(Array(category.selectedPaths))
+        }
+        return CleanupCategory.mergingLongTail(available, homeDirectory: homeDirectory)
+            .sorted(by: CleanupCategory.sizeDescending)
     }
 
     /// 应用执行前使用新快照重判。风险只会保持或升高，不会在旧扫描上降级。
