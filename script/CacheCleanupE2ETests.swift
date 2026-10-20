@@ -29,13 +29,19 @@ import Foundation
     }
     static func scan(_ core: NativeCore, _ home: URL) async -> NativeCore.CleanupScan {
         await core.scanCleanup(homeDirectory: home.path, mode: .deep,
-            agentPresence: AgentPresenceContext(applicationDirs: [], searchPath: []))
+            agentPresence: AgentPresenceContext(applicationDirs: [home.path + "/Applications"], searchPath: []))
     }
     static func roundTrip(_ item: CacheFixtureCase, fixture: URL) async throws {
         let home = fixture.appendingPathComponent(item.name + "/home")
         let root = home.appendingPathComponent(item.root)
         let payload = root.appendingPathComponent("fixture.cache")
         try write(payload)
+        // These cases exercise caches of installed apps. Absent owners use
+        // the separate, unselected uninstall-data review inventory.
+        for name in ["Codex", "Cursor", "Zed"] {
+            try fm.createDirectory(at: home.appendingPathComponent("Applications/" + name + ".app"),
+                                   withIntermediateDirectories: true)
+        }
         var preserved = ["Documents/user.txt", ".codex/auth.json", ".codex/sessions/history.jsonl",
                          ".cache/huggingface/models/weights", ".npm/custom-data/keep"]
         if let profile = item.root.range(of: "/Default/") {

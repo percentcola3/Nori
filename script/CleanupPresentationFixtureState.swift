@@ -46,6 +46,7 @@ final class AppState: ObservableObject {
     @Published var agentStorageFootprints: [String: AgentStorageFootprint] = [:]
     @Published var agentCLIBodySizes: [String: AgentInstallationSize] = [:]
     @Published var agentProgramBusyID: String?
+    var uninstallDataReview: UUID?
     @Published var agentSelectedCLIInstallations = Set<String>()
     @Published var agentSelectedSkills = Set<String>()
     @Published var agentSelectedServers = Set<String>()

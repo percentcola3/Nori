@@ -57,6 +57,7 @@ final class AppState {
     var isAutoCleanupMutationActive = false
     var agentApplying = false
     var agentProgramBusyID: String?
+    var uninstallDataReview: UUID?
     var isCheckingSoftwareUpdates = false
     struct Confirmation {
         let title: String

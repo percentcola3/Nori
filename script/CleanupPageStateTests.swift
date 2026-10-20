@@ -61,6 +61,7 @@ private final class PageStateFixture {
     var isCleanupTaskBusy: Bool { isApplying || cleanupQueued }
     var agentApplying = false
     var agentProgramBusyID: String?
+    var uninstallDataReview: UUID?
     var commandLineToolBusyID: String?
     var softwareUpdatingID: String?
     var uninstallQueue = QueueFixture()
@@ -139,7 +140,7 @@ struct CleanupPageStateTests {
 
     private static func testMutationBoundaries() async throws {
         let captured = category(["/fixture/captured"])
-        for gate in ["agent-data", "agent-program", "cli-uninstall", "software-update"] {
+        for gate in ["agent-data", "agent-program", "data-review", "cli-uninstall", "software-update"] {
             let page = PageStateFixture()
             page.isApplying = false
             page.categories = [captured]
@@ -147,6 +148,7 @@ struct CleanupPageStateTests {
                 installers: nil, maintenanceIDs: [], result: .init(), verified: true)
             if gate == "agent-data" { page.agentApplying = true }
             if gate == "agent-program" { page.agentProgramBusyID = "other-agent" }
+            if gate == "data-review" { page.uninstallDataReview = UUID() }
             if gate == "cli-uninstall" { page.commandLineToolBusyID = "other-cli" }
             if gate == "software-update" { page.softwareUpdatingID = "other-update" }
             page.applyCleanup()
@@ -156,6 +158,7 @@ struct CleanupPageStateTests {
                          "Shared mutation consumed the captured cleanup retry")
             page.agentApplying = false
             page.agentProgramBusyID = nil
+            page.uninstallDataReview = nil
             page.commandLineToolBusyID = nil
             page.softwareUpdatingID = nil
             page.categories = [category(["/fixture/new-selection"])]

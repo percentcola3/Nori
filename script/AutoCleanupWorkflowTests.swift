@@ -161,6 +161,7 @@ enum ProtectedOperation { case previewAutoCleanup(ruleID: UUID), runAutoCleanup(
     var isSystemMaintenanceRunning = false
     var agentApplying = false
     var agentProgramBusyID: String?
+    var uninstallDataReview: UUID?
     var commandLineToolBusyID: String?
     var softwareUpdatingID: String?
     let automationRuntime = AutomationRuntimeState()

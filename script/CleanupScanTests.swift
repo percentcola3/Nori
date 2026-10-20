@@ -130,6 +130,12 @@ struct CleanupScanTests {
         try fm.createSymbolicLink(at: home.appendingPathComponent("Library/Application Support/Claude"),
                                   withDestinationURL: outside)
 
+        // Keep the installed-app cache contract separate from the orphan
+        // data review cases below, with valid bundle-ID installation evidence.
+        let wechatInfo = home.appendingPathComponent("Applications/WeChat.app/Contents/Info.plist")
+        try fm.createDirectory(at: wechatInfo.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.tencent.xinWeChat",
+            "CFBundleName": "WeChat"], format: .xml, options: 0).write(to: wechatInfo)
         let installedPresence = AgentPresenceContext(applicationDirs: [home.path + "/Applications"], searchPath: [])
         let catalogLeaves = [".hex/cache", ".rbenv/cache", ".gem/specs", ".bundle/cache", ".cpan/build",
                              ".kube/cache", ".config/gcloud/logs", ".azure/logs", ".npm/_logs",
@@ -477,6 +483,9 @@ struct CleanupScanTests {
         let shared = wechatHome.appendingPathComponent(WeChatStorage.filesRelativeRoot + "/all_users/login/key")
         try fm.createDirectory(at: shared.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data(repeating: 8, count: 8192).write(to: shared)
+        let installedWeChat = wechatHome.appendingPathComponent("Applications/WeChat.app/Contents/Info.plist")
+        try fm.createDirectory(at: installedWeChat.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.copyItem(at: wechatInfo, to: installedWeChat)
         let wechatScan = await NativeCore(cleanupOpenFileProbe: { [] }).scanCleanup(homeDirectory: wechatHome.path)
         let wechat = wechatScan.categories.filter { $0.name.hasPrefix("WeChat") }
         let wechatPaths = Set(wechat.flatMap(\.paths))
