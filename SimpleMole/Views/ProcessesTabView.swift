@@ -147,7 +147,7 @@ struct ProcessesTabView: View {
                 } label: {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(group.children.isEmpty ? Color.clear : Color.secondary)
+                        .foregroundStyle(group.children.isEmpty ? Color.clear : Color.textSecondary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                         .frame(width: 14, height: 26)
                 }
@@ -438,7 +438,7 @@ private struct ProcessMetric: View {
                 .foregroundStyle(.tertiary)
             Text(value)
                 .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                .foregroundStyle(isElevated ? Color.warning : Color.secondary)
+                .foregroundStyle(isElevated ? Color.warning : Color.textSecondary)
                 .lineLimit(1)
         }
         .frame(width: 62, alignment: .trailing)

@@ -222,7 +222,7 @@ struct CleanupTabView: View {
             HStack(spacing: 8) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 13))
-                    .foregroundStyle(isSelected ? Color.moleAccentText : Color.secondary)
+                    .foregroundStyle(isSelected ? Color.moleAccentText : Color.textSecondary)
                     .frame(width: 18)
                 Image(systemName: "cylinder.split.1x2")
                     .font(.system(size: 11))

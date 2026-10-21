@@ -32,7 +32,7 @@ struct AgentHistoryView: View {
             if let key = page.statusKey, !key.hasPrefix("agents.history.error"), page.failureKeys.isEmpty {
                 Text(statusText(key))
                     .font(.system(size: 11))
-                    .foregroundStyle(key.hasPrefix("agents.history.error") ? Color.warning : Color.secondary)
+                    .foregroundStyle(key.hasPrefix("agents.history.error") ? Color.warning : Color.textSecondary)
                     .textSelection(.enabled)
             }
             if store.busy == provider {
@@ -119,7 +119,7 @@ struct AgentHistoryView: View {
         Button { store.toggle(row, state: state) } label: {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: page.selection.contains(row.id) ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(row.canSelect ? Color.moleAccentText : Color.secondary)
+                    .foregroundStyle(row.canSelect ? Color.moleAccentText : Color.textSecondary)
                     .padding(.top, 2)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(row.title).font(.system(size: 12, weight: .medium)).lineLimit(2)

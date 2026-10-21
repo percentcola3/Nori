@@ -186,7 +186,7 @@ struct DuplicateFileRow: View {
                 HStack(spacing: 10) {
                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 14))
-                        .foregroundStyle(isSelected ? Color.moleAccentText : Color.secondary)
+                        .foregroundStyle(isSelected ? Color.moleAccentText : Color.textSecondary)
                     DuplicateThumbnail(path: member.path,
                                        isImage: member.imageInfo != nil || DuplicateThumbnail.isImagePath(member.path))
                     VStack(alignment: .leading, spacing: 3) {

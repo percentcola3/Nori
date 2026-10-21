@@ -471,11 +471,11 @@ private struct BreakdownValue: View {
         VStack(alignment: .leading, spacing: 2) {
             Label(label, systemImage: symbol)
                 .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(accented ? Color.moleAccentText : Color.secondary)
+                .foregroundStyle(accented ? Color.moleAccentText : Color.textSecondary)
                 .lineLimit(1)
             Text(bytes.map(ByteFormat.format) ?? "—")
                 .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                .foregroundStyle(accented ? Color.moleAccentText : Color.primary)
+                .foregroundStyle(accented ? Color.moleAccentText : Color.textPrimary)
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -548,7 +548,7 @@ private struct UninstallFileDrawer: View {
             Image(systemName: symbol(for: file))
                 .font(.system(size: 10))
                 .foregroundStyle(file.informational
-                    ? Color.secondary
+                    ? Color.textSecondary
                     : (file.isCache ? Color.moleAccentText : Color.moleAccent))
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 1) {

@@ -284,7 +284,7 @@ private struct DiskBreadcrumb: View {
         return Button { onNavigate(path) } label: {
             Text(title(path))
                 .font(.system(size: 11, weight: isLast ? .semibold : .regular))
-                .foregroundStyle(isLast ? Color.primary : Color.secondary)
+                .foregroundStyle(isLast ? Color.textPrimary : Color.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
@@ -329,7 +329,7 @@ private struct DiskBrowserRow: View {
                 HStack(spacing: 7) {
                     Image(systemName: entry.isDir ? "folder.fill" : "doc")
                         .font(.system(size: 13))
-                        .foregroundStyle(entry.isDir || isSelected ? Color.moleAccentText : Color.secondary)
+                        .foregroundStyle(entry.isDir || isSelected ? Color.moleAccentText : Color.textSecondary)
                         .frame(width: 16)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(entry.name).font(.system(size: 11, weight: isSelected || isOpened ? .semibold : .medium))

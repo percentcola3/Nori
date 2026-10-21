@@ -156,7 +156,7 @@ struct AnalyzeTabView: View {
             Button { state.toggleAnalysisFileSelection(item) } label: {
                 HStack(spacing: 10) {
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 14)).foregroundStyle(selected ? Color.moleAccentText : Color.secondary)
+                        .font(.system(size: 14)).foregroundStyle(selected ? Color.moleAccentText : Color.textSecondary)
                     if mode == .images {
                         MediaThumbnail(path: item.path, size: item.size, kind: .image)
                     } else {
@@ -373,7 +373,7 @@ private struct AnalysisSelectionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(isActive ? Color.moleAccentText
-                : isEnabled && (isHovering || configuration.isPressed) ? Color.primary : Color.secondary)
+                : isEnabled && (isHovering || configuration.isPressed) ? Color.textPrimary : Color.textSecondary)
             .frame(width: 32, height: 32)
             .background {
                 if isEnabled && (isHovering || configuration.isPressed) {
@@ -412,7 +412,7 @@ private struct AnalysisIconButtonStyle: ButtonStyle {
     private func icon(_ configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(quiet ? Color.secondary : isEnabled ? Color.primary : Color.secondary)
+            .foregroundStyle(quiet ? Color.textSecondary : isEnabled ? Color.textPrimary : Color.textSecondary)
             .frame(width: 28, height: 28)
             .contentShape(Capsule())
     }
@@ -425,7 +425,7 @@ private struct AnalysisActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(isEnabled ? tint : Color.secondary)
+            .foregroundStyle(isEnabled ? tint : Color.textSecondary)
             .padding(.horizontal, 12)
             .frame(height: 30)
             .contentShape(Capsule())

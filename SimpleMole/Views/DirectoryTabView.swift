@@ -560,7 +560,7 @@ private struct DirectoryFileRow<MenuContent: View>: View {
                     .help(l10n.t("dir.git.repository"))
             } else {
                 Image(systemName: entry.isSymbolicLink ? "arrowshape.turn.up.right" : entry.isDirectory ? "folder.fill" : "doc")
-                .foregroundStyle(entry.isDirectory ? Color.accentText : Color.secondary)
+                .foregroundStyle(entry.isDirectory ? Color.accentText : Color.textSecondary)
                 .font(.system(size: 16)).frame(width: 22)
             }
             VStack(alignment: .leading, spacing: 3) {
@@ -582,7 +582,7 @@ private struct DirectoryFileRow<MenuContent: View>: View {
             Group {
                 if let pathMatch {
                     Text(pathMatch == 100 ? l10n.t("dir.path.exact") : l10n.tf("dir.path.similarity", pathMatch))
-                        .foregroundStyle(pathMatch == 100 ? Color.success : Color.secondary)
+                        .foregroundStyle(pathMatch == 100 ? Color.success : Color.textSecondary)
                 } else if let modified = entry.modifiedAt {
                     Text(modified, format: .dateTime.year().month(.twoDigits).day(.twoDigits).hour().minute())
                 } else { Text("—") }
@@ -639,7 +639,7 @@ private struct DirectoryDiskSize: View {
                 Text(l10n.t(state == .unavailable ? "dir.size.unavailable" : "dir.size.pending"))
             }
         }
-        .font(.system(size: 10).monospacedDigit()).foregroundStyle(showsLowerBound ? Color.warning : Color.secondary)
+        .font(.system(size: 10).monospacedDigit()).foregroundStyle(showsLowerBound ? Color.warning : Color.textSecondary)
         .lineLimit(1)
         .help(helpText)
         .accessibilityElement(children: .combine)

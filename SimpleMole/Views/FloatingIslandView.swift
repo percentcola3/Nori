@@ -684,7 +684,7 @@ struct FloatingIslandView: View {
         Image(systemName: "gearshape")
             .font(.system(size: 14, weight: .semibold))
             .rotationEffect(.degrees(moreHovered && !reduceMotion ? 30 : 0))
-            .foregroundStyle(moreHovered ? Color.accentText : Color.secondary)
+            .foregroundStyle(moreHovered ? Color.accentText : Color.textSecondary)
             .frame(width: IslandLayout.moreWidth, height: height)
             .contentShape(Rectangle())
         .animation(reduceMotion ? nil : MoleMotion.press, value: moreHovered)
@@ -793,7 +793,7 @@ struct FloatingIslandView: View {
                 .font(.system(size: 9, weight: .medium))
                 .lineLimit(1)
         }
-        .foregroundStyle(highlighted ? Color.accentText : Color.secondary)
+        .foregroundStyle(highlighted ? Color.accentText : Color.textSecondary)
         .frame(height: 11, alignment: .leading)
     }
 
@@ -831,7 +831,7 @@ struct FloatingIslandView: View {
                          tint: Color.success)
                 rateLine(symbol: "arrow.up",
                          text: ByteFormat.megabytesPerSecond(metricsStore.metrics.networkTxMBps),
-                         tint: Color.secondary)
+                         tint: Color.textSecondary)
             }
             Spacer(minLength: 1)
             IslandSparkline(primary: metricsStore.networkHistory, secondary: metricsStore.networkUploadHistory)
@@ -874,10 +874,10 @@ struct FloatingIslandView: View {
             let level = metricsStore.metrics.thermalLevel
             health = level >= 2 || temperature >= 90 ? .high : level == 1 || temperature >= 75 ? .elevated : .healthy
         case .bluetooth:
-            guard let lowest = metricsStore.metrics.bluetoothBatteries.first?.percent else { return Color.secondary }
+            guard let lowest = metricsStore.metrics.bluetoothBatteries.first?.percent else { return Color.textSecondary }
             health = lowest <= 10 ? .high : lowest <= 25 ? .elevated : .healthy
         case .gpu where metricsStore.metrics.gpuPercent == nil, .power where metricsStore.metrics.systemPowerWatts == nil:
-            return Color.secondary
+            return Color.textSecondary
         default: health = IslandResourcePolicy.health(percent: progress(item) * 100)
         }
         switch health {
@@ -1150,7 +1150,7 @@ private struct IslandSparkline: View {
     var body: some View {
         Canvas { context, size in
             let peak = max(primary.max() ?? 0, secondary.max() ?? 0, 0.05)
-            Self.stroke(&context, values: secondary, in: size, peak: peak, color: Color.primary.opacity(0.40))
+            Self.stroke(&context, values: secondary, in: size, peak: peak, color: Color.textPrimary.opacity(0.40))
             Self.stroke(&context, values: primary, in: size, peak: peak, color: Color.success)
         }
         .accessibilityHidden(true)
@@ -1205,7 +1205,7 @@ private struct IslandQuitButton: View {
                 } else {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(hovered && isEnabled ? Color.danger : Color.secondary)
+                        .foregroundStyle(hovered && isEnabled ? Color.danger : Color.textSecondary)
                 }
             }
             .frame(width: 24, height: 24)

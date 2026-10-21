@@ -33,7 +33,7 @@ struct DirectoryPathBar: View {
                 pathContent(crumbs: crumbs, plan: plan)
                 Button(action: onCopy) {
                     Image(systemName: isPathCopied ? "checkmark" : "doc.on.doc")
-                        .foregroundStyle(isPathCopied ? Color.success : Color.secondary)
+                        .foregroundStyle(isPathCopied ? Color.success : Color.textSecondary)
                 }
                 .buttonStyle(MoleIconButtonStyle(size: 30))
                 .help(l10n.t(isPathCopied ? "dir.path.copied" : "dir.path.copy"))
@@ -136,7 +136,7 @@ struct DirectoryPathBar: View {
     private func crumbLabel(_ crumb: DirectoryPathCrumb, width: CGFloat, current: Bool = false) -> some View {
         Text(crumb.title)
             .font(.system(size: 11, weight: current ? .semibold : .medium))
-            .foregroundStyle(current ? Color.accentText : Color.primary)
+            .foregroundStyle(current ? Color.accentText : Color.textPrimary)
             .lineLimit(1).truncationMode(.middle)
             .padding(.horizontal, min(6, max(0, width / 4 - 1)))
             .frame(width: width, height: 26, alignment: .leading)

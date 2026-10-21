@@ -37,7 +37,7 @@ struct IslandMetricGauge: View {
             .frame(width: 36, height: 36)
             Text(title)
                 .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(highlighted ? Color.accentText : Color.secondary)
+                .foregroundStyle(highlighted ? Color.accentText : Color.textSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
         }

@@ -209,7 +209,7 @@ private struct ClipboardFilterButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(isSelected ? Color.moleAccentText : Color.secondary)
+            .foregroundStyle(isSelected ? Color.moleAccentText : Color.textSecondary)
             .padding(.horizontal, 12)
             .frame(height: 30)
             .background(

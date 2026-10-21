@@ -22,28 +22,37 @@ import SwiftUI
 
 /// 品牌配色的原始值：token 与对比度测试共用同一份数据。
 enum EarthBluePalette {
-    static let accentDark: UInt32 = 0x9BDBEF
+    static let accentDark: UInt32 = 0x7FD0EE
     static let accentLight: UInt32 = 0x0F5F7A
-    static let accentTextDark: UInt32 = 0xC4ECF7
+    static let accentTextDark: UInt32 = 0xA8DFF4
     static let accentTextLight: UInt32 = 0x0C4A5F
     static let onAccentDark: UInt32 = 0x082B3A
     static let onAccentLight: UInt32 = 0xFFFFFF
-    /// 玻璃着色在典型后景（深色桌面 / 浅色桌面）上的等效实底，用于对比度估算。
-    static let glassDark: UInt32 = 0x164459
-    static let glassLight: UInt32 = 0xEDF6FA
+    /// 主窗口玻璃在深色桌面上的实测合成色（截图取色拟合），用于对比度估算，
+    /// 同时是"减少透明度"时的实底。
+    static let glassDark: UInt32 = 0x1D5488
+    static let glassLight: UInt32 = 0xE6F4FA
     static let tintDark: UInt32 = 0x164459
     static let tintLight: UInt32 = 0xE9F5FA
-    /// 主窗口采用偏天蓝的晴海蓝，减少灰绿感；轻着色保留系统磨砂材质。
-    /// 实际合成颜色随壁纸与系统外观变化，不能用实底对比度代替验证。
-    /// 灵动岛继续使用独立的深色 tintDark。
-    static let windowTintDark: UInt32 = 0x477FAF
-    static let windowTintAlpha: CGFloat = 0.42
+    /// 主窗口玻璃：纯净海蓝着色。磨砂与桌面会把着色冲淡约一半，
+    /// 合成后约为 glassDark；再亮白字就撑不住（实测 #2A9EE8@58% 正文仅 3.9:1）。
+    /// 灵动岛浮在任意窗口上，仍用更深的 tintDark。
+    static let windowTintDark: UInt32 = 0x0A80E0
+    static let windowTintAlpha: CGFloat = 0.44
+    /// 文字层级：用实色替代系统半透明白（secondary≈55%、tertiary≈30%），
+    /// 半透明字叠在彩色玻璃上会被底色吃掉。
+    static let textPrimaryDark: UInt32 = 0xF4FAFF
+    static let textPrimaryLight: UInt32 = 0x16242F
+    static let textSecondaryDark: UInt32 = 0xD2E6F5
+    static let textSecondaryLight: UInt32 = 0x4A5B69
+    static let textTertiaryDark: UInt32 = 0xB4D0E6
+    static let textTertiaryLight: UInt32 = 0x66798A
     static let tintAlpha: CGFloat = 0.66
     static let successDark: UInt32 = 0x53C68C
     static let successLight: UInt32 = 0x1E8A55
     static let warningDark: UInt32 = 0xE3A43C
     static let warningLight: UInt32 = 0xA9700E
-    static let dangerDark: UInt32 = 0xE56672
+    static let dangerDark: UInt32 = 0xFF8A96
     static let dangerLight: UInt32 = 0xCB3D4C
 
     /// WCAG 2.x 相对亮度。
@@ -87,6 +96,11 @@ extension Color {
     static let accentText = adaptive(light: srgb(EarthBluePalette.accentTextLight), dark: srgb(EarthBluePalette.accentTextDark))
     /// 主按钮上的文字。
     static let onAccent = adaptive(light: srgb(EarthBluePalette.onAccentLight), dark: srgb(EarthBluePalette.onAccentDark))
+
+    // 文字层级（主窗口通过 foregroundStyle 层级注入，Color.textSecondary 统一换成 textSecondary）
+    static let textPrimary = adaptive(light: srgb(EarthBluePalette.textPrimaryLight), dark: srgb(EarthBluePalette.textPrimaryDark))
+    static let textSecondary = adaptive(light: srgb(EarthBluePalette.textSecondaryLight), dark: srgb(EarthBluePalette.textSecondaryDark))
+    static let textTertiary = adaptive(light: srgb(EarthBluePalette.textTertiaryLight), dark: srgb(EarthBluePalette.textTertiaryDark))
 
     // 玻璃与表面
     /// 减少透明度时的实底。
@@ -200,8 +214,8 @@ struct GlassBackground: NSViewRepresentable {
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: .zero)
             glass.cornerRadius = cornerRadius
-            // L0 窗口底使用轻薄玻璃，与 L1 导航和按钮的 regular 材质区分。
-            glass.style = .clear
+            // L0 窗口底回到 regular 磨砂：clear 会让后景直接透上来，行面板与文字都立不住。
+            glass.style = .regular
             glass.tintColor = tintColor
             let container = NSView(frame: .zero)
             glass.contentView = container
@@ -220,7 +234,7 @@ struct GlassBackground: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         if #available(macOS 26.0, *), let glass = nsView as? NSGlassEffectView {
             glass.cornerRadius = cornerRadius
-            glass.style = .clear
+            glass.style = .regular
             glass.tintColor = tintColor
         }
     }

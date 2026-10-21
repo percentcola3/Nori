@@ -350,7 +350,7 @@ private struct AutoCleanupRuleRow: View {
                         .font(.system(size: 10,
                                       weight: currentRule.isSafetyAuthorized ? .medium : .semibold))
                         .foregroundStyle(currentRule.isSafetyAuthorized
-                                         ? Color.secondary : Color.warning)
+                                         ? Color.textSecondary : Color.warning)
                 } icon: {
                     Image(systemName: currentRule.isSafetyAuthorized
                           ? "checkmark.shield" : "shield.lefthalf.filled")
@@ -586,7 +586,7 @@ private struct AutoCleanupPreviewMetric: View {
                 .foregroundStyle(.tertiary)
             Text(value)
                 .font(.system(size: 10, weight: .medium).monospacedDigit())
-                .foregroundStyle(prominent ? Color.moleAccentText : Color.primary)
+                .foregroundStyle(prominent ? Color.moleAccentText : Color.textPrimary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)

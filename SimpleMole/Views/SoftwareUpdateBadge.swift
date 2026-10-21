@@ -18,7 +18,7 @@ struct SoftwareUpdateBadge: View {
                 Text(l10n.t("software.install.external")).foregroundStyle(.secondary)
             } else if let result {
                 Text(label(result))
-                    .foregroundStyle(result.state == .available ? Color.success : Color.secondary)
+                    .foregroundStyle(result.state == .available ? Color.success : Color.textSecondary)
                     .help(result.state == .unsupported ? l10n.t("software.updates.unsupportedHint") : result.source)
             }
         }

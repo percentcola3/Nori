@@ -142,7 +142,7 @@ struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(isEnabled ? (tint ?? Color.primary) : Color.secondary)
+            .foregroundStyle(isEnabled ? (tint ?? Color.textPrimary) : Color.textSecondary)
             .padding(.horizontal, 20)
             .frame(minHeight: 36)
             .modifier(ActionGlassChrome(tint: isEnabled ? tint : nil))
@@ -211,7 +211,7 @@ struct MoleRowSelectionToggleStyle: ToggleStyle {
                       : (partiallySelected ? "minus.square.fill" : "square"))
                     .font(.system(size: 16, weight: .medium))
                     .foregroundStyle(configuration.isOn || partiallySelected
-                                     ? Color.moleAccentText : Color.secondary)
+                                     ? Color.moleAccentText : Color.textSecondary)
                     .frame(width: 18)
                     .accessibilityHidden(true)
                 configuration.label
@@ -241,7 +241,7 @@ struct MoleIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(tint ?? (isActive ? Color.moleAccentText : Color.secondary))
+            .foregroundStyle(tint ?? (isActive ? Color.moleAccentText : Color.textSecondary))
             .frame(width: size, height: size)
             .background {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -418,7 +418,7 @@ struct PillPicker: View {
                 Button { select(index) } label: {
                     Text(items[index])
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(selected ? Color.primary : Color.secondary)
+                        .foregroundStyle(selected ? Color.textPrimary : Color.textSecondary)
                         .padding(.horizontal, itemHorizontalPadding)
                         .frame(height: 28)
                         .background {
@@ -448,7 +448,7 @@ struct PillPicker: View {
                             GlassEffectContainer(spacing: 24) {
                             Text(items[index])
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.primary)
+                                .foregroundStyle(Color.textPrimary)
                                 .padding(.horizontal, itemHorizontalPadding)
                                 .frame(height: 28)
                                 .background {
@@ -475,7 +475,7 @@ struct PillPicker: View {
                         } else {
                             Text(items[index])
                                 .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.secondary)
+                                .foregroundStyle(Color.textSecondary)
                                 .padding(.horizontal, itemHorizontalPadding)
                                 .frame(height: 28)
                                 .contentShape(Capsule())
@@ -507,7 +507,7 @@ struct PillPicker: View {
                 Button { select(index) } label: {
                     Text(items[index])
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(selected ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Color.secondary))
+                        .foregroundStyle(selected ? AnyShapeStyle(Color.textPrimary) : AnyShapeStyle(Color.textSecondary))
                         .padding(.horizontal, itemHorizontalPadding)
                         .frame(height: 26)
                         .contentShape(Capsule())

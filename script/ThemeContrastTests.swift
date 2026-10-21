@@ -12,6 +12,13 @@ struct ThemeContrastTests {
         check("accentText on light glass", EarthBluePalette.accentTextLight, EarthBluePalette.glassLight, minimum: 4.5)
         check("onAccent on dark accent", EarthBluePalette.onAccentDark, EarthBluePalette.accentDark, minimum: 4.5)
         check("onAccent on light accent", EarthBluePalette.onAccentLight, EarthBluePalette.accentLight, minimum: 3.0)
+        // 文字层级：正文与次级说明 4.5:1，三级提示 3:1。
+        check("textPrimary dark", EarthBluePalette.textPrimaryDark, EarthBluePalette.glassDark, minimum: 4.5)
+        check("textPrimary light", EarthBluePalette.textPrimaryLight, EarthBluePalette.glassLight, minimum: 4.5)
+        check("textSecondary dark", EarthBluePalette.textSecondaryDark, EarthBluePalette.glassDark, minimum: 4.5)
+        check("textSecondary light", EarthBluePalette.textSecondaryLight, EarthBluePalette.glassLight, minimum: 4.5)
+        check("textTertiary dark", EarthBluePalette.textTertiaryDark, EarthBluePalette.glassDark, minimum: 3.0)
+        check("textTertiary light", EarthBluePalette.textTertiaryLight, EarthBluePalette.glassLight, minimum: 3.0)
         // 状态色作为图标 / 大字（3:1）。
         check("success dark", EarthBluePalette.successDark, EarthBluePalette.glassDark, minimum: 3.0)
         check("success light", EarthBluePalette.successLight, EarthBluePalette.glassLight, minimum: 3.0)

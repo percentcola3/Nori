@@ -140,7 +140,7 @@ private struct DeveloperIssueList: View {
                 ForEach(group) { issue in
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: severity == .attention ? "exclamationmark.triangle" : "info.circle")
-                            .foregroundStyle(severity == .attention ? Color.warning : Color.secondary)
+                            .foregroundStyle(severity == .attention ? Color.warning : Color.textSecondary)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(l10n.t(issue.titleKey)).font(.system(size: 12, weight: .medium))
                             if !issue.detail.isEmpty { Text(issue.detail).font(.system(size: 10)).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -371,7 +371,7 @@ struct DeveloperPackagesPanel: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(service.name).font(.system(size: 12, weight: .medium))
                             Text(l10n.t("dev.services." + (["started", "stopped", "error"].contains(service.status) ? service.status : "unknown")))
-                                .font(.system(size: 10)).foregroundStyle(service.status == "error" ? Color.warning : Color.secondary)
+                                .font(.system(size: 10)).foregroundStyle(service.status == "error" ? Color.warning : Color.textSecondary)
                             if let pid = service.pid {
                                 let ports = Array(Set(state.portRows.filter { $0.pid == pid }.map(\.port))).sorted().joined(separator: ", ")
                                 Text(ports.isEmpty ? l10n.tf("dev.services.pid", Int(pid)) : l10n.tf("dev.services.pidPorts", Int(pid), ports))

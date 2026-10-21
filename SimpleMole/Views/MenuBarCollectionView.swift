@@ -80,7 +80,7 @@ struct MenuBarCollectionSettingsView: View {
                 Text(app.name).font(.system(size: 12)).lineLimit(1)
                 Spacer(minLength: 8)
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected ? Color.accentText : Color.secondary)
+                    .foregroundStyle(selected ? Color.accentText : Color.textSecondary)
             }
             .padding(.horizontal, 10).frame(height: 34)
             .modifier(ListRowSurface(selected: selected))

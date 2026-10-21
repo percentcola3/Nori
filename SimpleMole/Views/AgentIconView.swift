@@ -14,7 +14,7 @@ struct AgentIconView: View {
                     .renderingMode(icon.isTemplate ? .template : .original)
                     .interpolation(.high)
                     .scaledToFit()
-                    .foregroundStyle(Color.primary)
+                    .foregroundStyle(Color.textPrimary)
             } else {
                 AgentDefaultIcon(size: size)
             }

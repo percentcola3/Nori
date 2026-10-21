@@ -261,7 +261,7 @@ struct SettingsTabView: View {
                     .font(.system(size: 8, weight: .bold))
                     .opacity(isSelected ? 1 : 0)
             }
-            .foregroundStyle(isSelected ? Color.moleAccentText : Color.secondary)
+            .foregroundStyle(isSelected ? Color.moleAccentText : Color.textSecondary)
             .padding(.horizontal, 9)
             .frame(height: 27)
             .background(RoundedRectangle(cornerRadius: 8)
@@ -447,7 +447,7 @@ struct SettingsTabView: View {
             .padding(.horizontal, 6)
             .frame(maxWidth: .infinity)
             .frame(height: 27)
-            .foregroundStyle(isActive ? Color.moleAccentText : Color.secondary)
+            .foregroundStyle(isActive ? Color.moleAccentText : Color.textSecondary)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(isActive ? Color.moleAccent.opacity(0.15) : Color.surface2))

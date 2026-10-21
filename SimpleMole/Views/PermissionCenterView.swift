@@ -483,7 +483,7 @@ private struct PermissionCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(guidance.text)
                     .font(.system(size: 11))
-                    .foregroundStyle(guidance.tone == .neutral ? Color.secondary : Color.primary)
+                    .foregroundStyle(guidance.tone == .neutral ? Color.textSecondary : Color.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let link = guidance.link {
                     Button(action: link.perform) {

@@ -217,7 +217,7 @@ private struct TrafficMetric: View {
                 .lineLimit(1)
             Text(value)
                 .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                .foregroundStyle(isElevated ? Color.warning : Color.secondary)
+                .foregroundStyle(isElevated ? Color.warning : Color.textSecondary)
                 .lineLimit(1)
         }
         .frame(minWidth: 52, alignment: .trailing)

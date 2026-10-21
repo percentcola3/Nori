@@ -538,7 +538,7 @@ struct ScreenshotEditorView: View {
                                 Text(l10n.t(preset.l10nKey))
                                     .font(.system(size: 8.5, weight: composition.preset.id == preset.id ? .semibold : .regular))
                                     .foregroundStyle(composition.preset.id == preset.id
-                                                     ? Color.moleAccentText : Color.secondary)
+                                                     ? Color.moleAccentText : Color.textSecondary)
                                     .lineLimit(1)
                             }
                             .frame(width: 60)

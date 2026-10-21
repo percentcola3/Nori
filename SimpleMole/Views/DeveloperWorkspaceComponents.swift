@@ -100,7 +100,7 @@ extension DevSubheader where Trailing == EmptyView {
 struct DevNotice: View {
     let symbol: String
     let text: String
-    var color: Color = .secondary
+    var color: Color = .textSecondary
 
     var body: some View {
         Label {
@@ -109,7 +109,7 @@ struct DevNotice: View {
             Image(systemName: symbol).foregroundStyle(color)
         }
         .font(.system(size: 11))
-        .foregroundStyle(color == .secondary ? Color.secondary : color)
+        .foregroundStyle(color)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)

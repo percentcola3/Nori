@@ -47,7 +47,7 @@ struct IslandNetworkProbeView: View {
             .font(.system(size: 10.5, weight: .medium))
             .frame(maxWidth: .infinity).frame(height: 24)
             .background(Capsule().fill(activeMode == segmentMode ? Color.selectionFill : Color.clear))
-            .foregroundStyle(activeMode == segmentMode ? Color.primary : Color.secondary)
+            .foregroundStyle(activeMode == segmentMode ? Color.textPrimary : Color.textSecondary)
             .allowsHitTesting(false).accessibilityHidden(true)
             .overlay { IslandActionTarget(label: l10n.t(key)) { mode = segmentMode } }
     }
@@ -160,7 +160,7 @@ struct IslandNetworkProbeView: View {
         Label(l10n.t(key), systemImage: symbol).font(.system(size: 10.5, weight: .medium))
             .padding(.horizontal, 11).frame(height: 28)
             .background(Capsule().fill(Color.surface2))
-            .foregroundStyle(enabled ? Color.primary : Color.secondary)
+            .foregroundStyle(enabled ? Color.textPrimary : Color.textSecondary)
             .allowsHitTesting(false).accessibilityHidden(true)
             .overlay { IslandActionTarget(label: l10n.t(key), isEnabled: enabled, action: action) }
     }
