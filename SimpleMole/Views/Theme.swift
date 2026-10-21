@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 
-// MARK: - Nori 品牌深蓝
-// 使用 Logo 的墨蓝 #10283F 与冰蓝 #BFEAF2，跟随系统浅色 / 深色外观。
-// 深色以墨蓝承托冰蓝 Logo 与按钮，浅色以近白底承托墨蓝文字与按钮。
+// MARK: - Nori 海蓝主题
+// 窗口采用轻着色的晴海蓝玻璃，强调色沿用浅海蓝家族。
+// 浅色 / 深色外观分别配置文字与按钮颜色。
+// 吉祥物与 App 图标仍用 Logo 的冰蓝/墨蓝（NoriGeometry），不随窗口主题变化。
 //
 // 规则：
 // - 玻璃分层：L0 只保留窗口底的 GlassSurface；L1 导航与浮层（PillPicker
@@ -21,17 +22,22 @@ import SwiftUI
 
 /// 品牌配色的原始值：token 与对比度测试共用同一份数据。
 enum EarthBluePalette {
-    static let accentDark: UInt32 = 0xBFEAF2
-    static let accentLight: UInt32 = 0x10283F
-    static let accentTextDark: UInt32 = 0xBFEAF2
-    static let accentTextLight: UInt32 = 0x10283F
-    static let onAccentDark: UInt32 = 0x10283F
+    static let accentDark: UInt32 = 0x9BDBEF
+    static let accentLight: UInt32 = 0x0F5F7A
+    static let accentTextDark: UInt32 = 0xC4ECF7
+    static let accentTextLight: UInt32 = 0x0C4A5F
+    static let onAccentDark: UInt32 = 0x082B3A
     static let onAccentLight: UInt32 = 0xFFFFFF
     /// 玻璃着色在典型后景（深色桌面 / 浅色桌面）上的等效实底，用于对比度估算。
-    static let glassDark: UInt32 = 0x10283F
-    static let glassLight: UInt32 = 0xF0F5FA
-    static let tintDark: UInt32 = 0x10283F
-    static let tintLight: UInt32 = 0xEAF1F8
+    static let glassDark: UInt32 = 0x164459
+    static let glassLight: UInt32 = 0xEDF6FA
+    static let tintDark: UInt32 = 0x164459
+    static let tintLight: UInt32 = 0xE9F5FA
+    /// 主窗口采用偏天蓝的晴海蓝，减少灰绿感；轻着色保留系统磨砂材质。
+    /// 实际合成颜色随壁纸与系统外观变化，不能用实底对比度代替验证。
+    /// 灵动岛继续使用独立的深色 tintDark。
+    static let windowTintDark: UInt32 = 0x477FAF
+    static let windowTintAlpha: CGFloat = 0.42
     static let tintAlpha: CGFloat = 0.66
     static let successDark: UInt32 = 0x53C68C
     static let successLight: UInt32 = 0x1E8A55
@@ -126,9 +132,10 @@ extension Color {
 
 extension NSColor {
     /// GlassSurface 传给 NSGlassEffectView 的着色（NSColor 版本，随外观变化）。
+    /// 主窗口深色用更浅的淡海蓝着色；灵动岛与对比度实底仍用 tintDark / glassDark。
     static let forgeGlassTint = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? Color.srgb(EarthBluePalette.tintDark, EarthBluePalette.tintAlpha)
+            ? Color.srgb(EarthBluePalette.windowTintDark, EarthBluePalette.windowTintAlpha)
             : Color.srgb(EarthBluePalette.tintLight, EarthBluePalette.tintAlpha)
     }
 }
@@ -193,7 +200,8 @@ struct GlassBackground: NSViewRepresentable {
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView(frame: .zero)
             glass.cornerRadius = cornerRadius
-            glass.style = .regular
+            // L0 窗口底使用轻薄玻璃，与 L1 导航和按钮的 regular 材质区分。
+            glass.style = .clear
             glass.tintColor = tintColor
             let container = NSView(frame: .zero)
             glass.contentView = container
@@ -212,6 +220,7 @@ struct GlassBackground: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         if #available(macOS 26.0, *), let glass = nsView as? NSGlassEffectView {
             glass.cornerRadius = cornerRadius
+            glass.style = .clear
             glass.tintColor = tintColor
         }
     }
