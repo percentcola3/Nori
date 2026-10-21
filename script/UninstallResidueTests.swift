@@ -339,6 +339,13 @@ struct UninstallResidueTests {
         try write(".local/share/fixture-cli/history")
         try write(".fixture-cli/real-project/.git/config")
         try write(".fixture-cli/real-project/code.swift")
+        try write(".config/fixture-cli.toml")
+        try write(".fixture-clirc")
+        try write("Library/Caches/Homebrew/fixture-cli--1.2.3.arm64_sequoia.bottle.tar.gz")
+        try write("Library/Caches/Homebrew/downloads/" + String(repeating: "a", count: 64) + "--fixture-cli--1.2.3.arm64_sequoia.bottle.tar.gz")
+        try write("Library/Caches/Homebrew/fixture-cli-other--9.0.bottle.tar.gz")
+        try write("Library/Logs/Homebrew/fixture-cli/post_install.log")
+        try write(".config/fixture-cli-other.toml")
         try write(".unknown-tool/keep")
         try write("Library/WebKit/com.example.alreadydeleted/state")
         try write("Library/Preferences/com.example.alreadydeleted.plist")
@@ -390,6 +397,15 @@ struct UninstallResidueTests {
                "A protected project was re-admitted by the legacy app-data scan")
         expect(paths.contains(home.path + "/.config/fixture-cli") && paths.contains(home.path + "/.local/share/fixture-cli"),
                "Generic CLI configuration and history disappeared after uninstall")
+        let brewDownload = home.path + "/Library/Caches/Homebrew/downloads/" + String(repeating: "a", count: 64)
+            + "--fixture-cli--1.2.3.arm64_sequoia.bottle.tar.gz"
+        expect([".config/fixture-cli.toml", ".fixture-clirc",
+                "Library/Caches/Homebrew/fixture-cli--1.2.3.arm64_sequoia.bottle.tar.gz",
+                "Library/Logs/Homebrew/fixture-cli"].allSatisfy { paths.contains(home.path + "/" + $0) }
+               && paths.contains(brewDownload),
+               "Single-file configs and Homebrew per-package caches/logs must be offered for a removed CLI")
+        expect(!paths.contains { $0.contains("fixture-cli-other") },
+               "A different package sharing the name prefix must never be offered")
         expect(paths.contains(appHistory), "Named app data was lost after the .app and its metadata were removed")
         expect(paths.contains(home.path + "/Library/WebKit/com.example.alreadydeleted")
                && paths.contains(home.path + "/Library/Preferences/com.example.alreadydeleted.plist"),

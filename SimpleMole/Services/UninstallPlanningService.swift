@@ -327,10 +327,45 @@ struct UninstallPlanningService: Sendable {
         return candidates
     }
 
+    /// Exact, owner-named single files only; no globbing beyond these names.
+    static func singleFileConfigNames(_ slug: String) -> [String] {
+        let extensions = ["toml", "yaml", "yml", "json", "conf", "ini"]
+        return extensions.map { ".config/" + slug + "." + $0 }
+            + extensions.map { "." + slug + "." + $0 }
+            + ["." + slug + "rc", ".config/" + slug + "rc"]
+    }
+
+    /// Homebrew keeps per-formula/cask downloads and logs outside the Cellar.
+    /// Only entries whose name is exactly the package (plus Homebrew's own
+    /// `--version` suffix or `<hash>--<name>` download form) are offered.
+    func homebrewResidues(for owner: UninstallDataOwner, home: String) -> [String] {
+        guard owner.kind == .cli || owner.kind == .application else { return [] }
+        let names = Set(([owner.name] + owner.names).map { $0.split(separator: "/").last.map(String.init) ?? $0 }
+            .filter { $0.count >= 3 && $0.range(of: #"^[A-Za-z0-9][A-Za-z0-9@._+-]*$"#, options: .regularExpression) != nil })
+        guard !names.isEmpty else { return [] }
+        var result: [String] = []
+        for name in names {
+            result.append("Library/Logs/Homebrew/" + name)
+        }
+        let cache = "Library/Caches/Homebrew"
+        for relativeRoot in [cache, cache + "/downloads", cache + "/Cask"] {
+            for url in directChildren(of: URL(fileURLWithPath: home + "/" + relativeRoot)) {
+                let file = url.lastPathComponent
+                let matches = names.contains { name in
+                    file.hasPrefix(name + "--") || file == name
+                        || file.range(of: "^[0-9a-f]{64}--" + NSRegularExpression.escapedPattern(for: name) + "--",
+                                      options: .regularExpression) != nil
+                }
+                if matches { result.append(relativeRoot + "/" + file) }
+            }
+        }
+        return result
+    }
+
     func dataOwner(for app: UninstallApp) -> UninstallDataOwner {
         .init(kind: .application, name: app.name, bundleID: app.bundleID, installationPath: app.path,
               names: uninstallSupportNames(at: URL(fileURLWithPath: app.path), bundleID: app.bundleID).sorted(),
-              groups: inventory.applicationGroups(at: URL(fileURLWithPath: app.path)).sorted(),
+              groups: applicationGroups(at: URL(fileURLWithPath: app.path)).sorted(),
               agentIDs: AgentCatalog.applicationAgentIDs(appPath: app.path, appName: app.name))
     }
 
@@ -387,8 +422,12 @@ struct UninstallPlanningService: Sendable {
             if !Self.genericDotNames.contains(slug),
                slug.range(of: #"^[a-z0-9][a-z0-9._-]*$"#, options: .regularExpression) != nil {
                 relative += ["." + slug, ".config/" + slug, ".local/share/" + slug, ".local/state/" + slug, ".cache/" + slug]
+                // Single-file configs (e.g. ~/.config/starship.toml, ~/.foorc)
+                // are as much a tool's data as its directories.
+                relative += Self.singleFileConfigNames(slug)
             }
         }
+        relative += homebrewResidues(for: owner, home: home)
         if owner.kind == .application, CleanupRiskPolicy.isValidReverseDNSOwner(owner.bundleID),
            !owner.bundleID.hasPrefix("com.apple.") {
             let identifier = owner.bundleID
@@ -431,7 +470,7 @@ struct UninstallPlanningService: Sendable {
                 for name in tokens where sharedNames.contains(where: { $0.lowercased() == name.lowercased() }) {
                     for parent in ["Library/Application Support", "Library/Caches", "Library/Logs"] { blocked.append(home + "/" + parent + "/" + name) }
                 }
-                for group in (owner.groups.isEmpty ? [] : inventory.applicationGroups(at: app).intersection(owner.groups)) {
+                for group in (owner.groups.isEmpty ? [] : applicationGroups(at: app).intersection(owner.groups)) {
                     blocked += [home + "/Library/Group Containers/" + group, home + "/Library/Application Scripts/" + group]
                 }
             }
@@ -446,6 +485,16 @@ struct UninstallPlanningService: Sendable {
     }
 
     private func uninstallSupportNames(at appURL: URL, bundleID: String) -> Set<String> {
+        UninstallResidueMemo.value("supportNames\u{1F}" + appURL.path + "\u{1F}" + bundleID) {
+            uncachedUninstallSupportNames(at: appURL, bundleID: bundleID)
+        }
+    }
+
+    private func applicationGroups(at url: URL) -> Set<String> {
+        UninstallResidueMemo.value("groups\u{1F}" + url.path) { inventory.applicationGroups(at: url) }
+    }
+
+    private func uncachedUninstallSupportNames(at appURL: URL, bundleID: String) -> Set<String> {
         let bundle = Bundle(url: appURL)
         let metadataNames = [bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String,
                              bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String,

@@ -336,7 +336,9 @@ final class NativeCore: @unchecked Sendable {
                 return CleanupScan(categories: [], succeeded: false, error: "Cleanup whitelist is unavailable.")
             }
             let residuePresence = Self.uninstallDataPresence(home: home.path, overriding: agentPresence)
-            let residueCandidates = self.uninstallResidueCandidates(home: home, presence: residuePresence, control: control)
+            let residueCandidates = UninstallResidueMemo.withScope {
+                self.uninstallResidueCandidates(home: home, presence: residuePresence, control: control)
+            }
             let residueRoots = residueCandidates.flatMap { $0.1.map(\.path) }
             let broadRoots = Set(["Library/Caches", "Library/Logs", "Library/DiagnosticReports",
                                   ".cache", ".Trash"].map { home.appendingPathComponent($0).path })

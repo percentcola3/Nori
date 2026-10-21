@@ -104,6 +104,33 @@ struct AgentDefinition: Sendable {
     var implicitSkillDirectories: [String] = []
 }
 
+/// Per-scan memo for owner-independent uninstall-residue facts. It is active
+/// only inside `UninstallResidueMemo.$current.withValue`, so deletion edges
+/// and interactive reviews always derive fresh state.
+final class UninstallResidueMemo: @unchecked Sendable {
+    @TaskLocal static var current: UninstallResidueMemo?
+    private let lock = NSLock()
+    private var values: [String: Any] = [:]
+
+    static func value<T>(_ key: String, _ make: () -> T) -> T {
+        guard let memo = current else { return make() }
+        memo.lock.lock()
+        if let hit = memo.values[key] as? T { memo.lock.unlock(); return hit }
+        memo.lock.unlock()
+        // Compute outside the lock: producers may consult other keys.
+        let made = make()
+        memo.lock.lock()
+        memo.values[key] = made
+        memo.lock.unlock()
+        return made
+    }
+
+    static func withScope<T>(_ operation: () -> T) -> T {
+        if current != nil { return operation() }
+        return $current.withValue(UninstallResidueMemo(), operation: operation)
+    }
+}
+
 enum AgentCatalog {
     static let appSupport = "Library/Application Support/"
     static let claudeSystemTemporaryPrefix = "claude-\(getuid())"
@@ -900,6 +927,12 @@ enum AgentCatalog {
     /// 数据根覆盖缓存、会话、配置与安装下载，合并父子路径避免重复计量。
     /// Gemini 与 Antigravity 共享 .gemini，因此 Gemini 只认自己的叶子。
     static func dataRoots(for agent: AgentDefinition, home: String) -> [String] {
+        UninstallResidueMemo.value("dataRoots\u{1F}" + agent.id + "\u{1F}" + home) {
+            uncachedDataRoots(for: agent, home: home)
+        }
+    }
+
+    private static func uncachedDataRoots(for agent: AgentDefinition, home: String) -> [String] {
         // 自定义 home 不能证明整根独占（可能就是 Documents）；只取已知叶子。
         var roots = agent.detect.filter {
             absolute($0, home: home) == URL(fileURLWithPath: home).appendingPathComponent($0).standardizedFileURL.path
@@ -1275,6 +1308,10 @@ enum AgentCatalog {
     /// 返回精确根目录/数据库族，支持 CODEX_HOME 与独立 sqlite_home。
     /// 不依赖文件年龄、已安装状态或旧扫描结果的风险标记。
     static func managedCleanupPaths(home: String) -> [String] {
+        UninstallResidueMemo.value("managedCleanupPaths\u{1F}" + home) { uncachedManagedCleanupPaths(home: home) }
+    }
+
+    private static func uncachedManagedCleanupPaths(home: String) -> [String] {
         let historyLabels: Set<String> = [
             "agents.label.sessions", "agents.label.transcripts", "agents.label.archivedSessions",
             "agents.label.history", "agents.label.conversations", "agents.label.conversationDatabase",
@@ -1389,113 +1426,122 @@ enum AgentCatalog {
                 .contains(where: { $0.hasPrefix("/") && !$0.hasPrefix(excluded + "/") }) { return true }
             return AgentHostPresence.hasExtension(ids: installation.extensionIDs, home: home, context: context)
         }
-        let live = definitions.filter(installedElsewhere)
-        var shared = live.flatMap { dataRoots(for: $0, home: home)
-            + $0.implicitSkillDirectories.map { absolute($0, home: home) } }
-        shared += shared.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
-        for agent in live {
-            for command in installationPresence(for: agent)?.commands ?? [] {
-                guard let executable = resolveExecutable(command, searchPath: context.searchPath, home: home) else { continue }
-                var body = URL(fileURLWithPath: executable).resolvingSymlinksInPath().deletingLastPathComponent()
-                if body.lastPathComponent == "bin" { body.deleteLastPathComponent() }
-                shared.append(body.path)
+        // Owner-independent: identical for every owner during one scan.
+        let memoKey = "sharedRefs\u{1F}" + home + "\u{1F}" + (excludingApplication ?? "")
+            + "\u{1F}" + context.applicationDirs.joined(separator: ":") + "\u{1F}" + context.searchPath.joined(separator: ":")
+        let sharedReferences = UninstallResidueMemo.value(memoKey) { () -> ([String], [String], Bool) in
+            let live = definitions.filter(installedElsewhere)
+            var shared = live.flatMap { dataRoots(for: $0, home: home)
+                + $0.implicitSkillDirectories.map { absolute($0, home: home) } }
+            shared += shared.map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }
+            for agent in live {
+                for command in installationPresence(for: agent)?.commands ?? [] {
+                    guard let executable = resolveExecutable(command, searchPath: context.searchPath, home: home) else { continue }
+                    var body = URL(fileURLWithPath: executable).resolvingSymlinksInPath().deletingLastPathComponent()
+                    if body.lastPathComponent == "bin" { body.deleteLastPathComponent() }
+                    shared.append(body.path)
+                }
             }
-        }
-        for directory in skillDirectories(home: home) where directory.agentNames.contains(where: { name in
-            live.contains { $0.name == name }
-        }) {
-            shared += childNames(of: directory.path).compactMap { name -> String? in
-                let path = directory.path + "/" + name
-                return isSymlink(path) ? URL(fileURLWithPath: path).resolvingSymlinksInPath().path : nil
+            for directory in skillDirectories(home: home) where directory.agentNames.contains(where: { name in
+                live.contains { $0.name == name }
+            }) {
+                shared += childNames(of: directory.path).compactMap { name -> String? in
+                    let path = directory.path + "/" + name
+                    return isSymlink(path) ? URL(fileURLWithPath: path).resolvingSymlinksInPath().path : nil
+                }
             }
-        }
-        if live.contains(where: { $0.id == "codex" }) { shared += configuredSkillTargets(home: home) }
-        var referenceText: [String] = []
-        var unknownReferences = false
-        func strings(_ value: Any) -> [String] {
-            if let value = value as? String { return [value] }
-            if let values = value as? [Any] { return values.flatMap(strings) }
-            if let values = value as? [String: Any] { return values.values.flatMap(strings) }
-            return []
-        }
-        for source in live.flatMap(\.mcpSources) {
-            let config = absolute(source.path, home: home)
-            guard exists(config) else { continue }
-            shared.append(URL(fileURLWithPath: config).resolvingSymlinksInPath().path)
-            guard let file = FileHandle(forReadingAtPath: config) else { unknownReferences = true; continue }
-            let bytes = try? file.read(upToCount: 1_048_577)
-            try? file.close()
-            guard let bytes, bytes.count <= 1_048_576, let text = String(data: bytes, encoding: .utf8) else {
-                unknownReferences = true; continue
+            if live.contains(where: { $0.id == "codex" }) { shared += configuredSkillTargets(home: home) }
+            var referenceText: [String] = []
+            var unknownReferences = false
+            func strings(_ value: Any) -> [String] {
+                if let value = value as? String { return [value] }
+                if let values = value as? [Any] { return values.flatMap(strings) }
+                if let values = value as? [String: Any] { return values.values.flatMap(strings) }
+                return []
             }
-            let values: [String]
-            switch source.format {
-            case .json(let keyPath):
-                guard let json = try? JSONSerialization.jsonObject(with: bytes, options: [.json5Allowed]) else {
+            for source in live.flatMap(\.mcpSources) {
+                let config = absolute(source.path, home: home)
+                guard exists(config) else { continue }
+                shared.append(URL(fileURLWithPath: config).resolvingSymlinksInPath().path)
+                guard let file = FileHandle(forReadingAtPath: config) else { unknownReferences = true; continue }
+                let bytes = try? file.read(upToCount: 1_048_577)
+                try? file.close()
+                guard let bytes, bytes.count <= 1_048_576, let text = String(data: bytes, encoding: .utf8) else {
                     unknownReferences = true; continue
                 }
-                func scopedStrings(_ value: Any) -> [String] {
-                    if let object = value as? [String: Any] {
-                        var current: Any? = object[keyPath]
-                        if current == nil {
-                            current = object
-                            for key in keyPath.split(separator: ".") { current = (current as? [String: Any])?[String(key)] }
+                let values: [String]
+                switch source.format {
+                case .json(let keyPath):
+                    guard let json = try? JSONSerialization.jsonObject(with: bytes, options: [.json5Allowed]) else {
+                        unknownReferences = true; continue
+                    }
+                    func scopedStrings(_ value: Any) -> [String] {
+                        if let object = value as? [String: Any] {
+                            var current: Any? = object[keyPath]
+                            if current == nil {
+                                current = object
+                                for key in keyPath.split(separator: ".") { current = (current as? [String: Any])?[String(key)] }
+                            }
+                            return (current.map(strings) ?? []) + object.values.flatMap(scopedStrings)
                         }
-                        return (current.map(strings) ?? []) + object.values.flatMap(scopedStrings)
+                        return (value as? [Any])?.flatMap(scopedStrings) ?? []
                     }
-                    return (value as? [Any])?.flatMap(scopedStrings) ?? []
-                }
-                values = scopedStrings(json)
-            case .toml(let table):
-                // Project trust, UI settings and unrelated paths do not imply
-                // that every application below that directory is shared.
-                var inScope = false
-                var lines: [String] = []
-                for line in text.components(separatedBy: .newlines) {
-                    let trimmed = line.trimmingCharacters(in: .whitespaces)
-                    if trimmed.hasPrefix("[") {
-                        inScope = trimmed.hasPrefix("[" + table + ".") || trimmed.hasPrefix("[" + table + "]")
-                            || trimmed.hasPrefix("[\"" + table + "\".") || trimmed.hasPrefix("[\"" + table + "\"]")
+                    values = scopedStrings(json)
+                case .toml(let table):
+                    // Project trust, UI settings and unrelated paths do not imply
+                    // that every application below that directory is shared.
+                    var inScope = false
+                    var lines: [String] = []
+                    for line in text.components(separatedBy: .newlines) {
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        if trimmed.hasPrefix("[") {
+                            inScope = trimmed.hasPrefix("[" + table + ".") || trimmed.hasPrefix("[" + table + "]")
+                                || trimmed.hasPrefix("[\"" + table + "\".") || trimmed.hasPrefix("[\"" + table + "\"]")
+                        }
+                        if inScope || trimmed.hasPrefix(table + " =") || trimmed.hasPrefix(table + "=") { lines.append(line) }
                     }
-                    if inScope || trimmed.hasPrefix(table + " =") || trimmed.hasPrefix(table + "=") { lines.append(line) }
+                    let scoped = lines.joined(separator: "\n")
+                    if scoped.isEmpty && text.contains(table) { unknownReferences = true; continue }
+                    // Decode quoted TOML strings too, so escaped absolute paths
+                    // receive the same conservative protection as literal paths.
+                    let pattern = #"\"(?:\\.|[^\"\\])*\"|'[^']*'"#
+                    let matches = (try? NSRegularExpression(pattern: pattern))?.matches(in: scoped,
+                        range: NSRange(scoped.startIndex..., in: scoped)) ?? []
+                    values = [scoped] + matches.compactMap { match in
+                        guard let range = Range(match.range, in: scoped) else { return nil }
+                        if scoped[range].first == "'" { return String(scoped[range].dropFirst().dropLast()) }
+                        guard let data = ("[" + scoped[range] + "]").data(using: .utf8) else { return nil }
+                        return ((try? JSONSerialization.jsonObject(with: data)) as? [String])?.first
+                    }
                 }
-                let scoped = lines.joined(separator: "\n")
-                if scoped.isEmpty && text.contains(table) { unknownReferences = true; continue }
-                // Decode quoted TOML strings too, so escaped absolute paths
-                // receive the same conservative protection as literal paths.
-                let pattern = #"\"(?:\\.|[^\"\\])*\"|'[^']*'"#
-                let matches = (try? NSRegularExpression(pattern: pattern))?.matches(in: scoped,
-                    range: NSRange(scoped.startIndex..., in: scoped)) ?? []
-                values = [scoped] + matches.compactMap { match in
-                    guard let range = Range(match.range, in: scoped) else { return nil }
-                    if scoped[range].first == "'" { return String(scoped[range].dropFirst().dropLast()) }
-                    guard let data = ("[" + scoped[range] + "]").data(using: .utf8) else { return nil }
-                    return ((try? JSONSerialization.jsonObject(with: data)) as? [String])?.first
+                referenceText += values
+                for value in values {
+                    var path = value
+                    for prefix in ["~", "$HOME", "${HOME}"] where value.hasPrefix(prefix + "/") {
+                        path = home + value.dropFirst(prefix.count)
+                    }
+                    if path.hasPrefix("/") {
+                        shared.append(URL(fileURLWithPath: path).resolvingSymlinksInPath().path)
+                        continue
+                    }
+                    if value.hasPrefix("./") || value.hasPrefix("../") {
+                        let configURL = URL(fileURLWithPath: config)
+                        for base in [configURL.deletingLastPathComponent(), configURL.resolvingSymlinksInPath().deletingLastPathComponent()] {
+                            shared.append(base.appendingPathComponent(value).standardizedFileURL.resolvingSymlinksInPath().path)
+                        }
+                        continue
+                    }
+                    guard !value.contains(where: \.isWhitespace) else { continue }
+                    if let path = resolveExecutable(value, searchPath: context.searchPath, home: home), path.hasPrefix("/") {
+                        shared.append(URL(fileURLWithPath: path).resolvingSymlinksInPath().path)
+                    }
                 }
             }
-            referenceText += values
-            for value in values {
-                var path = value
-                for prefix in ["~", "$HOME", "${HOME}"] where value.hasPrefix(prefix + "/") {
-                    path = home + value.dropFirst(prefix.count)
-                }
-                if path.hasPrefix("/") {
-                    shared.append(URL(fileURLWithPath: path).resolvingSymlinksInPath().path)
-                    continue
-                }
-                if value.hasPrefix("./") || value.hasPrefix("../") {
-                    let configURL = URL(fileURLWithPath: config)
-                    for base in [configURL.deletingLastPathComponent(), configURL.resolvingSymlinksInPath().deletingLastPathComponent()] {
-                        shared.append(base.appendingPathComponent(value).standardizedFileURL.resolvingSymlinksInPath().path)
-                    }
-                    continue
-                }
-                guard !value.contains(where: \.isWhitespace) else { continue }
-                if let path = resolveExecutable(value, searchPath: context.searchPath, home: home), path.hasPrefix("/") {
-                    shared.append(URL(fileURLWithPath: path).resolvingSymlinksInPath().path)
-                }
-            }
+            return (shared, referenceText, unknownReferences)
         }
+        var shared = sharedReferences.0
+        let referenceText = sharedReferences.1
+        let unknownReferences = sharedReferences.2
         shared += protectedRoots
         let roots = Array(Set(requested.flatMap { dataRoots(for: $0, home: home) } + additionalRoots))
             .filter { $0.hasPrefix(home + "/") && isPhysical($0, home: home) }
