@@ -38,6 +38,12 @@ SimpleMole/Services/CleanupCache.swift|SimpleMole/Services/MediaSlimmer.swift) r
             [[ "$2" == 'defer { try? FileManager.default.removeItem(at: file) }' ]] && return 0 ;;
         SimpleMole/Services/AgentCLIService.swift)
             [[ "$2" == 'defer { try? handle.close(); try? FileManager.default.removeItem(at: output) }' ]] && return 0 ;;
+        # Per-launch session cleanup is limited to its own cancellation token
+        # and socket in the root-owned, non-writable IPC directory.
+        SimpleMole/Services/PrivilegedSessionClient.swift)
+            [[ "$2" == 'try? FileManager.default.removeItem(at: url)' ]] && return 0 ;;
+        SimpleMole/Support/PrivilegedSession/main.swift)
+            [[ "$2" == 'defer { close(listener); unlink(socketPath) }' ]] && return 0 ;;
         SimpleMole/Services/AgentRemovalService.swift)
             [[ "$2" == 'try FileManager.default.trashItem(at: url, resultingItemURL: &destination)' ]] && return 0 ;;
         SimpleMole/Services/AdministratorCleanupService.swift|\
@@ -87,6 +93,21 @@ while IFS= read -r match; do
     fi
 done < <(grep -rnE 'removeItem\(|trashItem\(|unlinkat\(|unlink\(|rmdir\(' \
     "$ROOT_DIR/SimpleMole" --include='*.swift' || true)
+
+session_client="$ROOT_DIR/SimpleMole/Services/PrivilegedSessionClient.swift"
+session_broker="$ROOT_DIR/SimpleMole/Support/PrivilegedSession/main.swift"
+for contract in \
+    'url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nori-admin-session-\(UUID().uuidString).token")' \
+    'guard FileManager.default.createFile(atPath: url.path, contents: Data(), attributes: [.posixPermissions: 0o600]) else { return nil }' \
+    'guard !ended else { lock.unlock(); return }'; do
+    grep -Fq "$contract" "$session_client" || fail 'Administrator session token cleanup lost its owned-file boundary'
+done
+for contract in \
+    'try require(directory == stageDirectory.appendingPathComponent("ipc").path, "invalid IPC layout")' \
+    'try require(canonical(directory) == directory && item.st_uid == 0 && item.st_mode & S_IFMT == S_IFDIR && item.st_mode & 0o777 == 0o711, "untrusted socket directory")' \
+    'try require(metadata(socket) == nil && active(), "session cancelled")'; do
+    grep -Fq "$contract" "$session_broker" || fail 'Administrator session socket cleanup lost its private IPC boundary'
+done
 
 directory_service="$ROOT_DIR/SimpleMole/Services/DirectoryFileService.swift"
 agent_removal_service="$ROOT_DIR/SimpleMole/Services/AgentRemovalService.swift"

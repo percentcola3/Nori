@@ -2677,6 +2677,12 @@ test_clipboard_history
 # Release-only supplemental checks were previously inline in release.yml.
 # Keep them under the same default full-regression entry point too.
 if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
+    bash "$ROOT_DIR/script/test_privileged_session.sh" || fail "administrator session protocol, client and helper compilation"
+    pass "administrator session protocol, client and helper compilation"
+    bash "$ROOT_DIR/script/test_administrator_session_state.sh" || fail "administrator session state"
+    pass "administrator session state"
+    bash "$ROOT_DIR/script/test_memory_cache_reclaim.sh" || fail "memory cache reclaim"
+    pass "memory cache reclaim"
     bash "$ROOT_DIR/script/test_island_network_probe.sh" || fail "island network probe"
     bash "$ROOT_DIR/script/test_bluetooth_battery.sh" || fail "Bluetooth battery"
     bash "$ROOT_DIR/script/test_menu_bar_collection.sh" || fail "menu bar collection"

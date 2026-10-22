@@ -16,6 +16,11 @@ swiftc "${SWIFT_COMMON[@]}" \
     "$ROOT_DIR/SimpleMole/Services/PrivilegedSessionProtocol.swift" \
     "$ROOT_DIR/script/PrivilegedSessionProtocolTests.swift" -o "$TEST_DIR/protocol-tests"
 "$TEST_DIR/protocol-tests"
+swiftc "${SWIFT_COMMON[@]}" \
+    "$ROOT_DIR/SimpleMole/Services/PrivilegedSessionProtocol.swift" \
+    "$ROOT_DIR/SimpleMole/Services/PrivilegedSessionClient.swift" \
+    "$ROOT_DIR/script/PrivilegedSessionClientReviewTests.swift" -o "$TEST_DIR/client-tests"
+"$TEST_DIR/client-tests"
 swiftc "${SWIFT_COMMON[@]}" -framework Foundation -framework Security \
     "$ROOT_DIR/SimpleMole/Services/PrivilegedSessionProtocol.swift" \
     "$ROOT_DIR/SimpleMole/Support/PrivilegedSession/main.swift" -o "$TEST_DIR/NoriPrivilegedSession"
