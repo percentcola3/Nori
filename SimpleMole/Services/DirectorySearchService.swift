@@ -536,6 +536,27 @@ final class DirectorySpotlightSearch {
     private var limit = 300
 
     func search(query text: String, showHidden: Bool = true, limit: Int = 300) async throws -> [URL] {
+        var results = try await runQuery(text, showHidden: showHidden, limit: limit)
+        // Spotlight tokenizes file names: a substring spanning separators such as
+        // "name-1.2.3.dmg" matches nothing even though the file is indexed. Retry
+        // with the longest inner token, then keep only names truly containing the text.
+        if results.isEmpty, let fallback = Self.subtokenFallback(for: text) {
+            results = try await runQuery(fallback, showHidden: showHidden, limit: limit)
+                .filter { $0.lastPathComponent.localizedStandardContains(text) }
+        }
+        return results
+    }
+
+    /// The longest alphanumeric run inside the text, when it is shorter than the whole text.
+    private static func subtokenFallback(for text: String) -> String? {
+        let tokens = text.split(whereSeparator: { !($0.isLetter || $0.isNumber) })
+            .filter { $0.count >= 2 }
+        guard let longest = tokens.max(by: { $0.count < $1.count }),
+              longest.count < text.count else { return nil }
+        return String(longest)
+    }
+
+    private func runQuery(_ text: String, showHidden: Bool, limit: Int) async throws -> [URL] {
         cancel()
         try Task.checkCancellation()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, limit > 0 else { return [] }
@@ -630,6 +651,8 @@ struct DirectoryPathQuery: Sendable {
                   url.host == nil || url.host == "" || url.host == "localhost" else { return nil }
             value = url.path
         }
+        // A leading '@' is a common mention prefix; it never names a file or folder.
+        while value.hasPrefix("@") { value.removeFirst() }
         value = value.replacingOccurrences(of: "\\ ", with: " ")
         guard value.contains("/") || value == "~" else { return nil }
         if value == "~" || value.hasPrefix("~/") { value = home.path + value.dropFirst() }

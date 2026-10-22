@@ -37,6 +37,8 @@ struct DirectorySearchTests {
         expect(built.roots == [root] && !built.isBuilding && built.lastUpdated != nil, "Snapshot root overlaps collapse and status persists")
         let pathMatches = try await index.searchPath(DirectoryPathQuery(visible.path)!, showHidden: true)
         expect(pathMatches.first == visible, "Exact indexed path is ranked first")
+        let mentionQuery = DirectoryPathQuery("@" + visible.path)!
+        expect(mentionQuery.text == visible.path && mentionQuery.isAbsolute, "A leading mention prefix is stripped from path queries")
         let typoMatches = try await index.searchPath(DirectoryPathQuery(visible.path.replacingOccurrences(of: "report", with: "reprot"))!, showHidden: true)
         expect(typoMatches.contains(visible), "Indexed paths match filename transpositions")
         let reports = try await index.search(query: "REPORT")
