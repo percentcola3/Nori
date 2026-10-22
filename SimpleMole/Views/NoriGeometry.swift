@@ -16,6 +16,7 @@ enum NoriGeometry {
     static let ribbonFail: UInt32 = 0xE56672
     static let ribbonSuccess: UInt32 = 0x5FC98A
     static let blush: UInt32 = 0xF4A6B8
+    static let tile: UInt32 = 0x215A88
     static func bodyPath() -> CGPath {
         let path = CGMutablePath()
         path.move(to: CGPoint(x: 72, y: 218))

@@ -30,15 +30,17 @@ enum EarthBluePalette {
     static let onAccentLight: UInt32 = 0xFFFFFF
     /// 主窗口玻璃在深色桌面上的实测合成色（截图取色拟合），用于对比度估算，
     /// 同时是"减少透明度"时的实底。
-    static let glassDark: UInt32 = 0x1D5488
+    static let glassDark: UInt32 = 0x215A88
     static let glassLight: UInt32 = 0xE6F4FA
-    static let tintDark: UInt32 = 0x164459
+    /// 灵动岛着色：与主窗口同一钢青蓝色相（≈210°），压深一档，
+    /// 浮在任意窗口上时白字仍站得住。
+    static let tintDark: UInt32 = 0x17426C
     static let tintLight: UInt32 = 0xE9F5FA
-    /// 主窗口玻璃：纯净海蓝着色。磨砂与桌面会把着色冲淡约一半，
-    /// 合成后约为 glassDark；再亮白字就撑不住（实测 #2A9EE8@58% 正文仅 3.9:1）。
-    /// 灵动岛浮在任意窗口上，仍用更深的 tintDark。
-    static let windowTintDark: UInt32 = 0x0A80E0
-    static let windowTintAlpha: CGFloat = 0.44
+    /// 主窗口玻璃：明亮但低饱和的雾海蓝着色。高饱和亮蓝（旧 #0A80E0@44%）合成后
+    /// 偏"塑料蓝"；过深的墨蓝（#123A5C）又显得沉闷。取中间的钢青蓝，
+    /// 明亮通透，白字仍保持 ≥ 4.5:1。灵动岛浮在任意窗口上，仍用更深的 tintDark。
+    static let windowTintDark: UInt32 = 0x2F78B4
+    static let windowTintAlpha: CGFloat = 0.50
     /// 文字层级：用实色替代系统半透明白（secondary≈55%、tertiary≈30%），
     /// 半透明字叠在彩色玻璃上会被底色吃掉。
     static let textPrimaryDark: UInt32 = 0xF4FAFF
@@ -102,6 +104,10 @@ extension Color {
     static let textSecondary = adaptive(light: srgb(EarthBluePalette.textSecondaryLight), dark: srgb(EarthBluePalette.textSecondaryDark))
     static let textTertiary = adaptive(light: srgb(EarthBluePalette.textTertiaryLight), dark: srgb(EarthBluePalette.textTertiaryDark))
 
+    // 大气层纱幕（AtmosphereVeil）：深空墨蓝压暗四周，顶部一束冷白天光。
+    static let atmosphereSpace = Color(nsColor: srgb(0x050F1F))
+    static let atmosphereHaze = Color(nsColor: srgb(0xBFE6FF))
+
     // 玻璃与表面
     /// 减少透明度时的实底。
     static let glassOpaque = adaptive(light: srgb(EarthBluePalette.glassLight), dark: srgb(EarthBluePalette.glassDark))
@@ -136,7 +142,7 @@ extension Color {
 
 extension Color {
     /// 灵动岛玻璃的着色：浮在任意窗口之上，着色太浅时背后的文字会透上来抢字。
-    static let islandGlassTint = Color(nsColor: srgb(EarthBluePalette.tintDark, 0.62))
+    static let islandGlassTint = Color(nsColor: srgb(EarthBluePalette.tintDark, 0.66))
     /// 折叠句柄上的短横线提示。
     static let islandHandleGrip = Color.white.opacity(0.55)
     /// 折叠手柄的暗色纱罩：半透明，叠在玻璃上加深一档，

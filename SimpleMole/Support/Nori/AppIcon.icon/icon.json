@@ -1,5 +1,5 @@
 {
-  "fill": {"solid": "srgb:0.06275,0.15686,0.24706,1.00000"},
+  "fill": {"solid": "srgb:0.12941,0.35294,0.53333,1.00000"},
   "groups": [{
     "layers": [{"image-name": "Nori.svg", "name": "Nori"}],
     "shadow": {"kind": "neutral", "opacity": 0},

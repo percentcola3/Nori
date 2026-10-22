@@ -3,6 +3,8 @@ Nori — approved simplified ice-blue companion, September 2026.
 Design: one gently tilted rounded pebble and two navy capsule eyes.
 Flat fills: ice blue #BFEAF2, deep ocean #10283F. No text, gradients,
 highlights, mouth, limbs, tools or baked-in lighting.
+App icon tile: steel sea blue #215A88 (design.json "tile"), the same hue
+as the main window glass; the mascot keeps its own ice blue and navy.
 
 Production master: Nori/design.json, editable vector: Nori/Nori.svg.
 Regenerate native geometry, SVG animations, PNGs and ICNS:

@@ -50,7 +50,7 @@ struct RenderNori {
             // Legacy ICNS: optical inset and pre-masked tile. Icon Composer uses
             // full-bleed unmasked layers instead (Support/Nori/AppIcon.icon).
             let tile = CGRect(x: 100, y: 100, width: 824, height: 824)
-            context.setFillColor(color(NoriGeometry.ink))
+            context.setFillColor(color(NoriGeometry.tile))
             context.addPath(CGPath(roundedRect: tile, cornerWidth: 185, cornerHeight: 185, transform: nil))
             context.fillPath()
             context.translateBy(x: 174, y: 184)

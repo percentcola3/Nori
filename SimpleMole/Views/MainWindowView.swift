@@ -61,7 +61,13 @@ struct MainWindowView: View {
         // .secondary / .tertiary 改用实色层级，避免半透明白字被彩色玻璃吃掉。
         .foregroundStyle(Color.textPrimary, Color.textSecondary, Color.textTertiary)
         .frame(minWidth: 760, idealWidth: 940, minHeight: 620, idealHeight: 720)
-        .background { GlassSurface().ignoresSafeArea() }
+        .background {
+            ZStack {
+                GlassSurface()
+                AtmosphereVeil()
+            }
+            .ignoresSafeArea()
+        }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .ignoresSafeArea(.container, edges: .top)
         .animation(reduceMotion ? nil : MoleMotion.panel, value: activeDialog)
