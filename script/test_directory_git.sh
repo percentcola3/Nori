@@ -20,6 +20,8 @@ swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     "$DIRECTORY_GIT_TEST_DIR/GitExecutable.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
     "$ROOT_DIR/SimpleMole/Services/MoleEngine.swift" \
+    "$ROOT_DIR/SimpleMole/Services/PrivilegedSessionProtocol.swift" \
+    "$ROOT_DIR/SimpleMole/Services/PrivilegedSessionClient.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperTerminalEnvironment.swift" \
     "$ROOT_DIR/SimpleMole/Services/DirectoryGitService.swift" \
     "$ROOT_DIR/script/DirectoryGitTests.swift" \

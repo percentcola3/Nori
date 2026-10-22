@@ -127,6 +127,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             .store(in: &observables)
         setupIslandPanelObservers()
         updateIslandPanel()
+        NotificationCenter.default.publisher(for: Notification.Name("nori.administratorSessionStateDidChange"))
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                guard let value = notification.object as? String else { return }
+                self?.appState.updateAdministratorSession(value)
+            }
+            .store(in: &observables)
+        // 启动时不申请管理员授权：首次执行需要管理员权限的操作时，
+        // runPrivilegedBridge 才按需弹出系统授权；授权后本次运行内复用同一会话。
     }
 
     /// Finder → Services → Reveal in Nori, accepting both modern file URLs
@@ -185,6 +194,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         MosaicCache.shared.clear()
         appState.trafficMonitor.flushHistoryForTermination()
         appState.stopUninstallQueueForTermination()
+        PrivilegedSessionClient.shutdown()
         MoleEngine.shared.cancelAll()
     }
 

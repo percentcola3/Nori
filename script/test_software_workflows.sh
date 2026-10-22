@@ -25,6 +25,8 @@ SOURCES+=(
     "$ROOT_DIR/SimpleMole/Services/AgentRemovalReviewQueue.swift"
     "$ROOT_DIR/SimpleMole/Services/ProcessSampler.swift"
     "$ROOT_DIR/SimpleMole/Services/MoleEngine.swift"
+    "$ROOT_DIR/SimpleMole/Services/PrivilegedSessionProtocol.swift"
+    "$ROOT_DIR/SimpleMole/Services/PrivilegedSessionClient.swift"
     "$ROOT_DIR/SimpleMole/Services/AdministratorCleanupPlan.swift"
     "$ROOT_DIR/SimpleMole/Services/AdministratorUninstallService.swift"
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift"

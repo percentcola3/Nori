@@ -78,6 +78,7 @@ final class MoleEngine {
 
     /// 终止所有被追踪的子进程组（应用退出或用户取消时调用）。
     func cancelAll() {
+        PrivilegedSessionClient.cancelRequests(for: ObjectIdentifier(self))
         let processes = state.withLock { current -> [RunningProcess] in
             let all = current.tracked
             current.tracked.removeAll()
@@ -117,80 +118,31 @@ final class MoleEngine {
                          timeout: timeout)
     }
 
-    /// 通过 osascript 提权运行桥接脚本（系统级扫描与清理）。
-    ///
-    /// root 不直接执行用户可写 Bundle：先把整个 App 复制到 root-only 目录，
-    /// 完整验签并比对启动时 CDHash，最后在空环境中执行暂存脚本。
+    /// 启动时申请一次管理员会话；所有 engine 实例共享同一会话。
+    @discardableResult
+    func authorizeAdministratorSession() async -> RunResult {
+        guard let expectedHash = runningCodeDirectoryHash else {
+            return RunResult(output: L10n.shared.t("engine.signatureInvalid"), exitCode: 78, timedOut: false)
+        }
+        return await PrivilegedSessionClient.shared.authorize(bundle: appBundleURL, resources: resourcesURL, hash: expectedHash)
+    }
+
+    /// 只运行会话代理允许的已验签桥接脚本；不逐项重复申请管理员授权。
     @discardableResult
     func runPrivilegedBridge(_ relativePath: String, arguments: [String],
                              timeout: TimeInterval = 600) async -> RunResult {
-        guard let expectedHash = runningCodeDirectoryHash else {
-            return RunResult(output: L10n.shared.t("engine.signatureInvalid"),
-                             exitCode: 78, timedOut: false)
-        }
         guard Self.isSafeRelativeResourcePath(relativePath),
               let script = resourceURL(relativePath),
               Self.isRegularResource(script, inside: resourcesURL) else {
-            return RunResult(output: L10n.shared.t("engine.privilegedPathInvalid"),
-                             exitCode: 78, timedOut: false)
+            return RunResult(output: L10n.shared.t("engine.privilegedPathInvalid"), exitCode: 78, timedOut: false)
         }
-        guard let cancellationToken = PrivilegedCancellationToken() else {
-            return RunResult(output: L10n.shared.t("engine.cancellationUnavailable"),
-                             exitCode: 78, timedOut: false)
-        }
-        defer { cancellationToken.cancel() }
-
-        let stagedResources = "$staged_app/Contents/Resources"
-        let stagedScript = "$staged_resources/\(relativePath)"
-        let commandArguments = arguments.map { argument -> String in
-            // 系统清理桥接原本会收到 Bundle 资源目录；提权后必须改用已验签副本。
-            argument == resourcesURL.path ? "\"\(stagedResources)\"" : shellQuote(argument)
-        }.joined(separator: " ")
-        let invocation = commandArguments.isEmpty
-            ? "/bin/bash \"\(stagedScript)\""
-            : "/bin/bash \"\(stagedScript)\" \(commandArguments)"
-
-        let command = [
-            "set -eu",
-            "umask 077",
-            "[ \"$(/usr/bin/id -u)\" -eq 0 ] || exit 77",
-            "stage_root=''",
-            "worker_pid=''",
-            "terminate_tree() { tree_pid=$1; tree_signal=$2; for tree_child in $(/bin/ps -axo pid=,ppid= | /usr/bin/awk -v parent=\"$tree_pid\" '$2 == parent {print $1}'); do terminate_tree \"$tree_child\" \"$tree_signal\"; done; /bin/kill -\"$tree_signal\" \"$tree_pid\" 2>/dev/null || true; }",
-            "cleanup() { if [ -n \"$worker_pid\" ] && /bin/kill -0 \"$worker_pid\" 2>/dev/null; then terminate_tree \"$worker_pid\" TERM; /bin/sleep 1; terminate_tree \"$worker_pid\" KILL; fi; case \"$stage_root\" in /private/var/tmp/com.nori.privileged.*) /bin/rm -rf -- \"$stage_root\" ;; esac; }",
-            "trap cleanup 0",
-            "trap 'exit 129' HUP",
-            "trap 'exit 130' INT",
-            "trap 'exit 143' TERM",
-            "stage_root=$(/usr/bin/mktemp -d /private/var/tmp/com.nori.privileged.XXXXXXXX)",
-            "case \"$stage_root\" in /private/var/tmp/com.nori.privileged.*) ;; *) exit 77 ;; esac",
-            "[ -f \(shellQuote(cancellationToken.url.path)) ] || exit 143",
-            "/bin/chmod 700 \"$stage_root\"",
-            "staged_app=\"$stage_root/Nori.app\"",
-            "staged_resources=\"$staged_app/Contents/Resources\"",
-            "/usr/bin/ditto --noqtn \(shellQuote(appBundleURL.path)) \"$staged_app\"",
-            "/usr/bin/codesign --verify --deep --strict \"$staged_app\"",
-            "/usr/bin/codesign -d --verbose=4 \"$staged_app\" >\"$stage_root/codesign.txt\" 2>&1",
-            "actual_hash=$(/usr/bin/awk -F= '/^CDHash=/{print $2; exit}' \"$stage_root/codesign.txt\")",
-            "[ \"$actual_hash\" = \(shellQuote(expectedHash)) ] || exit 78",
-            "[ -f \"\(stagedScript)\" ] && [ ! -L \"\(stagedScript)\" ] || exit 78",
-            "[ -f \(shellQuote(cancellationToken.url.path)) ] || exit 143",
-            "/usr/bin/env -i HOME=/var/root USER=root LOGNAME=root PATH=/usr/bin:/bin:/usr/sbin:/sbin TMPDIR=/private/var/tmp TERM=dumb NO_COLOR=1 \(invocation) & worker_pid=$!",
-            "while /bin/kill -0 \"$worker_pid\" 2>/dev/null; do if [ ! -f \(shellQuote(cancellationToken.url.path)) ]; then terminate_tree \"$worker_pid\" TERM; /bin/sleep 2; terminate_tree \"$worker_pid\" KILL; wait \"$worker_pid\" 2>/dev/null || true; worker_pid=''; exit 143; fi; /bin/sleep 0.2; done",
-            "worker_status=0",
-            "wait \"$worker_pid\" || worker_status=$?",
-            "worker_pid=''",
-            "exit \"$worker_status\""
-        ].joined(separator: "; ")
-
-        let escaped = command
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let source = "do shell script \"\(escaped)\" with administrator privileges"
-        return await run(executable: URL(fileURLWithPath: "/usr/bin/osascript"),
-                         arguments: ["-e", source],
-                         environment: standardEnvironment(includeHomebrew: false),
-                         timeout: timeout, cancellation: cancellationToken.cancel)
+        guard !Task.isCancelled else { return RunResult(output: "", exitCode: 130, timedOut: false) }
+        let owner = ObjectIdentifier(self)
+        let generation = PrivilegedSessionClient.cancellationGeneration(for: owner)
+        let authorization = await authorizeAdministratorSession()
+        guard authorization.succeeded else { return authorization }
+        return await PrivilegedSessionClient.shared.run(relativePath: relativePath, arguments: arguments,
+                                                        resources: resourcesURL, timeout: timeout, owner: owner, generation: generation)
     }
 
     /// 进程 / 端口桥接（只读观察 + 明确选中后的终止信号）。

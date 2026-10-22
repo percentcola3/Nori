@@ -72,6 +72,7 @@ struct SettingsTabView: View {
                 awakeSection
                 maintenanceSection
                 generalSection
+                administratorSessionSection
                 UpdateSettingsView(updater: .shared)
                 SettingsSection(title: l10n.t("permissions.title")) {
                     PermissionCenterView(state: state, embedded: true)
@@ -91,6 +92,42 @@ struct SettingsTabView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             loginItem.refresh()
+        }
+    }
+
+    private var administratorSessionSection: some View {
+        SettingsSection(title: l10n.t("settings.administratorSession.title")) {
+            SettingsRow(vertical: 12) {
+                VStack(alignment: .leading, spacing: 9) {
+                    HStack(spacing: 10) {
+                        if state.administratorSession == .authorizing {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(l10n.t(state.administratorSession.statusKey))
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(state.administratorSession == .ready ? Color.success : Color.textSecondary)
+                            .accessibilityIdentifier("administratorSession.status")
+                        Spacer(minLength: 8)
+                        Button(l10n.t(state.administratorSession == .cancelled || state.administratorSession == .failed
+                                      ? "settings.administratorSession.retry" : "settings.administratorSession.authorize")) {
+                            state.requestAdministratorSession()
+                        }
+                        .controlSize(.small)
+                        .disabled(state.administratorSession == .authorizing || state.administratorSession == .ready)
+                    }
+                    Text(l10n.t("settings.administratorSession.hint"))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail = state.administratorSessionDetail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.system(size: 10))
+                            .foregroundStyle(Color.warning)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
         }
     }
 

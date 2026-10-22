@@ -4,6 +4,22 @@ import Foundation
 /// 全量文案，其余语言回退 English（与 permissions.openSettings 等既有键同策略）。
 enum L10nMaintenanceTables {
     static let en: [String: String] = [
+        "settings.administratorSession.title": "Administrator Session",
+        "settings.administratorSession.idle": "Not authorized",
+        "settings.administratorSession.authorizing": "Waiting for system authorization…",
+        "settings.administratorSession.ready": "Authorized for this Nori run",
+        "settings.administratorSession.cancelled": "Authorization cancelled; read-only features remain available",
+        "settings.administratorSession.failed": "Authorization failed; you can retry",
+        "settings.administratorSession.authorize": "Authorize",
+        "settings.administratorSession.retry": "Retry Authorization",
+        "settings.administratorSession.hint": "Nori does not ask at launch. The native macOS authorization dialog appears the first time an action needs administrator rights; after you authorize, the rest of this Nori run reuses it. You can also authorize here in advance. Each destructive action still needs its own confirmation. Cancelling does not block read-only use. Nori does not save your password or modify sudoers.",
+        "memory.reclaim.action": "Reclaim Memory Cache",
+        "memory.reclaim.scope": "Reclaims disk caches; does not clear swap or quit apps. Asks for administrator authorization once per Nori run.",
+        "memory.reclaim.hint": "Runs purge. macOS asks for authorization the first time in this Nori run, then it is reused. Reclaims disk caches; does not clear swap or quit apps. Caches may refill afterward.",
+        "memory.reclaim.running": "Authorizing / reclaiming memory cache…",
+        "memory.reclaim.done": "Cache reclaimed · measured memory used %@ → %@ · swap %@ → %@",
+        "memory.reclaim.cancelled": "Memory cache reclaim cancelled.",
+        "memory.reclaim.failed": "Could not reclaim memory cache.",
         // 清理页 · 系统数据库维护
         "sysmaint.title": "System Database Maintenance",
         "sysmaint.card.hint": "Checked after a deep scan; each item runs only on your confirmation.",
@@ -57,6 +73,22 @@ enum L10nMaintenanceTables {
     ]
 
     static let zhHans: [String: String] = [
+        "settings.administratorSession.title": "管理员会话",
+        "settings.administratorSession.idle": "尚未授权",
+        "settings.administratorSession.authorizing": "正在等待系统授权…",
+        "settings.administratorSession.ready": "本次 Nori 运行已授权",
+        "settings.administratorSession.cancelled": "已取消授权，仍可使用只读功能",
+        "settings.administratorSession.failed": "授权失败，可重试",
+        "settings.administratorSession.authorize": "授权",
+        "settings.administratorSession.retry": "重新授权",
+        "settings.administratorSession.hint": "启动时不会请求授权。首次执行需要管理员权限的操作时，才弹出 macOS 原生授权窗口；授权后本次 Nori 运行内不再弹出。也可以在这里提前授权。每次实际破坏性操作仍需单独确认；取消授权不会阻止只读使用。Nori 不保存密码，也不修改 sudoers。",
+        "memory.reclaim.action": "回收内存缓存",
+        "memory.reclaim.scope": "回收磁盘缓存，不清空 swap，也不退出应用；每次运行 Nori 只需授权一次。",
+        "memory.reclaim.hint": "执行 purge 回收磁盘缓存；本次运行首次使用时由系统请求授权，之后复用。不会清空 swap 或退出应用，缓存可能随后重新增长。",
+        "memory.reclaim.running": "正在授权 / 回收内存缓存…",
+        "memory.reclaim.done": "缓存已回收 · 实测内存占用 %@ → %@ · swap %@ → %@",
+        "memory.reclaim.cancelled": "已取消内存缓存回收。",
+        "memory.reclaim.failed": "内存缓存回收失败。",
         // 清理页 · 系统数据库维护
         "sysmaint.title": "系统数据库维护",
         "sysmaint.card.hint": "深度扫描后体检，逐项确认后才会执行。",

@@ -3,6 +3,46 @@ import Darwin
 import Foundation
 
 extension AppState {
+    /// 独立的缓存回收动作，不终止进程；不把采样差值当作 purge 释放量。
+    func reclaimMemoryCache() {
+        guard islandCleaningResource == nil, islandClosingPIDs.isEmpty else { return }
+        islandCleaningResource = .memory
+        islandResourceStatus[.memory] = L10n.shared.t("memory.reclaim.running")
+        Task {
+            defer { islandCleaningResource = nil }
+            let before = await Task.detached(priority: .utility) {
+                SystemMetrics.sampleMemory()
+            }.value
+            let result = await MemoryCacheReclaimService.run()
+            let after = await Task.detached(priority: .utility) {
+                SystemMetrics.sampleMemory()
+            }.value
+            // 保留蓝牙等慢采样字段；只刷新本次操作关联的内存数据。
+            var refreshed = metricsStore.metrics
+            refreshed.memoryPercent = after.memoryPercent
+            refreshed.memoryUsedBytes = after.memoryUsedBytes
+            refreshed.memoryTotalBytes = after.memoryTotalBytes
+            refreshed.memoryAvailableBytes = after.memoryAvailableBytes
+            refreshed.memoryPressure = after.memoryPressure
+            refreshed.swapUsedBytes = after.swapUsedBytes
+            refreshed.swapTotalBytes = after.swapTotalBytes
+            metricsStore.metrics = refreshed
+            switch result {
+            case .success:
+                MosaicCache.shared.clear()
+                islandResourceStatus[.memory] = L10n.shared.tf("memory.reclaim.done",
+                    ByteFormat.format(before.memoryUsedBytes), ByteFormat.format(after.memoryUsedBytes),
+                    ByteFormat.format(before.swapUsedBytes), ByteFormat.format(after.swapUsedBytes))
+            case .cancelled:
+                islandResourceStatus[.memory] = L10n.shared.t("memory.reclaim.cancelled")
+            case .failed(let details):
+                let message = L10n.shared.t("memory.reclaim.failed")
+                islandResourceStatus[.memory] = message
+                presentTaskFailure(message: message, details: [details], detailsAreLocalized: true)
+            }
+            resampleAfterMutation()
+        }
+    }
     func refreshIslandProcesses(force: Bool = false) {
         guard !islandSampling, islandCleaningResource == nil,
               force || Date().timeIntervalSince(lastIslandSample) >= 2 else { return }

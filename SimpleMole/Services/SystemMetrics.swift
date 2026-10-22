@@ -17,6 +17,21 @@ enum SystemMetrics {
     private static var previousDiskSample: Double = 0
     private static let diskAvailableCapacityCache = DiskAvailableCapacityCache()
 
+    /// 按需刷新内存，不推进 CPU、网络或磁盘速率的周期采样基线。
+    static func sampleMemory() -> MetricsSnapshot {
+        var snapshot = MetricsSnapshot()
+        let memory = memoryStats()
+        snapshot.memoryPercent = memory.percent
+        snapshot.memoryUsedBytes = memory.usedBytes
+        snapshot.memoryTotalBytes = memory.totalBytes
+        snapshot.memoryAvailableBytes = memory.availableBytes
+        snapshot.memoryPressure = SensorMetrics.memoryPressure() ?? memory.pressure
+        let swap = swapUsage()
+        snapshot.swapUsedBytes = swap.used
+        snapshot.swapTotalBytes = swap.total
+        return snapshot
+    }
+
     static func sample(includeBluetooth: Bool = false) -> MetricsSnapshot {
         var snapshot = MetricsSnapshot()
         snapshot.collectedAt = Date()

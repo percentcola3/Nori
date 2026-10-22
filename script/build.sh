@@ -251,7 +251,20 @@ for arch in $BUILD_ARCHS; do
     CONTENTS="$APP_DIR/Contents"
     RESOURCES="$CONTENTS/Resources"
     rm -rf "$APP_DIR"
-    mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Frameworks" "$RESOURCES"
+    mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Helpers" "$CONTENTS/Frameworks" "$RESOURCES"
+
+    echo "==> Compiling privileged session broker ($arch)"
+    SDKROOT="$SWIFT_SDKROOT" swiftc -O -whole-module-optimization -target "$arch-apple-macos13.0" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$BUILD_TMP/module-cache-$arch}" \
+        -framework Foundation -framework Security \
+        "$SWIFT_SOURCE_DIR/Services/PrivilegedSessionProtocol.swift" \
+        "$SWIFT_SOURCE_DIR/Support/PrivilegedSession/main.swift" \
+        -o "$CONTENTS/Helpers/NoriPrivilegedSession"
+    [[ "$(/usr/bin/lipo -archs "$CONTENTS/Helpers/NoriPrivilegedSession")" == "$arch" ]] || {
+        echo "error: expected a single $arch privileged session executable" >&2
+        exit 2
+    }
+    /usr/bin/strip -x "$CONTENTS/Helpers/NoriPrivilegedSession"
 
     echo "==> Compiling Swift app ($arch)"
     xcrun clang -fobjc-arc -isysroot "$SWIFT_SDKROOT" -target "$arch-apple-macos13.0" \
@@ -318,6 +331,7 @@ for arch in $BUILD_ARCHS; do
     sign_one "$SPARKLE_FRAMEWORK/Versions/B/Autoupdate"
     sign_one "$SPARKLE_FRAMEWORK/Versions/B/Updater.app"
     sign_one "$SPARKLE_FRAMEWORK"
+    sign_one "$CONTENTS/Helpers/NoriPrivilegedSession"
     sign_one "$CONTENTS/MacOS/Nori" "$HOST_ENTITLEMENTS"
     sign_one "$APP_DIR" "$HOST_ENTITLEMENTS"
     /usr/bin/codesign --verify --deep --strict "$APP_DIR"

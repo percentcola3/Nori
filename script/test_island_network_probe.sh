@@ -29,6 +29,8 @@ swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" -framework Security \
     "$TEST_DIR/RunResult.swift" "$TEST_DIR/L10n.swift" \
     "$ROOT_DIR/SimpleMole/Services/MoleEngine.swift" \
+    "$ROOT_DIR/SimpleMole/Services/PrivilegedSessionProtocol.swift" \
+    "$ROOT_DIR/SimpleMole/Services/PrivilegedSessionClient.swift" \
     "$ROOT_DIR/SimpleMole/Services/IslandNetworkProbe.swift" \
     "$ROOT_DIR/script/IslandNetworkProbeTests.swift" -o "$TEST_DIR/tests"
 "$TEST_DIR/tests"

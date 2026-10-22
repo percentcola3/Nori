@@ -36,6 +36,10 @@ final class AppState: ObservableObject {
         let onConfirm: () -> Void
     }
 
+    @Published var administratorSession: AdministratorSessionState = .idle
+    @Published var administratorSessionDetail: String?
+    var administratorSessionInFlight = false
+
     @Published var administratorCleanupPrompt: String?
     private var administratorCleanupDecision: CheckedContinuation<Bool?, Never>?
 

@@ -940,6 +940,22 @@ struct FloatingIslandView: View {
                     .padding(.trailing, 34)
             }
             .frame(height: 22)
+            if resource == .memory {
+                Button { state.reclaimMemoryCache() } label: {
+                    Label(l10n.t("memory.reclaim.action"), systemImage: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentText)
+                .disabled(state.islandCleaningResource != nil || !state.islandClosingPIDs.isEmpty)
+                .help(l10n.t("memory.reclaim.hint"))
+                .padding(.top, 6)
+                Text(l10n.t("memory.reclaim.scope"))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 6)
+            }
             if rows.isEmpty {
                 Text(l10n.t("island.process.loading"))
                     .font(.system(size: 11)).foregroundStyle(.secondary)
