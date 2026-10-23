@@ -30,6 +30,7 @@ struct TrafficTabView: View {
                     .controlSize(.small)
                     .font(.system(size: 11))
                 Button(l10n.t("netmon.reset")) { store.resetSession() }
+                    .buttonStyle(MoleFilledControlButtonStyle())
                     .controlSize(.small)
                     .disabled(store.rows.isEmpty && store.physicalDown == 0 && store.physicalUp == 0)
             }
@@ -55,12 +56,15 @@ struct TrafficTabView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 8)
-                Picker(l10n.t("netmon.sort.title"), selection: $store.sortOrder) {
+                Text(l10n.t("netmon.sort.title"))
+                    .font(.system(size: 11))
+                MoleMenuPicker(title: l10n.t("netmon.sort.title"),
+                               value: l10n.t(store.sortOrder.titleKey),
+                               selection: $store.sortOrder) {
                     ForEach(TrafficSortOrder.allCases, id: \.rawValue) { order in
                         Text(l10n.t(order.titleKey)).tag(order)
                     }
                 }
-                .pickerStyle(.menu)
                 .controlSize(.small)
                 .fixedSize()
                 Text(l10n.t("netmon.sort.descending"))

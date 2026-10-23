@@ -94,12 +94,18 @@ struct AgentHistoryView: View {
     private var controls: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Picker(l10n.t("agents.history.provider"), selection: Binding(get: { provider }, set: {
-                    provider = $0
-                    search = ""
-                })) {
-                    ForEach(AgentHistoryProvider.allCases, id: \.self) { item in Text(item.name).tag(item) }
-                }.pickerStyle(.menu).frame(width: 180).disabled(blocked)
+                HStack(spacing: 6) {
+                    Text(l10n.t("agents.history.provider"))
+                    MoleMenuPicker(title: l10n.t("agents.history.provider"),
+                                   value: provider.name,
+                                   selection: Binding(get: { provider }, set: {
+                                       provider = $0
+                                       search = ""
+                                   })) {
+                        ForEach(AgentHistoryProvider.allCases, id: \.self) { item in Text(item.name).tag(item) }
+                    }
+                }
+                .frame(width: 180).disabled(blocked)
                 Spacer()
                 Button(l10n.t("agents.history.project.choose")) { store.chooseProject(provider, state: state) }
                     .buttonStyle(SecondaryButtonStyle()).disabled(blocked)

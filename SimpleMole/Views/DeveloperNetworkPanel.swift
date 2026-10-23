@@ -355,6 +355,13 @@ private struct DeveloperHostsEntryEditor: View {
         self.cancel = cancel
     }
 
+    private var selectedGroupTitle: String {
+        if groupID == "new" { return L10n.shared.t("dev.network.new.group") }
+        if let group = groups.first(where: { $0.id == groupID }), case .named(let name) = group.kind {
+            return name
+        }
+        return L10n.shared.t("dev.network.ungrouped")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -387,7 +394,8 @@ private struct DeveloperHostsEntryEditor: View {
                     GridRow {
                         Text(L10n.shared.t("dev.network.group")).font(.system(size: 11)).foregroundStyle(.secondary)
                         HStack(spacing: 8) {
-                            Picker("", selection: $groupID) {
+                            MoleMenuPicker(title: L10n.shared.t("dev.network.group"),
+                                           value: selectedGroupTitle, selection: $groupID) {
                                 Text(L10n.shared.t("dev.network.ungrouped")).tag("ungrouped")
                                 ForEach(groups.filter { if case .named = $0.kind { return true } else { return false } }) { group in
                                     if case .named(let name) = group.kind { Text(name).tag(group.id) }

@@ -184,6 +184,11 @@ private struct DeveloperMirrorRow: View {
     let test: (String) -> Void
     @ObservedObject private var l10n = L10n.shared
     private var value: String { draft.selection == "custom" ? draft.custom : draft.selection }
+    private var selectionTitle: String {
+        if draft.selection == "custom" { return l10n.t("dev.network.custom") }
+        return row.tool.presets.first { $0.url == draft.selection }
+            .map { l10n.t($0.name) } ?? l10n.t("dev.network.chooseSource")
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(row.tool.title).font(.system(size: 12, weight: .medium))
@@ -193,7 +198,8 @@ private struct DeveloperMirrorRow: View {
                 Text(l10n.tf("dev.network.sourceEnvironment", key)).font(.system(size: 10)).foregroundStyle(.tertiary)
             }
             HStack {
-                Picker(l10n.t("dev.network.source"), selection: $draft.selection) {
+                MoleMenuPicker(title: l10n.t("dev.network.source"),
+                               value: selectionTitle, selection: $draft.selection) {
                     Text(l10n.t("dev.network.chooseSource")).tag("")
                     ForEach(row.tool.presets, id: \.url) { preset in Text(l10n.t(preset.name)).tag(preset.url) }
                     Text(l10n.t("dev.network.custom")).tag("custom")

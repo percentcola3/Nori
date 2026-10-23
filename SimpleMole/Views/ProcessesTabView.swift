@@ -80,12 +80,13 @@ struct ProcessesTabView: View {
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.surface2))
                 .frame(maxWidth: 260)
 
-                Picker("", selection: $state.processSort) {
+                MoleMenuPicker(title: l10n.t("proc.sort"),
+                               value: l10n.t(state.processSort.l10nKey),
+                               selection: $state.processSort) {
                     ForEach(ProcessSort.allCases, id: \.self) { sort in
                         Text(l10n.t(sort.l10nKey)).tag(sort)
                     }
                 }
-                .pickerStyle(.menu)
                 .labelsHidden()
                 .frame(width: 112)
                 Spacer()

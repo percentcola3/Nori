@@ -60,14 +60,18 @@ struct AgentRetentionControls: View {
 
     private func retentionPicker(_ labelKey: String,
                                  retentionClass: AgentRetentionClass) -> some View {
-        Picker(l10n.t(labelKey), selection: selection(for: retentionClass)) {
+        let retentionSelection = selection(for: retentionClass)
+        return MoleMenuPicker(title: l10n.t(labelKey),
+                              value: retentionSelection.wrappedValue == 0
+                                ? l10n.t("agents.retention.never")
+                                : l10n.tf("agents.retention.days", retentionSelection.wrappedValue),
+                              selection: retentionSelection) {
             Text(l10n.t("agents.retention.never")).tag(0)
             ForEach(AgentRetentionPreferences.presetDays, id: \.self) { days in
                 Text(l10n.tf("agents.retention.days", days)).tag(days)
             }
         }
         .labelsHidden()
-        .pickerStyle(.menu)
         .controlSize(.mini)
         .accessibilityIdentifier("agent-retention-\(agentID)-\(retentionClass.rawValue)")
     }

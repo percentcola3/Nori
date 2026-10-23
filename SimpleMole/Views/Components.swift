@@ -168,6 +168,71 @@ struct SecondaryButtonStyle: ButtonStyle {
     }
 }
 
+/// 内容区控件使用成对的实色，避免文字层级色影响系统控件底色。
+private struct MoleFilledControlChrome: ViewModifier {
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.controlSize) private var controlSize
+
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: controlSize == .mini ? 10 : 12, weight: .medium))
+            .foregroundStyle(isEnabled ? Color.onAccent : Color.textSecondary)
+            .padding(.horizontal, controlSize == .mini ? 8 : 10)
+            .frame(height: controlSize == .mini ? 22 : 27)
+            .background(Capsule().fill(isEnabled ? Color.accent : Color.surface1))
+            .contentShape(Capsule())
+    }
+}
+
+struct MoleFilledControlButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .modifier(MoleFilledControlChrome())
+            .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
+    }
+}
+
+struct MoleSelectionValueLabel: View {
+    let value: String
+    var symbol = "chevron.down"
+    var expanded = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(value).lineLimit(1)
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .semibold))
+                .rotationEffect(.degrees(expanded ? 180 : 0))
+                .accessibilityHidden(true)
+        }
+        .modifier(MoleFilledControlChrome())
+    }
+}
+
+/// 菜单保留原生 Picker 的选项与勾选，闭合标签使用明确的主题配色。
+struct MoleMenuPicker<Selection: Hashable, Options: View>: View {
+    let title: String
+    let value: String
+    @Binding var selection: Selection
+    @ViewBuilder let content: () -> Options
+
+    var body: some View {
+        Menu {
+            Picker(title, selection: $selection) { content() }
+                .pickerStyle(.inline)
+                .labelsHidden()
+        } label: {
+            MoleSelectionValueLabel(value: value, symbol: "chevron.up.chevron.down")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel(title.isEmpty ? value : title)
+        .accessibilityValue(value)
+    }
+}
+
 struct DangerButtonStyle: ButtonStyle {
     /// 覆盖默认的 danger 着色，供非红色但同样需要警示表面的入口。
     var tint: Color? = nil

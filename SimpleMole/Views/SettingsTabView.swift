@@ -53,31 +53,6 @@ struct SettingsRow<Content: View>: View {
     }
 }
 
-/// 当前选择值使用不透明的 accent / onAccent 配色，避免继承文字层级色作为底色。
-private struct SettingsValueLabel: View {
-    let value: String
-    var symbol = "chevron.down"
-    var expanded = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Text(value)
-                .lineLimit(1)
-            Image(systemName: symbol)
-                .font(.system(size: 9, weight: .semibold))
-                .rotationEffect(.degrees(expanded ? 180 : 0))
-                .accessibilityHidden(true)
-        }
-        .font(.system(size: 12, weight: .medium))
-        .foregroundStyle(isEnabled ? Color.onAccent : Color.textSecondary)
-        .padding(.horizontal, 10)
-        .frame(height: 27)
-        .background(Capsule().fill(isEnabled ? Color.accent : Color.surface1))
-        .contentShape(Capsule())
-    }
-}
-
 struct SettingsTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
@@ -137,6 +112,7 @@ struct SettingsTabView: View {
                                       ? "settings.administratorSession.retry" : "settings.administratorSession.authorize")) {
                             state.requestAdministratorSession()
                         }
+                        .buttonStyle(MoleFilledControlButtonStyle())
                         .controlSize(.small)
                         .disabled(state.administratorSession == .authorizing || state.administratorSession == .ready)
                     }
@@ -212,7 +188,7 @@ struct SettingsTabView: View {
             if reduceMotion { languageExpanded.toggle() }
             else { withAnimation(MoleMotion.panel) { languageExpanded.toggle() } }
         } label: {
-            SettingsValueLabel(value: l10n.language.displayName, expanded: languageExpanded)
+            MoleSelectionValueLabel(value: l10n.language.displayName, expanded: languageExpanded)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(l10n.t("header.language"))
@@ -233,16 +209,19 @@ struct SettingsTabView: View {
                         Spacer(minLength: 2)
                         Image(systemName: "checkmark")
                             .opacity(L10n.shared.language == language ? 1 : 0)
+                            .accessibilityHidden(true)
                     }
                     .font(.system(size: 10, weight: L10n.shared.language == language ? .semibold : .regular))
+                    .foregroundStyle(L10n.shared.language == language ? Color.onAccent : Color.textSecondary)
                     .padding(.horizontal, 8)
                     .frame(height: 26)
                     .background(RoundedRectangle(cornerRadius: 8)
                         .fill(L10n.shared.language == language
-                              ? Color.moleAccent.opacity(0.15) : Color.surface2))
+                              ? Color.accent : Color.surface2))
                     .contentShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(L10n.shared.language == language ? .isSelected : [])
             }
         }
         .padding(.top, 10)
@@ -313,17 +292,19 @@ struct SettingsTabView: View {
                 Image(systemName: "checkmark")
                     .font(.system(size: 8, weight: .bold))
                     .opacity(isSelected ? 1 : 0)
+                    .accessibilityHidden(true)
             }
-            .foregroundStyle(isSelected ? Color.moleAccentText : Color.textSecondary)
+            .foregroundStyle(isSelected ? Color.onAccent : Color.textSecondary)
             .padding(.horizontal, 9)
             .frame(height: 27)
             .background(RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.moleAccent.opacity(0.15) : Color.surface2))
+                .fill(isSelected ? Color.accent : Color.surface2))
             .contentShape(RoundedRectangle(cornerRadius: 8))
             .opacity(isLastRemaining ? 0.55 : 1)
         }
         .buttonStyle(.plain)
         .disabled(isLastRemaining)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var awakeBatteryFloorLabel: String {
@@ -351,28 +332,18 @@ struct SettingsTabView: View {
                     Text(l10n.t("awake.settings.batteryFloor"))
                         .font(.system(size: 12))
                     Spacer(minLength: 8)
-                    Menu {
-                        Picker(l10n.t("awake.settings.batteryFloor"), selection: Binding(
-                            get: { state.awakePreferences.batteryFloorPercent },
-                            set: { state.setAwakeBatteryFloor($0) })) {
-                            Text(l10n.t("awake.settings.off")).tag(0)
-                            ForEach([5, 10, 15, 20, 30], id: \.self) { percent in
-                                Text("\(percent)%").tag(percent)
-                            }
+                    MoleMenuPicker(title: l10n.t("awake.settings.batteryFloor"),
+                                   value: awakeBatteryFloorLabel,
+                                   selection: Binding(
+                                       get: { state.awakePreferences.batteryFloorPercent },
+                                       set: { state.setAwakeBatteryFloor($0) })) {
+                        Text(l10n.t("awake.settings.off")).tag(0)
+                        ForEach([5, 10, 15, 20, 30], id: \.self) { percent in
+                            Text("\(percent)%").tag(percent)
                         }
-                        .pickerStyle(.inline)
-                        .labelsHidden()
-                    } label: {
-                        SettingsValueLabel(value: awakeBatteryFloorLabel, symbol: "chevron.up.chevron.down")
-                            .monospacedDigit()
                     }
-                    .menuStyle(.button)
-                    .buttonStyle(.plain)
-                    .menuIndicator(.hidden)
+                    .monospacedDigit()
                     .controlSize(.small)
-                    .fixedSize()
-                    .accessibilityLabel(l10n.t("awake.settings.batteryFloor"))
-                    .accessibilityValue(awakeBatteryFloorLabel)
                 }
             }
             SettingsRow {
@@ -508,7 +479,7 @@ struct SettingsTabView: View {
         }
     }
 
-    /// 功能页标签：激活用品牌色淡染 + 描边 + 加粗表达，不加对号。
+    /// 功能页标签：实色底、成对文字色和加粗表达选中；最后一项仍保留选中语义。
     private func chipLabel(_ title: String, isActive: Bool) -> some View {
         Text(title)
             .font(.system(size: 11, weight: isActive ? .semibold : .regular))
@@ -516,10 +487,10 @@ struct SettingsTabView: View {
             .padding(.horizontal, 6)
             .frame(maxWidth: .infinity)
             .frame(height: 27)
-            .foregroundStyle(isActive ? Color.moleAccentText : Color.textSecondary)
+            .foregroundStyle(isActive ? Color.onAccent : Color.textSecondary)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isActive ? Color.moleAccent.opacity(0.15) : Color.surface2))
+                    .fill(isActive ? Color.accent : Color.surface2))
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
