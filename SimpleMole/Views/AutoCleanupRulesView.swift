@@ -100,7 +100,7 @@ struct AutoCleanupRulesView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 7)
-            .background(.quinary)
+            .background(Color.surface1)
         }
     }
 
@@ -558,7 +558,7 @@ private struct AutoCleanupPreviewView: View {
                         }
                     }
                 }
-                .background(RoundedRectangle(cornerRadius: 7).fill(.quaternary))
+                .background(RoundedRectangle(cornerRadius: 7).fill(Color.surface2))
 
                 if plan.candidates.count > visibleCandidates.count {
                     Text(l10n.tf(
@@ -591,7 +591,7 @@ private struct AutoCleanupPreviewMetric: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 7).fill(.quaternary))
+        .background(RoundedRectangle(cornerRadius: 7).fill(Color.surface2))
     }
 }
 

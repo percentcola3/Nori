@@ -118,6 +118,8 @@ extension Color {
                                    dark: NSColor.white.withAlphaComponent(0.10))
     static let surface3 = adaptive(light: NSColor.white.withAlphaComponent(0.88),
                                    dark: NSColor.white.withAlphaComponent(0.16))
+    /// 容量徽标使用实色内容底，稳定小字号文字对比度。
+    static let badgeSurface = glassOpaque
     /// 开关关闭态的轨道与滑块。
     static let trackOff = adaptive(light: NSColor.black.withAlphaComponent(0.12),
                                    dark: NSColor.white.withAlphaComponent(0.12))

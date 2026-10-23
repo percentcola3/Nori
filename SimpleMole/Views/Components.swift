@@ -407,12 +407,10 @@ struct SizeBadge: View {
     var body: some View {
         Text(text)
             .font(.system(size: 10, weight: .medium).monospacedDigit())
-            .foregroundStyle(prominent ? Color.moleAccentText : .secondary)
+            .foregroundStyle(prominent ? Color.onAccent : Color.textPrimary)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
-            .background(Capsule().fill(prominent
-                ? AnyShapeStyle(Color.moleAccent.opacity(0.32))
-                : AnyShapeStyle(.quaternary)))
+            .background(Capsule().fill(prominent ? Color.accent : Color.badgeSurface))
     }
 }
 
