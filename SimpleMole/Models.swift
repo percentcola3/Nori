@@ -634,6 +634,11 @@ enum ProcessLifecycle: String, Equatable {
     }
 }
 
+enum ProcessSort: String, CaseIterable {
+    case memory, cpu, name
+    var l10nKey: String { "proc.sort.\(rawValue)" }
+}
+
 /// 进程列表行（应用组模式 / 高级 PID 模式 / 原生应用模式共用）。
 struct ProcessRow: Identifiable, Equatable, Sendable {
     let pid: Int32
@@ -652,6 +657,12 @@ struct ProcessRow: Identifiable, Equatable, Sendable {
     let state: String
     /// 进程已运行秒数；旧 bridge 或原生应用行未知时为 0。
     let elapsed: TimeInterval
+    /// Display metadata only; process actions still use the captured start identity.
+    let bundlePath: String?
+    let executablePath: String?
+    let workingDirectory: String?
+    /// Exact libproc identity for individual PID actions; legacy tokens remain unchanged.
+    let nativeStartTime: UInt64?
     var lifecycle: ProcessLifecycle { ProcessLifecycle(processState: state) }
     var id: Int32 { pid }
     var signalToken: String { "\(pid)|\(startIdentity)" }
@@ -661,7 +672,8 @@ struct ProcessRow: Identifiable, Equatable, Sendable {
     init(pid: Int32, startIdentity: String, name: String, detail: String,
          isNativeApp: Bool, cpu: Double, mem: Double, memBytes: UInt64,
          ppid: Int32 = 0, uid: UInt32 = UInt32.max, state: String = "",
-         elapsed: TimeInterval = 0) {
+         elapsed: TimeInterval = 0, bundlePath: String? = nil,
+         executablePath: String? = nil, workingDirectory: String? = nil, nativeStartTime: UInt64? = nil) {
         self.pid = pid
         self.startIdentity = startIdentity
         self.name = name
@@ -674,6 +686,18 @@ struct ProcessRow: Identifiable, Equatable, Sendable {
         self.uid = uid
         self.state = state
         self.elapsed = elapsed
+        self.bundlePath = bundlePath
+        self.executablePath = executablePath
+        self.workingDirectory = workingDirectory
+        self.nativeStartTime = nativeStartTime
+    }
+
+    func matchesProcessQuery(_ query: String) -> Bool {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !needle.isEmpty else { return true }
+        if String(pid) == needle || String(ppid) == needle { return true }
+        return [name, executablePath, workingDirectory, bundlePath].compactMap { $0 }
+            .contains { $0.localizedCaseInsensitiveContains(needle) }
     }
 }
 

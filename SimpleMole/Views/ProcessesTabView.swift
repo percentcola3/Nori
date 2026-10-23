@@ -1,12 +1,17 @@
 import SwiftUI
 
-/// 进程清理：默认应用级视图（libproc 采样、按 .app 聚合、搜索 / 排序 / 趋势），
-/// 高级模式走 ps 桥接并按进程树聚合（保留自动异常清理）。
+/// 进程管理：默认应用级视图（libproc 采样、按 .app 聚合、搜索 / 排序 / 趋势），
+/// 高级模式独立展示每个 PID，异常自动处理由用户显式启用。
 struct ProcessesTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var expanded: Set<Int32> = []
+    @State private var expanded: Set<String> = []
+    @State private var childLimits: [String: Int] = [:]
+
+    private var searchQuery: String {
+        state.processSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,8 +55,8 @@ struct ProcessesTabView: View {
     // MARK: 工具条
 
     private var toolbar: some View {
-        HStack(spacing: 8) {
-            if !state.advancedProcesses {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 10, weight: .semibold))
@@ -83,12 +88,18 @@ struct ProcessesTabView: View {
                 .pickerStyle(.menu)
                 .labelsHidden()
                 .frame(width: 112)
+                Spacer()
+                Toggle(l10n.t("proc.advanced"), isOn: $state.advancedProcesses)
+                    .toggleStyle(MoleSwitchToggleStyle())
+                    .controlSize(.small)
+                    .font(.system(size: 11))
             }
-            Spacer()
-            Toggle(l10n.t("proc.advanced"), isOn: $state.advancedProcesses)
-                .toggleStyle(MoleSwitchToggleStyle())
-                .controlSize(.small)
-                .font(.system(size: 11))
+            if state.advancedProcesses {
+                Toggle(l10n.t("proc.autoCleanup"), isOn: $state.automaticProcessCleanup)
+                    .toggleStyle(MoleSwitchToggleStyle())
+                    .controlSize(.small)
+                    .font(.system(size: 11))
+            }
         }
     }
 
@@ -122,13 +133,13 @@ struct ProcessesTabView: View {
         let groups = state.visibleProcessGroups
         if groups.isEmpty {
             EmptyStateView(symbol: "cpu",
-                           title: state.processSearch.isEmpty
+                           title: searchQuery.isEmpty
                              ? l10n.t("proc.status.none") : l10n.t("proc.search.empty"),
-                           subtitle: state.processSearch.isEmpty ? l10n.t("proc.status.systemHint") : nil)
+                           subtitle: searchQuery.isEmpty ? l10n.t("proc.status.systemHint") : nil)
         } else {
             ScrollView {
                 LazyVStack(spacing: 6) {
-                    ForEach(groups) { group in
+                    ForEach(groups, id: \.app.signalToken) { group in
                         groupCard(group)
                     }
                 }
@@ -139,20 +150,25 @@ struct ProcessesTabView: View {
     }
 
     private func groupCard(_ group: ProcessGroup) -> some View {
-        let isExpanded = expanded.contains(group.id)
+        let token = group.app.signalToken
+        let matchingChildren = searchQuery.isEmpty ? [] : group.children.filter { $0.matchesProcessQuery(searchQuery) }
+        let filtersChildren = !searchQuery.isEmpty
+        let children = filtersChildren ? matchingChildren : group.children
+        let childLimit = filtersChildren ? children.count : childLimits[token, default: 30]
+        let isExpanded = filtersChildren ? !children.isEmpty : expanded.contains(token)
         return VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Button {
-                    if isExpanded { expanded.remove(group.id) } else { expanded.insert(group.id) }
+                    if isExpanded { expanded.remove(token) } else { expanded.insert(token) }
                 } label: {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(group.children.isEmpty ? Color.clear : Color.textSecondary)
+                        .foregroundStyle(children.isEmpty ? Color.clear : Color.textSecondary)
                         .rotationEffect(.degrees(isExpanded ? 90 : 0))
                         .frame(width: 14, height: 26)
                 }
                 .buttonStyle(.plain)
-                .disabled(group.children.isEmpty)
+                .disabled(children.isEmpty || filtersChildren)
 
                 ProcessAppIcon(row: group.app,
                                size: 26,
@@ -219,17 +235,20 @@ struct ProcessesTabView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
 
-            if isExpanded, !group.children.isEmpty {
+            if isExpanded, !children.isEmpty {
                 Divider().padding(.horizontal, 10)
                 VStack(spacing: 0) {
-                    ForEach(group.children.prefix(30)) { child in
+                    ForEach(children.prefix(childLimit), id: \.signalToken) { child in
                         childRow(child)
                     }
-                    if group.children.count > 30 {
-                        Text(l10n.tf("proc.children.more", group.children.count - 30))
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
-                            .padding(.vertical, 4)
+                    if children.count > childLimit {
+                        Button(l10n.tf("proc.children.more", min(30, children.count - childLimit))) {
+                            childLimits[token] = childLimit + 30
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.accentText)
+                        .padding(.vertical, 6)
                     }
                 }
                 .padding(.vertical, 4)
@@ -286,6 +305,7 @@ struct ProcessesTabView: View {
                 Text(child.detail)
                     .font(.system(size: 9).monospacedDigit())
                     .foregroundStyle(.tertiary)
+                locationDetails(child)
             }
             Spacer()
             ProcessMetric(label: "CPU", value: String(format: "%.1f%%", child.cpu), isElevated: child.cpu >= 50)
@@ -300,69 +320,97 @@ struct ProcessesTabView: View {
         .padding(.vertical, 5)
     }
 
-    // MARK: 高级模式（ps 桥接）
+    // MARK: 高级模式（独立 PID）
 
     @ViewBuilder
     private var advancedList: some View {
-        if state.processRows.isEmpty {
+        let rows = state.visiblePIDRows
+        if rows.isEmpty {
             EmptyStateView(symbol: "cpu",
-                           title: state.processStatus,
+                           title: searchQuery.isEmpty ? state.processStatus : l10n.t("proc.search.empty"),
                            subtitle: nil)
         } else {
             ScrollView {
                 LazyVStack(spacing: 6) {
-                    ForEach(state.processRows) { row in
-                        HStack(spacing: 8) {
-                            if row.isNativeApp {
-                                ProcessAppIcon(row: row,
-                                               size: 26,
-                                               fallbackSystemName: "app.fill",
-                                               fallbackTint: Color.moleAccentText,
-                                               validatesNativeStartIdentity: true)
-                            } else {
-                                Image(systemName: "terminal.fill")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 26, height: 26)
-                            }
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(row.name)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .lineLimit(1)
-                                        .truncationMode(.tail)
-                                    if row.lifecycle != .normal {
-                                        ProcessLifecycleBadge(lifecycle: row.lifecycle)
-                                    }
-                                }
-                                Text(row.detail)
-                                    .font(.system(size: 10).monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            ProcessMetric(label: "CPU",
-                                          value: String(format: "%.1f%%", row.cpu),
-                                          isElevated: row.cpu >= 50)
-                            ProcessMetric(label: l10n.t("proc.memory"),
-                                          value: row.memBytes > 0
-                                            ? ByteFormat.short(row.memBytes) : "--",
-                                          isElevated: row.mem >= 20)
-                            Button(row.lifecycle == .normal
-                                   ? l10n.t("proc.kill")
-                                   : l10n.t("proc.cleanupStale")) {
-                                state.terminateProcess(row)
-                            }
-                                .buttonStyle(DangerButtonStyle())
-                                .disabled(state.runtimeInFlight)
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
+                    ForEach(rows, id: \.signalToken) { row in
+                        advancedRow(row)
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)
             }
+        }
+    }
+
+    private func advancedRow(_ row: ProcessRow) -> some View {
+        HStack(spacing: 8) {
+            if row.bundlePath != nil {
+                ProcessAppIcon(row: row,
+                               size: 26,
+                               fallbackSystemName: "app.fill",
+                               fallbackTint: Color.moleAccentText,
+                               validatesNativeStartIdentity: true,
+                               bundlePath: row.bundlePath)
+            } else {
+                Image(systemName: "terminal.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(row.name)
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if row.lifecycle != .normal {
+                        ProcessLifecycleBadge(lifecycle: row.lifecycle)
+                    }
+                }
+                Text(row.detail)
+                    .font(.system(size: 10).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                locationDetails(row)
+            }
+            Spacer()
+            ProcessMetric(label: "CPU",
+                          value: String(format: "%.1f%%", row.cpu),
+                          isElevated: row.cpu >= 50)
+            ProcessMetric(label: l10n.t("proc.memory"),
+                          value: row.memBytes > 0 ? ByteFormat.short(row.memBytes) : "--",
+                          isElevated: row.mem >= 20)
+            Button(row.lifecycle == .normal
+                   ? l10n.t("proc.kill")
+                   : l10n.t("proc.cleanupStale")) {
+                state.terminateProcess(row)
+            }
+            .buttonStyle(DangerButtonStyle())
+            .disabled(state.runtimeInFlight || !state.canControlPIDRow(row))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.surface2))
+    }
+
+    @ViewBuilder
+    private func locationDetails(_ row: ProcessRow) -> some View {
+        if let path = row.executablePath, !path.isEmpty {
+            Text(path)
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .help(path)
+        }
+        if let directory = row.workingDirectory, !directory.isEmpty {
+            Text(l10n.tf("proc.directory", directory))
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+                .help(directory)
         }
     }
 }

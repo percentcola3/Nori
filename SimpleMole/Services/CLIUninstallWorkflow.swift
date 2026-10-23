@@ -41,7 +41,8 @@ enum CLIUninstallWorkflow {
         let scope = SoftwareUpdateProcesses.Scope.tool(tool)
         let stillCurrent: @MainActor () -> Bool = {
             guard !Task.isCancelled, let originalIdentity, !originalIdentity.isEmpty,
-                  environment.identity(tool.path) == originalIdentity else { return false }
+                  environment.identity(tool.confirmationPath) == originalIdentity else { return false }
+            guard tool.installationIdentities.allSatisfy({ environment.identity($0.key) == $0.value }) else { return false }
             guard let installation = tool.agentInstallation else { return true }
             return !installation.identities.isEmpty && installation.identities.allSatisfy {
                 !$0.value.isEmpty && environment.identity($0.key) == $0.value

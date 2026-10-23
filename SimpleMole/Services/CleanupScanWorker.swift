@@ -245,7 +245,7 @@ final class CleanupScanControl: @unchecked Sendable {
 
 /// Size-only traversal. FTS supplies type, inode and allocated blocks together;
 /// the cleanup path does not build the analyzer's large-file report per file.
-/// The same walk also collects the newest mtime/ctime/atime so activity gating
+/// The same walk also collects the newest file mtime/atime so activity gating
 /// never needs a second traversal.
 enum CleanupScanWorker {
     /// Age-gated rules recheck file activity from the saved flat inventory.
@@ -351,68 +351,17 @@ enum CleanupScanWorker {
         }
     }
 
+    static func measure(_ path: String, control: CleanupScanControl) -> Measurement {
+        let measured = FileScanService.measure(path, policy: .cleanup,
+            maximumSeconds: control.directoryBudget,
+            shouldStop: { control.shouldStop }, onDirectory: control.reportDirectory)
+        return Measurement(bytes: measured.bytes, files: measured.files, complete: measured.complete,
+            newestModified: measured.newestModified, newestAccessed: measured.newestAccessed)
+    }
+
     private struct Identity: Hashable {
         let device: dev_t
         let inode: ino_t
-    }
-
-    static func measure(_ path: String, control: CleanupScanControl) -> Measurement {
-        control.reportDirectory(path)
-        let began = ProcessInfo.processInfo.systemUptime
-        guard !control.shouldStop, let name = strdup(path) else {
-            return Measurement(complete: false)
-        }
-        defer { free(name) }
-        var paths: [UnsafeMutablePointer<CChar>?] = [name, nil]
-        guard let tree = paths.withUnsafeMutableBufferPointer({
-            fts_open($0.baseAddress!, FTS_PHYSICAL | FTS_NOCHDIR | FTS_XDEV, nil)
-        }) else { return Measurement(complete: false) }
-        defer { fts_close(tree) }
-        var result = Measurement()
-        var seen = Set<Identity>()
-        while true {
-            if control.shouldStop || ProcessInfo.processInfo.systemUptime - began >= control.directoryBudget {
-                result.complete = false
-                break
-            }
-            errno = 0
-            guard let entry = fts_read(tree) else {
-                if errno != 0 { result.complete = false }
-                break
-            }
-            switch Int32(entry.pointee.fts_info) {
-            case FTS_ERR, FTS_DNR, FTS_NS:
-                result.complete = false
-            case FTS_F, FTS_D:
-                if Int32(entry.pointee.fts_info) == FTS_D,
-                   let directory = entry.pointee.fts_path {
-                    control.reportDirectory(String(cString: directory))
-                }
-                guard let metadata = entry.pointee.fts_statp?.pointee else {
-                    result.complete = false
-                    continue
-                }
-                // Only multiply-linked files require identity bookkeeping.
-                if metadata.st_nlink > 1 && Int32(entry.pointee.fts_info) == FTS_F {
-                    guard seen.insert(Identity(device: metadata.st_dev, inode: metadata.st_ino)).inserted else {
-                        continue
-                    }
-                }
-                result.bytes &+= UInt64(max(0, metadata.st_blocks)) * 512
-                if Int32(entry.pointee.fts_info) == FTS_F {
-                    result.files += 1
-                    func newer(_ current: Date?, _ ts: timespec) -> Date {
-                        let date = Date(timeIntervalSince1970: TimeInterval(ts.tv_sec))
-                        return max(current ?? .distantPast, date)
-                    }
-                    result.newestModified = newer(result.newestModified, metadata.st_mtimespec)
-                    result.newestAccessed = newer(result.newestAccessed, metadata.st_atimespec)
-                }
-            default:
-                break // Never follow symlinks or count directory postorder twice.
-            }
-        }
-        return result
     }
 
     /// Workers draw from one queue across all roots, keeping total I/O bounded.

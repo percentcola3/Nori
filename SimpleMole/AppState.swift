@@ -440,6 +440,13 @@ final class AppState: ObservableObject {
             refreshProcesses()
         }
     }
+    @Published var automaticProcessCleanup = false {
+        didSet {
+            guard oldValue != automaticProcessCleanup else { return }
+            resetAutomaticProcessCleanup()
+            if advancedProcesses { refreshProcesses() }
+        }
+    }
     /// 应用级视图：按 .app 聚合的进程组（libproc 采样，2 秒刷新）。
     @Published var processGroups: [ProcessGroup] = []
     @Published var processSearch = ""
@@ -1143,8 +1150,8 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
         // 服务启动放在所有存储属性初始化完成之后。
         if clipboardHistoryEnabled { clipboardManager.start() }
-        // /Applications is safe to watch at launch. ~/.Trash is registered
-        // only after Full Disk Access has been verified for this process.
+        // User-protected folders are watched only after Full Disk Access has
+        // been verified for this process.
         startUninstallInventoryMonitoring(includeProtectedPaths: false)
         DispatchQueue.main.async { [weak self] in
             self?.prepareStartupPermissions()
@@ -1696,7 +1703,7 @@ final class AppState: ObservableObject {
             NSHomeDirectory().appending("/Applications")
         ]
         if includeProtectedPaths {
-            paths.append(NSHomeDirectory().appending("/.Trash"))
+            paths += ["/.Trash", "/Downloads", "/Desktop"].map { NSHomeDirectory().appending($0) }
         }
         for path in paths where !uninstallInventoryWatchedPaths.contains(path)
             && FileManager.default.fileExists(atPath: path) {

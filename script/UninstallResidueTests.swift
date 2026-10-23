@@ -9,7 +9,7 @@ private struct FixedApplicationSizer: ApplicationSizeMeasuring {
 }
 
 private struct GroupApplicationInventory: ApplicationInventoryReading {
-    let base = NativeApplicationInventory()
+    let base = NativeApplicationInventory(discoveredApplications: { [] })
     let groups: [String: Set<String>]
     func roots(home: URL) -> [(URL, String)] { base.roots(home: home) }
     func children(of directory: URL) -> [URL] { base.children(of: directory) }
@@ -32,8 +32,9 @@ struct UninstallResidueTests {
             try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(repeating: 97, count: bytes).write(to: url)
         }
-        func makeApp(_ filename: String, name: String, bundleID: String) throws -> UninstallApp {
-            let url = home.appendingPathComponent("Applications/" + filename + ".app")
+        func makeApp(_ filename: String, name: String, bundleID: String,
+                     in directory: String = "Applications") throws -> UninstallApp {
+            let url = home.appendingPathComponent(directory + "/" + filename + ".app")
             try fm.createDirectory(at: url.appendingPathComponent("Contents"), withIntermediateDirectories: true)
             let info = ["CFBundleIdentifier": bundleID, "CFBundleName": name,
                         "CFBundlePackageType": "APPL", "CFBundleExecutable": filename]
@@ -45,7 +46,7 @@ struct UninstallResidueTests {
             plan.files.contains { !$0.informational && $0.path == home.appendingPathComponent(relative).path }
         }
         let app = try makeApp(appName, name: appName, bundleID: identifier)
-        let core = NativeCore.shared
+        let core = NativeCore(applicationInventory: NativeApplicationInventory(discoveredApplications: { [] }))
         let applications = home.appendingPathComponent("Applications")
         var roots: [(URL, String)] = [(applications, "User Applications")]
         // Reproduce two mounted installers pointing back at the same Applications.
@@ -67,7 +68,7 @@ struct UninstallResidueTests {
         expect(deduplicated.first?.path == app.path, "Inventory must use the real install path")
         expect(deduplicated.first?.source == "User Applications", "Alias replaced the original source")
         let sizingDependency = FixedApplicationSizer()
-        let injectedInventory = NativeApplicationInventory(sizer: sizingDependency)
+        let injectedInventory = NativeApplicationInventory(sizer: sizingDependency, discoveredApplications: { [] })
         let injectedCore = NativeCore(applicationInventory: injectedInventory, applicationSizer: sizingDependency)
         let injectedApps = injectedCore.installedApps(in: roots)
         expect(injectedApps.count == 1 && injectedApps[0].size == ByteFormat.format(4096),
@@ -94,6 +95,79 @@ struct UninstallResidueTests {
         roots.append((external, "External Applications"))
         expect(core.installedApps(in: roots).count == 2,
                "Distinct installs sharing a name and Bundle ID must remain visible")
+        let portable = home.appendingPathComponent("Downloads/Delta.app")
+        try fm.createDirectory(at: portable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.copyItem(at: URL(fileURLWithPath: app.path), to: portable)
+        let portableApps = injectedInventory.installedApps(in: injectedInventory.roots(home: home))
+        expect(portableApps.contains { $0.path == portable.path },
+               "An app launched directly from Downloads must be discoverable even after it exits")
+        let desktop = try makeApp("DesktopCopy", name: appName, bundleID: identifier, in: "Desktop")
+        let custom = try makeApp("CustomCopy", name: appName, bundleID: identifier, in: "Portable Tools")
+        let hiddenSibling = try makeApp(".HiddenSibling", name: "HiddenSibling",
+                                       bundleID: "com.example.hidden", in: "Portable Tools")
+        let customURL = URL(fileURLWithPath: custom.path)
+        let customAlias = home.appendingPathComponent("ToolsAlias")
+        try fm.createSymbolicLink(at: customAlias, withDestinationURL: customURL.deletingLastPathComponent())
+        let candidates = [URL(fileURLWithPath: app.path), portable, URL(fileURLWithPath: desktop.path),
+                          customURL, customURL, customAlias.appendingPathComponent("CustomCopy.app")]
+        let discoveredInventory = NativeApplicationInventory(sizer: sizingDependency,
+                                                              discoveredApplications: { candidates })
+        let discoveredRoots = discoveredInventory.roots(home: home).filter { $0.0.path.hasPrefix(home.path + "/") }
+        let discoveredApps = discoveredInventory.installedApps(in: discoveredRoots)
+        expect(Set(discoveredApps.map(\.path)) == [app.path, portable.path, desktop.path, custom.path]
+               && discoveredApps.count == 4,
+               "Multiple discovery sources must deduplicate paths while preserving separate copies with the same Bundle ID")
+        expect(discoveredApps.first { $0.path == app.path }?.source == "User Applications"
+               && discoveredApps.first { $0.path == portable.path }?.source == "Downloads"
+               && discoveredApps.first { $0.path == desktop.path }?.source == "Desktop"
+               && discoveredApps.first { $0.path == custom.path }?.source == "Other Applications",
+               "Discovered candidates must preserve existing root sources and include Desktop and custom locations")
+        var excludedCandidates: [URL] = []
+        for directory in ["Packages/Outer.app/Contents/Helpers", ".Trash", ".hidden/Tools",
+                          "AppTranslocation/session/d", "Library/Caches/Extracted", "Build/DerivedData"] {
+            let excluded = try makeApp("Excluded", name: "Excluded", bundleID: "com.example.excluded", in: directory)
+            excludedCandidates.append(URL(fileURLWithPath: excluded.path))
+        }
+        let hiddenCandidate = try makeApp(".HiddenApp", name: "HiddenApp",
+                                          bundleID: "com.example.hidden", in: "HiddenNameOnly")
+        excludedCandidates.append(URL(fileURLWithPath: hiddenCandidate.path))
+        excludedCandidates.append(home.appendingPathComponent("Missing/Stale.app"))
+        let rejectedCandidates = excludedCandidates
+        let rejectedInventory = NativeApplicationInventory(sizer: sizingDependency,
+                                                           discoveredApplications: { rejectedCandidates })
+        let rejectedRoots = Set(rejectedInventory.roots(home: home).map { $0.0.path })
+        expect(rejectedCandidates.allSatisfy { !rejectedRoots.contains($0.deletingLastPathComponent().path) },
+               "Helpers, Trash, hidden folders, transient caches, AppTranslocation and stale candidates must not add scan roots")
+        try fm.removeItem(at: portable)
+        try fm.removeItem(atPath: desktop.path)
+        try fm.removeItem(atPath: custom.path)
+        try fm.removeItem(atPath: hiddenSibling.path)
+
+        // Cask ownership is tied to its physical artifact, not a duplicate filename.
+        let brewApp = try makeApp("PortableBrewFixture", name: "PortableBrewFixture", bundleID: "com.example.brew")
+        let brewCopy = try makeApp("PortableBrewFixture", name: "PortableBrewFixture",
+                                   bundleID: "com.example.brew", in: "Downloads")
+        func brewPlanner(artifact: URL) -> UninstallPlanningService {
+            UninstallPlanningService(dependencies: .init(inventory: injectedInventory,
+                allocatedBytes: { _ in 4096 }, isPhysicalPath: { _, _ in true },
+                requiresAdministrator: { _ in false }, commandOutput: { _, arguments in
+                    if arguments == ["list", "--cask", "--full-name"] { return "portablebrewfixture\n" }
+                    if arguments == ["list", "--cask", "portablebrewfixture"] { return artifact.path + "\n" }
+                    return nil
+                }, brewExecutables: ["/usr/bin/true"]))
+        }
+        let caskPlanner = brewPlanner(artifact: URL(fileURLWithPath: brewApp.path))
+        expect(caskPlanner.plan(for: brewApp, homeDirectory: home.path)?.isBrewCask == true,
+               "The installed Homebrew artifact must retain its cask removal route")
+        expect(caskPlanner.plan(for: brewCopy, homeDirectory: home.path)?.isBrewCask == false,
+               "A downloaded copy with the same filename must not uninstall the Homebrew cask")
+        let brewArtifact = fixture.appendingPathComponent("Caskroom/portablebrewfixture/1.0/PortableBrewFixture.app")
+        try fm.createDirectory(at: brewArtifact.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: brewArtifact, withDestinationURL: URL(fileURLWithPath: brewApp.path))
+        expect(brewPlanner(artifact: brewArtifact).plan(for: brewApp, homeDirectory: home.path)?.isBrewCask == true,
+               "A Homebrew artifact symlink to the same physical install must still match")
+        try fm.removeItem(atPath: brewApp.path)
+        try fm.removeItem(atPath: brewCopy.path)
         let caches = [
             "Library/Caches/\(identifier)",
             "Library/Caches/\(identifier).ShipIt",
@@ -271,6 +345,23 @@ struct UninstallResidueTests {
                "Shared data must not be selectable while another installation still owns it")
         try fm.removeItem(atPath: sibling.path)
 
+        // Portable copies discovered through either roots or metadata share the same app data.
+        let downloadSibling = try makeApp("PortableCopy", name: appName, bundleID: identifier, in: "Downloads")
+        let downloadSiblingPlan = await core.uninstallPlan(for: app, homeDirectory: home.path)!
+        expect(downloadSiblingPlan.files.filter { !$0.informational }.map(\.path) == [app.path],
+               "A copy outside Applications must retain the target's shared caches and data")
+        try fm.removeItem(atPath: downloadSibling.path)
+        let customSibling = try makeApp("PortableCopy", name: appName, bundleID: identifier, in: "Portable Tools")
+        let customSiblingURL = URL(fileURLWithPath: customSibling.path)
+        let portableOwnerCore = NativeCore(applicationInventory: NativeApplicationInventory(
+            sizer: sizingDependency, discoveredApplications: { [customSiblingURL] }))
+        for target in [app, customSibling] {
+            let portableSiblingPlan = await portableOwnerCore.uninstallPlan(for: target, homeDirectory: home.path)!
+            expect(portableSiblingPlan.files.filter { !$0.informational }.map(\.path) == [target.path],
+                   "Metadata-discovered copies must protect shared residues when uninstalling either copy")
+        }
+        try fm.removeItem(atPath: customSibling.path)
+
         // A symlinked ancestor must never contribute automatic cache paths.
         let linked = try makeApp("LinkedFixture", name: "LinkedFixture", bundleID: "com.example.linked-fixture")
         let outside = fixture.appendingPathComponent("outside")
@@ -332,7 +423,10 @@ struct UninstallResidueTests {
         let snapshots = home.appendingPathComponent("Library/Application Support/Cursor/snapshots")
         try FileManager.default.createDirectory(at: snapshots, withIntermediateDirectories: true)
         try Data(repeating: 1, count: 8192).write(to: snapshots.appendingPathComponent("history"))
-        let core = NativeCore(cleanupOpenFileProbe: { [] })
+        // Portable discovery has explicit fixtures above. This residue fixture
+        // must not inherit other test applications through the system index.
+        let core = NativeCore(cleanupOpenFileProbe: { [] },
+            applicationInventory: NativeApplicationInventory(discoveredApplications: { [] }))
         let bin = home.appendingPathComponent("bin")
         let presence = AgentPresenceContext(applicationDirs: [home.appendingPathComponent("Applications").path], searchPath: [bin.path])
         try write(".config/fixture-cli/settings.json")

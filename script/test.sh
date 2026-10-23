@@ -243,8 +243,10 @@ test_process_icon_contract() {
     [[ -f "$component" ]] || fail "shared process app icon component is missing"
     /usr/bin/grep -Fq 'NSRunningApplication(processIdentifier: row.pid)' "$component" || \
         fail "process icons are not resolved from the running application"
-    /usr/bin/grep -Fq '.task(id: row.signalToken)' "$component" || \
-        fail "process icons are not refreshed across PID reuse"
+    /usr/bin/grep -Fq 'bundlePath ?? row.bundlePath' "$component" || \
+        fail "process icons do not preserve the application's bundle path"
+    /usr/bin/grep -Fq '.task(id: [row.signalToken, effectiveBundlePath ?? ""])' "$component" || \
+        fail "process icons are not refreshed across PID reuse or bundle path changes"
     /usr/bin/grep -Fq 'RuntimeStore.nativeStartIdentity(for: application) == row.startIdentity' "$component" || \
         fail "native process icons are not bound to the application launch identity"
     /usr/bin/grep -Fq 'ProcessAppIcon(row: row,' "$processes" || \
@@ -2411,6 +2413,7 @@ test_cleanup_risk_policy() {
         "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
         "$ROOT_DIR/SimpleMole/Services/Parsers.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupCache.swift" \
+        "$ROOT_DIR/SimpleMole/Services/FileScanService.swift" \
         "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
         "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
         "$ROOT_DIR/script/CleanupRiskPolicyTests.swift" \

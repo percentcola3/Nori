@@ -157,13 +157,21 @@ private struct AgentResourceManagementView: View {
 
     private func skillCard(_ resource: AgentResourceCatalog.Skill) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            sourceHeader(id: resource.id, name: resource.name, path: resource.id,
-                         count: resource.bindings.count, canDelete: resource.canDelete)
+            sourceHeader(name: resource.name, path: resource.id,
+                         count: resource.bindings.count,
+                         canSelect: resource.canDelete || resource.hasOnlyDanglingLinks,
+                         selected: resource.hasOnlyDanglingLinks
+                            ? resource.bindings.allSatisfy(state.isAgentSkillBindingSelected)
+                            : selectedSources.contains(resource.id)) {
+                if resource.hasOnlyDanglingLinks { state.toggleAgentSkillBindings(resource.bindings) }
+                else { toggleSource(resource.id) }
+            }
             if !resource.summary.isEmpty { Text(resource.summary).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2) }
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(resource.bindings) { binding in
                     AgentCompactResourceCard(title: binding.names.isEmpty ? "Skill" : binding.names.joined(separator: " / "),
-                        subtitle: l10n.t(binding.link != nil ? "agents.manage.linkBinding"
+                        subtitle: l10n.t(binding.link?.isDangling == true ? "agents.manage.danglingBinding"
+                            : binding.link != nil ? "agents.manage.linkBinding"
                             : binding.registration != nil ? "agents.manage.configBinding" : "agents.manage.implicit"),
                         symbol: "link", selected: state.isAgentSkillBindingSelected(binding),
                         enabled: binding.removable && !state.isAgentTaskBusy,
@@ -175,15 +183,19 @@ private struct AgentResourceManagementView: View {
             if resource.bindings.contains(where: { !$0.removable }) {
                 Text(l10n.t("agents.manage.implicitReason")).font(.system(size: 10)).foregroundStyle(.secondary)
             }
-            if !resource.canDelete { Text(l10n.t("agents.manage.readOnly")).font(.system(size: 10)).foregroundStyle(.secondary) }
+            if resource.bindings.contains(where: { $0.link?.isDangling == true }) {
+                Text(l10n.t("agents.manage.danglingReason")).font(.system(size: 10)).foregroundStyle(Color.warning)
+            } else if !resource.canDelete {
+                Text(l10n.t("agents.manage.readOnly")).font(.system(size: 10)).foregroundStyle(.secondary)
+            }
         }.padding(10).modifier(ListRowSurface())
     }
 
     private func mcpCard(_ resource: AgentResourceCatalog.MCP) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            sourceHeader(id: resource.id, name: resource.name,
+            sourceHeader(name: resource.name,
                 path: resource.installation?.path ?? resource.servers.first?.endpoint ?? "", count: resource.servers.count,
-                canDelete: resource.canDelete)
+                canSelect: resource.canDelete, selected: selectedSources.contains(resource.id)) { toggleSource(resource.id) }
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(resource.servers) { server in
                     AgentCompactResourceCard(title: server.agentName,
@@ -201,12 +213,13 @@ private struct AgentResourceManagementView: View {
         }.padding(10).modifier(ListRowSurface())
     }
 
-    private func sourceHeader(id: String, name: String, path: String, count: Int, canDelete: Bool) -> some View {
+    private func sourceHeader(name: String, path: String, count: Int,
+                              canSelect: Bool, selected: Bool, action: @escaping () -> Void) -> some View {
         HStack(spacing: 8) {
-            Button { if !selectedSources.insert(id).inserted { selectedSources.remove(id) } } label: {
+            Button(action: action) {
                 HStack(spacing: 8) {
-                    Image(systemName: selectedSources.contains(id) ? "checkmark.square.fill" : "square")
-                        .foregroundStyle(selectedSources.contains(id) ? Color.moleAccentText : .secondary)
+                    Image(systemName: selected ? "checkmark.square.fill" : "square")
+                        .foregroundStyle(selected ? Color.moleAccentText : .secondary)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(name).font(.system(size: 12, weight: .semibold))
                         Text(path).font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
@@ -215,7 +228,7 @@ private struct AgentResourceManagementView: View {
                     Spacer()
                     Text(l10n.tf("agents.manage.bindings", count)).font(.system(size: 10)).foregroundStyle(.secondary)
                 }.contentShape(Rectangle())
-            }.buttonStyle(.plain).disabled(!canDelete || state.isAgentTaskBusy)
+            }.buttonStyle(.plain).disabled(!canSelect || state.isAgentTaskBusy)
             if path.hasPrefix("/") {
                 Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) } label: {
                     Image(systemName: "folder")
@@ -238,7 +251,8 @@ private struct AgentResourceManagementView: View {
             }
             Spacer(minLength: 8)
             Button { state.requestAgentResourceChanges(unbindings) } label: {
-                Text(l10n.t("agents.manage.unlink") + " (\(unbindings.count))")
+                Text(l10n.t(unbindings.cleansOnlyDanglingLinks ? "agents.manage.cleanDangling" : "agents.manage.unlink")
+                    + " (\(unbindings.count))")
             }.buttonStyle(PrimaryButtonStyle()).disabled(unbindings.count == 0 || mutationBlocked)
             Button { state.requestAgentResourceChanges(deletion) } label: {
                 Text(l10n.t("agents.manage.delete") + " (\(deletion.count))")
@@ -251,6 +265,9 @@ private struct AgentResourceManagementView: View {
     }
     private func selectSources() {
         selectedSources.formUnion(skills ? skillResources.filter(\.canDelete).map(\.id) : mcpResources.filter(\.canDelete).map(\.id))
+    }
+    private func toggleSource(_ id: String) {
+        if !selectedSources.insert(id).inserted { selectedSources.remove(id) }
     }
     private func selectBindings() {
         if skills {

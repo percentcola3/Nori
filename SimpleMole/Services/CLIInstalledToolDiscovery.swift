@@ -201,38 +201,23 @@ enum CLIInstalledToolDiscovery {
             }
         return uniqueRoots(candidates).flatMap { cargoHome -> [CommandLineTool] in
             guard !control.isCancelled,
-                  let text = try? String(contentsOfFile: cargoHome + "/.crates.toml", encoding: .utf8) else { return [] }
-            var tools: [CommandLineTool] = []
-            // "name version (registry+https://…)" = ["bin-a", "bin-b"]
-            guard let pattern = try? NSRegularExpression(pattern: #"^"([^ "]+) ([^ "]+) [^"]*" = \[(.*)\]$"#) else { return [] }
-            for rawLine in text.split(whereSeparator: \.isNewline) {
-                let line = String(rawLine)
-                guard let match = pattern.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
-                      let nameRange = Range(match.range(at: 1), in: line),
-                      let versionRange = Range(match.range(at: 2), in: line),
-                      let binaryRange = Range(match.range(at: 3), in: line) else { continue }
-                let name = String(line[nameRange]), version = String(line[versionRange])
-                let binaries = line[binaryRange].split(separator: ",").map {
-                    $0.trimmingCharacters(in: CharacterSet(charactersIn: " \""))
-                }.filter { !$0.isEmpty }
-                var bytes: UInt64 = 0
-                var firstPath = cargoHome + "/bin/" + name
-                for (index, binary) in binaries.enumerated() {
-                    let path = cargoHome + "/bin/" + binary
+                  let packages = CargoInstallReceipt.packages(at: cargoHome + "/.crates.toml") else { return [] }
+            return packages.map { package in
+                let paths = package.binaries.map { cargoHome + "/bin/" + $0 }
+                let existing = paths.filter { AgentCatalog.exists($0) }
+                let bytes = existing.reduce(UInt64(0)) { total, path in
                     var metadata = stat()
-                    guard lstat(path, &metadata) == 0 else { continue }
-                    if index == 0 { firstPath = path }
-                    bytes &+= UInt64(max(0, metadata.st_blocks)) * 512
+                    return lstat(path, &metadata) == 0 ? total &+ UInt64(max(0, metadata.st_blocks)) * 512 : total
                 }
-                tools.append(CommandLineTool(manager: .cargo, name: name, version: version, path: firstPath,
-                                             bytes: bytes, dependents: [], installedOnRequest: true,
-                                             supportsPublicRegistryUpdates: line.contains("registry+https://github.com/rust-lang/crates.io-index")
-                                                || line.contains("registry+https://index.crates.io/"),
-                                             executablePaths: binaries.filter {
-                                                 $0 != "." && $0 != ".." && $0.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil
-                                             }.map { cargoHome + "/bin/" + $0 }))
+                let firstPath = existing.first ?? paths.first ?? cargoHome + "/bin/" + package.name
+                let identities = Dictionary(uniqueKeysWithValues: (existing + [cargoHome + "/.crates.toml"]).compactMap { path in
+                    DeletionPlan.identity(at: path).map { (path, $0) }
+                })
+                return CommandLineTool(manager: .cargo, name: package.name, version: package.version, path: firstPath,
+                                       bytes: bytes, dependents: [], installedOnRequest: true,
+                                       supportsPublicRegistryUpdates: package.supportsPublicRegistryUpdates,
+                                       executablePaths: paths, installationIdentities: identities)
             }
-            return tools
         }
     }
 

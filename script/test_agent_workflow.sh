@@ -16,6 +16,7 @@ WORKFLOW_SOURCES=(
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupTaskProgress.swift"
+    "$ROOT_DIR/SimpleMole/Services/FileScanService.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift"
     "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift"

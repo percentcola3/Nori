@@ -983,6 +983,14 @@ struct FloatingIslandView: View {
                 }
                 .frame(height: 30)
             }
+            HStack {
+                Spacer()
+                Button(l10n.t("proc.inspectAll")) { state.openProcessInspection() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Color.accentText)
+            }
+            .padding(.top, 6)
             if let status = state.islandResourceStatus[resource] {
                 Text(status)
                     .font(.system(size: 10))

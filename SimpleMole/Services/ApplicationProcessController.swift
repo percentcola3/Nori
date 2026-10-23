@@ -54,6 +54,10 @@ enum ApplicationProcessController {
             guard snapshot.isComplete else {
                 return .init(completed: false, reasonKey: "proc.exit.unknown")
             }
+            let executablePaths = Set(snapshot.processes.filter { !$0.path.isEmpty }
+                .map { ApplicationProcessScope.canonical($0.path) })
+            scope.independentRoots.formUnion(ApplicationProcessScope.standaloneApplicationRoots(
+                executablePaths: executablePaths).subtracting([scope.root]))
             remaining = scope.processes(in: snapshot.processes, remembering: known)
             // Validate the entire set before stopping any jobs or processes.
             guard remaining.allSatisfy({ $0.pid > 1 && $0.uid == env.uid && !$0.path.isEmpty &&

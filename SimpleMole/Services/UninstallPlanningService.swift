@@ -10,6 +10,7 @@ struct UninstallPlanningService: Sendable {
         let isPhysicalPath: @Sendable (URL, URL) -> Bool
         let requiresAdministrator: @Sendable (String) -> Bool
         let commandOutput: @Sendable (String, [String]) -> String?
+        var brewExecutables: [String] = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
     }
     let dependencies: Dependencies
     private var fileManager: FileManager { .default }
@@ -62,7 +63,7 @@ struct UninstallPlanningService: Sendable {
     /// `brew list --cask <token>` reports the installed artifact paths, which
     /// gives us a stronger match than comparing display names alone.
     private func nativeBrewCaskToken(for app: UninstallApp) -> String? {
-        let candidates = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+        let candidates = dependencies.brewExecutables
             .filter { fileManager.isExecutableFile(atPath: $0) }
         guard let brew = candidates.first,
               let tokenList = runCommandOutput(brew, ["list", "--cask", "--full-name"]) else {
@@ -82,8 +83,13 @@ struct UninstallPlanningService: Sendable {
             let tokenStem = token.filter { $0.isLetter || $0.isNumber }.lowercased()
             guard tokenStem.contains(appStem) || appStem.contains(tokenStem) else { continue }
             guard let listing = runCommandOutput(brew, ["list", "--cask", token]) else { continue }
-            if listing.split(whereSeparator: \.isNewline).contains(where: {
-                URL(fileURLWithPath: String($0)).lastPathComponent.lowercased() == appName
+            // A downloaded copy can have the same filename as a cask. Only
+            // the physical bundle owned by Homebrew may use its remover.
+            let appIdentity = applicationDirectoryIdentity(URL(fileURLWithPath: app.path))
+            if let appIdentity, listing.split(whereSeparator: \.isNewline).contains(where: {
+                let artifact = URL(fileURLWithPath: String($0)).resolvingSymlinksInPath().standardizedFileURL
+                return artifact.pathExtension.lowercased() == "app"
+                    && applicationDirectoryIdentity(artifact) == appIdentity
             }) {
                 return token
             }

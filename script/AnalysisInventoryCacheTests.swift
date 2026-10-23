@@ -51,6 +51,8 @@ struct AnalysisInventoryCacheTests {
         expect(images.snapshot.files[video.path] == nil, "each section must inspect only its own file category")
         expect(images.statistics.listedDirectories > 0 && images.statistics.reusedDirectories == 0,
                "first scan must enumerate fresh directory memberships")
+        expect(images.statistics.reusedListedFileMetadata == images.statistics.inspectedFiles,
+               "fresh directory listings must reuse each readable file's metadata instead of probing it twice")
         expect(cache.restore()[.videos] == nil, "scanning images must not mark videos as scanned")
         let originalImageDate = images.snapshot.scannedAt
 
@@ -61,9 +63,13 @@ struct AnalysisInventoryCacheTests {
                "incremental scan must reuse directory membership index")
         expect(unchanged.statistics.changedFiles == 0 && unchanged.statistics.reusedFiles == 2,
                "unchanged relevant file fingerprints must be reused")
+        expect(unchanged.statistics.reusedListedFileMetadata == 0,
+               "cached directory memberships must freshly probe files to detect in-place edits")
         let full = scan(.images, full: true)
         expect(full.statistics.listedDirectories == images.statistics.listedDirectories &&
                full.statistics.reusedFiles == 0, "explicit full scan must rebuild the index")
+        expect(full.statistics.reusedListedFileMetadata == full.statistics.inspectedFiles,
+               "full scans must reuse their freshly listed file metadata too")
 
         // An edit can leave parent directory metadata and file size unchanged.
         // Preserve the old mtime too: ctime/nanosecond identity still invalidates.
@@ -476,6 +482,20 @@ struct AnalysisInventoryCacheTests {
                withMissingScope.diskBrowser?.entriesByPath[AnalysisDiskScopes.overviewPath]?
                 .first(where: { $0.path == missingScope })?.isPartial == true,
                "missing new scopes must show an explicitly partial navigable column without discarding useful results")
-        print("PASS: independent analysis inventories, multi-scope accounting, alias deduplication, incremental reuse, partial retry, persistence, and local mutation repair")
+        let metadataRoot = fixture.appendingPathComponent("metadata-read-fixture")
+        try fm.createDirectory(at: metadataRoot, withIntermediateDirectories: true)
+        for name in ["one.txt", "two.txt"] {
+            try Data([1]).write(to: metadataRoot.appendingPathComponent(name))
+        }
+        let firstMetadataScan = AnalysisInventoryWorker.scan(.disk, roots: [metadataRoot.path], home: home.path,
+            control: CleanupScanControl(mode: .deep))
+        expect(firstMetadataScan.statistics.metadataReads == 4,
+               "two fresh files require two root checks and exactly one metadata read per file")
+        let cachedMetadataScan = AnalysisInventoryWorker.scan(.disk, roots: [metadataRoot.path], home: home.path,
+            previous: firstMetadataScan.snapshot, control: CleanupScanControl(mode: .deep))
+        expect(cachedMetadataScan.statistics.metadataReads == 4 &&
+               cachedMetadataScan.statistics.reusedListedFileMetadata == 0,
+               "an unchanged membership must still read each file once rather than trusting old fingerprints")
+        print("PASS: independent analysis inventories, multi-scope accounting, alias deduplication, incremental reuse, partial retry, persistence, mutation repair, and single-read metadata")
     }
 }

@@ -48,7 +48,7 @@ extension AppState {
               commandLineTools.contains(tool) else { return }
         let generation = UUID()
         commandLineToolUninstallGeneration = generation
-        let identity = DeletionPlan.identity(at: tool.path)
+        let identity = DeletionPlan.identity(at: tool.confirmationPath)
         commandLineToolBusyID = tool.id
         commandLineToolStatus = l10n.tf("cli.status.checkingProcesses", tool.name)
         Task {

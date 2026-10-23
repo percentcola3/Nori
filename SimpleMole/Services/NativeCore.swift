@@ -2689,6 +2689,7 @@ final class NativeCore: @unchecked Sendable {
     /// 每级父目录用 O_NOFOLLOW 打开，最终 fstatat 复核链接自身的完整身份。
     func applyAgentSkillLinks(items: [DeletionPlan.Item], homeDirectory: String,
                               allowedDirectories: [String] = [],
+                              danglingPaths: Set<String> = [],
                               onProgress: ((Int, Int, String) -> Void)? = nil) -> ApplySummary {
         let parents = Set(AgentCatalog.skillDirectories(home: homeDirectory).map(\.path)
                             + allowedDirectories)
@@ -2737,8 +2738,14 @@ final class NativeCore: @unchecked Sendable {
             let matches = fstatat(directoryFD, leaf, &metadata, AT_SYMLINK_NOFOLLOW) == 0
                 && (metadata.st_mode & S_IFMT) == S_IFLNK
                 && "\(metadata.st_dev):\(metadata.st_ino):\(metadata.st_mtimespec.tv_sec)" == item.identity
+            var target = stat()
+            let targetMissing = !danglingPaths.contains(path)
+                || (fstatat(directoryFD, leaf, &target, 0) != 0 && (errno == ENOENT || errno == ENOTDIR))
             if !matches {
                 skipped += 1
+            } else if !targetMissing {
+                skipped += 1
+                messages.append("Kept Skill link because its target was restored or could not be verified as missing: " + path)
             } else if unlinkat(directoryFD, leaf, 0) == 0 {
                 removed += 1
                 removedPaths.insert(path)
@@ -3736,7 +3743,7 @@ final class NativeCore: @unchecked Sendable {
     // MARK: Filesystem helpers
 
     func directChildren(of directory: URL) -> [URL] {
-        guard let names = try? fileManager.contentsOfDirectory(atPath: directory.path) else { return [] }
+        guard let names = try? FileScanService.childNames(in: directory.path) else { return [] }
         return names.map { directory.appendingPathComponent($0) }
     }
 

@@ -18,6 +18,9 @@ enum AgentResourceCatalog {
         let body: AgentSkill?
         let bindings: [SkillBinding]
         var canDelete: Bool { body?.bodyDeletionSupported == true && !(body?.identity.isEmpty ?? true) }
+        var hasOnlyDanglingLinks: Bool {
+            body == nil && !bindings.isEmpty && bindings.allSatisfy { $0.link?.isDangling == true }
+        }
     }
     struct MCP: Identifiable, Sendable {
         let id: String
@@ -81,4 +84,15 @@ struct AgentResourceChanges: Sendable {
     var installations: [AgentMCPInstallation] = []
     var count: Int { skills.count + registrations.count + servers.count + installations.count }
     var deletesBodies: Bool { skills.contains { !$0.linked } || !installations.isEmpty }
+    var cleansOnlyDanglingLinks: Bool {
+        !skills.isEmpty && skills.allSatisfy { $0.linked && $0.isDangling }
+            && registrations.isEmpty && servers.isEmpty && installations.isEmpty
+    }
+
+    func retainedSkillSelection(_ selectedPaths: Set<String>, afterRefreshing current: [AgentSkill]) -> Set<String> {
+        let danglingPaths = Set(skills.filter(\.isDangling).map(\.path))
+        return selectedPaths.intersection(current.filter {
+            !danglingPaths.contains($0.path) || $0.isDangling
+        }.map(\.path))
+    }
 }

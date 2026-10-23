@@ -145,19 +145,9 @@ enum DirectoryFileError: LocalizedError {
 }
 
 enum DirectoryFileService {
-    private struct Identity: Hashable {
-        let device: dev_t
-        let inode: ino_t
-    }
-
-    // Darwin's SF_DATALESS indicates a File Provider placeholder. Reading
-    // metadata is safe; traversing a dataless directory can request a download.
-    private static let datalessFlag: UInt32 = 0x40000000
-
     static func list(directory: URL, showHidden: Bool) throws -> [DirectoryEntry] {
         let directory = try directoryURL(directory)
-        let children = try FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: nil, options: [])
+        let children = try FileScanService.childPaths(in: directory.path).map { URL(fileURLWithPath: $0) }
         // Metadata races are expected if another application removes an item
         // between enumeration and lstat. Preserve the remaining listing.
         return children.compactMap { try? DirectoryEntry.metadata(url: $0) }
@@ -174,65 +164,9 @@ enum DirectoryFileService {
     /// symlinks are not followed, and cancellation is checked for every entry.
     static func allocatedSize(of url: URL,
                               cancellation: @Sendable () -> Bool = { false }) -> DirectorySizeResult {
-        guard !cancellation(), let url = try? fileURL(url),
-              let rootInfo = try? fileInfo(url), let name = strdup(url.path) else {
-            return DirectorySizeResult(bytes: 0, isComplete: false)
-        }
-        defer { free(name) }
-        // A directory symlink must measure only its own blocks, even if it
-        // points to the currently browsed parent or an inaccessible folder.
-        if (rootInfo.st_mode & S_IFMT) != S_IFDIR {
-            return DirectorySizeResult(bytes: blocks(rootInfo), isComplete: true)
-        }
-        if (rootInfo.st_flags & datalessFlag) != 0 {
-            return DirectorySizeResult(bytes: blocks(rootInfo), isComplete: false)
-        }
-        var roots: [UnsafeMutablePointer<CChar>?] = [name, nil]
-        guard let tree = roots.withUnsafeMutableBufferPointer({
-            fts_open($0.baseAddress!, FTS_PHYSICAL | FTS_NOCHDIR | FTS_XDEV, nil)
-        }) else {
-            return DirectorySizeResult(bytes: blocks(rootInfo), isComplete: false)
-        }
-        defer { fts_close(tree) }
-        var bytes: Int64 = 0
-        var complete = true
-        var seen = Set<Identity>()
-        while true {
-            if cancellation() { complete = false; break }
-            errno = 0
-            guard let entry = fts_read(tree) else {
-                if errno != 0 { complete = false }
-                break
-            }
-            let item = entry.pointee
-            let kind = Int32(item.fts_info)
-            if kind == FTS_DP { continue }
-            if kind == FTS_ERR || kind == FTS_DNR || kind == FTS_NS || kind == FTS_DC {
-                complete = false
-            }
-            guard let info = item.fts_statp?.pointee, kind != FTS_NS else {
-                complete = false
-                continue
-            }
-            if kind == FTS_D && info.st_dev != rootInfo.st_dev {
-                // Stay on the selected disk; a mounted child can be measured
-                // separately. A lower bound communicates the skipped mount.
-                complete = false
-                fts_set(tree, entry, FTS_SKIP)
-                continue
-            }
-            let identity = Identity(device: info.st_dev, inode: info.st_ino)
-            if seen.insert(identity).inserted {
-                let addition = bytes.addingReportingOverflow(blocks(info))
-                bytes = addition.overflow ? Int64.max : addition.partialValue
-                if addition.overflow { complete = false }
-            }
-            if kind == FTS_D && (info.st_flags & datalessFlag) != 0 {
-                complete = false
-                fts_set(tree, entry, FTS_SKIP)
-            }
-        }
-        return DirectorySizeResult(bytes: bytes, isComplete: complete)
+        guard let url = try? fileURL(url) else { return DirectorySizeResult(bytes: 0, isComplete: false) }
+        let measured = FileScanService.measure(url.path, policy: .directory, shouldStop: cancellation)
+        return DirectorySizeResult(bytes: Int64(measured.bytes), isComplete: measured.complete)
     }
 
     static func createDirectory(in directory: URL, name: String) throws -> URL {
@@ -413,8 +347,7 @@ enum DirectoryFileService {
     }
 
     fileprivate static func fileInfo(_ url: URL) throws -> stat {
-        var info = stat()
-        guard lstat(url.path, &info) == 0 else { throw posixError(url: url) }
+        guard let info = FileScanService.metadata(at: url.path) else { throw posixError(url: url) }
         return info
     }
 

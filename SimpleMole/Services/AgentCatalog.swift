@@ -1829,6 +1829,14 @@ enum AgentCatalog {
         return lstat(path, &metadata) == 0 && (metadata.st_mode & S_IFMT) == S_IFLNK
     }
 
+    /// Only confirmed missing targets qualify; permission and I/O errors do not.
+    static func isDanglingSymlink(_ path: String) -> Bool {
+        guard isSymlink(path) else { return false }
+        var metadata = stat()
+        guard fstatat(AT_FDCWD, path, &metadata, 0) != 0 else { return false }
+        return errno == ENOENT || errno == ENOTDIR
+    }
+
     static func isDirectory(_ path: String) -> Bool {
         var metadata = stat()
         return lstat(path, &metadata) == 0 && (metadata.st_mode & S_IFMT) == S_IFDIR
@@ -1865,7 +1873,7 @@ enum AgentCatalog {
     }
 
     static func childNames(of directory: String) -> [String] {
-        ((try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? [])
+        ((try? FileScanService.childNames(in: directory)) ?? [])
             .filter { !$0.hasPrefix(".") }
             .sorted()
     }

@@ -35,6 +35,7 @@ struct CommandLineTool: Identifiable, Equatable, Sendable {
     var agentInstallation: AgentCLIInstallation? = nil
     var sizeIsKnown = true
     var managerExecutable: String? = nil
+    var installationIdentities: [String: String] = [:]
 
     var installationRoot: String {
         let url = URL(fileURLWithPath: path).standardizedFileURL
@@ -51,5 +52,57 @@ struct CommandLineTool: Identifiable, Equatable, Sendable {
         return .init(kind: .cli, name: name, installationPath: installationRoot,
                      names: Array(Set([package] + commands)).sorted(), commands: commands.isEmpty ? [package] : commands,
                      agentIDs: agentID.map { [$0] } ?? [])
+    }
+
+    /// Validate the installation evidence used by discovery. A receipt-backed
+    /// tool remains actionable when its command file has already disappeared.
+    var confirmationPath: String {
+        if manager == .cargo {
+            return URL(fileURLWithPath: path).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent(".crates.toml").path
+        }
+        return path
+    }
+}
+
+/// Cargo discovery and removal confirmation read the same install receipt.
+/// An unreadable/unsupported receipt is different from an empty one.
+enum CargoInstallReceipt {
+    struct Package {
+        let name: String
+        let version: String
+        let binaries: [String]
+        let supportsPublicRegistryUpdates: Bool
+    }
+
+    static func packages(at path: String) -> [Package]? {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8),
+              let pattern = try? NSRegularExpression(pattern: #"^"([^ "]+) ([^ "]+) [^"]*"\s*=\s*\[(.*)\]$"#) else { return nil }
+        var inPackages = false
+        var packages: [Package] = []
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty || line.hasPrefix("#") { continue }
+            if line.hasPrefix("[") {
+                guard line == "[v1]" else { return nil }
+                inPackages = true
+                continue
+            }
+            guard inPackages,
+                  let match = pattern.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+                  let nameRange = Range(match.range(at: 1), in: line),
+                  let versionRange = Range(match.range(at: 2), in: line),
+                  let binaryRange = Range(match.range(at: 3), in: line) else { return nil }
+            let binaries = line[binaryRange].split(separator: ",").map {
+                $0.trimmingCharacters(in: CharacterSet(charactersIn: " \""))
+            }
+            guard Set(binaries).count == binaries.count,
+                  binaries.allSatisfy({ $0 != "." && $0 != ".."
+                && $0.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil }) else { return nil }
+            packages.append(.init(name: String(line[nameRange]), version: String(line[versionRange]), binaries: binaries,
+                supportsPublicRegistryUpdates: line.contains("registry+https://github.com/rust-lang/crates.io-index")
+                    || line.contains("registry+https://index.crates.io/")))
+        }
+        return inPackages ? packages : nil
     }
 }

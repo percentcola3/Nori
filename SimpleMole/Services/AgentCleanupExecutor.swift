@@ -315,6 +315,11 @@ enum AgentCleanupExecutor {
         }
         var explicitLinks: [DeletionPlan.Item] = []
         for skill in skills {
+            if skill.isDangling && !AgentCatalog.isDanglingSymlink(skill.path) {
+                refused += 1
+                preflightMessages.append("Kept Skill link because its target was restored or could not be verified as missing: " + skill.path)
+                continue
+            }
             if !skill.linked && !skillScan.unresolvedConfigPaths.isEmpty {
                 refused += 1
                 preflightMessages.append("Kept Skill body because its registrations could not be verified: " + skill.path)
@@ -451,6 +456,7 @@ enum AgentCleanupExecutor {
         if !linkItems.isEmpty {
             let links = NativeCore.shared.applyAgentSkillLinks(
                 items: linkItems, homeDirectory: home, allowedDirectories: Array(launcherParents),
+                danglingPaths: Set(skills.filter { $0.linked && $0.isDangling }.map(\.path)),
                 onProgress: { completed, _, path in
                     if completed > 0 { progress.complete(path: path) }
                 })

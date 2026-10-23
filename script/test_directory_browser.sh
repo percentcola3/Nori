@@ -7,6 +7,7 @@ trap 'rm -rf "$DIRECTORY_MODEL_TEST_DIR"' EXIT
 mkdir -p "$DIRECTORY_MODEL_TEST_DIR/sources"
 cp "$ROOT_DIR/SimpleMole/L10n/TablesDirectory.swift" \
     "$ROOT_DIR/script/DirectoryBrowserTestSupport.swift" \
+    "$ROOT_DIR/SimpleMole/Services/FileScanService.swift" \
     "$ROOT_DIR/SimpleMole/Services/DirectoryFileService.swift" \
     "$ROOT_DIR/SimpleMole/Services/DirectorySearchService.swift" \
     "$ROOT_DIR/SimpleMole/Services/DirectorySizeCache.swift" \

@@ -97,6 +97,7 @@ enum TaskFeedbackDiagnostic {
         .init(prefix: "Configuration changed or is a symbolic link: ", key: "task.reason.changed"),
         .init(prefix: "Skill configuration changed or is a symbolic link: ", key: "task.reason.changed"),
         .init(prefix: "Kept Skill link because it changed or is no longer recognized: ", key: "task.reason.changed"),
+        .init(prefix: "Kept Skill link because its target was restored or could not be verified as missing: ", key: "task.reason.changed"),
         .init(prefix: "Kept MCP installation because its path or scanned identity is no longer recognized: ", key: "task.reason.changed"),
         .init(prefix: "Kept MCP registration because its configuration path is no longer recognized: ", key: "task.reason.changed"),
         .init(prefix: "Kept Agent resource because it is no longer recognized by the catalog: ", key: "task.reason.changed"),

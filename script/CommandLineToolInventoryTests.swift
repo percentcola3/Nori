@@ -67,6 +67,56 @@ struct CommandLineToolInventoryTests {
         expect(CLIManagedCommands.command(ownedCrate, action: .uninstall, home: home.path, searchPath: [])?.arguments
                == ["uninstall", "ripgrep", "--root", home.path + "/.cargo"], "Cargo uninstall targets its selected install root")
 
+        // A receipt can remain after either the first or all command files
+        // disappear. Confirmation and post-removal checks must use the receipt.
+        let partialCargo = fixture.path + "/partial-cargo"
+        try write("partial-cargo/.crates.toml", "[v1]\n\"fixture-cli 1.0.0 (registry+https://index.crates.io/)\" = [\"first\", \"second\"]\n")
+        try write("partial-cargo/bin/second", "owned binary", executable: true)
+        setenv("CARGO_HOME", partialCargo, 1)
+        let partial = CLIInstalledToolDiscovery.cargoTools(home: home.path, control: control)
+            .first { $0.name == "fixture-cli" }!
+        setenv("CARGO_HOME", fixture.appendingPathComponent("cargo").path, 1)
+        expect(partial.path == partialCargo + "/bin/second"
+               && partial.confirmationPath == partialCargo + "/.crates.toml"
+               && DeletionPlan.identity(at: partial.confirmationPath) != nil,
+               "Cargo selects a surviving command for display and its receipt for confirmation")
+        try fm.removeItem(atPath: partial.path)
+        var cargoRemnant = CLIInstalledToolDiscovery.cargoTools(home: home.path, control: control,
+            searchPath: [partialCargo + "/bin"]).first { $0.name == "fixture-cli" }!
+        expect(cargoRemnant.installationIdentities.keys.sorted() == [cargoRemnant.confirmationPath],
+               "A fresh scan binds a binary-free Cargo installation to its remaining receipt")
+        cargoRemnant.managerExecutable = home.path + "/fixture-cargo"
+        try write("home/fixture-cargo", "#!/bin/sh\nexit 0\n", executable: true)
+        let noOpCargo = CLIUninstallService.uninstall(cargoRemnant, home: home.path, running: RunningApplicationSnapshot())
+        expect(!noOpCargo.succeeded, "Missing binaries do not make a no-op Cargo uninstall successful while the receipt entry remains")
+        try write("home/fixture-cargo", #"""
+        #!/bin/sh
+        [ "$1" = uninstall ] && [ "$2" = fixture-cli ] && [ "$3" = --root ] && [ "$4" = "$CARGO_HOME" ] || exit 31
+        printf '[v1]\n"other-cli 2.0.0 (registry+https://index.crates.io/)" = ["other"]\n' > "$CARGO_HOME/.crates.toml"
+        """#, executable: true)
+        let removedCargo = CLIUninstallService.uninstall(cargoRemnant, home: home.path, running: RunningApplicationSnapshot())
+        expect(removedCargo.succeeded && CargoInstallReceipt.packages(at: cargoRemnant.confirmationPath)?.map(\.name) == ["other-cli"],
+               "Cargo confirms removal of only the selected package while preserving other receipt entries")
+        try write("partial-cargo/.crates.toml", "[unsupported]\n")
+        expect(CargoInstallReceipt.packages(at: cargoRemnant.confirmationPath) == nil
+               && !CLIUninstallService.uninstall(cargoRemnant, home: home.path, running: RunningApplicationSnapshot()).succeeded,
+               "Unsupported receipt formats cannot prove a successful uninstall")
+        let duplicateCargo = fixture.path + "/duplicate-cargo"
+        try write("duplicate-cargo/.crates.toml", "[v1]\n\"duplicate-cli 1.0.0 (registry+https://index.crates.io/)\" = [\"rg\", \"rg\"]\n")
+        try write("duplicate-cargo/bin/rg", "fixture", executable: true)
+        expect(CargoInstallReceipt.packages(at: duplicateCargo + "/.crates.toml") == nil,
+               "Duplicate command names make a receipt invalid before identity dictionaries are built")
+        let withoutDuplicateCargo = CLIInstalledToolDiscovery.cargoTools(home: home.path, control: control,
+            searchPath: [duplicateCargo + "/bin"])
+        expect(!withoutDuplicateCargo.contains { $0.path.hasPrefix(duplicateCargo + "/") },
+               "A malformed Cargo installation must not crash discovery or become actionable")
+        try write("partial-cargo/.crates.toml", " \n# truncated receipt\n")
+        expect(CargoInstallReceipt.packages(at: cargoRemnant.confirmationPath) == nil,
+               "A blank receipt cannot prove package removal")
+        try write("partial-cargo/.crates.toml", "[v1]\n")
+        expect(CargoInstallReceipt.packages(at: cargoRemnant.confirmationPath)?.isEmpty == true,
+               "An explicit empty v1 table remains a valid receipt")
+
         // go: only executable regular files in GOBIN are tools.
         try write("gobin/gopls", "g", executable: true)
         try write("gobin/notes.txt", "n")

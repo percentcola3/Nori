@@ -49,8 +49,7 @@ struct AnalysisFileFingerprint: Codable, Equatable {
     }
 
     static func read(_ path: String) -> AnalysisFileFingerprint? {
-        var info = stat()
-        guard lstat(path, &info) == 0 else { return nil }
+        guard let info = FileScanService.metadata(at: path) else { return nil }
         return .init(info)
     }
 
@@ -221,6 +220,9 @@ struct AnalysisInventoryScanStatistics {
     var inspectedFiles = 0
     var reusedFiles = 0
     var changedFiles = 0
+    /// Reads performed by the worker; scope normalization is not included.
+    var metadataReads = 0
+    var reusedListedFileMetadata = 0
 }
 
 struct AnalysisInventoryScanResult {
@@ -298,6 +300,10 @@ enum AnalysisInventoryWorker {
         var unreadable = Set<String>()
         var visitedDirectories = Set<AnalysisFileIdentity>()
         var countedFiles = Set<AnalysisFileIdentity>()
+        func readFingerprint(_ path: String) -> AnalysisFileFingerprint? {
+            statistics.metadataReads += 1
+            return AnalysisFileFingerprint.read(path)
+        }
         func retainUnreadableSubtree(_ path: String, fingerprint: AnalysisFileFingerprint) {
             unreadable.insert(path)
             guard let cached = retained?.directories[path], cached.fingerprint.device == fingerprint.device,
@@ -329,7 +335,7 @@ enum AnalysisInventoryWorker {
         }
         for root in normalizedRoots {
             if control.isCancelled { break }
-            guard let rootInfo = AnalysisFileFingerprint.read(root), rootInfo.isDirectory else {
+            guard let rootInfo = readFingerprint(root), rootInfo.isDirectory else {
                 let code = errno
                 failedRoots += 1
                 issue(root, code: code)
@@ -341,7 +347,7 @@ enum AnalysisInventoryWorker {
             var pending = [root]
             while let path = pending.popLast(), !control.isCancelled {
                 publish(path)
-                guard let current = AnalysisFileFingerprint.read(path) else {
+                guard let current = readFingerprint(path) else {
                     if errno != ENOENT {
                         issue(path, code: errno)
                         if kind == .disk, let cached = retained?.directories[path] {
@@ -353,6 +359,9 @@ enum AnalysisInventoryWorker {
                 guard current.isDirectory, current.device == rootInfo.device else { continue }
                 guard visitedDirectories.insert(AnalysisFileIdentity(current)).inserted else { continue }
                 let directory: AnalysisInventorySnapshot.Directory
+                // Only this newly listed directory's files reuse metadata. Cached
+                // memberships still probe every file to detect in-place edits.
+                var listedFingerprints: [AnalysisFileFingerprint?]?
                 if let cached = old?.directories[path], cached.fingerprint == current,
                    old?.unreadableDirectories?.contains(path) != true {
                     directory = cached
@@ -360,10 +369,12 @@ enum AnalysisInventoryWorker {
                 } else {
                     let names: [String]
                     do {
-                        names = try FileManager.default.contentsOfDirectory(atPath: path)
+                        names = try FileScanService.childNames(in: path)
                     } catch {
                         if path == root { failedRoots += 1 }
-                        let posix = (error as NSError).userInfo[NSUnderlyingErrorKey] as? NSError
+                        let failure = error as NSError
+                        let posix = failure.domain == NSPOSIXErrorDomain ? failure
+                            : failure.userInfo[NSUnderlyingErrorKey] as? NSError
                         issue(path, code: posix.map { Int32($0.code) } ?? EIO)
                         if kind == .disk { retainUnreadableSubtree(path, fingerprint: current) }
                         continue
@@ -371,6 +382,7 @@ enum AnalysisInventoryWorker {
                     statistics.listedDirectories += 1
                     var children: [String] = []
                     var files: [String] = []
+                    var freshFingerprints: [AnalysisFileFingerprint?] = []
                     for name in names.sorted() {
                         if control.isCancelled { break }
                         // Own a native Swift string once at the filesystem edge.
@@ -385,7 +397,7 @@ enum AnalysisInventoryWorker {
                         let fileEligible = kind.acceptsName(child) &&
                             (kind == .disk || MediaSlimPolicy.isEligible(child, home: normalizedHome))
                         guard directoryEligible || fileEligible else { continue }
-                        guard let info = AnalysisFileFingerprint.read(child) else {
+                        guard let info = readFingerprint(child) else {
                             let code = errno
                             if code != ENOENT {
                                 issue(child, code: code)
@@ -394,6 +406,7 @@ enum AnalysisInventoryWorker {
                                     if retained?.directories[child] != nil { children.append(child) }
                                     else if let cached = retained?.files[child] {
                                         files.append(child)
+                                        freshFingerprints.append(nil)
                                         snapshot.files[child] = cached
                                     }
                                 }
@@ -404,18 +417,22 @@ enum AnalysisInventoryWorker {
                             children.append(child)
                         } else if info.isRegularFile, fileEligible, info.device == rootInfo.device {
                             files.append(child)
+                            freshFingerprints.append(info)
                         }
                     }
                     // If listing raced with a directory change, leave its earlier signature so next scan
                     // lists it again rather than treating the partial names as fresh.
                     directory = .init(fingerprint: current, directories: children, files: files)
+                    listedFingerprints = freshFingerprints
                 }
                 snapshot.directories[path] = directory
                 pending.append(contentsOf: directory.directories.reversed())
-                for file in directory.files {
+                for (index, file) in directory.files.enumerated() {
                     if control.isCancelled { break }
                     statistics.inspectedFiles += 1
-                    guard let fingerprint = AnalysisFileFingerprint.read(file) else {
+                    let listed = listedFingerprints?[index]
+                    if listed != nil { statistics.reusedListedFileMetadata += 1 }
+                    guard let fingerprint = listed ?? readFingerprint(file) else {
                         if errno != ENOENT {
                             issue(file, code: errno)
                             unreadable.insert(path)

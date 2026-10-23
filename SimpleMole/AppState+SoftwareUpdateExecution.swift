@@ -50,7 +50,7 @@ extension AppState {
         let identity: String?
         switch selection {
         case .app(let app, _): identity = app.appIdentity
-        case .tool(let tool): identity = DeletionPlan.identity(at: tool.path)
+        case .tool(let tool): identity = DeletionPlan.identity(at: tool.confirmationPath)
         }
         Task {
             let scope = updateProcessScope(selection)
@@ -92,7 +92,8 @@ extension AppState {
                 return DeletionPlan.identity(at: app.path) == app.appIdentity
                     && DeletionPlan.identity(at: app.path + "/Contents/Info.plist") == app.infoIdentity
             case .tool(let tool):
-                return originalIdentity != nil && DeletionPlan.identity(at: tool.path) == originalIdentity
+                return originalIdentity != nil && DeletionPlan.identity(at: tool.confirmationPath) == originalIdentity
+                    && tool.installationIdentities.allSatisfy { DeletionPlan.identity(at: $0.key) == $0.value }
             }
         }
         guard stillCurrent() else { softwareUpdateFailed(selection, reason: "software.install.changed"); return }

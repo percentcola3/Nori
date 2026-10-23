@@ -12,6 +12,10 @@ struct ProcessAppIcon: View {
 
     @State private var icon: NSImage?
 
+    private var effectiveBundlePath: String? {
+        bundlePath ?? row.bundlePath
+    }
+
     var body: some View {
         Group {
             if let icon {
@@ -26,9 +30,9 @@ struct ProcessAppIcon: View {
             }
         }
         .frame(width: size, height: size)
-        .task(id: row.signalToken) {
+        .task(id: [row.signalToken, effectiveBundlePath ?? ""]) {
             icon = nil
-            if let bundlePath {
+            if let bundlePath = effectiveBundlePath {
                 icon = NSWorkspace.shared.icon(forFile: bundlePath)
                 return
             }

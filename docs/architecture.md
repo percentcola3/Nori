@@ -14,10 +14,28 @@ Nori targets macOS 13 and later. Its SwiftUI presentation still uses `Observable
 | CLI inventory | Provider discovery, reconciliation, optional version/size enrichment and independent failure results | `CommandLineToolInventory.swift`, `CLIInstalledToolDiscovery.swift`, `CommandLineTool.swift` |
 | CLI command planning | Fixed argv, manager binding, installation environment and root verification shared by update/uninstall | `CLIManagedCommand.swift` |
 | Command I/O | Bounded subprocess lifetime and capped output collection for metadata queries and uninstall commands | `CLICommandRunner.swift` |
+| Shared file scanning | Read-only directory enumeration, live metadata and allocated-byte measurement shared by Agent, directory and cleanup scans | `FileScanService.swift` |
 | Execution | CLI uninstall and async software-update execution | `CLIUninstallService.swift`, `SoftwareUpdateExecution.swift` |
 | Audited cleanup engine | Live identity/access/occupancy revalidation and the existing deletion funnel | `NativeCore.swift`, `DeletionPlan.swift` |
 
 `AppState` remains the composition root and presentation facade. Its domain extensions organize actions without widening existing `private(set)` inventory/queue setters. Moving a function between files alone does not change its responsibility: workflows with independent side effects are separate services, while UI publication remains on the main actor.
+
+## Shared file scanning
+
+`FileScanService` provides live `metadata(at:)`, directory names/paths and streaming size measurement. It owns the POSIX directory handles and FTS traversal, reads no file contents, and stores no global file index or cached identities. Size-only walks construct Swift paths only for directory progress; they do not materialize a record for every file.
+
+| Consumer | Shared call path | Consumer-owned behavior |
+| --- | --- | --- |
+| Agent inventory | `AgentCatalog.childNames` and `AgentInventory` → `CleanupScanWorker.measure` → `FileScanService` | Installed presence, resource bindings, session-local measurement reuse, retention and recommendations |
+| Directory listing and sizes | `DirectoryFileService`, `DirectorySizeCache` → `FileScanService` | Hidden display, sorting, bounded member trees, FSEvents invalidation and calibration |
+| Directory search and analysis | `DirectorySearchIndex.pathStatus`, `AnalysisFileFingerprint`, analysis directory discovery → `FileScanService` | Filename index/package/cloud rules, fingerprints, one-read reuse and result projection |
+| Cleanup scan | `NativeCore.directChildren` and `CleanupScanWorker.measure` → `FileScanService` | Risk/age filters, SQLite families, eligibility and progress scheduling |
+
+The two measurement policies preserve their existing accounting: cleanup excludes symlinks and derives activity only from file mtime/atime; directory display counts links themselves, skips dataless directories and reports skipped mounts as lower bounds. Both use physical traversal, allocated blocks and hard-link deduplication. Directory member caches retain their existing node limits and incremental refresh behavior. Directory-name reads return errors rather than treating unreadable folders as empty successful results.
+
+The module is a read path. It does not authorize deletion or replace the cleanup executor's live identity, permissions, ownership, process/open-file and whitelist checks. Specialized configuration parsing, file-content hashing and the filename index's provider/package-aware traversal remain owned by their consumers.
+
+`script/test_file_scan_service.sh` tests the shared interface with real temporary fixtures. Existing Agent, directory, analysis, cleanup and activity tests exercise the production call paths; explicit fixture compiler lists include `FileScanService.swift`.
 
 ## SOLID in these boundaries
 

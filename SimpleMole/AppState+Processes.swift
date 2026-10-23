@@ -8,6 +8,8 @@ final class ProcessRuntimeState {
     fileprivate var history = ProcessHistory(capacity: 30)
     fileprivate var highUsageTracker = HighUsageTracker()
     fileprivate var sampleInFlight = false
+    fileprivate let pidSampler = ProcessSampler()
+    fileprivate var protectedPIDs: Set<Int32> = []
     fileprivate var exitingRoots: Set<String> = []
     fileprivate var automaticTracker = RuntimeStore.AutomaticCandidateTracker()
     fileprivate var cleanupAttempted = 0
@@ -55,12 +57,38 @@ extension AppState {
                 return
             }
             if requestedAdvancedMode {
-                let rows = RuntimeStore.rows(fromProcessText: result.output, advanced: true)
+                let sampler = processRuntime.pidSampler
+                let output = result.output
+                let currentUID = getuid()
+                let ownPID = ProcessInfo.processInfo.processIdentifier
+                let sampled = await Task.detached(priority: .utility) {
+                    let samples = sampler.sample()
+                    let metadata = Dictionary(samples.compactMap { sample -> (Int32, RuntimeStore.ProcessMetadata)? in
+                        let directory = sample.uid == currentUID ? SoftwareUpdateProcesses.currentDirectory(sample.pid) : nil
+                        guard let current = sampler.current(for: sample.identity), current.path == sample.path else { return nil }
+                        return (sample.pid, RuntimeStore.ProcessMetadata(
+                            startTime: sample.identity.startTime, name: sample.name, path: sample.path,
+                            cpuPercent: sample.cpuPercent, residentBytes: sample.residentBytes,
+                            ppid: sample.ppid, uid: sample.uid,
+                            state: sample.isZombie ? "Z" : (sample.isExiting ? "SE" : "S"),
+                            elapsed: sample.elapsed, workingDirectory: directory,
+                            bundlePath: ApplicationProcessScope.bundlePath(of: sample.path)))
+                    }, uniquingKeysWith: { first, _ in first })
+                    return (rows: RuntimeStore.rows(fromProcessText: output, advanced: true, metadata: metadata),
+                            protected: ApplicationProcessScope.ownProcessTreePIDs(ownPID: ownPID, samples: samples))
+                }.value
+                guard requestedAdvancedMode == advancedProcesses else {
+                    runtimeInFlight = false
+                    refreshProcesses()
+                    return
+                }
+                let rows = sampled.rows
+                processRuntime.protectedPIDs = sampled.protected
                 processRows = rows
                 // 验证重扫也必须更新 tracker，确保恢复正常或已消失的进程
                 // 及时打断旧计数；只禁止这一拍继续执行自动动作。
                 let candidates = processRuntime.automaticTracker.candidates(in: rows)
-                let selection = allowAutomaticCleanup
+                let selection = allowAutomaticCleanup && automaticProcessCleanup
                     ? automaticCleanupSelection(fromCandidates: candidates)
                     : (actions: [], attemptedRows: [])
                 if !selection.actions.isEmpty {
@@ -86,6 +114,27 @@ extension AppState {
     var visibleProcessGroups: [ProcessGroup] {
         ProcessAggregator.sorted(ProcessAggregator.filter(processGroups, query: processSearch),
                                  by: processSort)
+    }
+
+    var visiblePIDRows: [ProcessRow] {
+        RuntimeStore.visibleRows(processRows, query: processSearch, sort: processSort)
+    }
+
+    func openProcessInspection() {
+        if !visiblePages.contains(.processes) { setPageVisible(.processes, true) }
+        automaticProcessCleanup = false
+        processSearch = ""
+        advancedProcesses = true
+        NotificationCenter.default.post(name: .smOpenPage, object: PageKey.processes.rawValue)
+        refreshProcesses(allowAutomaticCleanup: false)
+    }
+
+    func canControlPIDRow(_ row: ProcessRow) -> Bool {
+        guard row.pid > 1, row.uid == getuid(), row.nativeStartTime != nil,
+              !processRuntime.protectedPIDs.contains(row.pid),
+              let path = row.executablePath, path.hasPrefix("/"),
+              !ProcessAggregator.isProtectedPath(path) else { return false }
+        return true
     }
 
     func processCPUHistory(_ pid: Int32) -> [Double] { processRuntime.history.series(for: pid) }
@@ -271,15 +320,15 @@ extension AppState {
     }
 
     /// 结束单个子进程（非应用主进程）。
-    func terminateChildProcess(_ row: ProcessRow) {
+    func terminateChildProcess(_ row: ProcessRow, isChild: Bool = true) {
         guard let identity = Self.childIdentity(row) else { return }
         confirmation = Confirmation(
-            title: l10n.tf("proc.confirm.child.title", row.name),
+            title: isChild ? l10n.tf("proc.confirm.child.title", row.name) : l10n.t("proc.confirm.killPid.title"),
             message: l10n.tf("proc.confirm.kill.msg", row.pid),
             confirmLabel: l10n.t("proc.kill")) { [weak self] in
                 guard let self else { return }
                 Task {
-                    switch ProcessTerminator.validate(identity) {
+                    switch ProcessTerminator.validate(identity, expectedPath: row.executablePath) {
                     case .failure(let refusal):
                         self.processActionStatus = self.l10n.t(Self.refusalKey(refusal))
                         self.presentTaskFailure(message: self.processActionStatus)
@@ -287,7 +336,7 @@ extension AppState {
                     case .success:
                         break
                     }
-                    let ended = await ProcessTerminator.terminateThenKill(identity, grace: 3)
+                    let ended = await ProcessTerminator.terminateThenKill(identity, grace: 3, expectedPath: row.executablePath)
                     self.processActionStatus = ended
                         ? self.l10n.t("status.signalSent") : self.l10n.t("status.signalFailed")
                     if !ended { self.presentTaskFailure(message: self.processActionStatus) }
@@ -297,8 +346,17 @@ extension AppState {
             }
     }
 
+    private static func staleRowIsCurrent(_ row: ProcessRow) -> Bool {
+        guard let identity = childIdentity(row),
+              let current = ProcessSampler.shared.current(for: identity),
+              current.ppid == row.ppid, current.uid == row.uid,
+              current.lifecycle == row.lifecycle,
+              let path = row.executablePath, current.path == path else { return false }
+        return true
+    }
+
     private static func childIdentity(_ row: ProcessRow) -> ProcessIdentity? {
-        guard let startTime = UInt64(row.startIdentity, radix: 16) else { return nil }
+        guard let startTime = row.nativeStartTime ?? UInt64(row.startIdentity, radix: 16) else { return nil }
         return ProcessIdentity(pid: row.pid, startTime: startTime, ppid: row.ppid, uid: row.uid)
     }
 
@@ -349,7 +407,8 @@ extension AppState {
         var succeeded = 0
         var failureDetails: [String] = []
         for row in rows {
-            guard advancedProcesses else { break }
+            guard advancedProcesses, automaticProcessCleanup else { break }
+            guard Self.staleRowIsCurrent(row) else { continue }
             attempted += 1
             let result = await MoleEngine.shared.runRuntime("cleanup-stale", row.staleCleanupToken)
             if result.succeeded {
@@ -433,6 +492,10 @@ extension AppState {
             endProcessGroup(group)
             return
         }
+        if row.nativeStartTime != nil, row.lifecycle == .normal {
+            terminateChildProcess(row, isChild: false)
+            return
+        }
         if row.lifecycle != .normal {
             confirmation = Confirmation(
                 title: l10n.t("proc.confirm.cleanupStale.title"),
@@ -442,34 +505,17 @@ extension AppState {
                 }
             return
         }
-        let mode = advancedProcesses ? "kill-pid" : "kill-group"
-        let title = advancedProcesses
-            ? l10n.t("proc.confirm.killPid.title")
-            : l10n.t("proc.confirm.killGroup.title")
-        confirmation = Confirmation(
-            title: title,
-            message: l10n.tf("proc.confirm.kill.msg", row.pid),
-            confirmLabel: l10n.t("proc.kill")) { [weak self] in
-                guard let self else { return }
-                Task {
-                    while self.runtimeInFlight {
-                        try? await Task.sleep(nanoseconds: 100_000_000)
-                    }
-                    self.runtimeInFlight = true
-                    let result = await MoleEngine.shared.runRuntime(mode, row.signalToken)
-                    self.processActionStatus = result.succeeded
-                        ? self.l10n.t("status.signalSent")
-                        : self.l10n.t("status.signalFailed")
-                    self.logFailure(result)
-                    self.runtimeInFlight = false
-                    self.refreshProcesses(allowAutomaticCleanup: false)
-                    self.resampleAfterMutation()
-                }
-            }
+        presentTaskFailure(message: l10n.t("proc.refusal.identity"))
+        refreshProcesses(allowAutomaticCleanup: false)
     }
 
     private func cleanupStaleProcess(_ row: ProcessRow) {
         guard advancedProcesses, !runtimeInFlight, row.lifecycle != .normal else { return }
+        guard Self.staleRowIsCurrent(row) else {
+            presentTaskFailure(message: l10n.t("proc.refusal.identity"))
+            refreshProcesses(allowAutomaticCleanup: false)
+            return
+        }
         let coveredRows: [ProcessRow]
         if row.lifecycle == .zombie {
             coveredRows = processRows.filter {

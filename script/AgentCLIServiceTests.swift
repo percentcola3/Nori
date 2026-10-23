@@ -177,7 +177,54 @@ struct AgentCLIServiceTests {
                "Reject a manager replaced after the installation scan")
 
         try testGrokNativeRemnants(fixture: fixture)
+        try testNativeProgramsWithoutLaunchers(fixture: fixture)
         print("Agent CLI service tests passed")
+    }
+
+    private static func testNativeProgramsWithoutLaunchers(fixture: URL) throws {
+        let layouts = [
+            ("claude-code", ".local/share/claude/versions/2.1.207", ".claude/sessions/keep.jsonl"),
+            ("claude-code", ".claude/local/claude", ".claude/sessions/keep.jsonl"),
+            ("cursor-cli", ".local/share/cursor-agent/versions/2026.10.01/cursor-agent", ".cursor/chats/keep.jsonl"),
+            ("copilot", ".copilot/pkg/universal/1.0.80/copilot", ".copilot/session-state/keep.jsonl"),
+            ("grok", ".grok/downloads/grok-1.0.5-macos-aarch64", ".grok/sessions/keep.jsonl"),
+            ("opencode", ".opencode/bin/opencode", ".local/share/opencode/sessions/keep.jsonl"),
+            ("kimi", ".kimi-code/bin/kimi", ".kimi-code/sessions/keep.jsonl"),
+            ("amp", ".amp/bin/amp", ".config/amp/keep.json")
+        ]
+        var missed: [String] = []
+        for (index, layout) in layouts.enumerated() {
+            let (id, relative, data) = layout
+            let home = fixture.appendingPathComponent("native-without-launcher-\(id)-\(index)").path
+            let agent = AgentCatalog.definitions.first { $0.id == id }!
+            let program = home + "/" + relative
+            try executable(program, "#!/bin/sh\nexit 0\n")
+            try executable(home + "/" + data, "retained user data")
+            let context = AgentPresenceContext(applicationDirs: [], searchPath: [])
+            let found = AgentCLIService.installations(for: agent, home: home,
+                presence: context)
+            print("Native body without command entry: \(id) = \(found.count)")
+            guard let installation = found.first else { missed.append(id); continue }
+            let core = NativeCore(cleanupOpenFileProbe: { [] })
+            let active = AgentCLIService.uninstall(installation, home: home,
+                running: RunningApplicationSnapshot(processNames: agent.owners), permanent: true, core: core)
+            expect(!active.succeeded && AgentCatalog.exists(program), "\(id): running owners still block remnant removal")
+            try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -120)], ofItemAtPath: program)
+            let changed = AgentCLIService.uninstall(installation, home: home,
+                running: RunningApplicationSnapshot(), permanent: true, core: core)
+            expect(changed.requiresRescan && !changed.succeeded && AgentCatalog.exists(program),
+                   "\(id): a changed program still blocks the captured uninstall plan")
+            let fresh = AgentCLIService.installations(for: agent, home: home, presence: context).first!
+            let removed = AgentCLIService.uninstall(fresh, home: home,
+                running: RunningApplicationSnapshot(), permanent: true, core: core)
+            expect(removed.succeeded && !AgentCatalog.exists(program) && AgentCatalog.exists(home + "/" + data)
+                   && AgentCLIService.installations(for: agent, home: home, presence: context).isEmpty,
+                   "\(id): refreshed discovery and uninstall agree, while user data remains: \(removed.messages)")
+            try executable((program as NSString).deletingLastPathComponent + "/unrecognized-tool", "#!/bin/sh\nexit 0\n")
+            expect(AgentCLIService.installations(for: agent, home: home, presence: context).isEmpty,
+                   "\(id): arbitrary executable names do not count as program ownership")
+        }
+        expect(missed.isEmpty, "All supported native installation bodies remain discoverable without a launcher: \(missed)")
     }
 
     private static func testGrokNativeRemnants(fixture: URL) throws {
@@ -206,7 +253,7 @@ struct AgentCLIServiceTests {
         try executable(launcher, "#!/bin/sh\nexit 0\n")
         try fm.createSymbolicLink(atPath: alias, withDestinationPath: launcher)
         let live = AgentCLIService.installations(for: grok, home: home, presence: context)
-        expect(live.count == 1 && Set(live[0].managedPaths) == Set([home + "/.grok/downloads", home + "/.grok/bin"]),
+        expect(live.count == 1 && Set(live[0].managedPaths) == Set([home + "/.grok/downloads", launcher]),
                "The Grok launcher and downloaded program share one complete native uninstall plan")
         try fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -120)], ofItemAtPath: download)
         let changed = AgentCLIService.uninstall(live[0], home: home,
@@ -230,6 +277,19 @@ struct AgentCLIServiceTests {
             running: RunningApplicationSnapshot(), permanent: true, core: NativeCore(cleanupOpenFileProbe: { [] }))
         expect(grokOnly.succeeded && AgentCatalog.isSymlink(alias) && AgentCatalog.exists(cursor),
                "Grok remnant removal preserves another Agent's command and program")
+        try executable(download, "#!/bin/sh\nexit 0\n")
+        try fm.createDirectory(atPath: (launcher as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: launcher, withDestinationPath: cursor)
+        try fm.removeItem(atPath: alias)
+        try fm.createSymbolicLink(atPath: alias, withDestinationPath: launcher)
+        let chained = AgentCLIService.installations(for: grok, home: home, presence: context)
+        expect(chained.count == 1 && !chained[0].executablePaths.contains(alias),
+               "Alias ownership follows the complete link chain, not only the first private-looking destination")
+        let chainedRemoval = AgentCLIService.uninstall(chained[0], home: home,
+            running: RunningApplicationSnapshot(), permanent: true, core: NativeCore(cleanupOpenFileProbe: { [] }))
+        expect(chainedRemoval.succeeded && AgentCatalog.isSymlink(alias) && AgentCatalog.exists(cursor)
+               && URL(fileURLWithPath: alias).resolvingSymlinksInPath().path == cursor,
+               "Removing an old native program cannot unlink a command that now resolves to another tool")
         try executable(home + "/.grok/downloads/unrelated-tool", "#!/bin/sh\nexit 0\n")
         expect(AgentCLIService.installations(for: grok, home: home, presence: context).isEmpty,
                "Unrecognized executable names alone do not prove a Grok installation")

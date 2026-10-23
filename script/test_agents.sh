@@ -32,6 +32,7 @@ swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DiskAnalysisWorker.swift" \
     "$ROOT_DIR/SimpleMole/Services/MediaSlimmer.swift" \
+    "$ROOT_DIR/SimpleMole/Services/FileScanService.swift" \
     "$ROOT_DIR/SimpleMole/Services/NativeCore.swift" \
     "$ROOT_DIR/SimpleMole/Services/ApplicationSizeMeasurer.swift" \
     "$ROOT_DIR/SimpleMole/Services/ApplicationInventoryService.swift" \
@@ -57,6 +58,7 @@ else
     "$TEST_DIR/agent-tests" "$FIXTURE_DIR"
     swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDK_PATH" \
         -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
+        "$ROOT_DIR/SimpleMole/Services/FileScanService.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \
@@ -66,6 +68,7 @@ else
     "$TEST_DIR/project-storage-tests" "$FIXTURE_DIR"
     swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDK_PATH" \
         -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
+        "$ROOT_DIR/SimpleMole/Services/FileScanService.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
         "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \

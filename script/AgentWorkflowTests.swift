@@ -69,6 +69,7 @@ struct AgentSkill {
     let bytes: UInt64
     let identity: String
     let linked: Bool
+    var isDangling = false
 }
 struct AgentMCPServer {
     enum Issue { case unreadableConfig }
@@ -1193,6 +1194,15 @@ struct AgentWorkflowTests {
         ]
         let recommendedNames: Set<String> = ["cache", "checkpoints", "logs", "logDatabase", "tempFiles"]
         f.report.categories = reported
+        let brokenPath = workflowHome + "/broken-skill"
+        f.report.skills += [
+            AgentSkill(path: brokenPath, name: "Broken Skill", agentID: "fixture",
+                bytes: 0, identity: "broken-link-identity", linked: true, isDangling: true),
+            AgentSkill(path: workflowHome + "/valid-skill-link", name: "Valid link", agentID: "fixture",
+                bytes: 0, identity: "valid-link-identity", linked: true),
+            AgentSkill(path: workflowHome + "/unverified-link", name: "Unverified link", agentID: "fixture",
+                bytes: 0, identity: "", linked: true, isDangling: true)
+        ]
         f.report.groups = [AgentGroupSummary(id: "fixture", name: "Fixture", documented: true,
             orphaned: false, categoryIDs: reported.map(\.id),
             skillIDs: state.agentSkills.map(\.path), serverIDs: state.agentServers.map(\.id),
@@ -1222,7 +1232,7 @@ struct AgentWorkflowTests {
                      && !state.agentServers.isEmpty && !state.agentMCPInstallations.isEmpty)
         precondition(state.agentSelectedCLIInstallations.isEmpty && state.agentSelectedSkills.isEmpty
                      && state.agentSelectedServers.isEmpty && state.agentSelectedMCPInstallations.isEmpty,
-                     "CLI, Skill, MCP registrations, and MCP bodies must remain manual selections after scanning")
+                     "Skill links, including verified broken links, must remain manual selections after scanning")
         precondition(state.agentCategories.filter { ["sessions", "stateDatabase", "credentials"].contains($0.name) }
             .allSatisfy { !$0.selected }, "Sessions, durable databases, and show-only resources cannot be recommended")
         if complete {

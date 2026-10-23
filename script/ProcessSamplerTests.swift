@@ -9,6 +9,7 @@ struct ProcessSamplerTests {
         testSortFilter()
         testHighUsageTracker()
         testHistoryCapacity()
+        testCompletePIDValidation()
         await testTerminatorRefusesOwnTreeAndSystem()
         print("process sampler tests ok")
     }
@@ -116,6 +117,47 @@ struct ProcessSamplerTests {
         precondition(history.series(for: 1) == [3, 4, 5, 6, 7], "history keeps the newest N samples")
         history.record([])
         precondition(history.series(for: 1).isEmpty, "vanished processes drop their history")
+    }
+
+    static func testCompletePIDValidation() {
+        let uid = getuid()
+        let ancestor = makeSample(pid: 700, ppid: 1, name: "launcher", path: "/Users/test/launcher")
+        let parent = makeSample(pid: 701, ppid: 700, name: "parent", path: "/Users/test/parent")
+        let host = makeSample(pid: 702, ppid: 701, name: "Nori", path: "/Applications/Nori.app/Contents/MacOS/Nori")
+        let child = makeSample(pid: 703, ppid: 702, name: "child", path: "/Users/test/child")
+        let grandchild = makeSample(pid: 704, ppid: 703, name: "grandchild", path: "/Users/test/grandchild")
+        let sibling = makeSample(pid: 705, ppid: 701, name: "sibling", path: "/Users/test/sibling")
+        let service = makeSample(pid: 800, ppid: 1, name: "custom-server", path: "/Users/test/project/target/debug/custom-server")
+        let system = makeSample(pid: 801, ppid: 1, name: "python3", path: "/usr/bin/python3")
+        let unknown = makeSample(pid: 802, ppid: 1, name: "unknown", path: "")
+        let foreign = makeSample(pid: 803, ppid: 1, uid: uid &+ 1, name: "foreign", path: "/Users/other/server")
+        let samples = [ancestor, parent, host, child, grandchild, sibling, service, system, unknown, foreign]
+        let snapshot = ProcessSampler.Snapshot(processes: samples, isComplete: true)
+        let protected = ApplicationProcessScope.ownProcessTreePIDs(ownPID: host.pid, samples: samples)
+        precondition(protected == [700, 701, 702, 703, 704], "Protect ancestors and all descendants, not unrelated siblings")
+        func validate(_ sample: ProcessSample, expectedPath: String? = nil) -> Result<ProcessSample, ProcessTerminator.Refusal> {
+            ProcessTerminator.validate(sample.identity, current: sample, snapshot: snapshot,
+                                       ownPID: host.pid, ownUID: uid, expectedPath: expectedPath)
+        }
+        for member in [ancestor, parent, host, child, grandchild] {
+            precondition(validate(member) == .failure(.ownProcessTree), "Never signal the inspector's full process lineage")
+        }
+        precondition(validate(sibling) == .success(sibling))
+        precondition(validate(service, expectedPath: service.path) == .success(service),
+                     "A separately selected user PID is not an entire runtime or project")
+        precondition(validate(service, expectedPath: "/Users/test/project/old-server") == .failure(.identityChanged))
+        precondition(validate(system) == .failure(.protectedPath), "Display visibility does not authorize system PID control")
+        precondition(validate(unknown) == .failure(.protectedPath))
+        precondition(validate(foreign) == .failure(.otherUser))
+        let reused = ProcessIdentity(pid: service.pid, startTime: 999, ppid: service.ppid, uid: uid)
+        precondition(ProcessTerminator.validate(reused, current: service, snapshot: snapshot,
+                     ownPID: host.pid, ownUID: uid) == .failure(.identityChanged))
+        precondition(ProcessTerminator.validate(service.identity, current: service,
+                     snapshot: .init(processes: samples, isComplete: false), ownPID: host.pid, ownUID: uid)
+                     == .failure(.identityChanged))
+        precondition(ProcessTerminator.validate(service.identity, current: service,
+                     snapshot: .init(processes: samples.filter { $0.pid != host.pid }, isComplete: true),
+                     ownPID: host.pid, ownUID: uid) == .failure(.identityChanged))
     }
 
     static func testTerminatorRefusesOwnTreeAndSystem() async {

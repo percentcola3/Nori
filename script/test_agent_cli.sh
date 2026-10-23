@@ -33,6 +33,7 @@ AGENT_CLI_SOURCES=(
     "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift"
     "$ROOT_DIR/SimpleMole/Services/DiskAnalysisWorker.swift"
     "$ROOT_DIR/SimpleMole/Services/MediaSlimmer.swift"
+    "$ROOT_DIR/SimpleMole/Services/FileScanService.swift"
     "$ROOT_DIR/SimpleMole/Services/NativeCore.swift"
     "$ROOT_DIR/SimpleMole/Services/ApplicationSizeMeasurer.swift"
     "$ROOT_DIR/SimpleMole/Services/ApplicationInventoryService.swift"

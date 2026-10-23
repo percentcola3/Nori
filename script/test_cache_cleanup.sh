@@ -13,6 +13,7 @@ swiftc -O -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
+    "$ROOT_DIR/SimpleMole/Services/FileScanService.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \

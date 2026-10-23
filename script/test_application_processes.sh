@@ -18,4 +18,4 @@ swiftc -Onone -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
     "$ROOT_DIR/script/OwnedProcessFixture.swift" \
     "$ROOT_DIR/script/ApplicationProcessTests.swift" -o "$TEST_DIR/tests"
-"$TEST_DIR/tests" "$FIXTURE_DIR"
+"$TEST_DIR/tests" "$FIXTURE_DIR" "$@"

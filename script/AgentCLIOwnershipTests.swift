@@ -272,14 +272,21 @@ struct AgentCLIOwnershipTests {
         expect(remove(droidRows[0], home: home).succeeded
                && AgentCatalog.exists(home + "/.factory/bin/rg")
                && AgentCatalog.exists(home + "/.factory/settings.json"), "Program removal preserves Droid's separate retained data")
-        try executable(home + "/.opencode/bin/opencode", "#!/bin/sh\nexit 0\n")
+        let openProgram = home + "/.opencode/bin/opencode"
+        let otherProgram = home + "/tools/other"
+        let otherEntry = home + "/.opencode/bin/other"
+        try executable(openProgram, "#!/bin/sh\nexit 0\n")
+        try executable(otherProgram, "#!/bin/sh\nexit 0\n")
+        try link(otherEntry, target: otherProgram)
         let openRows = scan(opencode, home: home)
-        expect(openRows.count == 1 && openRows[0].managedPaths == [home + "/.opencode/bin"],
-               "OpenCode's remaining private executable is discovered without a public launcher")
-        expect(remove(openRows[0], home: home).succeeded
+        expect(openRows.count == 1, "OpenCode's remaining private executable is discovered without a public launcher")
+        expect(openRows[0].managedPaths == [openProgram],
+               "Only OpenCode's verified executable belongs to its mixed bin removal plan")
+        expect(remove(openRows[0], home: home).succeeded && !AgentCatalog.exists(openProgram)
+               && AgentCatalog.exists(otherEntry) && AgentCatalog.exists(otherProgram)
                && AgentCatalog.exists(home + "/.opencode/node_modules/plugin/bin/opencode")
                && AgentCatalog.exists(home + "/.config/opencode/opencode.json"),
-               "Removing OpenCode's private program preserves plugin and configuration data")
+               "Removing OpenCode's private program preserves other tool entries, plugins and configuration data")
     }
 
     private static func native(home: String, environment: String = "venv") throws -> String {

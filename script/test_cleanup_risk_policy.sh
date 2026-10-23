@@ -16,6 +16,7 @@ swiftc -target "$(uname -m)-apple-macos13.0" \
     "$ROOT_DIR/SimpleMole/Services/Parsers.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupCache.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
+    "$ROOT_DIR/SimpleMole/Services/FileScanService.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \
     "$ROOT_DIR/script/CleanupRiskPolicyTests.swift" \

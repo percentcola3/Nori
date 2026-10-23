@@ -395,12 +395,7 @@ actor DirectorySearchIndex {
 
     static func pathStatus(_ url: URL) -> stat? {
         guard url.isFileURL else { return nil }
-        var status = stat()
-        let result = url.withUnsafeFileSystemRepresentation { path -> Int32 in
-            guard let path else { return -1 }
-            return lstat(path, &status)
-        }
-        return result == 0 ? status : nil
+        return FileScanService.metadata(at: url.path)
     }
 
     private static func physicalURL(_ url: URL) -> URL {

@@ -90,6 +90,63 @@ struct AgentResourceManagementTests {
                      && AgentCatalog.exists(home + "/.agents/skills/other"),
                      "Deleting a shared body must remove its bindings and preserve other sources")
 
+        let missingBody = home + "/.agents/skills/missing"
+        let brokenPath = home + "/.codex/skills/broken"
+        try fm.createSymbolicLink(atPath: brokenPath, withDestinationPath: "../../.agents/skills/missing")
+        let broken = scan().first { $0.path == brokenPath }!
+        precondition(broken.linked && broken.isDangling && !broken.identity.isEmpty,
+                     "A missing target must produce an identifiable broken-link candidate")
+        precondition(AgentResourceCatalog.skills([broken])[0].hasOnlyDanglingLinks
+                     && AgentResourceChanges(skills: [broken]).cleansOnlyDanglingLinks,
+                     "Broken links must be selectable for cleanup without becoming deletable bodies")
+        try write(".agents/skills/missing/SKILL.md", "Restored Skill")
+        let restored = AgentResourceMutator.execute(.init(skills: [broken]), running: idle,
+            home: home, presence: presence)
+        precondition(restored.refused == 1 && AgentCatalog.exists(brokenPath) && AgentCatalog.exists(missingBody),
+                     "A target restored after scanning must preserve its previously broken link")
+        let guarded = NativeCore.shared.applyAgentSkillLinks(
+            items: [.init(record: brokenPath, identity: broken.identity)], homeDirectory: home,
+            danglingPaths: [brokenPath])
+        precondition(guarded.skipped == 1 && AgentCatalog.exists(brokenPath),
+                     "The final unlink stage must also preserve a restored target")
+        let refreshed = scan()
+        precondition(refreshed.first { $0.path == brokenPath }?.isDangling == false,
+                     "Live links must never be marked as broken cleanup candidates")
+        let brokenChanges = AgentResourceChanges(skills: [broken])
+        let previousSelection: Set<String> = [brokenPath, home + "/.agents/skills/other"]
+        let refreshedSelection = brokenChanges.retainedSkillSelection(previousSelection, afterRefreshing: refreshed)
+        precondition(!refreshedSelection.contains(brokenPath)
+                     && refreshedSelection.contains(home + "/.agents/skills/other"),
+                     "A refused broken-link cleanup must unselect a restored target without clearing unrelated choices")
+        precondition(!refreshed.contains { $0.path == brokenPath && refreshedSelection.contains($0.path) },
+                     "A fresh action must not inherit intent to clean a formerly broken link")
+        try fm.removeItem(atPath: missingBody)
+        let cleaned = AgentResourceMutator.execute(.init(skills: [broken]), running: idle,
+            home: home, presence: presence)
+        precondition(cleaned.summary.removed == 1 && !AgentCatalog.exists(brokenPath)
+                     && AgentCatalog.exists(home + "/.agents/skills/other"),
+                     "Broken-link cleanup must remove only the link and preserve other Skill sources")
+
+        // An intermediate component that is a file is also a confirmed missing target.
+        let invalidPath = home + "/.codex/skills/not-a-directory"
+        try write("plain-file", "fixture")
+        try fm.createSymbolicLink(atPath: invalidPath, withDestinationPath: home + "/plain-file/missing")
+        precondition(scan().first { $0.path == invalidPath }?.isDangling == true)
+        let cyclicPath = home + "/.codex/skills/cyclic"
+        try fm.createSymbolicLink(atPath: cyclicPath, withDestinationPath: cyclicPath)
+        precondition(scan().first { $0.path == cyclicPath }?.isDangling == false,
+                     "Unverified resolution errors cannot become default cleanup candidates")
+        let inaccessibleDirectory = home + "/inaccessible"
+        try fm.createDirectory(atPath: inaccessibleDirectory, withIntermediateDirectories: true)
+        let inaccessibleLink = home + "/.codex/skills/inaccessible"
+        try fm.createSymbolicLink(atPath: inaccessibleLink, withDestinationPath: inaccessibleDirectory + "/missing")
+        do {
+            try fm.setAttributes([.posixPermissions: 0], ofItemAtPath: inaccessibleDirectory)
+            defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: inaccessibleDirectory) }
+            precondition(scan().first { $0.path == inaccessibleLink }?.isDangling == false,
+                         "Permission failures must never be mistaken for confirmed missing targets")
+        }
+
         let serverA = AgentMCPServer(id: "a", agentName: "Codex", agentID: "codex", configPath: home + "/a.json",
             format: .json(keyPath: "mcpServers"), scope: nil, name: "Shared MCP", remote: true,
             endpoint: "https://fixture.invalid/mcp", disabled: false, issues: [])
@@ -101,6 +158,6 @@ struct AgentResourceManagementTests {
         serverB.installationID = body
         precondition(AgentResourceCatalog.mcps(servers: [serverA, serverB], installations: []).count == 2,
                      "A different local installation must not merge merely because its name matches")
-        print("Agent resource management: source grouping, selective unlink, backups, changed/running guards and MCP identity passed")
+        print("Agent resource management: grouping, unlink, backups, broken-link cleanup, restored targets, permission guards and MCP identity passed")
     }
 }

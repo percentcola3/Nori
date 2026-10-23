@@ -190,8 +190,7 @@ actor DirectorySizeCache {
             await observer?(path)
             try checkCancellation()
             if inspectedCount % 64 == 0 { await Task.yield(); try checkCancellation() }
-            var info = stat()
-            guard lstat(path, &info) == 0 else {
+            guard let info = FileScanService.metadata(at: path) else {
                 if path == rootPath && (errno == ENOENT || errno == ENOTDIR) { rootMissing = true }
                 else if path == rootPath { rootUnreadable = true }
                 return nil
@@ -222,8 +221,7 @@ actor DirectorySizeCache {
                 enumerationCount += 1
                 if enumeratedDirectories.count < 2048 { enumeratedDirectories.append(path) }
                 do {
-                    paths = try FileManager.default.contentsOfDirectory(atPath: path).sorted()
-                        .map { path == "/" ? "/" + $0 : path + "/" + $0 }
+                    paths = try FileScanService.childPaths(in: path, sorted: true)
                 } catch {
                     if path == rootPath { rootUnreadable = true }
                     return Node(path: path, fingerprint: fingerprint, children: [], membershipComplete: false,

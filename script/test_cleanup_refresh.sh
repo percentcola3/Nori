@@ -10,6 +10,7 @@ swiftc -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/cache}" \
     "$ROOT_DIR/SimpleMole/Services/CleanupRiskPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupAgePolicy.swift" \
+    "$ROOT_DIR/SimpleMole/Services/FileScanService.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupScanWorker.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupInventoryRefresh.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" \

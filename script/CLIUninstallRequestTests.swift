@@ -11,6 +11,7 @@ struct CommandLineTool: Equatable, Sendable {
     let id: String
     let name: String
     let path: String
+    var confirmationPath: String { path + "/install-receipt" }
     var bytes: UInt64 = 123
     var manager: Manager = .fixture
     var agentID: String? = nil
@@ -245,7 +246,7 @@ struct CLIUninstallRequestTests {
             consent(independent)
             try await waitUntil { independent.commandLineTools.count == 1 }
             precondition(CLIUninstallWorkflow.calls.count == 1 && CLIUninstallWorkflow.calls[0].toolID == selected.id
-                         && CLIUninstallWorkflow.calls[0].identity == DeletionPlan.identity(at: selected.path)
+                         && CLIUninstallWorkflow.calls[0].identity == DeletionPlan.identity(at: selected.confirmationPath)
                          && independent.commandLineTools[0].id == "neighbor" && independent.isBusy
                          && independent.softwareUpdateResults == ["cli:neighbor": 2] && independent.resamples == 1
                          && independent.dataOffers == [selected.name] && !independent.cleanupScanComplete,

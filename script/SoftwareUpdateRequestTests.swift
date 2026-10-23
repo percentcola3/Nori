@@ -6,7 +6,7 @@ struct UninstallApp {
     let bundleID: String?
     var appIdentity: String? { "fixture-app" }
 }
-struct CommandLineTool { let name: String; let path: String }
+struct CommandLineTool { let name: String; let path: String; var confirmationPath: String { path } }
 struct SoftwareUpdateResult {
     enum State { case available, current }
     let state: State

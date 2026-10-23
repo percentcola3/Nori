@@ -1,3 +1,5 @@
+import AppKit
+import CoreServices
 import Darwin
 import Foundation
 import Security
@@ -25,11 +27,14 @@ struct NativeApplicationInventory: ApplicationInventoryReading {
     private var fileManager: FileManager { .default }
     private let sizer: any ApplicationSizeMeasuring
     private let ownBundleID: String?
+    private let discoveredApplications: @Sendable () -> [URL]
 
     init(sizer: any ApplicationSizeMeasuring = BoundedApplicationSizeMeasurer(),
-         ownBundleID: String? = Bundle.main.bundleIdentifier) {
+         ownBundleID: String? = Bundle.main.bundleIdentifier,
+         discoveredApplications: @escaping @Sendable () -> [URL] = { Self.systemApplications() }) {
         self.sizer = sizer
         self.ownBundleID = ownBundleID
+        self.discoveredApplications = discoveredApplications
     }
 
     /// Scan canonical roots once; names and Bundle IDs are not unique installs.
@@ -39,6 +44,7 @@ struct NativeApplicationInventory: ApplicationInventoryReading {
         for (root, source) in uniqueRoots(roots) {
             for item in children(of: root) {
                 guard item.pathExtension.lowercased() == "app",
+                      !item.lastPathComponent.hasPrefix("."),
                       (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
                       let metadata = metadata(at: item),
                       !metadata.bundleID.isEmpty, metadata.bundleID != ownBundleID,
@@ -105,6 +111,8 @@ struct NativeApplicationInventory: ApplicationInventoryReading {
             (URL(fileURLWithPath: "/Applications", isDirectory: true), "Applications"),
             (URL(fileURLWithPath: "/System/Applications", isDirectory: true), "System Applications"),
             (home.appendingPathComponent("Applications", isDirectory: true), "User Applications"),
+            (home.appendingPathComponent("Downloads", isDirectory: true), "Downloads"),
+            (home.appendingPathComponent("Desktop", isDirectory: true), "Desktop"),
             (home.appendingPathComponent("Library/Application Support/Setapp/Applications", isDirectory: true), "Setapp"),
             (home.appendingPathComponent("Library/Application Support/Steam/steamapps/common", isDirectory: true), "Steam")
         ]
@@ -121,6 +129,52 @@ struct NativeApplicationInventory: ApplicationInventoryReading {
                 roots.append((applications, "External Applications"))
             }
         }
+        // Reuse these roots for uninstall sibling checks and orphan detection,
+        // so discovering a portable copy also protects its shared app data.
+        for app in discoveredApplications() where isStandaloneApplication(app) {
+            let parent = app.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+            guard seen.insert(parent.path).inserted else { continue }
+            roots.append((parent, "Other Applications"))
+        }
         return uniqueRoots(roots)
+    }
+
+    private func isStandaloneApplication(_ url: URL) -> Bool {
+        guard url.isFileURL, url.pathExtension.lowercased() == "app",
+              !url.lastPathComponent.hasPrefix("."),
+              (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true else { return false }
+        let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+        let ancestors = resolved.deletingLastPathComponent().pathComponents
+        // Spotlight and NSWorkspace can also report embedded helpers, trashed
+        // copies and Gatekeeper's temporary AppTranslocation mount.
+        guard !ancestors.contains(where: {
+            $0.hasPrefix(".") || $0 == "AppTranslocation" || $0 == "Contents"
+                || $0 == "Caches" || $0 == "DerivedData"
+                || ["app", "framework", "bundle", "xpc"].contains(URL(fileURLWithPath: $0).pathExtension.lowercased())
+        }), !resolved.path.hasPrefix("/System/"),
+            (try? resolved.resourceValues(forKeys: [.volumeIsReadOnlyKey]).volumeIsReadOnly) != true,
+            let metadata = metadata(at: resolved), !metadata.bundleID.isEmpty,
+            metadata.bundleID != ownBundleID, !metadata.bundleID.hasPrefix("com.apple."),
+            directoryIdentity(resolved) != nil else { return false }
+        return true
+    }
+
+    /// Spotlight finds closed apps outside installation folders; the workspace
+    /// covers running apps on volumes where indexing is disabled. No disk walk.
+    private static func systemApplications() -> [URL] {
+        var urls = NSWorkspace.shared.runningApplications.compactMap(\.bundleURL)
+        guard let query = MDQueryCreate(kCFAllocatorDefault,
+            "kMDItemContentType == 'com.apple.application-bundle'" as CFString, nil, nil) else { return urls }
+        MDQuerySetSearchScope(query, [kMDQueryScopeComputerIndexed!] as CFArray, 0)
+        guard MDQueryExecute(query, CFOptionFlags(kMDQuerySynchronous.rawValue)) else { return urls }
+        defer { MDQueryStop(query) }
+        for index in 0..<MDQueryGetResultCount(query) {
+            guard let result = MDQueryGetResultAtIndex(query, index) else { continue }
+            let item = Unmanaged<MDItem>.fromOpaque(result).takeUnretainedValue()
+            if let path = MDItemCopyAttribute(item, kMDItemPath) as? String {
+                urls.append(URL(fileURLWithPath: path, isDirectory: true))
+            }
+        }
+        return urls
     }
 }

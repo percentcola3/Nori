@@ -2,13 +2,14 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-uninstall-tests.XXXXXX")"
-FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/.uninstall-residue-fixture.XXXXXX")"
+FIXTURE_DIR="$(mktemp -d "$ROOT_DIR/uninstall-residue-fixture.XXXXXX")"
 trap 'rm -rf "$TEST_DIR" "$FIXTURE_DIR"' EXIT
 swiftc -target "$(uname -m)-apple-macos13.0" \
     -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" -framework AppKit -framework IOKit \
     "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentRetentionPolicy.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
+    "$ROOT_DIR/SimpleMole/Services/FileScanService.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentCatalog.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentWorktreeInspector.swift" \
     "$ROOT_DIR/SimpleMole/Services/AgentHostPresence.swift" \

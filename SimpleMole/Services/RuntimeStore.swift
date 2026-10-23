@@ -1,8 +1,8 @@
 import Foundation
 import AppKit
 
-/// 进程与端口数据：默认走 NSWorkspace（应用级、无子进程），
-/// 高级模式走 app_runtime.sh 的 ps 输出并按进程树聚合。
+/// 进程与端口数据：应用视图保留 NSWorkspace 身份，
+/// 高级模式展示 app_runtime.sh 的完整 PID 快照。
 enum RuntimeStore {
     /// 物理内存（用于把 ps 的内存百分比换算成字节）。
     static let physicalMemory: UInt64 = {
@@ -27,6 +27,21 @@ enum RuntimeStore {
         let command: String
         let arguments: String
         var lifecycle: ProcessLifecycle { ProcessLifecycle(processState: state) }
+    }
+
+    /// Native display metadata is valid only for the same bridge start identity and UID.
+    struct ProcessMetadata: Sendable {
+        let startTime: UInt64
+        let name: String
+        let path: String
+        let cpuPercent: Double
+        let residentBytes: UInt64
+        let ppid: Int32
+        let uid: UInt32
+        let state: String
+        let elapsed: TimeInterval
+        let workingDirectory: String?
+        var bundlePath: String? = nil
     }
 
     struct ProcessUsage: Equatable {
@@ -179,15 +194,48 @@ enum RuntimeStore {
         return usage
     }
 
-    /// 高级 PID 模式：解析 ps TSV 并聚合成应用组或单 PID 行。
-    /// sortByMemory 用于快捷面板的“内存占用最高”列表。
-    static func rows(fromProcessText text: String, advanced: Bool, sortByMemory: Bool = false) -> [ProcessRow] {
+    /// 高级 PID 模式展示完整进程表；旧分组模式保留原有过滤规则。
+    /// sortByMemory 用于旧分组模式的“内存占用最高”列表。
+    static func rows(fromProcessText text: String, advanced: Bool, sortByMemory: Bool = false,
+                     metadata: [Int32: ProcessMetadata] = [:]) -> [ProcessRow] {
         let records = parseRecords(text)
         guard !records.isEmpty else { return [] }
+        if advanced {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = .current
+            formatter.dateFormat = "EEE_MMM_d_HH:mm:ss_yyyy"
+            let rows = records.map { record in
+                let native = metadata[record.pid].flatMap { candidate -> ProcessMetadata? in
+                    guard candidate.uid == record.uid,
+                          formatter.string(from: Date(timeIntervalSince1970:
+                            TimeInterval(candidate.startTime / 1_000_000))) == record.startIdentity else { return nil }
+                    return candidate
+                }
+                // libproc may expose identity while task resource reads remain unavailable.
+                let nativeResources = native.flatMap { $0.residentBytes > 0 ? $0 : nil }
+                let bytes = nativeResources?.residentBytes ?? memToBytes(record.mem)
+                let memory = nativeResources.map { sample in
+                    physicalMemory > 0 ? Double(sample.residentBytes) / Double(physicalMemory) * 100 : 0
+                } ?? record.mem
+                let name = native?.name ?? (record.command as NSString).lastPathComponent
+                let ppid = native?.ppid ?? record.ppid
+                return ProcessRow(pid: record.pid, startIdentity: record.startIdentity,
+                                  name: "\(name)  PID \(record.pid)",
+                                  detail: L10n.shared.tf("proc.detail.pid", record.pid) + " · PPID \(ppid)",
+                                  isNativeApp: false, cpu: nativeResources?.cpuPercent ?? record.cpu,
+                                  mem: memory, memBytes: bytes, ppid: ppid, uid: record.uid,
+                                  state: native?.state ?? record.state, elapsed: native?.elapsed ?? record.elapsed,
+                                  bundlePath: native?.bundlePath,
+                                  executablePath: native?.path ?? (record.command.hasPrefix("/") ? record.command : nil),
+                                  workingDirectory: native?.workingDirectory, nativeStartTime: native?.startTime)
+            }
+            return visibleRows(rows, query: "", sort: .cpu)
+        }
+
         var byPID: [Int32: RawProcess] = [:]
         for record in records { byPID[record.pid] = record }
         let ownPID = ProcessInfo.processInfo.processIdentifier
-
         var visible: [RawProcess] = []
         for record in records {
             let root = rootPID(of: record, byPID: byPID)
@@ -199,27 +247,6 @@ enum RuntimeStore {
             if !isSystem && record.pid != ownPID {
                 visible.append(record)
             }
-        }
-
-        if advanced {
-            return visible
-                .sorted {
-                    let leftPriority = lifecyclePriority($0.lifecycle)
-                    let rightPriority = lifecyclePriority($1.lifecycle)
-                    if leftPriority != rightPriority { return leftPriority < rightPriority }
-                    if $0.cpu != $1.cpu { return $0.cpu > $1.cpu }
-                    return $0.pid < $1.pid
-                }
-                .prefix(40)
-                .map { ProcessRow(pid: $0.pid,
-                                  startIdentity: $0.startIdentity,
-                                  name: "\($0.command)  PID \($0.pid)",
-                                  detail: L10n.shared.tf("proc.detail.pid", $0.pid),
-                                  isNativeApp: false,
-                                  cpu: $0.cpu, mem: $0.mem,
-                                  memBytes: memToBytes($0.mem),
-                                  ppid: $0.ppid, uid: $0.uid,
-                                  state: $0.state, elapsed: $0.elapsed) }
         }
 
         struct Group {
@@ -263,6 +290,27 @@ enum RuntimeStore {
                               memBytes: memToBytes($0.mem),
                               ppid: $0.ppid, uid: $0.uid,
                               state: $0.state, elapsed: $0.elapsed) }
+    }
+
+    /// Search affects presentation only; lifecycle priority remains first for every sort.
+    static func visibleRows(_ rows: [ProcessRow], query: String, sort: ProcessSort) -> [ProcessRow] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return rows.filter { needle.isEmpty || $0.matchesProcessQuery(needle) }.sorted { lhs, rhs in
+            let leftPriority = lifecyclePriority(lhs.lifecycle)
+            let rightPriority = lifecyclePriority(rhs.lifecycle)
+            if leftPriority != rightPriority { return leftPriority < rightPriority }
+            switch sort {
+            case .memory:
+                if lhs.memBytes != rhs.memBytes { return lhs.memBytes > rhs.memBytes }
+            case .cpu:
+                if lhs.cpu != rhs.cpu { return lhs.cpu > rhs.cpu }
+            case .name:
+                break
+            }
+            let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+            return lhs.pid < rhs.pid
+        }
     }
 
     static func portRows(fromText text: String) -> [PortRow] {

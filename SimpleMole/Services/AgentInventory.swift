@@ -14,6 +14,7 @@ struct AgentSkill: Identifiable, Equatable, Sendable {
     /// 链接清理仅解除关联；identity 绑定链接自身，绝不删除 linkTarget。
     let linked: Bool
     let linkTarget: String?
+    var isDangling = false
     var measurementComplete = true
     var directUsers: [String] = []
     var registrations: [AgentSkillConfigEditor.Registration] = []
@@ -521,6 +522,7 @@ enum AgentInventory {
                     bytes: measurement?.bytes ?? 0,
                     identity: DeletionPlan.identity(at: path) ?? "",
                     linked: linked, linkTarget: linked ? resolved : nil)
+                skill.isDangling = linked && AgentCatalog.isDanglingSymlink(path)
                 skill.measurementComplete = measurement?.complete ?? true
                 skill.directUsers = linked ? directory.agentNames : liveUsers
                 skills.append(skill)

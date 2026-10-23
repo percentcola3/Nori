@@ -61,6 +61,120 @@ struct ApplicationProcessTests {
                      "Proven helper apps must not appear in duplicate groups")
     }
 
+    static func makeApplicationFixture(at app: URL, executable name: String, backgroundOnly: Bool = false)
+        throws -> (root: String, executable: String) {
+        let executable = app.appendingPathComponent("Contents/MacOS/" + name)
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let info: [String: Any] = ["CFBundleIdentifier": "com.nori.aggregation-fixture." + UUID().uuidString,
+                                   "CFBundlePackageType": "APPL", "CFBundleName": name,
+                                   "CFBundleExecutable": name, "LSBackgroundOnly": backgroundOnly]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: app.appendingPathComponent("Contents/Info.plist"))
+        try Data().write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        return (ApplicationProcessScope.canonical(app.path), ApplicationProcessScope.canonical(executable.path))
+    }
+
+    static func testElectronDevelopmentOwnership(_ fixture: URL) async throws {
+        // Empty executable files supply Bundle metadata without launching any process.
+        let directory = fixture.appendingPathComponent("electron-aggregation-" + UUID().uuidString)
+        let ide = try makeApplicationFixture(at: directory.appendingPathComponent("IDE.app"), executable: "IDE")
+        let development = try makeApplicationFixture(
+            at: directory.appendingPathComponent("project/node_modules/electron/dist/Electron.app"), executable: "Electron")
+        let installed = try makeApplicationFixture(at: directory.appendingPathComponent("Installed Electron.app"), executable: "Electron")
+        let background = try makeApplicationFixture(at: directory.appendingPathComponent("Background Helper.app"),
+                                                     executable: "Worker", backgroundOnly: true)
+        let renderer = try makeApplicationFixture(
+            at: URL(fileURLWithPath: development.root).appendingPathComponent("Contents/Frameworks/Electron Helper.app"),
+            executable: "Electron Helper", backgroundOnly: true)
+        precondition(!ProcessAggregator.isProtectedPath(ide.root),
+                     "Aggregation fixtures must use the supplied repository fixture directory, not /private/tmp")
+        let ideMain = sample(100, ide.executable)
+        let node = sample(101, "/opt/homebrew/bin/node", ppid: ideMain.pid)
+        let backgroundMain = sample(150, background.executable, ppid: ideMain.pid)
+        let developmentMain = sample(200, development.executable, ppid: node.pid, start: 0x1234)
+        let developmentRenderer = sample(201, renderer.executable, ppid: developmentMain.pid, start: 0x1235)
+        let installedMain = sample(300, installed.executable)
+        let samples = [developmentRenderer, installedMain, backgroundMain, node, developmentMain, ideMain]
+        let nativeIdentity = "development-native-launch"
+        func aggregate(_ samples: [ProcessSample], registeredDevelopment: Bool = false, ownPID: Int32 = 999,
+                       previous: [ProcessGroup] = []) -> [ProcessGroup] {
+            var applications: [(pid: Int32, name: String, startIdentity: String)] =
+                [(ideMain.pid, "IDE", "ide-native-launch"), (installedMain.pid, "Electron", "installed-native-launch")]
+            if registeredDevelopment { applications.append((developmentMain.pid, "Electron", nativeIdentity)) }
+            return ProcessAggregator.groups(samples: samples, applications: applications, ownPID: ownPID,
+                previous: previous, detail: { "PID \($0)" }, childDetail: { "PID \($0.pid)" })
+        }
+        let unregistered = aggregate(samples)
+        guard let ideGroup = unregistered.first(where: { $0.bundlePath == ide.root }),
+              let developmentGroup = unregistered.first(where: { $0.bundlePath == development.root }),
+              let installedGroup = unregistered.first(where: { $0.bundlePath == installed.root }) else {
+            fatalError("An unregistered development Electron must remain separate from its IDE and installed Electron")
+        }
+        precondition(unregistered.count == 3 && Set(ideGroup.members.map(\.pid)) == [100, 101, 150],
+                     "The IDE retains its node and LSBackgroundOnly helper, but not the development Electron")
+        precondition(Set(developmentGroup.members.map(\.pid)) == [200, 201] && installedGroup.members.map(\.pid) == [300],
+                     "Same-name Electron applications with different bundle roots must not merge")
+        precondition(ApplicationProcessScope.bundlePath(of: renderer.executable) == development.root,
+                     "The nested Electron renderer belongs to the outer development bundle")
+        precondition(developmentGroup.isBackgroundOnly && developmentGroup.app.name == "Electron" &&
+                     developmentGroup.app.bundlePath == development.root && installedGroup.app.bundlePath == installed.root,
+                     "Unregistered application rows retain their bundle path and Bundle display name")
+        let libprocToken = "\(developmentMain.pid)|\(String(developmentMain.identity.startTime, radix: 16))"
+        precondition(developmentGroup.app.signalToken == libprocToken,
+                     "Adding bundle metadata must not change a libproc signal token")
+        for sort in [ProcessSort.memory, .cpu] {
+            let rows = Array(ProcessAggregator.sorted(unregistered, by: sort).prefix(5).map(\.app))
+            let developmentRow = rows.first { $0.pid == developmentMain.pid }
+            precondition(developmentRow?.bundlePath == development.root && developmentRow?.signalToken == libprocToken,
+                         "CPU and memory row projections must retain bundle paths and process identity")
+        }
+
+        let registered = aggregate(samples, registeredDevelopment: true)
+        guard let native = registered.first(where: { $0.bundlePath == development.root }) else {
+            fatalError("Registering a development Electron must preserve its independent group")
+        }
+        precondition(registered.count == 3 && !native.isBackgroundOnly && native.app.pid == developmentMain.pid &&
+                     Set(native.members.map(\.pid)) == [200, 201] && native.app.bundlePath == development.root &&
+                     native.app.signalToken == "\(developmentMain.pid)|\(nativeIdentity)",
+                     "A native application row must retain its NSRunningApplication signal token")
+        let nativeRows = ProcessAggregator.sorted(registered, by: .memory).prefix(5).map(\.app)
+        precondition(nativeRows.first(where: { $0.pid == developmentMain.pid })?.bundlePath == development.root,
+                     "Native application row projections must retain bundle paths")
+
+        let ownGroups = aggregate(samples, ownPID: developmentMain.pid)
+        precondition(ownGroups.count == 2 && ownGroups.allSatisfy { group in
+            group.bundlePath != development.root && !group.members.contains { [200, 201].contains($0.pid) }
+        }, "The host application and its nested renderer must never enter the IDE group")
+        let orphanRenderer = sample(developmentRenderer.pid, developmentRenderer.path,
+                                    start: developmentRenderer.identity.startTime)
+        for previous in [[], unregistered] {
+            let orphanGroups = aggregate([orphanRenderer], previous: previous)
+            precondition(orphanGroups.count == 1 && orphanGroups[0].isBackgroundOnly &&
+                         orphanGroups[0].bundlePath == development.root &&
+                         orphanGroups[0].app.bundlePath == development.root &&
+                         orphanGroups[0].members.map(\.pid) == [developmentRenderer.pid],
+                         "A surviving renderer retains its outer application root with or without prior history")
+        }
+
+        let capture = Capture()
+        capture.samples = samples
+        let independentRoots = Set(unregistered.compactMap(\.bundlePath)).subtracting([ide.root])
+        let parentScope = ApplicationProcessScope(root: ide.root, independentRoots: independentRoots)
+        let outcome = await ApplicationProcessController.stop(parentScope, remembering: ideGroup.members,
+                                                               environment: environment(capture))
+        precondition(outcome.completed && Set(capture.signals.map { $0.0 }) == [100, 101, 150] &&
+                     Set(capture.samples.map(\.pid)) == [200, 201, 300],
+                     "Mock parent shutdown must retain the independent development and installed Electron applications")
+        let direct = Capture()
+        direct.samples = samples
+        let directOutcome = await ApplicationProcessController.stop(ApplicationProcessScope(root: ide.root),
+            remembering: ideGroup.members, environment: environment(direct))
+        precondition(directOutcome.completed && Set(direct.signals.map { $0.0 }) == [100, 101, 150] &&
+                     Set(direct.samples.map(\.pid)) == [200, 201, 300],
+                     "Direct shutdown must discover independent Electron roots without UI-provided boundaries")
+    }
+
     final class Capture {
         var samples: [ProcessSample] = []
         var signals: [(Int32, Int32)] = []
@@ -251,6 +365,11 @@ struct ApplicationProcessTests {
         await testShutdown()
         testLaunchJobOwnership()
         let fixture = URL(fileURLWithPath: CommandLine.arguments[1])
+        try await testElectronDevelopmentOwnership(fixture)
+        if CommandLine.arguments.contains("--aggregation-only") {
+            print("Application process aggregation: bundle ownership, Electron isolation, row metadata and mock shutdown passed")
+            return
+        }
         try await testNativeReparenting(fixture)
         try await testNativeLaunchJob(fixture)
         print("Application processes: background-only apps, bundle/orphan ownership, remembered descendants, independent apps, reparenting, respawn, escalation, quiet verification, launch jobs and mutation safety passed")

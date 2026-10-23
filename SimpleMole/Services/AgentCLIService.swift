@@ -73,7 +73,7 @@ enum AgentCLIService {
                 if AgentCatalog.isExecutableCommandFile(path) { candidates.insert(path) }
             }
         }
-        for relative in AgentCatalog.nativeLaunchers(for: agent) {
+        for relative in nativeLaunchers(for: agent) {
             let path = AgentCatalog.absolute(relative, home: home)
             guard AgentCatalog.isExecutableCommandFile(path) else { continue }
             // 通用 agent 别名只有实际指向本工具安装目录时才归属。
@@ -84,19 +84,8 @@ enum AgentCLIService {
                     return resolved == root || resolved.hasPrefix(root + "/")
                 }) { candidates.insert(path) }
         }
-        // Grok keeps native release executables separately from its command
-        // entry. A removed entry must not hide an otherwise removable program.
-        if agent.id == "grok" {
-            let root = AgentCatalog.absolute(".grok/downloads", home: home)
-            if safeAncestors(root), !AgentCatalog.isSymlink(root) {
-                for name in AgentCatalog.childNames(of: root) where isGrokReleaseName(name) {
-                    let path = root + "/" + name
-                    if !AgentCatalog.isSymlink(path), AgentCatalog.isExecutableCommandFile(path) {
-                        candidates.insert(path)
-                    }
-                }
-            }
-        }
+        // Grok's release executables arrive through nativeExecutables below; its
+        // downloads layout is declared in nativeLayouts with the same pattern.
         if agent.id == "hermes" {
             // The public pipx/uv aliases can be removed independently of the
             // package environment. Inspect only known package roots and require
@@ -111,54 +100,73 @@ enum AgentCLIService {
                 }
             }
         }
+        // Discover program bodies independently of their PATH entries. The
+        // same bounded layout rules are used again at the uninstall edge.
+        candidates.formUnion(nativeExecutables(for: agent, home: home))
 
-        var byID: [String: AgentCLIInstallation] = [:]
+        let ownedRoots = nativeRoots[agent.id, default: []].map { AgentCatalog.absolute($0, home: home) }
+        let ownedEntries = candidates.filter { path in
+            guard safeAncestors(path) else { return false }
+            let resolved = resolvedPath(path)
+            return ownedRoots.contains { resolved.hasPrefix($0 + "/") }
+        }.sorted()
+        let ownedPrograms = Array(Set(ownedEntries.map(resolvedPath))).sorted()
+
+        let nativePaths = nativeManagedPaths(for: agent, home: home, programs: ownedPrograms, entries: ownedEntries)
+        var precomputed: [AgentCLIInstallation] = []
         if agent.id == "hermes", let native = hermesNativeInstallation(agent: agent, home: home,
                                                                         searchPath: context.searchPath) {
-            byID[native.id] = native
+            precomputed = [native]
         }
+        var groups: [String: (record: AgentCLIInstallation, launchers: Set<String>, paths: Set<String>)] = [:]
         for path in candidates.sorted() {
             // A verified Hermes installer wrapper is a command entry, not the
             // program itself. Never execute it to discover its destination.
-            if agent.id == "hermes", byID.values.contains(where: { $0.executablePaths.contains(path) }) { continue }
+            if agent.id == "hermes", precomputed.contains(where: { $0.executablePaths.contains(path) }) { continue }
             let resolved = agent.id == "hermes" ? hermesWrapperTarget(path) ?? resolvedPath(path) : resolvedPath(path)
             guard !resolved.contains(".app/Contents/"), safeAncestors(path) else { continue }
             let record = managedInstallation(agent: agent, launcher: path, resolved: resolved,
                                              searchPath: context.searchPath, home: home)
-                ?? nativeInstallation(agent: agent, launcher: path, resolved: resolved, home: home)
+                ?? nativeInstallation(agent: agent, launcher: path, resolved: resolved, home: home,
+                                      managedPaths: nativePaths)
             guard let record else { continue }
-            if let previous = byID[record.id] {
-                let launchers = Array(Set(previous.executablePaths + record.executablePaths)).sorted()
-                let paths = Array(Set(previous.managedPaths + record.managedPaths)).sorted()
-                byID[record.id] = make(agent: agent, launchers: launchers, paths: paths,
-                    manager: record.manager, managerExecutable: record.managerExecutable,
-                    package: record.packageName, idRoot: record.id, explicitID: true)
+            if var group = groups[record.id] {
+                group.record = record
+                group.launchers.formUnion(record.executablePaths)
+                group.paths.formUnion(record.managedPaths)
+                groups[record.id] = group
             } else {
-                byID[record.id] = record
+                groups[record.id] = (record, Set(record.executablePaths), Set(record.managedPaths))
             }
         }
-        if agent.id == "grok" {
-            let downloadRoot = AgentCatalog.absolute(".grok/downloads", home: home)
-            let binRoot = AgentCatalog.absolute(".grok/bin", home: home)
-            let aliases = (AgentCatalog.nativeLaunchers(for: agent) + [".local/bin/agent"]).compactMap { relative -> String? in
-                let path = AgentCatalog.absolute(relative, home: home)
-                guard safeAncestors(path), AgentCatalog.isSymlink(path),
-                      let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: path) else { return nil }
-                let target = URL(fileURLWithPath: (destination as NSString).isAbsolutePath
-                    ? destination : (path as NSString).deletingLastPathComponent + "/" + destination).standardizedFileURL.path
-                guard safeAncestors(target), target == binRoot + "/agent" || target == binRoot + "/grok"
-                    || (target as NSString).deletingLastPathComponent == downloadRoot
-                        && isGrokReleaseName((target as NSString).lastPathComponent) else { return nil }
-                return path
-            }
-            // Include owned dangling links only after a native program has
-            // been found. A broken link alone is not an installed program.
-            for record in Array(byID.values) where record.manager == .native
-                && record.managedPaths.contains(where: { $0 == downloadRoot || $0 == binRoot }) {
-                byID[record.id] = make(agent: agent,
-                    launchers: Array(Set(record.executablePaths + aliases)).sorted(), paths: record.managedPaths,
-                    manager: .native, managerExecutable: nil, package: nil, idRoot: record.id, explicitID: true)
-            }
+        // Capture each merged installation once rather than re-reading every
+        // earlier version for each newly found executable.
+        var byID = groups.mapValues { group in
+            make(agent: agent, launchers: group.launchers.sorted(), paths: group.paths.sorted(),
+                 manager: group.record.manager, managerExecutable: group.record.managerExecutable,
+                 package: group.record.packageName, idRoot: group.record.id, explicitID: true)
+        }
+        for record in precomputed { byID[record.id] = record }
+        let aliases = nativeLaunchers(for: agent).compactMap { relative -> String? in
+            let path = AgentCatalog.absolute(relative, home: home)
+            guard safeAncestors(path), AgentCatalog.isSymlink(path),
+                  let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: path) else { return nil }
+            let target = URL(fileURLWithPath: (destination as NSString).isAbsolutePath
+                ? destination : (path as NSString).deletingLastPathComponent + "/" + destination).standardizedFileURL.path
+            let resolved = resolvedPath(target)
+            guard safeAncestors(target), safeAncestors(resolved),
+                  ownedRoots.contains(where: { resolved.hasPrefix($0 + "/") }) else { return nil }
+            return path
+        }
+        // A dangling alias belongs to an existing program body only when its
+        // destination remains inside that installation's declared roots.
+        for record in Array(byID.values) where record.manager == .native
+            && record.managedPaths.contains(where: { path in
+                ownedRoots.contains { path == $0 || path.hasPrefix($0 + "/") }
+            }) {
+            byID[record.id] = make(agent: agent,
+                launchers: Array(Set(record.executablePaths + aliases)).sorted(), paths: record.managedPaths,
+                manager: .native, managerExecutable: nil, package: nil, idRoot: record.id, explicitID: true)
         }
         return byID.values.sorted { $0.id < $1.id }
     }
@@ -326,12 +334,85 @@ enum AgentCLIService {
         "factory": ["droid"], "amp": ["amp"], "crush": ["crush"],
         "hermes": ["hermes", "hermes-agent", "hermes-acp"]
     ]
-    private static let nativeRoots: [String: [String]] = [
-        "claude-code": [".local/share/claude/versions"],
-        "cursor-cli": [".local/share/cursor-agent"], "copilot": [".copilot/pkg"],
-        "grok": [".grok/downloads", ".grok/bin"], "opencode": [".opencode/bin"],
-        "kimi": [".kimi-code/bin"], "amp": [".amp/bin"]
+    private struct NativeLayout {
+        struct Root {
+            enum Probe {
+                case files([String])
+                case versionFiles(String)
+                case versionFolders(String, files: [String])
+            }
+            let path: String
+            let probe: Probe
+            var removesDirectory = true
+        }
+        let identityRoot: String
+        let roots: [Root]
+        var aliases: [String] = []
+    }
+
+    /// Only installer-owned program roots belong here, never config/session
+    /// roots. Product-specific filenames are data; discovery/removal is shared.
+    private static let nativeLayouts: [String: NativeLayout] = [
+        "claude-code": .init(identityRoot: ".local/share/claude/versions", roots: [
+            .init(path: ".local/share/claude/versions", probe: .versionFiles("^[0-9]+\\.[0-9]+\\.[0-9]+([.+_-][0-9A-Za-z.+_-]+)?$")),
+            .init(path: ".claude/local", probe: .files(["claude", "node_modules/@anthropic-ai/claude-code/cli.js"]))
+        ]),
+        "cursor-cli": .init(identityRoot: ".local/share/cursor-agent", roots: [
+            .init(path: ".local/share/cursor-agent", probe: .versionFolders("versions", files: ["cursor-agent", "bin/cursor-agent"]))
+        ]),
+        "copilot": .init(identityRoot: ".copilot/pkg", roots: [
+            .init(path: ".copilot/pkg", probe: .versionFolders("universal", files: ["copilot", "bin/copilot"]))
+        ]),
+        "grok": .init(identityRoot: ".grok", roots: [
+            .init(path: ".grok/downloads", probe: .versionFiles("^grok-[0-9][0-9A-Za-z.+_-]*-macos-(aarch64|arm64|x86_64|amd64)$")),
+            .init(path: ".grok/bin", probe: .files(["grok", "agent"]), removesDirectory: false)
+        ], aliases: [".local/bin/agent"]),
+        "opencode": .init(identityRoot: ".opencode/bin", roots: [
+            .init(path: ".opencode/bin", probe: .files(["opencode"]), removesDirectory: false)
+        ]),
+        "kimi": .init(identityRoot: ".kimi-code/bin", roots: [
+            .init(path: ".kimi-code/bin", probe: .files(["kimi", "kimi-cli"]), removesDirectory: false)
+        ]),
+        "amp": .init(identityRoot: ".amp/bin", roots: [
+            .init(path: ".amp/bin", probe: .files(["amp"]), removesDirectory: false)
+        ])
     ]
+
+    private static let nativeRoots = nativeLayouts.mapValues { $0.roots.map(\.path) }
+
+    private static func nativeLaunchers(for agent: AgentDefinition) -> [String] {
+        AgentCatalog.nativeLaunchers(for: agent) + (nativeLayouts[agent.id]?.aliases ?? [])
+    }
+
+    private static func nativeExecutables(for agent: AgentDefinition, home: String) -> [String] {
+        guard let layout = nativeLayouts[agent.id] else { return [] }
+        func physicalDirectory(_ path: String) -> Bool {
+            safeAncestors(path) && !AgentCatalog.isSymlink(path) && AgentCatalog.isDirectory(path)
+        }
+        return layout.roots.flatMap { root -> [String] in
+            let path = AgentCatalog.absolute(root.path, home: home)
+            guard physicalDirectory(path) else { return [] }
+            let candidates: [String]
+            switch root.probe {
+            case .files(let names):
+                candidates = names.map { path + "/" + $0 }
+            case .versionFiles(let pattern):
+                candidates = AgentCatalog.childNames(of: path).filter {
+                    $0.range(of: pattern, options: .regularExpression) != nil
+                }.map { path + "/" + $0 }
+            case .versionFolders(let relative, let names):
+                let versions = path + "/" + relative
+                guard physicalDirectory(versions) else { return [] }
+                candidates = AgentCatalog.childNames(of: versions).filter { !$0.hasPrefix(".") }.flatMap { version -> [String] in
+                    let directory = versions + "/" + version
+                    guard physicalDirectory(directory) else { return [] }
+                    return names.map { directory + "/" + $0 }
+                }
+            }
+            return candidates.filter { safeAncestors($0) && !AgentCatalog.isSymlink($0) && AgentCatalog.isExecutableCommandFile($0) }
+        }.sorted()
+    }
+
     private static let packages: [String: [String]] = [
         "claude-code": ["@anthropic-ai/claude-code"], "codex": ["@openai/codex"],
         "copilot": ["@github/copilot", "@githubnext/github-copilot-cli"],
@@ -552,7 +633,7 @@ enum AgentCLIService {
     }
 
     private static func nativeInstallation(agent: AgentDefinition, launcher: String, resolved: String,
-                                           home: String) -> AgentCLIInstallation? {
+                                           home: String, managedPaths: [String]) -> AgentCLIInstallation? {
         let roots = nativeRoots[agent.id, default: []].map { AgentCatalog.absolute($0, home: home) }
             .filter { resolved == $0 || resolved.hasPrefix($0 + "/") }
         let parent = (launcher as NSString).deletingLastPathComponent
@@ -563,20 +644,29 @@ enum AgentCLIService {
                            home + "/.local/share/pnpm", "/usr/local/bin", "/opt/homebrew/bin"]
         // 无可识别包结构的 PATH 命令允许解除入口；其指向的未知实体不被递归删除。
         guard !roots.isEmpty || allowedBins.contains(parent) else { return nil }
-        if agent.id == "grok", !roots.isEmpty {
-            let paths = nativeRoots[agent.id, default: []].map { AgentCatalog.absolute($0, home: home) }
-                .filter { safeAncestors($0) && !AgentCatalog.isSymlink($0) && AgentCatalog.isDirectory($0) }
-            return make(agent: agent, launchers: [launcher], paths: paths, manager: .native,
-                        managerExecutable: nil, package: nil, idRoot: AgentCatalog.absolute(".grok", home: home))
+        if let layout = nativeLayouts[agent.id], !roots.isEmpty {
+            return make(agent: agent, launchers: [launcher], paths: managedPaths, manager: .native,
+                        managerExecutable: nil, package: nil, idRoot: AgentCatalog.absolute(layout.identityRoot, home: home))
         }
         let paths = roots.isEmpty ? [launcher] : roots
         return make(agent: agent, launchers: [launcher], paths: paths, manager: .native,
                     managerExecutable: nil, package: nil, idRoot: roots.first ?? launcher)
     }
 
-    private static func isGrokReleaseName(_ name: String) -> Bool {
-        name.range(of: "^grok-[0-9][0-9A-Za-z.+_-]*-macos-(aarch64|arm64|x86_64|amd64)$",
-                   options: .regularExpression) != nil
+    private static func nativeManagedPaths(for agent: AgentDefinition, home: String,
+                                           programs: [String], entries: [String]) -> [String] {
+        guard let layout = nativeLayouts[agent.id] else { return [] }
+        let owned = Array(Set(programs + entries)).sorted()
+        return layout.roots.flatMap { root -> [String] in
+            let path = AgentCatalog.absolute(root.path, home: home)
+            guard safeAncestors(path), !AgentCatalog.isSymlink(path), AgentCatalog.isDirectory(path) else { return [] }
+            // Distribution trees are exclusive installer roots. A bin
+            // directory can also contain another tool's proxy links.
+            if root.removesDirectory {
+                return owned.contains(where: { $0.hasPrefix(path + "/") }) ? [path] : []
+            }
+            return owned.filter { $0.hasPrefix(path + "/") }
+        }.sorted()
     }
 
     private static func make(agent: AgentDefinition, launchers: [String], paths: [String],

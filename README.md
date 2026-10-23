@@ -157,6 +157,14 @@ Requires **macOS 13 Ventura or later**. Native Liquid Glass requires macOS 26 or
 
 Starting with version 1.0.1, Nori checks for updates through Sparkle. Public releases reuse the same pinned signing certificate and `com.nori.app` bundle identifier; this is a fixed self-signed identity, **not Apple notarization**. See the [release signing guide](docs/release-signing.md) for identity verification.
 
+If macOS blocks the official release with an unidentified-developer warning, choose **System Settings → Privacy & Security → Open Anyway**, or remove the download quarantine flag after installing Nori in `/Applications`:
+
+```bash
+sudo xattr -dr com.apple.quarantine "/Applications/Nori.app"
+```
+
+This command applies only to the installed Nori copy and does not grant Full Disk Access or Screen Recording. A fresh browser download may add the quarantine flag again. Prefer the built-in Sparkle updater for later versions; it normally removes the new App's quarantine flag during installation.
+
 ## Languages
 
 English, 简体中文, 繁體中文, 日本語, 한국어, Deutsch, Français, Español, Português, Italiano, Русский, and Türkçe. Nori follows your system language by default; switch instantly in Settings.

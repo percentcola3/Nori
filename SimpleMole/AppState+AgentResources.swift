@@ -41,10 +41,13 @@ extension AppState {
         let serverNames = changes.servers.map { $0.agentName + " · " + $0.name + "\n" + $0.configPath }
         let installationNames = changes.installations.map { $0.name + "\n" + $0.path }
         let registrationNames = changes.registrations.map { "Codex · " + $0.skillPath }
-        confirmation = Confirmation(title: l10n.t(changes.deletesBodies ? "agents.manage.deleteTitle" : "agents.manage.unlinkTitle"),
-            message: l10n.t(changes.deletesBodies ? "agents.manage.deleteImpact" : "agents.manage.unlinkImpact")
+        confirmation = Confirmation(title: l10n.t(changes.cleansOnlyDanglingLinks ? "agents.manage.cleanDanglingTitle"
+                : changes.deletesBodies ? "agents.manage.deleteTitle" : "agents.manage.unlinkTitle"),
+            message: l10n.t(changes.cleansOnlyDanglingLinks ? "agents.manage.cleanDanglingImpact"
+                : changes.deletesBodies ? "agents.manage.deleteImpact" : "agents.manage.unlinkImpact")
                 + "\n\n" + (names + serverNames + installationNames + registrationNames).joined(separator: "\n\n"),
-            confirmLabel: l10n.t(changes.deletesBodies ? "agents.manage.delete" : "agents.manage.unlink")) { [weak self] in
+            confirmLabel: l10n.t(changes.cleansOnlyDanglingLinks ? "agents.manage.cleanDangling"
+                : changes.deletesBodies ? "agents.manage.delete" : "agents.manage.unlink")) { [weak self] in
                 self?.performAgentResourceChanges(changes)
             }
     }
@@ -87,7 +90,7 @@ extension AppState {
             agentStorageFootprints = footprints
             agentCLIBodySizes = bodies
             agentCategories = agentCategories.map { $0.selectingPaths(selectedPaths) }
-            agentSelectedSkills.formIntersection(Set(report.skills.map(\.path)))
+            agentSelectedSkills = changes.retainedSkillSelection(agentSelectedSkills, afterRefreshing: report.skills)
             agentSelectedServers.formIntersection(Set(report.servers.map(\.id)))
             agentSelectedMCPInstallations.formIntersection(Set(report.installations.map(\.id)))
             agentSelectedSkillRegistrations.formIntersection(Set(report.skills.flatMap(\.registrations).map(\.id)))

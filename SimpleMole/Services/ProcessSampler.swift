@@ -250,6 +250,19 @@ struct ApplicationProcessScope: Equatable, Sendable {
         return nil
     }
 
+    /// A bundle's observed main executable establishes an app boundary even
+    /// before Launch Services registers it. Background helpers keep their owner.
+    static func standaloneApplicationRoots(executablePaths: Set<String>, candidates: Set<String>? = nil) -> Set<String> {
+        let roots = candidates ?? Set(executablePaths.compactMap { bundlePath(of: $0) })
+        return Set(roots.filter { root in
+            guard let bundle = Bundle(path: root),
+                  bundle.object(forInfoDictionaryKey: "LSBackgroundOnly") as? Bool != true,
+                  let executable = bundle.executablePath else { return false }
+            let path = canonical(executable)
+            return path.hasPrefix(root + "/Contents/MacOS/") && executablePaths.contains(path)
+        })
+    }
+
     func contains(_ path: String) -> Bool {
         guard path.hasPrefix("/"), !path.split(separator: "/").contains(where: { $0 == "." || $0 == ".." }) else { return false }
         return Self.canonical(path).hasPrefix(root + "/")
@@ -281,6 +294,26 @@ struct ApplicationProcessScope: Equatable, Sendable {
         return samples.filter { owned.contains($0.pid) }
     }
 
+    static func ownProcessTreePIDs(ownPID: Int32, samples: [ProcessSample]) -> Set<Int32> {
+        let byPID = Dictionary(samples.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
+        let children = Dictionary(grouping: samples, by: \.ppid)
+        var protected: Set<Int32> = [ownPID]
+        var parent = byPID[ownPID]?.ppid ?? 0
+        while parent > 1, protected.insert(parent).inserted { parent = byPID[parent]?.ppid ?? 0 }
+        var seen: Set<Int32> = [ownPID]
+        var pending = [ownPID]
+        var index = 0
+        while index < pending.count {
+            let pid = pending[index]
+            index += 1
+            for child in children[pid] ?? [] where seen.insert(child.pid).inserted {
+                pending.append(child.pid)
+                protected.insert(child.pid)
+            }
+        }
+        return protected
+    }
+
     static func belongsToOwnTree(_ pid: Int32, ownPID: Int32, samples: [ProcessSample]) -> Bool {
         let byPID = Dictionary(samples.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
         func isAncestor(_ ancestor: Int32, of child: Int32) -> Bool {
@@ -294,11 +327,6 @@ struct ApplicationProcessScope: Equatable, Sendable {
         }
         return isAncestor(pid, of: ownPID) || isAncestor(ownPID, of: pid)
     }
-}
-
-enum ProcessSort: String, CaseIterable {
-    case memory, cpu, name
-    var l10nKey: String { "proc.sort.\(rawValue)" }
 }
 
 enum ProcessAggregator {
@@ -342,20 +370,26 @@ enum ProcessAggregator {
         let live = applications.filter { $0.pid != ownPID && byPID[$0.pid] != nil }
         let roots = Set(samples.compactMap { ApplicationProcessScope.bundlePath(of: $0.path) } + previous.compactMap(\.bundlePath))
         let liveRoots = Set(live.compactMap { byPID[$0.pid].flatMap { ApplicationProcessScope.bundlePath(of: $0.path) } })
+        var independentRoots = liveRoots.union(ApplicationProcessScope.standaloneApplicationRoots(
+            executablePaths: Set(canonicalPaths.values), candidates: roots))
+        if let ownRoot { independentRoots.insert(ownRoot) }
         var assigned = Set<Int32>()
         var result: [ProcessGroup] = []
         func row(_ sample: ProcessSample, name: String? = nil, identity: String? = nil,
-                 totalCPU: Double? = nil, totalBytes: UInt64? = nil, native: Bool = false) -> ProcessRow {
+                 totalCPU: Double? = nil, totalBytes: UInt64? = nil, native: Bool = false,
+                 bundlePath: String? = nil) -> ProcessRow {
             let bytes = totalBytes ?? sample.residentBytes
             return ProcessRow(pid: sample.pid, startIdentity: identity ?? String(sample.identity.startTime, radix: 16),
                               name: name ?? sample.name, detail: native ? detail(sample.pid) : childDetail(sample),
                               isNativeApp: native, cpu: totalCPU ?? sample.cpuPercent,
                               mem: percentOfPhysicalMemory(bytes), memBytes: bytes,
                               ppid: sample.ppid, uid: sample.uid,
-                              state: sample.isZombie ? "Z" : (sample.isExiting ? "E" : "S"), elapsed: sample.elapsed)
+                              state: sample.isZombie ? "Z" : (sample.isExiting ? "E" : "S"), elapsed: sample.elapsed,
+                              bundlePath: bundlePath, executablePath: sample.path,
+                              nativeStartTime: sample.identity.startTime)
         }
         let candidates = roots.filter { $0 != ownRoot }.map { root in
-            let scope = ApplicationProcessScope(root: root, independentRoots: liveRoots.subtracting([root]))
+            let scope = ApplicationProcessScope(root: root, independentRoots: independentRoots.subtracting([root]))
             let remembered = previous.filter { $0.bundlePath == root }.flatMap(\.members)
             return (root: root, members: scope.processes(in: samples, remembering: remembered, canonicalPaths: canonicalPaths))
         }.sorted { lhs, rhs in
@@ -383,7 +417,7 @@ enum ProcessAggregator {
             let totalBytes = members.reduce(UInt64(0)) { $0 + $1.residentBytes }
             let children = members.filter { application == nil || $0.pid != main.pid }.sorted { $0.residentBytes > $1.residentBytes }.map { row($0) }
             result.append(ProcessGroup(app: row(main, name: name, identity: application?.startIdentity,
-                                                totalCPU: totalCPU, totalBytes: totalBytes, native: true),
+                                                totalCPU: totalCPU, totalBytes: totalBytes, native: true, bundlePath: root),
                                        children: children, bundlePath: root, members: members,
                                        isBackgroundOnly: application == nil))
             assigned.formUnion(members.map(\.pid))
@@ -423,11 +457,7 @@ enum ProcessAggregator {
         let needle = query.trimmingCharacters(in: .whitespaces)
         guard !needle.isEmpty else { return groups }
         return groups.filter { group in
-            if group.app.name.localizedCaseInsensitiveContains(needle) { return true }
-            if String(group.app.pid) == needle { return true }
-            return group.children.contains {
-                $0.name.localizedCaseInsensitiveContains(needle) || String($0.pid) == needle
-            }
+            group.app.matchesProcessQuery(needle) || group.children.contains { $0.matchesProcessQuery(needle) }
         }
     }
 
@@ -512,25 +542,42 @@ enum ProcessTerminator {
     /// 结束前的安全核对：身份未变、同一用户、非系统路径、不在自己的进程树里。
     static func validate(_ identity: ProcessIdentity, sampler: ProcessSampler = .shared,
                          ownPID: Int32 = ProcessInfo.processInfo.processIdentifier,
-                         ownUID: UInt32 = getuid()) -> Result<ProcessSample, Refusal> {
+                         ownUID: UInt32 = getuid(), expectedPath: String? = nil) -> Result<ProcessSample, Refusal> {
         guard let current = sampler.current(for: identity) else { return .failure(.identityChanged) }
-        if current.pid == ownPID || current.ppid == ownPID { return .failure(.ownProcessTree) }
+        return validate(identity, current: current, snapshot: sampler.snapshot(), ownPID: ownPID,
+                        ownUID: ownUID, expectedPath: expectedPath)
+    }
+
+    static func validate(_ identity: ProcessIdentity, current: ProcessSample?, snapshot: ProcessSampler.Snapshot,
+                         ownPID: Int32, ownUID: UInt32, expectedPath: String? = nil) -> Result<ProcessSample, Refusal> {
+        guard snapshot.isComplete, let current,
+              current.identity.isSameProcess(as: identity),
+              snapshot.processes.contains(where: { $0.pid == ownPID }),
+              snapshot.processes.contains(where: {
+                  $0.identity.isSameProcess(as: identity) && $0.path == current.path
+              }), expectedPath == nil || current.path == expectedPath else { return .failure(.identityChanged) }
+        guard !ApplicationProcessScope.ownProcessTreePIDs(ownPID: ownPID, samples: snapshot.processes)
+            .contains(current.pid) else { return .failure(.ownProcessTree) }
         guard current.uid == ownUID else { return .failure(.otherUser) }
-        guard !ProcessAggregator.isProtectedPath(current.path) else { return .failure(.protectedPath) }
+        guard current.path.hasPrefix("/"), !ProcessAggregator.isProtectedPath(current.path) else {
+            return .failure(.protectedPath)
+        }
         return .success(current)
     }
 
     /// SIGTERM → 等待 → 仍在则 SIGKILL。返回进程是否已经消失。
     static func terminateThenKill(_ identity: ProcessIdentity, grace: TimeInterval,
-                                  sampler: ProcessSampler = .shared) async -> Bool {
-        guard case .success = validate(identity, sampler: sampler) else { return false }
+                                  sampler: ProcessSampler = .shared, expectedPath: String? = nil) async -> Bool {
+        guard case .success = validate(identity, sampler: sampler, expectedPath: expectedPath) else { return false }
         kill(identity.pid, SIGTERM)
         let deadline = Date().addingTimeInterval(grace)
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 100_000_000)
             if sampler.current(for: identity) == nil { return true }
         }
-        guard case .success = validate(identity, sampler: sampler) else { return true }
+        guard case .success = validate(identity, sampler: sampler, expectedPath: expectedPath) else {
+            return sampler.current(for: identity) == nil
+        }
         kill(identity.pid, SIGKILL)
         try? await Task.sleep(nanoseconds: 300_000_000)
         return sampler.current(for: identity) == nil

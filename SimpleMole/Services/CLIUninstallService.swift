@@ -21,6 +21,15 @@ enum CLIUninstallService {
             return Outcome(succeeded: false, messages: ["Other packages depend on \(tool.name): "
                 + tool.dependents.joined(separator: ", ")])
         }
+        guard tool.installationIdentities.allSatisfy({ DeletionPlan.identity(at: $0.key) == $0.value }) else {
+            return Outcome(succeeded: false, messages: ["The installation changed; scan again before uninstalling."])
+        }
+        if tool.manager == .cargo {
+            guard let packages = CargoInstallReceipt.packages(at: tool.confirmationPath),
+                  packages.contains(where: { $0.name == tool.name }) else {
+                return Outcome(succeeded: false, messages: ["The installation receipt changed; scan again before uninstalling."])
+            }
+        }
         let searchPath = AgentCatalog.executableSearchPath(home: home)
         if tool.manager == .go {
             guard DeletionPlan.isLexicallySafePath(tool.path), tool.path.hasPrefix(home + "/"),
@@ -46,9 +55,19 @@ enum CLIUninstallService {
         let before = CleanupScanWorker.measure(tool.path, control: CleanupScanControl(mode: .deep)).bytes
         let result = CLICommandRunner.run(command.executable, command.arguments, searchPath: searchPath, home: home, timeout: 120,
                          environment: command.environment)
-        let gone = !FileManager.default.fileExists(atPath: tool.path)
+        let gone: Bool
+        if tool.manager == .cargo {
+            let receipt = tool.confirmationPath
+            let packages = CargoInstallReceipt.packages(at: receipt)
+            let receiptRemoved = !AgentCatalog.exists(receipt)
+            let entryRemoved = packages.map { !$0.contains(where: { $0.name == tool.name }) } ?? receiptRemoved
+            gone = entryRemoved && (tool.executablePaths.isEmpty ? [tool.path] : tool.executablePaths)
+                .allSatisfy { !AgentCatalog.exists($0) }
+        } else {
+            gone = !FileManager.default.fileExists(atPath: tool.path)
+        }
         var messages = result.output.isEmpty ? [] : [result.output]
-        if !gone { messages.append("The installation path still exists: " + tool.path) }
+        if !gone { messages.append("The installation path or receipt still exists: " + tool.path) }
         return Outcome(succeeded: result.succeeded && gone, messages: messages, reclaimedBytes: gone ? before : 0)
     }
 }

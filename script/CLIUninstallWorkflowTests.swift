@@ -51,7 +51,7 @@ struct CLIUninstallWorkflowTests {
         let active = SoftwareUpdateProcesses.Probe(processes: [process], isComplete: true)
         func trace(_ probes: [SoftwareUpdateProcesses.Probe]) -> CLIWorkflowTrace {
             let result = CLIWorkflowTrace()
-            result.identities[tool.path] = original
+            result.identities[tool.confirmationPath] = original
             result.probes = probes
             return result
         }
@@ -146,7 +146,7 @@ struct CLIUninstallWorkflowTests {
             let desktop = sample(path: "/Applications/Build.app/Contents/MacOS/build", name: installation.name)
             let cli = sample(path: installation.path + "/bin/build", name: installation.name)
             let fixture = CLIWorkflowTrace()
-            fixture.identities[installation.path] = original
+            fixture.identities[installation.confirmationPath] = original
             fixture.probes = [
                 SoftwareUpdateProcesses.probe(scope, samples: [desktop], arguments: { _ in [] }),
                 SoftwareUpdateProcesses.probe(scope, samples: [desktop], arguments: { _ in [] })
@@ -185,6 +185,25 @@ struct CLIUninstallWorkflowTests {
 
     @MainActor
     private static func testAgentIdentity(fixture: URL, idle: SoftwareUpdateProcesses.Probe) async throws {
+        let cargoHome = fixture.appendingPathComponent("cargo-without-binary")
+        let receipt = cargoHome.appendingPathComponent(".crates.toml")
+        try FileManager.default.createDirectory(at: cargoHome, withIntermediateDirectories: true)
+        try Data("[v1]\n\"fixture-cli 1.0.0 (registry+https://index.crates.io/)\" = [\"fixture-cli\"]\n".utf8).write(to: receipt)
+        let cargo = makeTool(.cargo, path: cargoHome.appendingPathComponent("bin/fixture-cli").path)
+        let receiptIdentity = DeletionPlan.identity(at: receipt.path)!
+        let cargoTrace = CLIWorkflowTrace()
+        cargoTrace.identities[receipt.path] = receiptIdentity
+        cargoTrace.probes = [idle, idle]
+        expectFinished(await CLIUninstallWorkflow.execute(cargo, identity: receiptIdentity, mayClose: false,
+            environment: cargoTrace.environment), succeeded: true)
+        var capturedCargo = cargo
+        capturedCargo.installationIdentities = [receipt.path: receiptIdentity, cargo.path: "captured-program"]
+        let replacedProgram = CLIWorkflowTrace()
+        replacedProgram.identities = [receipt.path: receiptIdentity, cargo.path: "replacement-program"]
+        expectFailed(await CLIUninstallWorkflow.execute(capturedCargo, identity: receiptIdentity, mayClose: false,
+            environment: replacedProgram.environment), "cli.uninstall.changed")
+        precondition(replacedProgram.events.isEmpty, "A surviving program's identity remains protected alongside its receipt")
+
         // Read-only discovery of an owned native fixture supplies real captured
         // identities. The workflow's injected remover never deletes its files.
         let home = fixture.appendingPathComponent("home")

@@ -1727,19 +1727,22 @@ struct AgentCatalogTests {
                && fm.fileExists(atPath: home + "/.local/share/opencode/openCode.db")
                && AgentCatalog.isOrphaned(opencode, home: home, presence: sandboxPresence),
                "native CLI uninstall did not leave data for the cleanup tab: \(removedCLI.messages)")
-        // 安装器版本根和关联入口一起卸载；不会把数据根当成程序安装目录。
+        // 共享 bin 目录只移除归属的程序文件与入口链接，目录本身可能属于
+        // 其他工具，必须保留；数据根不是程序安装目录。
         try executable(".opencode/bin/opencode")
         try link(".local/bin/opencode", to: home + "/.opencode/bin/opencode")
         let rootedCLI = AgentCLIService.installations(for: opencode, home: home, presence: sandboxPresence)
-            .first { $0.managedPaths.contains(home + "/.opencode/bin") }!
-        expect(rootedCLI.identities[home + "/.opencode/bin"] != nil
+            .first { $0.managedPaths.contains(home + "/.opencode/bin/opencode") }!
+        expect(!rootedCLI.managedPaths.contains(home + "/.opencode/bin")
+               && rootedCLI.identities[home + "/.opencode/bin/opencode"] != nil
                && rootedCLI.identities[home + "/.local/bin/opencode"] != nil,
-               "native CLI root/launcher identity is missing")
+               "native CLI bound the shared bin directory instead of its owned program file")
         let rootedRemoval = AgentCLIService.uninstall(rootedCLI, home: home, running: idle, permanent: true)
-        expect(rootedRemoval.succeeded && !AgentCatalog.exists(home + "/.opencode/bin")
+        expect(rootedRemoval.succeeded && !AgentCatalog.exists(home + "/.opencode/bin/opencode")
                && !AgentCatalog.exists(home + "/.local/bin/opencode")
+               && AgentCatalog.isDirectory(home + "/.opencode/bin")
                && fm.fileExists(atPath: home + "/.local/share/opencode/auth.json"),
-               "native CLI root uninstall left its link or deleted user data: \(rootedRemoval.messages)")
+               "native CLI uninstall removed the shared bin directory or user data: \(rootedRemoval.messages)")
         let externalCLI = outside + "/standalone-opencode"
         try Data("#!/bin/sh\nexit 0\n".utf8).write(to: URL(fileURLWithPath: externalCLI))
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: externalCLI)
