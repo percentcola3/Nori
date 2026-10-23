@@ -53,6 +53,31 @@ struct SettingsRow<Content: View>: View {
     }
 }
 
+/// 当前选择值使用不透明的 accent / onAccent 配色，避免继承文字层级色作为底色。
+private struct SettingsValueLabel: View {
+    let value: String
+    var symbol = "chevron.down"
+    var expanded = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(value)
+                .lineLimit(1)
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .semibold))
+                .rotationEffect(.degrees(expanded ? 180 : 0))
+                .accessibilityHidden(true)
+        }
+        .font(.system(size: 12, weight: .medium))
+        .foregroundStyle(isEnabled ? Color.onAccent : Color.textSecondary)
+        .padding(.horizontal, 10)
+        .frame(height: 27)
+        .background(Capsule().fill(isEnabled ? Color.accent : Color.surface1))
+        .contentShape(Capsule())
+    }
+}
+
 struct SettingsTabView: View {
     @ObservedObject var state: AppState
     @ObservedObject private var l10n = L10n.shared
@@ -187,20 +212,11 @@ struct SettingsTabView: View {
             if reduceMotion { languageExpanded.toggle() }
             else { withAnimation(MoleMotion.panel) { languageExpanded.toggle() } }
         } label: {
-            HStack {
-                Text(L10n.shared.language.displayName)
-                    .font(.system(size: 12))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(languageExpanded ? 180 : 0))
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 27)
-            .background(Capsule().fill(.quinary))
-            .contentShape(Capsule())
+            SettingsValueLabel(value: l10n.language.displayName, expanded: languageExpanded)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(l10n.t("header.language"))
+        .accessibilityValue(l10n.language.displayName)
     }
 
     private var languageGrid: some View {
@@ -310,6 +326,11 @@ struct SettingsTabView: View {
         .disabled(isLastRemaining)
     }
 
+    private var awakeBatteryFloorLabel: String {
+        let percent = state.awakePreferences.batteryFloorPercent
+        return percent == 0 ? l10n.t("awake.settings.off") : "\(percent)%"
+    }
+
     private var awakeSection: some View {
         SettingsSection(title: l10n.t("awake.title")) {
             SettingsRow(divider: true) {
@@ -330,17 +351,28 @@ struct SettingsTabView: View {
                     Text(l10n.t("awake.settings.batteryFloor"))
                         .font(.system(size: 12))
                     Spacer(minLength: 8)
-                    Picker(l10n.t("awake.settings.batteryFloor"), selection: Binding(
-                        get: { state.awakePreferences.batteryFloorPercent },
-                        set: { state.setAwakeBatteryFloor($0) })) {
-                        Text(l10n.t("awake.settings.off")).tag(0)
-                        ForEach([5, 10, 15, 20, 30], id: \.self) { percent in
-                            Text("\(percent)%").tag(percent)
+                    Menu {
+                        Picker(l10n.t("awake.settings.batteryFloor"), selection: Binding(
+                            get: { state.awakePreferences.batteryFloorPercent },
+                            set: { state.setAwakeBatteryFloor($0) })) {
+                            Text(l10n.t("awake.settings.off")).tag(0)
+                            ForEach([5, 10, 15, 20, 30], id: \.self) { percent in
+                                Text("\(percent)%").tag(percent)
+                            }
                         }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                    } label: {
+                        SettingsValueLabel(value: awakeBatteryFloorLabel, symbol: "chevron.up.chevron.down")
+                            .monospacedDigit()
                     }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
+                    .menuStyle(.button)
+                    .buttonStyle(.plain)
+                    .menuIndicator(.hidden)
                     .controlSize(.small)
+                    .fixedSize()
+                    .accessibilityLabel(l10n.t("awake.settings.batteryFloor"))
+                    .accessibilityValue(awakeBatteryFloorLabel)
                 }
             }
             SettingsRow {
