@@ -274,6 +274,7 @@ struct AgentSkill: Identifiable, Sendable {
     var directUsers: [String] = []
     var registrations: [AgentSkillConfigEditor.Registration] = []
     var bodyDeletionSupported = true
+    var isDangling = false
 }
 struct AgentMCPServer: Identifiable, Sendable {
     enum Issue: Hashable { case commandMissing(String), plaintextSecret(String, String), unreadableConfig }
