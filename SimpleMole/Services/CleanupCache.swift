@@ -6,7 +6,7 @@ enum CleanupCache {
     // Only current, fully inspected deletion units may be displayed. Older
     // snapshots can contain broad parents covering occupied/protected files.
     // Every restored snapshot still receives a fresh native preflight.
-    private static let version = 27
+    private static let version = 28
     private static let maximumAge: TimeInterval = 5 * 60
 
     private static var cacheURL: URL {
@@ -24,6 +24,7 @@ enum CleanupCache {
         struct Category: Codable {
             var name: String
             var paths: [String]
+            var selectedPaths: Set<String>
             var bytes: UInt64
             var pathBytes: [String: UInt64]
             var source: CleanupSource
@@ -53,7 +54,7 @@ enum CleanupCache {
         let payload = Payload(version: version,
                               createdAt: Date().timeIntervalSince1970,
                               categories: categories.map {
-                                  .init(name: $0.name, paths: $0.paths, bytes: $0.bytes,
+                                  .init(name: $0.name, paths: $0.paths, selectedPaths: $0.selectedPaths, bytes: $0.bytes,
                                         pathBytes: $0.pathBytes,
                                         source: $0.source, risk: $0.risk,
                                         disposal: $0.disposal, applyRoute: $0.applyRoute,
@@ -104,7 +105,7 @@ enum CleanupCache {
             category.activityOwners = saved.activityOwners
             category.uninstallDataOwner = saved.uninstallDataOwner
             if let identities = saved.pathIdentities { category.pathIdentities = identities }
-            return category
+            return category.selectingPaths(saved.selectedPaths)
         }
         return (categories, age)
     }

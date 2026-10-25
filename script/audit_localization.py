@@ -33,7 +33,7 @@ TECHNICAL_LITERALS = {
     "pnpm", "yarn", "pip", "pipx", "uv", "cargo", "rustup", "Homebrew",
     "nvm", "fnm", "pyenv", "rbenv", "SDKMAN", "asdf", "mise", "hosts", "Brew",
     "UTF-8", "JSON", "TOML", "Brewfile", "MB", "GB", "TB", "KB", "B",
-    "PNG", "JPEG", "JPG", "HEIC", "WebP", "AVIF", "MP4", "MOV", "GIF",
+    "PNG", "JPEG", "JPG", "HEIC", "WebP", "AVIF", "MP4", "MOV", "GIF", "Mbps",
     "HTTP / HTTPS", "SSH / Git", "API", "ID", "PID", "TCP", "UDP",
     "Wi-Fi", "IPv4", "IPv6", "iCloud", "App Store", "CLI", "SDK", "LTS",
     "http_proxy", "https_proxy", "all_proxy", "no_proxy", "HTTP_PROXY",
@@ -185,13 +185,17 @@ def is_technical(value: str) -> bool:
         return True
     # Empty labels, pure runtime values, punctuation, numbers and units.
     remaining = re.sub(r"\\[ntr]", "", value.replace("<value>", "")).strip()
-    if remaining.strip(" ·:/—–-()[]") in TECHNICAL_LITERALS:
+    technical_label = re.sub(r"(?:…|\.{3})$", "", remaining).rstrip()
+    if technical_label.strip(" ·:/—–-()[]") in TECHNICAL_LITERALS:
         return True
     if not remaining or not re.search(r"[A-Za-z\u3400-\u9fff]", remaining):
         return True
-    if re.fullmatch(r"(?:\d+(?:\.\d+)?\s*)?(?:[KMGT]?B|px|pt|ms|s|%)", remaining):
+    if re.fullmatch(r"(?:\d+(?:\.\d+)?\s*)?(?:[KMGT]?B|Mbps|px|pt|ms|s|%)", remaining):
         return True
-    if re.fullmatch(r"%[-+# 0-9.]*[diuoxXfFeEgGaA]%%?", remaining):
+    # A single printf value, optionally followed by an escaped percent sign,
+    # is numeric/runtime data. Prose or malformed trailing '%' must still fail.
+    if re.fullmatch(r"%(?:[1-9]\d*\$)?[-+# 0]*(?:\d+|\*)?(?:\.(?:\d*|\*))?"
+                    r"(?:hh|h|ll|l|j|z|t|L)?[diuoxXfFeEgGaAcCsS@](?:%%)?", remaining):
         return True
     # UI previews may show literal paths, URLs and raw identifier syntax.
     if re.fullmatch(r"(?:~?/|https?://)[^\s]+", remaining):

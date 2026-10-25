@@ -432,7 +432,12 @@ struct CleanupCategory: Identifiable, Equatable {
         candidate.pathIdentities = pathIdentities.filter { kept.contains($0.key) }
         candidate.bytes = keptPaths.reduce(0) { $0 &+ (candidate.pathBytes[$1] ?? 0) }
         guard candidate.bytes > 0 else { return nil }
-        candidate.selectedPaths = Self.reviewOnlyReasonKeys.contains(reasonKey) ? [] : Set(keptPaths)
+        candidate.pathActivity = pathActivity.filter { kept.contains($0.key) }
+        candidate.pathNotes = pathNotes.filter { kept.contains($0.key) }
+        candidate.pathRetentionBlocked.formIntersection(kept)
+        candidate.selectedPaths.formIntersection(kept)
+        candidate.selectedPaths.subtract(candidate.pathRetentionBlocked)
+        if Self.reviewOnlyReasonKeys.contains(reasonKey) { candidate.selectedPaths.removeAll() }
         return candidate
     }
 

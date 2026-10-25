@@ -2652,6 +2652,8 @@ bash "$ROOT_DIR/script/test_installer_policy.sh" || fail "installer policy trans
 pass "installer policy transaction"
 bash "$ROOT_DIR/script/test_developer_state_guard.sh" || fail "live developer-state protection"
 pass "live developer-state protection"
+bash "$ROOT_DIR/script/test_bridge_cleanup_boundaries.sh" || fail "bridge dependency boundaries and fixture cleanup"
+pass "bridge dependency boundaries and fixture cleanup"
 test_packaged_apply_layout
 test_uninstall_space_breakdown
 test_native_cask_uninstall_contract
@@ -2673,6 +2675,10 @@ test_cleanup_risk_policy
 if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     bash "$ROOT_DIR/script/test_project_artifact_policy.sh" || fail "project artifact policy"
     pass "project artifact policy"
+    bash "$ROOT_DIR/script/test_native_cleanup_audit.sh" --all || fail "native cleanup dependency boundaries and filesystem audit"
+    pass "native cleanup dependency boundaries and filesystem audit"
+    bash "$ROOT_DIR/script/test_tool_cleanup_parser.sh" || fail "tool cleanup zero-size inventory and parsing safety"
+    pass "tool cleanup zero-size inventory and parsing safety"
 fi
 test_cleanup_execution_accounting
 test_inventory_components

@@ -63,6 +63,42 @@ Button(action: { let command = "echo hello" }) { Text(l10n.t("action.run")) }
 '''
         self.assertEqual([item[2] for item in audit_source(source)], ["Restart", "Start", "Tools"])
 
+    def test_single_printf_values_are_not_copy(self):
+        for value in ["%.0f", "%g", "%.1f%%", "%+08.2f", "%lld", "%zu", "%1$g", "%.*f"]:
+            with self.subTest(value=value):
+                self.assertEqual(audit_source(f'Text(String(format: "{value}", number))'), [])
+
+    def test_printf_prose_and_malformed_suffixes_are_still_reported(self):
+        for value in ["%g available", "About %.0f", "%.0f files", "%g%", "%g%%%", "%g MB free", "%foo"]:
+            with self.subTest(value=value):
+                findings = audit_source(f'Text(String(format: "{value}", number))')
+                self.assertEqual([item[2] for item in findings], [value])
+
+    def test_technical_labels_do_not_exempt_prose_or_verbatim_copy(self):
+        source = '''Text(verbatim: "Git…")
+Text("Git...")
+Text("Mbps")
+Text("100 Mbps")
+Text(verbatim: "Git is unavailable")
+Text("Mbps upload")
+Text(verbatim: "Loading…")
+Text("CPU percentage...")
+'''
+        self.assertEqual([item[2] for item in audit_source(source)],
+                         ["Git is unavailable", "Mbps upload", "Loading…", "CPU percentage..."])
+
+    def test_direct_error_localization_does_not_hide_other_error_copy(self):
+        source = '''var errorDescription: String? {
+switch self {
+case .missing: return L10n.shared.t("dir.git.unavailable")
+case .changed: return L10n.shared.tf("error.changed", filename)
+case .plain: return "unavailable"
+case .failure: return "config.toml could not be parsed safely"
+}
+}'''
+        self.assertEqual([item[2] for item in audit_source(source)],
+                         ["unavailable", "config.toml could not be parsed safely"])
+
     def test_conditional_localization_keys_and_data_are_ignored(self):
         source = '''Text(l10n.t(active ? "state.ready" : "state.waiting"))
 Text(l10n.tf("group.bytes", group.id == "shared-mcp" ? count : 0))

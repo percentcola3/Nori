@@ -145,6 +145,8 @@ SIMPLEMOLE_DEVELOPER_STATE_DENO=""
 SIMPLEMOLE_DEVELOPER_STATE_BREW=""
 SIMPLEMOLE_DEVELOPER_STATE_GO_MOD=""
 SIMPLEMOLE_DEVELOPER_STATE_POETRY=""
+SIMPLEMOLE_DEVELOPER_STATE_GRADLE=""
+SIMPLEMOLE_DEVELOPER_STATE_CARGO=""
 SIMPLEMOLE_DEVELOPER_STATE_READY="false"
 SIMPLEMOLE_DEVELOPER_STATE_VALID="false"
 SIMPLEMOLE_PROTECTED_DEVELOPER_ROOTS=()
@@ -154,6 +156,9 @@ SIMPLEMOLE_GO_MODULE_ROOTS=()
 SIMPLEMOLE_PHYSICAL_DEVELOPER_ROOTS=()
 SIMPLEMOLE_PHYSICAL_HOMEBREW_ROOTS=()
 SIMPLEMOLE_PHYSICAL_GO_MODULE_ROOTS=()
+SIMPLEMOLE_GRADLE_CACHE_ROOTS=()
+SIMPLEMOLE_RAW_GRADLE_CACHE_ROOTS=()
+SIMPLEMOLE_PHYSICAL_GRADLE_CACHE_ROOTS=()
 
 simplemole_prepare_developer_state_roots() {
     if [[ "$SIMPLEMOLE_DEVELOPER_STATE_READY" == "true" &&
@@ -161,7 +166,9 @@ simplemole_prepare_developer_state_roots() {
           "$SIMPLEMOLE_DEVELOPER_STATE_DENO" == "${DENO_DIR:-}" &&
           "$SIMPLEMOLE_DEVELOPER_STATE_BREW" == "${HOMEBREW_CACHE:-}" &&
           "$SIMPLEMOLE_DEVELOPER_STATE_GO_MOD" == "${GOMODCACHE:-}" &&
-          "$SIMPLEMOLE_DEVELOPER_STATE_POETRY" == "${POETRY_CACHE_DIR:-}" ]]; then
+          "$SIMPLEMOLE_DEVELOPER_STATE_POETRY" == "${POETRY_CACHE_DIR:-}" &&
+          "$SIMPLEMOLE_DEVELOPER_STATE_GRADLE" == "${GRADLE_USER_HOME:-}" &&
+          "$SIMPLEMOLE_DEVELOPER_STATE_CARGO" == "${CARGO_HOME:-}" ]]; then
         [[ "$SIMPLEMOLE_DEVELOPER_STATE_VALID" == "true" ]]
         return
     fi
@@ -172,10 +179,14 @@ simplemole_prepare_developer_state_roots() {
     SIMPLEMOLE_DEVELOPER_STATE_BREW="${HOMEBREW_CACHE:-}"
     SIMPLEMOLE_DEVELOPER_STATE_GO_MOD="${GOMODCACHE:-}"
     SIMPLEMOLE_DEVELOPER_STATE_POETRY="${POETRY_CACHE_DIR:-}"
+    SIMPLEMOLE_DEVELOPER_STATE_GRADLE="${GRADLE_USER_HOME:-}"
+    SIMPLEMOLE_DEVELOPER_STATE_CARGO="${CARGO_HOME:-}"
     SIMPLEMOLE_PROTECTED_DEVELOPER_ROOTS=()
     SIMPLEMOLE_RAW_PROTECTED_DEVELOPER_ROOTS=()
     SIMPLEMOLE_HOMEBREW_CACHE_ROOTS=()
     SIMPLEMOLE_GO_MODULE_ROOTS=()
+    SIMPLEMOLE_GRADLE_CACHE_ROOTS=()
+    SIMPLEMOLE_RAW_GRADLE_CACHE_ROOTS=()
 
     local home_root="${HOME:-}" deno_root="" brew_root="" root="" lower_root="" poetry_root="${POETRY_CACHE_DIR:-}"
     home_root="${home_root%/}"
@@ -210,8 +221,13 @@ simplemole_prepare_developer_state_roots() {
         "$home_root/Library/Caches/deno" "$home_root/.cache/deno" "$home_root/.deno" "$deno_root" \
         "$home_root/.aws/cli/cache" "$home_root/.jupyter/runtime" \
         "$home_root/Library/Caches/org.R-project.R/R/renv" \
-        "$home_root/Library/Caches/pypoetry/virtualenvs" \
-        "${poetry_root:+$poetry_root/virtualenvs}"; do
+        "$home_root/Library/Caches/pypoetry/virtualenvs" "$home_root/.cache/poetry/virtualenvs" \
+        "${poetry_root:+$poetry_root/virtualenvs}" \
+        "$home_root/.m2/repository" "$home_root/.ivy2/cache" \
+        "$home_root/.nuget/packages" "$home_root/.pub-cache" \
+        "$home_root/.cargo/git" "$home_root/.cargo/registry/src" \
+        "$home_root/.cabal/packages" "$home_root/.cpan/sources" \
+        "$home_root/.sbt/boot" "$home_root/.sbt/launchers"; do
         [[ -n "$root" ]] || continue
         SIMPLEMOLE_RAW_PROTECTED_DEVELOPER_ROOTS+=("$root")
         lower_root=$(printf '%s' "$root" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
@@ -239,6 +255,30 @@ simplemole_prepare_developer_state_roots() {
         lower_root=$(printf '%s' "$root" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
         SIMPLEMOLE_GO_MODULE_ROOTS+=("$lower_root")
     done
+    # Dependency repositories contain installed/source packages. Resolve their
+    # physical aliases at the final guard, even when an alias lands under Caches.
+    for root in "${CARGO_HOME:-}" "${GRADLE_USER_HOME:-}"; do
+        [[ -n "$root" ]] || continue
+        [[ "$root" == /* && ! "$root" =~ [[:cntrl:]] ]] || return 1
+        case "$root" in *'/../'*|*/..|*'/./'*|*/.|*'//'*) return 1 ;; esac
+        root="${root%/}"
+        case "$root" in
+            ""|/|"$home_root"|"$home_root/Library"|"$home_root/Library/Caches"|"$home_root/.cache") return 1 ;;
+        esac
+    done
+    if [[ -n "${CARGO_HOME:-}" ]]; then
+        for root in "${CARGO_HOME%/}/git" "${CARGO_HOME%/}/registry/src"; do
+            SIMPLEMOLE_RAW_PROTECTED_DEVELOPER_ROOTS+=("$root")
+            lower_root=$(printf '%s' "$root" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
+            SIMPLEMOLE_PROTECTED_DEVELOPER_ROOTS+=("$lower_root")
+        done
+    fi
+    for root in "$home_root/.gradle/caches" "${GRADLE_USER_HOME:+${GRADLE_USER_HOME%/}/caches}"; do
+        [[ -n "$root" ]] || continue
+        SIMPLEMOLE_RAW_GRADLE_CACHE_ROOTS+=("$root")
+        lower_root=$(printf '%s' "$root" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
+        SIMPLEMOLE_GRADLE_CACHE_ROOTS+=("$lower_root")
+    done
     SIMPLEMOLE_DEVELOPER_STATE_VALID="true"
 }
 
@@ -247,6 +287,7 @@ simplemole_refresh_developer_state_paths() {
     SIMPLEMOLE_PHYSICAL_DEVELOPER_ROOTS=()
     SIMPLEMOLE_PHYSICAL_HOMEBREW_ROOTS=()
     SIMPLEMOLE_PHYSICAL_GO_MODULE_ROOTS=()
+    SIMPLEMOLE_PHYSICAL_GRADLE_CACHE_ROOTS=()
     local root="" physical="" lower=""
     # Resolve current aliases at each final content boundary, not once for
     # the lifetime of a plan. Either a retained root or one of its parents
@@ -268,6 +309,12 @@ simplemole_refresh_developer_state_paths() {
         physical=$(cd -P "$root" 2>/dev/null && pwd -P) || return 1
         lower=$(printf '%s' "$physical" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
         SIMPLEMOLE_PHYSICAL_GO_MODULE_ROOTS+=("$lower")
+    done
+    for root in "${SIMPLEMOLE_RAW_GRADLE_CACHE_ROOTS[@]}"; do
+        [[ -e "$root" || -L "$root" ]] || continue
+        physical=$(cd -P "$root" 2>/dev/null && pwd -P) || return 1
+        lower=$(printf '%s' "$physical" | LC_ALL=C tr '[:upper:]' '[:lower:]') || return 1
+        SIMPLEMOLE_PHYSICAL_GRADLE_CACHE_ROOTS+=("$lower")
     done
 }
 
@@ -312,6 +359,22 @@ simplemole_forbidden_developer_state_path() {
         for root in "${SIMPLEMOLE_PHYSICAL_GO_MODULE_ROOTS[@]}"; do
             case "$lower" in
                 "$root/cache"|"$root/cache"/*) ;;
+                "$root"|"$root"/*) return 0 ;;
+            esac
+        done
+    fi
+    # Only independent build-cache-* units are reproducible Gradle output.
+    # The enclosing caches directory and modules/transforms remain owner data.
+    for root in "${SIMPLEMOLE_GRADLE_CACHE_ROOTS[@]}"; do
+        case "$lower" in
+            "$root"/build-cache-*) ;;
+            "$root"|"$root"/*) return 0 ;;
+        esac
+    done
+    if [[ ${#SIMPLEMOLE_PHYSICAL_GRADLE_CACHE_ROOTS[@]} -gt 0 ]]; then
+        for root in "${SIMPLEMOLE_PHYSICAL_GRADLE_CACHE_ROOTS[@]}"; do
+            case "$lower" in
+                "$root"/build-cache-*) ;;
                 "$root"|"$root"/*) return 0 ;;
             esac
         done

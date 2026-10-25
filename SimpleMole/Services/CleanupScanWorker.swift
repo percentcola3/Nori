@@ -268,12 +268,112 @@ enum CleanupScanWorker {
         return (modified, accessed)
     }
 
+    struct NpmContentAgeScope: Sendable {
+        let contentRoot: String
+        let retention: TimeInterval
+        let now: Date
+
+        func contains(_ path: String) -> Bool { path == contentRoot || path.hasPrefix(contentRoot + "/") }
+        func isStale(_ measurement: Measurement) -> Bool {
+            measurement.complete && measurement.activityEvidenceIsComplete
+                && CleanupAgePolicy.isStale(measurement.activityEvidence, now: now, retention: retention)
+        }
+    }
+
+    /// Postorder nodes come from the already authenticated secure traversal.
+    /// Cached activity refresh uses one lstat per node and no directory walk.
+    struct AgeNode: Sendable {
+        let path: String
+        var measurement: Measurement
+        let isDirectory: Bool
+        let requiresAdministrator: Bool
+        let hasHardlinks: Bool
+    }
+
+    struct NpmAgeTree {
+        let nodes: [AgeNode]
+        let scope: NpmContentAgeScope
+        private let indices: [String: Int]
+        private let children: [[Int]]
+        private let containsStale: [Bool]
+
+        init(nodes: [AgeNode], scope: NpmContentAgeScope) {
+            let indices = Dictionary(uniqueKeysWithValues: nodes.indices.map { (nodes[$0].path, $0) })
+            var children = Array(repeating: [Int](), count: nodes.count)
+            var stale = Array(repeating: false, count: nodes.count)
+            for index in nodes.indices {
+                let node = nodes[index]
+                stale[index] = stale[index] || (scope.contains(node.path) && scope.isStale(node.measurement))
+                if let parent = indices[(node.path as NSString).deletingLastPathComponent] {
+                    children[parent].append(index)
+                    stale[parent] = stale[parent] || stale[index]
+                }
+            }
+            self.nodes = nodes; self.scope = scope; self.indices = indices
+            self.children = children; self.containsStale = stale
+        }
+
+        func frontier(under path: String) -> [AgeNode]? {
+            guard scope.contains(path), let root = indices[path] else { return nil }
+            // Avoid overstating independently counted allocation for shared
+            // hardlinks. An entirely stale original unit still coalesces.
+            guard !nodes[root].hasHardlinks || scope.isStale(nodes[root].measurement) else { return nil }
+            var pending = [root]
+            var result: [AgeNode] = []
+            while let index = pending.popLast() {
+                let node = nodes[index]
+                if scope.isStale(node.measurement) || !containsStale[index] || children[index].isEmpty {
+                    if node.measurement.files > 0 && node.measurement.bytes > 0 { result.append(node) }
+                } else {
+                    pending.append(contentsOf: children[index])
+                }
+            }
+            return result
+        }
+    }
+
+    static func refreshedAgeNodes(_ nodes: [AgeNode], control: CleanupScanControl,
+                                  deadline: TimeInterval,
+                                  evidence: (String, stat) -> stat) -> [AgeNode]? {
+        var refreshed = nodes
+        let indices = Dictionary(uniqueKeysWithValues: nodes.indices.map { (nodes[$0].path, $0) })
+        for index in refreshed.indices {
+            guard !control.shouldStop, control.elapsed < deadline else { return nil }
+            var info = stat()
+            guard lstat(nodes[index].path, &info) == 0,
+                  info.st_mode & S_IFMT == (nodes[index].isDirectory ? S_IFDIR : S_IFREG) else { return nil }
+            refreshed[index].measurement.newestModified = nil
+            refreshed[index].measurement.newestAccessed = nil
+            refreshed[index].measurement.activityEvidenceIsComplete = true
+            if !nodes[index].isDirectory {
+                info = evidence(nodes[index].path, info)
+                refreshed[index].measurement.newestModified = Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec))
+                refreshed[index].measurement.newestAccessed = Date(timeIntervalSince1970: TimeInterval(info.st_atimespec.tv_sec))
+                refreshed[index].measurement.activityEvidenceIsComplete = info.st_mtimespec.tv_sec > 0 && info.st_atimespec.tv_sec > 0
+            }
+        }
+        // Nodes are postorder, so every child updates its parent exactly once.
+        for index in refreshed.indices {
+            guard let parent = indices[(nodes[index].path as NSString).deletingLastPathComponent] else { continue }
+            let child = refreshed[index].measurement
+            if let date = child.newestModified {
+                refreshed[parent].measurement.newestModified = max(refreshed[parent].measurement.newestModified ?? .distantPast, date)
+            }
+            if let date = child.newestAccessed {
+                refreshed[parent].measurement.newestAccessed = max(refreshed[parent].measurement.newestAccessed ?? .distantPast, date)
+            }
+            refreshed[parent].measurement.activityEvidenceIsComplete = refreshed[parent].measurement.activityEvidenceIsComplete && child.activityEvidenceIsComplete
+        }
+        return refreshed
+    }
+
     struct MetadataInventory: Sendable {
         var measurement: Measurement
         var paths: [String]
         var requiresAdministrator: Bool
         var isCacheable = true
         var validationContext: String? = nil
+        var ageNodes: [AgeNode] = []
     }
 
     /// Discarded items need allocated blocks and deletion metadata, never file
@@ -343,10 +443,12 @@ enum CleanupScanWorker {
         /// 不能作为“内容仍在使用”的证据；创建时间在写入时已体现在 mtime。
         var newestModified: Date?
         var newestAccessed: Date?
+        var activityEvidenceIsComplete = true
 
         /// Combined activity evidence for the measured tree.
         var activityEvidence: Date? {
-            CleanupAgePolicy.activityEvidence(modified: newestModified,
+            guard activityEvidenceIsComplete else { return nil }
+            return CleanupAgePolicy.activityEvidence(modified: newestModified,
                                               accessed: newestAccessed)
         }
     }

@@ -6,7 +6,12 @@ enum Parsers {
     static func toolCategories(_ text: String) -> [CleanupCategory] {
         text.components(separatedBy: "\n").compactMap { line in
             let parts = line.components(separatedBy: "\t")
-            guard parts.count >= 3, let bytes = UInt64(parts[0]), bytes > 0 else { return nil }
+            guard parts.count == 3, let bytes = UInt64(parts[0]), !parts[1].isEmpty else { return nil }
+            let record = parts[2].split(separator: "|", omittingEmptySubsequences: false)
+            let managers: Set<String> = ["npm", "pnpm", "brew", "brew-cask", "cargo", "dotnet", "pipx"]
+            guard record.count == 2, managers.contains(String(record[0])),
+                  !record[1].isEmpty, !record[1].hasPrefix("-"),
+                  record[1].allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "@._+:/-".contains($0)) }) else { return nil }
             return makeCategory(name: parts[1], paths: [parts[2]], bytes: bytes,
                                 policy: CleanupRiskPolicy.tool())
         }

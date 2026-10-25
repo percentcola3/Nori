@@ -95,6 +95,10 @@ nori_scan_path_is_protected() {
             ;;
     esac
 
+    # Ordinary paths in this HOME (for example .npm and Public) have already
+    # passed the protected-folder cases above. Do not mistake /Users/me for a
+    # different user's home just because the fixture/real HOME starts in /Users.
+    case "$path" in "$home"/*) return 1 ;; esac
     # Other users' homes are always outside this process's normal scan scope.
     case "$path" in /Users/*) return 0 ;; esac
     return 1

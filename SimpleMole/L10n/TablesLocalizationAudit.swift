@@ -4,6 +4,10 @@ import Foundation
 enum L10nLocalizationAuditTables {
     private static let entries: [(String, String, String, String)] = [
         ("audit.island.cpuPercent", "% CPU", "CPU %", "CPU %"),
+        ("audit.codex.error.unreadable", "Cannot safely parse config.toml.", "无法安全解析 config.toml。", "無法安全解析 config.toml。"),
+        ("audit.codex.error.changed", "config.toml changed during editing.", "编辑期间 config.toml 发生了变化。", "編輯期間 config.toml 發生了變化。"),
+        ("audit.codex.error.backup", "Cannot back up config.toml.", "无法备份 config.toml。", "無法備份 config.toml。"),
+        ("audit.awake.error.create", "Cannot keep this Mac awake (system error %d).", "无法保持此 Mac 唤醒（系统错误 %d）。", "無法保持此 Mac 喚醒（系統錯誤 %d）。"),
         ("audit.auto.error.invalidRoot", "Cannot access automatic cleanup folder: %@", "无法访问自动清理目录：%@", "無法存取自動清理資料夾：%@"),
         ("audit.auto.error.protectedRoot", "Protected folders cannot be used for automatic cleanup: %@", "不能将受保护目录用于自动清理：%@", "無法將受保護資料夾用於自動清理：%@"),
         ("audit.auto.error.symbolicLink", "Automatic cleanup folders cannot contain symbolic-link paths: %@", "自动清理目录不能包含软链接路径：%@", "自動清理資料夾不能包含符號連結路徑：%@"),
@@ -358,12 +362,51 @@ enum L10nLocalizationAuditTables {
         "uv Cache": "audit.category.uv.cache",
     ]
 
+    // Four service errors have translations for every explicit app language.
+    // The tuple keeps parsing, concurrent-edit, backup and assertion failures aligned.
+    private static let serviceErrors: [AppLanguage: (String, String, String, String)] = [
+        .ja: (
+            "config.toml を安全に解析できません。", "編集中に config.toml が変更されました。",
+            "config.toml をバックアップできません。", "この Mac のスリープを防止できません（システムエラー %d）。"),
+        .ko: (
+            "config.toml을 안전하게 분석할 수 없습니다.", "편집 중에 config.toml이 변경되었습니다.",
+            "config.toml을 백업할 수 없습니다.", "이 Mac의 잠자기를 방지할 수 없습니다(시스템 오류 %d)."),
+        .de: (
+            "config.toml kann nicht sicher analysiert werden.", "config.toml wurde während der Bearbeitung geändert.",
+            "config.toml kann nicht gesichert werden.", "Dieser Mac kann nicht wach gehalten werden (Systemfehler %d)."),
+        .fr: (
+            "Impossible d’analyser config.toml de manière sûre.", "config.toml a été modifié pendant l’édition.",
+            "Impossible de sauvegarder config.toml.", "Impossible de maintenir ce Mac éveillé (erreur système %d)."),
+        .es: (
+            "No se puede analizar config.toml de forma segura.", "config.toml cambió durante la edición.",
+            "No se puede crear una copia de seguridad de config.toml.", "No se puede mantener este Mac activo (error del sistema %d)."),
+        .pt: (
+            "Não é possível analisar config.toml com segurança.", "config.toml foi alterado durante a edição.",
+            "Não é possível criar uma cópia de segurança de config.toml.", "Não é possível manter este Mac acordado (erro do sistema %d)."),
+        .it: (
+            "Impossibile analizzare config.toml in sicurezza.", "config.toml è cambiato durante la modifica.",
+            "Impossibile eseguire il backup di config.toml.", "Impossibile mantenere attivo questo Mac (errore di sistema %d)."),
+        .ru: (
+            "Не удалось безопасно разобрать config.toml.", "config.toml изменился во время редактирования.",
+            "Не удалось создать резервную копию config.toml.", "Не удалось предотвратить переход этого Mac в режим сна (системная ошибка %d)."),
+        .tr: (
+            "config.toml güvenli biçimde ayrıştırılamadı.", "config.toml düzenleme sırasında değişti.",
+            "config.toml yedeklenemedi.", "Bu Mac’in uyuması engellenemedi (sistem hatası %d).")
+    ]
+
     static func table(for language: AppLanguage) -> [String: String] {
         switch language {
         case .en: return Dictionary(uniqueKeysWithValues: entries.map { ($0.0, $0.1) })
         case .zhHans: return Dictionary(uniqueKeysWithValues: entries.map { ($0.0, $0.2) })
         case .zhHant: return Dictionary(uniqueKeysWithValues: entries.map { ($0.0, $0.3) })
-        default: return [:]
+        default:
+            guard let errors = serviceErrors[language] else { return [:] }
+            return [
+                "audit.codex.error.unreadable": errors.0,
+                "audit.codex.error.changed": errors.1,
+                "audit.codex.error.backup": errors.2,
+                "audit.awake.error.create": errors.3,
+            ]
         }
     }
 }

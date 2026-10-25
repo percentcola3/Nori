@@ -49,7 +49,7 @@ protocol AwakeAssertionBackend {
 struct IOPMAwakeAssertionBackend: AwakeAssertionBackend {
     struct Failure: LocalizedError {
         let code: IOReturn
-        var errorDescription: String? { "IOPMAssertionCreateWithName failed (\(code))" }
+        var errorDescription: String? { L10n.shared.tf("audit.awake.error.create", code) }
     }
 
     func create(type: CFString, name: CFString) throws -> IOPMAssertionID {

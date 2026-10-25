@@ -6,7 +6,11 @@
       "suites": [
         "test_directory_git.sh",
         "test_directory_browser.sh",
-        "test_directory_files.sh"
+        "test_directory_files.sh",
+        "test_directory_path_bar.sh",
+        "test_directory_size_watcher.sh",
+        "test_directory_sizes.sh",
+        "test_file_scan_service.sh"
       ]
     },
     {
@@ -16,8 +20,12 @@
         "test_cache_cleanup.sh",
         "test_cleanup_risk_policy.sh",
         "test_cleanup_commands.sh",
+        "test_bridge_cleanup_boundaries.sh",
+        "test_native_cleanup_audit.sh",
         "test_cleanup_refresh.sh",
-        "test_feature_matrix.sh"
+        "test_feature_matrix.sh",
+        "test_cleanup_atime.sh",
+        "test_whitelist_path.sh"
       ]
     },
     {
@@ -52,7 +60,8 @@
         "test_duplicate_responsiveness.sh",
         "test_duplicate_deletion.sh",
         "test_analysis_deletion.sh",
-        "test_similar_images.sh"
+        "test_similar_images.sh",
+        "test_analysis_disk_projection_performance.sh"
       ]
     },
     {
@@ -68,7 +77,8 @@
         "test_agent_cli.sh",
         "test_agent_workflow.sh",
         "test_agent_icons.sh",
-        "test_feature_matrix.sh"
+        "test_feature_matrix.sh",
+        "test_agent_resource_management.sh"
       ]
     },
     {
@@ -78,14 +88,24 @@
         "test_developer_shell.sh",
         "test_developer_workspace.sh",
         "test_cleanup_commands.sh",
-        "test.sh"
+        "test_tool_cleanup_parser.sh",
+        "test_bridge_cleanup_boundaries.sh",
+        "test.sh",
+        "test_developer_cache_sizes.sh",
+        "test_developer_command_queue.sh",
+        "test_developer_session.sh",
+        "test_developer_workspace_features.sh",
+        "test_nvm_guard.sh"
       ]
     },
     {
       "name": "开发网络、DNS与Hosts",
       "suites": [
         "test_developer_network.sh",
-        "test_optimize.sh"
+        "test_optimize.sh",
+        "test_developer_hosts_backups.sh",
+        "test_developer_network_tools.sh",
+        "test_developer_ssh_git.sh"
       ]
     },
     {
@@ -107,7 +127,9 @@
       "name": "剪贴板、截图比例与编辑器",
       "suites": [
         "test_screenshot_editor.sh",
-        "test.sh"
+        "test.sh",
+        "test_hotkeys.sh",
+        "test_memory_retention.sh"
       ]
     },
     {
@@ -133,7 +155,8 @@
         "test_task_feedback_localization.sh",
         "test_cleanup_task_localization.sh",
         "test_cleanup_page_state.sh",
-        "test_feature_matrix.sh"
+        "test_feature_matrix.sh",
+        "test_localization_audit.sh"
       ]
     },
     {
@@ -176,40 +199,85 @@
       "timeoutSeconds": 5400,
       "contains": [
         "test_administrator_cleanup.sh",
+        "test_administrator_cleanup_performance.sh",
+        "test_administrator_session_state.sh",
+        "test_administrator_uninstall.sh",
         "test_agent_cli.sh",
+        "test_agent_cli_ownership.sh",
+        "test_agent_data_process_scope.sh",
         "test_agent_icons.sh",
         "test_agent_presentation.sh",
+        "test_agent_program_removal.sh",
+        "test_agent_removal.sh",
+        "test_agent_scan_performance.sh",
+        "test_agent_software_inventory.sh",
+        "test_agent_storage_footprint.sh",
         "test_agent_workflow.sh",
         "test_agents.sh",
+        "test_analysis_automation.sh",
         "test_analysis_deletion.sh",
+        "test_analysis_inventory.sh",
+        "test_analysis_selection.sh",
+        "test_app_updates.sh",
+        "test_application_processes.sh",
         "test_auto_cleanup_workflow.sh",
+        "test_awake_session.sh",
+        "test_bluetooth_battery.sh",
+        "test_bridge_cleanup_boundaries.sh",
         "test_cache_cleanup.sh",
         "test_cleanup_manual_trigger.sh",
         "test_cleanup_page_state.sh",
         "test_cleanup_presentation.sh",
         "test_cleanup_refresh.sh",
         "test_cleanup_scan.sh",
+        "test_cli_tools.sh",
+        "test_cli_uninstall_request.sh",
+        "test_cli_uninstall_workflow.sh",
+        "test_developer_state_guard.sh",
         "test_directory_browser.sh",
         "test_directory_files.sh",
         "test_directory_git.sh",
+        "test_directory_search.sh",
         "test_disk_analysis.sh",
         "test_duplicate_deletion.sh",
         "test_duplicate_responsiveness.sh",
+        "test_duplicate_workspaces.sh",
         "test_duplicates.sh",
+        "test_install_update.sh",
+        "test_installer_policy.sh",
         "test_inventory.sh",
+        "test_island_network_probe.sh",
         "test_island_resources.sh",
         "test_island_window.sh",
         "test_login_item.sh",
         "test_media.sh",
+        "test_memory_cache_reclaim.sh",
+        "test_menu_bar_collection.sh",
+        "test_menu_bar_controller.sh",
+        "test_menu_bar_preferences.sh",
+        "test_native_cleanup_audit.sh",
         "test_nori.sh",
         "test_optimize.sh",
+        "test_page_keyboard_shortcuts.sh",
+        "test_privileged_session.sh",
+        "test_project_artifact_policy.sh",
+        "test_release_appcast.sh",
         "test_release_identity.sh",
         "test_release_packaging.sh",
+        "test_release_version.sh",
         "test_screenshot_editor.sh",
         "test_similar_images.sh",
+        "test_software_update_execution.sh",
+        "test_software_update_request.sh",
+        "test_software_updates.sh",
+        "test_software_workflows.sh",
+        "test_system_disk_metrics.sh",
+        "test_task_activity.sh",
         "test_task_feedback.sh",
         "test_task_feedback_localization.sh",
+        "test_tool_cleanup_parser.sh",
         "test_traffic.sh",
+        "test_uninstall_processes.sh",
         "test_uninstall_residue.sh"
       ]
     },
@@ -313,6 +381,120 @@
       "id": "performance",
       "script": "test_performance.sh",
       "timeoutSeconds": 1800,
+      "contains": []
+    },
+    {
+      "id": "agent_resource_management",
+      "script": "test_agent_resource_management.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "analysis_disk_projection_performance",
+      "script": "test_analysis_disk_projection_performance.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "cleanup_atime",
+      "script": "test_cleanup_atime.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_cache_sizes",
+      "script": "test_developer_cache_sizes.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_command_queue",
+      "script": "test_developer_command_queue.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_hosts_backups",
+      "script": "test_developer_hosts_backups.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_network_tools",
+      "script": "test_developer_network_tools.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_session",
+      "script": "test_developer_session.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_ssh_git",
+      "script": "test_developer_ssh_git.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "developer_workspace_features",
+      "script": "test_developer_workspace_features.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "directory_path_bar",
+      "script": "test_directory_path_bar.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "directory_size_watcher",
+      "script": "test_directory_size_watcher.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "directory_sizes",
+      "script": "test_directory_sizes.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "file_scan_service",
+      "script": "test_file_scan_service.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "hotkeys",
+      "script": "test_hotkeys.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "localization_audit",
+      "script": "test_localization_audit.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "memory_retention",
+      "script": "test_memory_retention.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "nvm_guard",
+      "script": "test_nvm_guard.sh",
+      "timeoutSeconds": 900,
+      "contains": []
+    },
+    {
+      "id": "whitelist_path",
+      "script": "test_whitelist_path.sh",
+      "timeoutSeconds": 900,
       "contains": []
     }
   ],

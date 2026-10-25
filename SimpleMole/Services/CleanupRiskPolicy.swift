@@ -1589,12 +1589,12 @@ enum CleanupRiskPolicy {
     /// 缓存是依赖仓库，保持复核态。
     static func isGradleBuildCachePath(_ path: String, home: String) -> Bool {
         let locations = DeveloperCacheLocations.current(home: home)
-        var gradleHomes = [home + "/.gradle"]
-        if let custom = locations.gradleUserHome, custom != home + "/.gradle" {
-            gradleHomes.append(custom)
+        var gradleCacheRoots = [home + "/.gradle/caches"] + locations.gradlePhysicalCacheRoots
+        if let custom = locations.gradleUserHome {
+            gradleCacheRoots.append(custom + "/caches")
         }
-        for gradleHome in gradleHomes {
-            let cachesRoot = gradleHome + "/caches/"
+        for root in gradleCacheRoots {
+            let cachesRoot = root + "/"
             guard path.hasPrefix(cachesRoot) else { continue }
             let child = String(path.dropFirst(cachesRoot.count))
                 .split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""

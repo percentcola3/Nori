@@ -20,23 +20,21 @@ actor DirectoryGitService {
         case command(String)
 
         var errorDescription: String? {
-            let key: String
             switch self {
-            case .unavailable: key = "unavailable"
-            case .notRepository: key = "notRepository"
-            case .dirty: key = "dirty"
-            case .operationInProgress: key = "operationInProgress"
-            case .branchUnavailable: key = "branchUnavailable"
-            case .branchOccupied: key = "branchOccupied"
-            case .noUpstream: key = "noUpstream"
-            case .detached: key = "detached"
-            case .timeout: key = "timeout"
-            case .outputTooLarge: key = "outputTooLarge"
-            case .cancelled: key = "cancelled"
-            case .repositoryChanged: key = "repositoryChanged"
+            case .unavailable: return L10n.shared.t("dir.git.unavailable")
+            case .notRepository: return L10n.shared.t("dir.git.notRepository")
+            case .dirty: return L10n.shared.t("dir.git.dirty")
+            case .operationInProgress: return L10n.shared.t("dir.git.operationInProgress")
+            case .branchUnavailable: return L10n.shared.t("dir.git.branchUnavailable")
+            case .branchOccupied: return L10n.shared.t("dir.git.branchOccupied")
+            case .noUpstream: return L10n.shared.t("dir.git.noUpstream")
+            case .detached: return L10n.shared.t("dir.git.detached")
+            case .timeout: return L10n.shared.t("dir.git.timeout")
+            case .outputTooLarge: return L10n.shared.t("dir.git.outputTooLarge")
+            case .cancelled: return L10n.shared.t("dir.git.cancelled")
+            case .repositoryChanged: return L10n.shared.t("dir.git.repositoryChanged")
             case .command(let message): return L10n.shared.tf("dir.git.failed", message)
             }
-            return L10n.shared.t("dir.git." + key)
         }
     }
 

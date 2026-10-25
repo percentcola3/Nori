@@ -15,9 +15,9 @@ enum AgentCodexFeatureEditor {
 
         var errorDescription: String? {
             switch self {
-            case .unreadable: return "config.toml could not be parsed safely"
-            case .changed: return "config.toml changed while it was being edited"
-            case .backupFailed: return "config.toml could not be backed up"
+            case .unreadable: return L10n.shared.t("audit.codex.error.unreadable")
+            case .changed: return L10n.shared.t("audit.codex.error.changed")
+            case .backupFailed: return L10n.shared.t("audit.codex.error.backup")
             case .writeFailed(let message): return message
             }
         }

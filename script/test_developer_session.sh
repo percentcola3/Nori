@@ -17,11 +17,10 @@ owner = re.findall(r'^\s*(lazy var developerWorkspaceSession = DeveloperWorkspac
 assert len(owner) == 1, 'Update fixture for the production Session owner'
 support = (root / 'script/DeveloperSessionTestSupport.swift').read_text()
 support = support.replace('// SESSION_OWNER_DECLARATION', owner[0])
-def refresh_method(relative):
+def production_declaration(relative, declaration):
     source = (root / relative).read_text()
     _, mask = swift_literals(source)
-    declaration = 'func refresh(for token: Int) async {'
-    assert mask.count(declaration) == 1, 'Update token fixture for ' + relative
+    assert mask.count(declaration) == 1, 'Update production declaration fixture for ' + relative
     start = mask.index(declaration)
     cursor, depth = start + len(declaration), 1
     while depth:
@@ -29,8 +28,12 @@ def refresh_method(relative):
         elif mask[cursor] == '}': depth -= 1
         cursor += 1
     return source[start:cursor]
-support = support.replace('// SHELL_REFRESH_METHOD', refresh_method('SimpleMole/Views/DeveloperShellPanel.swift'))
-support = support.replace('// NETWORK_REFRESH_METHOD', refresh_method('SimpleMole/Views/DeveloperNetworkPanel.swift'))
+support = support.replace('// DEVELOPER_BUSY_PROPERTY', production_declaration(
+    'SimpleMole/AppState+TaskActivity.swift', 'var isDeveloperTaskBusy: Bool {'))
+support = support.replace('// SHELL_REFRESH_METHOD', production_declaration(
+    'SimpleMole/Views/DeveloperShellPanel.swift', 'func refresh(for token: Int) async {'))
+support = support.replace('// NETWORK_REFRESH_METHOD', production_declaration(
+    'SimpleMole/Views/DeveloperNetworkPanel.swift', 'func refresh(for token: Int) async {'))
 (destination / 'SessionTestSupport.swift').write_text(support)
 view_source = (root / 'SimpleMole/Views/DevEnvTabView.swift').read_text()
 _, mask = swift_literals(view_source)

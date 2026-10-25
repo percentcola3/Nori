@@ -56,7 +56,7 @@ struct DirectoryGitRowControls: View {
             } else if isLoading {
                 ProgressView().controlSize(.mini).scaleEffect(0.65)
                     .frame(width: 12, height: 12)
-                Text("Git…").foregroundStyle(.secondary)
+                Text(verbatim: "Git…").foregroundStyle(.secondary)
                 Spacer(minLength: 0)
             } else {
                 Button { refreshID = UUID() } label: {

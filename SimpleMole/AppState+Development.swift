@@ -141,8 +141,11 @@ extension AppState {
                 self.devEnvStatus = self.l10n.t("status.envCleaning")
                 self.log(self.l10n.tf("log.envClean", paths.count))
                 Task {
+                    var environment = await DeveloperTerminalEnvironmentService.shared.snapshot().environment
+                    environment.merge(self.fullDiskScanEnvironment) { _, authorized in authorized }
                     let result = await MoleEngine.shared.runBridgeWithStdin(
-                        "bin/app_apply.sh", stdinData: deletionPlan.stdinData, timeout: 900)
+                        "bin/app_apply.sh", stdinData: deletionPlan.stdinData,
+                        extraEnvironment: environment, timeout: 900)
                     self.isApplyingDevEnv = false
                     if !result.output.isEmpty { self.log(result.output) }
                     self.logFailure(result, stdoutAlreadyLogged: true, notifyingUser: false)
@@ -201,8 +204,9 @@ extension AppState {
                 self.devEnvStatus = self.l10n.tf("log.gcRun", action.command)
                 self.log(self.l10n.tf("log.gcRun", action.command))
                 Task {
+                    let environment = await DeveloperTerminalEnvironmentService.shared.snapshot().environment
                     let result = await MoleEngine.shared.runBridge(
-                        "bin/app_gc_run.sh", arguments: [action.id],
+                        "bin/app_gc_run.sh", arguments: [action.id], extraEnvironment: environment,
                         timeout: 1200, onLine: self.streamLog)
                     self.gcRunningId = nil
                     self.noteHeaderReaction(result.succeeded ? .success : .attention)

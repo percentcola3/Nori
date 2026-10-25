@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// 工具自定义缓存位置解析。只读取用户配置文件与环境变量，不执行任何
@@ -21,6 +22,10 @@ struct DeveloperCacheLocations: Equatable {
     var retainedPhysicalRoots: [String] = []
     var homebrewPhysicalRoots: [String] = []
     var goModPhysicalRoots: [String] = []
+    var dependencyPhysicalRoots: [String] = []
+    var gradlePhysicalCacheRoots: [String] = []
+    var cargoPhysicalCacheRoots: [String] = []
+    var npmPhysicalRoots: [String] = []
 
     static func resolve(home: String,
                         environment: [String: String],
@@ -102,6 +107,30 @@ struct DeveloperCacheLocations: Equatable {
             pnpmStore = home + "/Library/pnpm/store"
         }
 
+        let gradleHomes = [home + "/.gradle"] + [expand(environment["GRADLE_USER_HOME"])].compactMap { $0 }
+        let cargoHomes = [home + "/.cargo"] + [expand(environment["CARGO_HOME"])].compactMap { $0 }
+        let dependencyRoots = [home + "/.m2/repository", home + "/.ivy2/cache",
+            home + "/.nuget/packages", home + "/.pub-cache", home + "/.cabal/packages",
+            home + "/.cpan/sources", home + "/.sbt/boot", home + "/.sbt/launchers"]
+            + cargoHomes.flatMap { [$0 + "/registry/src", $0 + "/git"] }
+        // Preserve the physical spelling required by the no-follow walker.
+        // Foundation may shorten /private/var to the /var symlink alias.
+        func physicalPath(_ path: String) -> String {
+            if let pointer = realpath(path, nil) {
+                defer { free(pointer) }
+                return String(cString: pointer)
+            }
+            let resolved = URL(fileURLWithPath: path, isDirectory: true).resolvingSymlinksInPath().path
+            if resolved == "/var" || resolved.hasPrefix("/var/")
+                || resolved == "/tmp" || resolved.hasPrefix("/tmp/")
+                || resolved == "/etc" || resolved.hasPrefix("/etc/") {
+                return "/private" + resolved
+            }
+            return resolved
+        }
+        func physicalRoots(_ paths: [String]) -> [String] {
+            Array(Set(paths.map(physicalPath))).sorted()
+        }
         return DeveloperCacheLocations(
             npmCache: firstExisting([npmCache]),
             yarnCache: firstExisting([yarnCache]),
@@ -122,17 +151,15 @@ struct DeveloperCacheLocations: Equatable {
                                      home + "/Library/Caches/org.R-project.R/R/renv",
                                      home + "/.aws/cli/cache", home + "/.jupyter/runtime"]
                 + [expand(environment["DENO_DIR"]),
-                   expand(environment["POETRY_CACHE_DIR"]).map { $0 + "/virtualenvs" }].compactMap { $0 }).map {
-                    URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
-                },
+                   expand(environment["POETRY_CACHE_DIR"]).map { $0 + "/virtualenvs" }].compactMap { $0 }).map(physicalPath),
             homebrewPhysicalRoots: ([home + "/Library/Caches/Homebrew"]
-                + [expand(environment["HOMEBREW_CACHE"])].compactMap { $0 }).map {
-                    URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
-                },
+                + [expand(environment["HOMEBREW_CACHE"])].compactMap { $0 }).map(physicalPath),
             goModPhysicalRoots: ([home + "/go/pkg/mod"]
-                + [expand(environment["GOMODCACHE"])].compactMap { $0 }).map {
-                    URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
-                })
+                + [expand(environment["GOMODCACHE"])].compactMap { $0 }).map(physicalPath),
+            dependencyPhysicalRoots: physicalRoots(dependencyRoots),
+            gradlePhysicalCacheRoots: physicalRoots(gradleHomes.map { $0 + "/caches" }),
+            cargoPhysicalCacheRoots: physicalRoots(cargoHomes.map { $0 + "/registry/cache" }),
+            npmPhysicalRoots: physicalRoots([home + "/.npm"] + [npmCache].compactMap { $0 }))
     }
 
     /// 进程级缓存。环境变量与用户配置在进程生命周期内视为稳定；测试用
@@ -294,6 +321,7 @@ enum DeveloperCleanupCatalog {
         if let brew = locations.homebrewCache { add(brew + "/downloads", "Homebrew Cache") }
         if let go = locations.goModCache { add(go + "/cache", "Go Download Cache") }
         if let cargo = locations.cargoHome { add(cargo + "/registry/cache", "Cargo Cache") }
+        for cache in locations.cargoPhysicalCacheRoots { add(cache, "Cargo Cache") }
         if let gradle = locations.gradleUserHome {
             for leaf in ["daemon", "workers", "notifications"] { add(gradle + "/" + leaf, "Gradle Cache") }
         }
@@ -323,7 +351,8 @@ enum DeveloperCleanupCatalog {
         let brewRoots: [String]
         let goRoots: [String]
         let dependencyRoots: [String]
-        let gradleHomes: [String]
+        let strictDependencyRoots: Set<String>
+        let gradleCacheRoots: [String]
     }
     private static let boundaryLock = NSLock()
     private static var boundaryCache: [String: ToolStateBoundary] = [:]
@@ -347,16 +376,17 @@ enum DeveloperCleanupCatalog {
             + (locations.homebrewCache.map { [$0] } ?? [])
         let goRoots = [home + "/go/pkg/mod"] + locations.goModPhysicalRoots
             + (locations.goModCache.map { [$0] } ?? [])
-        var dependencyRoots = [home + "/.m2/repository", home + "/.ivy2/cache", home + "/.gradle/caches",
-                               home + "/.nuget/packages", home + "/.pub-cache", home + "/.cargo/git",
-                               home + "/.cargo/registry/src", home + "/.cabal/packages", home + "/.cpan/sources",
-                               home + "/.sbt/boot", home + "/.sbt/launchers"] + goRoots
-        let gradleHomes = [home + "/.gradle"] + (locations.gradleUserHome.map { [$0] } ?? [])
-        if let gradle = locations.gradleUserHome { dependencyRoots.append(gradle + "/caches") }
-        if let cargo = locations.cargoHome { dependencyRoots += [cargo + "/registry/src", cargo + "/git"] }
+        var strictRoots = [home + "/.m2/repository", home + "/.ivy2/cache",
+                           home + "/.nuget/packages", home + "/.pub-cache", home + "/.cargo/git",
+                           home + "/.cargo/registry/src", home + "/.cabal/packages", home + "/.cpan/sources",
+                           home + "/.sbt/boot", home + "/.sbt/launchers"] + locations.dependencyPhysicalRoots
+        let gradleCacheRoots = [home + "/.gradle/caches"]
+            + (locations.gradleUserHome.map { [$0 + "/caches"] } ?? []) + locations.gradlePhysicalCacheRoots
+        if let cargo = locations.cargoHome { strictRoots += [cargo + "/registry/src", cargo + "/git"] }
         let boundary = ToolStateBoundary(locations: locations, retained: Array(Set(retained)),
                                          brewRoots: Array(Set(brewRoots)), goRoots: Array(Set(goRoots)),
-                                         dependencyRoots: Array(Set(dependencyRoots)), gradleHomes: gradleHomes)
+                                         dependencyRoots: Array(Set(strictRoots + goRoots + gradleCacheRoots)),
+                                         strictDependencyRoots: Set(strictRoots), gradleCacheRoots: gradleCacheRoots)
         boundaryCache[home] = boundary
         return boundary
     }
@@ -370,11 +400,12 @@ enum DeveloperCleanupCatalog {
         guard let owner = boundary.dependencyRoots.filter({ path == $0 || path.hasPrefix($0 + "/") })
             .max(by: { $0.count < $1.count }) else { return false }
         // The most specific owner wins when a configured store is nested in
-        // another tool's cache. A broad cache exception cannot erase ownership.
+        // another tool's cache. A strict owner wins an equal-root collision.
+        if boundary.strictDependencyRoots.contains(owner) { return true }
         if boundary.goRoots.contains(owner) {
             return path != owner + "/cache" && !path.hasPrefix(owner + "/cache/")
         }
-        if boundary.gradleHomes.contains(where: { owner == $0 + "/caches" }) {
+        if boundary.gradleCacheRoots.contains(owner) {
             let prefix = owner + "/"
             if path.hasPrefix(prefix),
                String(path.dropFirst(prefix.count)).split(separator: "/").first?.hasPrefix("build-cache-") == true { return false }

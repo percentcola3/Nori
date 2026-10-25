@@ -61,7 +61,11 @@ final class MoleEngine {
         let inherited = ProcessInfo.processInfo.environment
         let allowedKeys = [
             "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR",
-            "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"
+            "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME",
+            "GRADLE_USER_HOME", "CARGO_HOME", "GOPATH", "GOCACHE", "GOMODCACHE",
+            "NPM_CONFIG_CACHE", "npm_config_cache", "PIP_CACHE_DIR", "POETRY_CACHE_DIR",
+            "UV_CACHE_DIR", "BUN_INSTALL_CACHE_DIR", "DENO_DIR", "HOMEBREW_CACHE",
+            "PNPM_STORE_DIR", "YARN_CACHE_FOLDER"
         ]
         var environment: [String: String] = [:]
         for key in allowedKeys {

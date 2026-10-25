@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 // Shared presentation contracts for the isolated Shell, Network and CLI checks.
 // The production build and screenshot fixtures verify real materials/layout.
@@ -15,6 +16,7 @@ extension Color {
     static let warning = Color.orange
     static let success = Color.green
     static let accentText = Color.blue
+    static let textSecondary = Color(nsColor: .secondaryLabelColor)
     static let moleAccent = Color.blue
     static let hairline = Color.gray
     static let surface1 = Color.gray
@@ -65,6 +67,49 @@ struct MoleIconButtonStyle: ButtonStyle {
 }
 struct MoleSwitchToggleStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View { configuration.label }
+}
+// Keep native selection behavior and the production generic/binding contract.
+// Only the shared control chrome is simplified, as with the other view stubs.
+private struct MoleFilledControlChrome: ViewModifier {
+    func body(content: Content) -> some View { content }
+}
+struct MoleSelectionValueLabel: View {
+    let value: String
+    var symbol = "chevron.down"
+    var expanded = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(value).lineLimit(1)
+            Image(systemName: symbol)
+                .font(.system(size: 9, weight: .semibold))
+                .rotationEffect(.degrees(expanded ? 180 : 0))
+                .accessibilityHidden(true)
+        }
+        .modifier(MoleFilledControlChrome())
+    }
+}
+struct MoleMenuPicker<Selection: Hashable, Options: View>: View {
+    let title: String
+    let value: String
+    @Binding var selection: Selection
+    @ViewBuilder let content: () -> Options
+
+    var body: some View {
+        Menu {
+            Picker(title, selection: $selection) { content() }
+                .pickerStyle(.inline)
+                .labelsHidden()
+        } label: {
+            MoleSelectionValueLabel(value: value, symbol: "chevron.up.chevron.down")
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel(title.isEmpty ? value : title)
+        .accessibilityValue(value)
+    }
 }
 struct PillPicker: View {
     let items: [String]

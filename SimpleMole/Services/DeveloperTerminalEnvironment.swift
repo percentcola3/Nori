@@ -21,7 +21,7 @@ actor DeveloperTerminalEnvironmentService {
                        "http_proxy", "https_proxy", "all_proxy", "no_proxy", "HTTP_PROXY", "HTTPS_PROXY",
                        "ALL_PROXY", "NO_PROXY", "HOMEBREW_API_DOMAIN", "HOMEBREW_BOTTLE_DOMAIN",
                        "UV_DEFAULT_INDEX", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "GOPROXY", "npm_config_registry",
-                       "NPM_CONFIG_CACHE", "npm_config_cache", "PIP_CACHE_DIR", "UV_CACHE_DIR", "BUN_INSTALL_CACHE_DIR", "DENO_DIR",
+                       "NPM_CONFIG_CACHE", "npm_config_cache", "PIP_CACHE_DIR", "UV_CACHE_DIR", "POETRY_CACHE_DIR", "GRADLE_USER_HOME", "BUN_INSTALL_CACHE_DIR", "DENO_DIR",
                        "HOMEBREW_CACHE", "PNPM_STORE_DIR", "YARN_CACHE_FOLDER", "DOCKER_CONFIG", "YARN_NPM_REGISTRY_SERVER",
                        "npm_config_proxy", "npm_config_https_proxy", "NPM_CONFIG_PROXY", "NPM_CONFIG_HTTPS_PROXY", "PIP_PROXY"]
     private var cached: DeveloperTerminalSnapshot?

@@ -38,7 +38,19 @@ final class DeveloperRefreshScanGate {
 
 @MainActor
 final class AppState {
-    var externalBusy = false
+    // The existing externalBusy fixture represents another developer task.
+    // Model it as an environment scan rather than unrelated page activity.
+    var externalBusy: Bool {
+        get { isScanningEnv }
+        set { isScanningEnv = newValue }
+    }
+    var isScanningEnv = false
+    var isApplyingDevEnv = false
+    var isRefreshingGc = false
+    var gcRunningId: String?
+    var isNetworkToolRunning = false
+    struct SimulatorInventoryFixture { var isDeleting = false }
+    var simulatorInventory = SimulatorInventoryFixture()
     var isDeveloperCommandRunning = false
     var isDeveloperConfigurationWriting = false {
         didSet {
@@ -49,7 +61,8 @@ final class AppState {
             }
         }
     }
-    var isBusy: Bool { externalBusy || isDeveloperCommandRunning || isDeveloperConfigurationWriting }
+    // DEVELOPER_BUSY_PROPERTY
+    var isBusy: Bool { isDeveloperTaskBusy }
     private var unlockWaiters: [CheckedContinuation<Void, Never>] = []
     // SESSION_OWNER_DECLARATION
     func waitForWriteUnlock() async {

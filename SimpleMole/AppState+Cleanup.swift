@@ -402,8 +402,10 @@ extension AppState {
         statusText = l10n.t("status.scanning")
         log(l10n.t("log.scanningSafe"))
         Task {
+            let terminalEnvironment = await DeveloperTerminalEnvironmentService.shared.snapshot().environment
+            let toolEnvironment = terminalEnvironment.merging(scanEnvironment) { _, authorized in authorized }
             async let scanResult = MoleEngine.shared.runBridge(
-                "bin/app_tool_scan.sh", extraEnvironment: scanEnvironment,
+                "bin/app_tool_scan.sh", extraEnvironment: toolEnvironment,
                 timeout: 180, onLine: streamLog)
             async let runtimeText = Task.detached(priority: .utility) {
                 SystemMetrics.processSnapshotText()
@@ -1077,6 +1079,10 @@ extension AppState {
             case .automatic: return "automatic"
             }
         }()]
+        if route == .toolCommand {
+            let terminal = await DeveloperTerminalEnvironmentService.shared.snapshot().environment
+            environment.merge(terminal) { existing, _ in existing }
+        }
         environment.merge(fullDiskScanEnvironment) { _, authorized in authorized }
         if route == .installerTrash, permanently {
             environment["SIMPLEMOLE_DELETE_MODE"] = "permanent"

@@ -335,7 +335,8 @@ struct CleanupTabView: View {
                         .foregroundStyle(Color.moleAccentText)
                 }
             }
-            .toggleStyle(MoleRowSelectionToggleStyle(horizontalPadding: 10))
+            .toggleStyle(MoleRowSelectionToggleStyle(
+                partiallySelected: groupPartiallySelected(group), horizontalPadding: 10))
             .disabled(!state.cleanupScanComplete || state.isApplying)
             .accessibilityIdentifier("cleanup-group-select-" + group.kind.rawValue)
             Button { toggleCollapsed(group.kind, in: collapsedGroups) } label: {
@@ -348,6 +349,14 @@ struct CleanupTabView: View {
             .padding(.trailing, 8)
         }
         .modifier(ListRowSurface(emphasis: .header))
+    }
+
+    private func groupPartiallySelected(_ group: CleanupPresentationGroup) -> Bool {
+        let categories = state.categories.filter {
+            group.categoryIDs.contains($0.id)
+                && (!$0.isAppDataReview || group.kind == .appData || group.kind == .leftovers)
+        }
+        return categories.contains(where: \.selected) && !categories.allSatisfy(\.allSelected)
     }
 
     private func groupSelection(_ group: CleanupPresentationGroup) -> Binding<Bool> {
