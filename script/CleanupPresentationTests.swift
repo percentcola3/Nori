@@ -491,6 +491,12 @@ struct CleanupPresentationTests {
         let output = URL(fileURLWithPath: ProcessInfo.processInfo.environment["NORI_PRESENTATION_OUTPUT"]
                          ?? NSTemporaryDirectory() + "nori-cleanup-presentation-renders", isDirectory: true)
         try! FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        // Terminate only this disposable process if an unexpected native modal
+        // loop stalls a Launch Services run. Never leave an orphaned test App.
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 120) {
+            FileHandle.standardError.write(Data("Cleanup UI fixture timed out; exiting disposable process.\n".utf8))
+            Darwin._exit(124)
+        }
         if ProcessInfo.processInfo.environment["NORI_CONFIRMATION_ONLY"] == "1" {
             // Even an unexpected native modal loop must not wait for a human.
             // This terminates only this disposable fixture process.

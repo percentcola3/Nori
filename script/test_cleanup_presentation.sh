@@ -125,5 +125,30 @@ swiftc -Onone -whole-module-optimization -target "$(uname -m)-apple-macos13.0" -
 if [[ "$UI_COMPILE_ONLY" == 1 ]]; then
     printf 'Cleanup UI fixture compiled without launching an app.\n'
 else
-    "$FIXTURE_APP/Contents/MacOS/CleanupPresentationTests"
+    # Launch Services gives this disposable App a foreground activation request.
+    # Direct executable launch can leave NSApp.activate() inactive on CI macOS.
+    /usr/bin/python3 - "$FIXTURE_APP" "$TEST_DIR" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+app, work = map(Path, sys.argv[1:])
+stdout, stderr = work / 'fixture.stdout', work / 'fixture.stderr'
+command = ['/usr/bin/open', '-n', '-W', '-a', str(app), '--stdout', str(stdout), '--stderr', str(stderr)]
+for name in ('NORI_CONFIRMATION_ONLY', 'NORI_PRESENTATION_OUTPUT'):
+    if name in os.environ:
+        command += ['--env', name + '=' + os.environ[name]]
+result = subprocess.run(command, timeout=130)
+output = stdout.read_text(errors='replace') if stdout.exists() else ''
+errors = stderr.read_text(errors='replace') if stderr.exists() else ''
+print(output, end='')
+print(errors, end='', file=sys.stderr)
+marker = ('Cleanup confirmation-only fixture passed; no production services or deletion called'
+          if os.environ.get('NORI_CONFIRMATION_ONLY') == '1'
+          else 'Cleanup presentation layout: real idle/scanning/results/cleaning/partial/failure/success views retained ')
+# open -W does not propagate the App's exit status. This marker is emitted only
+# after every real-window assertion succeeds, so a crash cannot pass the suite.
+if result.returncode != 0 or marker not in output:
+    raise SystemExit('Cleanup UI fixture did not complete its real-window assertions')
+PY
 fi
