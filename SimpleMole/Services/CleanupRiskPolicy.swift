@@ -1356,12 +1356,73 @@ enum CleanupRiskPolicy {
             databaseFileExtensions.contains((String($0) as NSString).pathExtension.lowercased())
         })
             || databaseSidecarSuffixes.contains(where: name.hasSuffix)) { return true }
-        if extensionName == "app" { return !allowApplicationBundle && !downloadedRuntime }
+        if extensionName == "app" {
+            if allowApplicationBundle || downloadedRuntime { return false }
+            guard isPlainBundleIdentifierCacheDirectory(path, home: home) else { return true }
+        }
         return contextPath.split(separator: "/").contains { component in
             let component = component.lowercased()
             return durableCleanupNames.contains(component)
                 && !((templateSource || runtimeSource) && templateSourceNames.contains(component))
         }
+    }
+
+    /// A bundle identifier may end in `.app` without naming an application.
+    /// This is only a naming exception for a physical, user-owned cache root;
+    /// it grants neither bundle-removal permission nor occupancy exceptions.
+    private static func isPlainBundleIdentifierCacheDirectory(_ path: String, home: String) -> Bool {
+        guard DeletionPlan.isLexicallySafePath(home),
+              isDirectChild(path, of: home + "/Library/Caches"),
+              isValidReverseDNSOwner((path as NSString).lastPathComponent) else { return false }
+        let components = path.split(separator: "/").map(String.init)
+        guard components.count <= 128 else { return false }
+        let flags = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        let rootFD = open("/", flags)
+        guard rootFD >= 0 else { return false }
+        var descriptors = [rootFD]
+        defer { for descriptor in descriptors.reversed() { close(descriptor) } }
+        var edges: [(parent: Int32, name: String, metadata: stat)] = []
+        var descriptor = rootFD
+        var walked = ""
+        var homeMetadata: stat?
+        for component in components {
+            let child = openat(descriptor, component, flags)
+            guard child >= 0 else { return false }
+            descriptors.append(child)
+            var metadata = stat()
+            guard fstat(child, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFDIR else { return false }
+            edges.append((descriptor, component, metadata))
+            descriptor = child
+            walked += "/" + component
+            if walked == home { homeMetadata = metadata }
+        }
+        guard let owner = homeMetadata, let cache = edges.last?.metadata,
+              cache.st_uid == owner.st_uid else { return false }
+        for marker in ["Contents", "Info.plist", "PkgInfo"] {
+            var metadata = stat()
+            // A symlink marker also counts as a possible bundle. Unknown lookup
+            // results must never be mistaken for an absent application marker.
+            guard fstatat(descriptor, marker, &metadata, AT_SYMLINK_NOFOLLOW) != 0,
+                  errno == ENOENT else { return false }
+        }
+        for (index, edge) in edges.enumerated() {
+            var current = stat()
+            guard fstatat(edge.parent, edge.name, &current, AT_SYMLINK_NOFOLLOW) == 0,
+                  current.st_mode & S_IFMT == S_IFDIR,
+                  current.st_dev == edge.metadata.st_dev, current.st_ino == edge.metadata.st_ino,
+                  current.st_uid == edge.metadata.st_uid,
+                  current.st_birthtimespec.tv_sec == edge.metadata.st_birthtimespec.tv_sec,
+                  current.st_birthtimespec.tv_nsec == edge.metadata.st_birthtimespec.tv_nsec else { return false }
+            if index == edges.count - 1 {
+                // Bind marker absence to the same named cache directory and
+                // reject a marker added/replaced during the classification.
+                guard current.st_mtimespec.tv_sec == cache.st_mtimespec.tv_sec,
+                      current.st_mtimespec.tv_nsec == cache.st_mtimespec.tv_nsec,
+                      current.st_ctimespec.tv_sec == cache.st_ctimespec.tv_sec,
+                      current.st_ctimespec.tv_nsec == cache.st_ctimespec.tv_nsec else { return false }
+            }
+        }
+        return true
     }
 
     /// The pnpm dlx cache contains downloaded packages. Recognize source

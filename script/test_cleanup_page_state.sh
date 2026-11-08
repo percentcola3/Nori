@@ -3,7 +3,17 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/nori-cleanup-page-state.XXXXXX")"
-trap 'rm -rf "$TEST_DIR"' EXIT
+cleanup() {
+    /usr/bin/python3 - "$TEST_DIR" "${TMPDIR:-/tmp}" <<'PY'
+from pathlib import Path
+import sys
+path, base = map(Path, sys.argv[1:])
+if path.is_symlink() or path.resolve().parent != base.resolve() or not path.name.startswith("nori-cleanup-page-state."):
+    raise SystemExit("Refusing to remove an unexpected page-state test directory")
+PY
+    rm -rf -- "${TEST_DIR:?}"
+}
+trap cleanup EXIT
 source "$ROOT_DIR/script/test_developer_toolchain.sh"
 
 /usr/bin/python3 - "$ROOT_DIR" "$TEST_DIR" <<'PY'
@@ -13,7 +23,8 @@ import sys
 
 root, destination = map(Path, sys.argv[1:])
 source = "\n".join(path.read_text() for path in sorted((root / "SimpleMole").glob("AppState*.swift"))).splitlines()
-names = ["applyCleanup", "configureCleanupRetry", "retryFailedCleanup", "recordRemainingCleanup",
+names = ["traceCleanupInteraction", "requestCleanupFromPage", "cancelCleanupConfirmation", "runConfirmation",
+         "applyCleanup", "executeCleanupRoute", "freshAdministratorCleanupItems", "configureCleanupRetry", "retryFailedCleanup", "recordRemainingCleanup",
          "reportCleanupResult", "prepareStartupPermissions", "refreshAuthorizationAndResume"]
 methods = []
 for name in names:
@@ -41,7 +52,7 @@ execution = next(index for index in range(declaration + 1, len(source))
 boundary = "\n".join(source[declaration:execution]).replace("private func", "func", 1)
 methods.append(boundary + "\n" + '''        cleanupRetryAvailable = false
         cleanupRuntime.retryAction = nil
-        attempts.append(Attempt(categories: requested, priorResult: priorResult,
+        attempts.append(Attempt(categories: requested, family: applyFamily, priorResult: priorResult,
                                 maintenanceIDs: maintenanceIDs, installers: installers,
                                 retryScope: retryScope, pendingMaintenanceIDs: pendingMaintenanceIDs))
         isApplying = false
@@ -52,6 +63,10 @@ for name, declaration in [
     ("uniqueAgentBytes", re.compile(r"^    nonisolated static func uniqueAgentBytes\(")),
     ("isCleanupSubmissionBlocked", re.compile(r"^    var isCleanupSubmissionBlocked: Bool \{")),
     ("isAgentMutationBusy", re.compile(r"^    var isAgentMutationBusy: Bool \{")),
+    ("isCleanupTaskBusy", re.compile(r"^    var isCleanupTaskBusy: Bool \{")),
+    ("hasCleanupSelection", re.compile(r"^    var hasCleanupSelection: Bool \{")),
+    ("cleanupButtonBlockReason", re.compile(r"^    var cleanupButtonBlockReason: String\? \{")),
+    ("cleanupGateSignature", re.compile(r"^    var cleanupGateSignature: String \{")),
 ]:
     matches = [index for index, line in enumerate(source) if declaration.match(line)]
     if len(matches) != 1:
@@ -79,6 +94,7 @@ cp "$ROOT_DIR/SimpleMole/Models.swift" \
     "$ROOT_DIR/SimpleMole/Services/DeveloperCacheLocator.swift" \
     "$ROOT_DIR/SimpleMole/Services/TaskFeedbackNotice.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" \
+    "$ROOT_DIR/SimpleMole/Services/CleanupRetryPolicy.swift" \
     "$ROOT_DIR/script/CleanupRiskTestL10nStub.swift" "$TEST_DIR/sources/"
 swiftc -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$TEST_DIR/module-cache}" \

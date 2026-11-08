@@ -670,7 +670,7 @@ enum L10nTaskFeedbackTables {
         ]
     ]
 
-private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm.message","uninstall.confirm.running","uninstall.confirm.force","uninstall.status.closing","uninstall.reason.stop","uninstall.reason.bundle","uninstall.reason.openProcess"]
+private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm.message","uninstall.confirm.running","uninstall.confirm.force","uninstall.status.closing","uninstall.reason.stop","uninstall.reason.bundle","uninstall.reason.openProcess","uninstall.reason.adminLocation","uninstall.status.residuesRemain"]
     private static let uninstallTranslations: [AppLanguage: [String]] = [
         .en: [
             "Uninstall %@?",
@@ -680,7 +680,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "Closing %@…",
             "Some app processes could not be safely stopped. Nothing was removed. Close them and retry.",
             "The application remains installed.",
-            "In use by %@ (PID %@)."
+            "In use by %@ (PID %@).",
+            "Administrator uninstall supports only apps directly inside /Applications. For system services or managed components, use the owning app or the vendor’s uninstall tool.",
+            "%@ has been uninstalled; some residues remain."
         ],
         .zhHans: [
             "卸载 %@？",
@@ -690,7 +692,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "正在结束 %@ 的进程…",
             "部分应用进程无法安全结束，尚未移除任何项目。请退出这些进程后重试。",
             "应用仍然保留，尚未卸载。",
-            "占用进程：%@（PID %@）。"
+            "占用进程：%@（PID %@）。",
+            "管理员卸载仅支持直接位于 /Applications 的应用。系统服务或受管理组件，请使用所属应用或厂商卸载工具处理。",
+            "%@ 应用已卸载，部分残留尚未清理。"
         ],
         .zhHant: [
             "解除安裝 %@？",
@@ -700,7 +704,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "正在結束 %@ 的程序…",
             "部分應用程式程序無法安全結束，尚未移除任何項目。請結束這些程序後重試。",
             "應用程式仍然保留，尚未解除安裝。",
-            "使用中的程序：%@（PID %@）。"
+            "使用中的程序：%@（PID %@）。",
+            "管理員解除安裝僅支援直接位於 /Applications 的應用程式。系統服務或受管理元件，請使用所屬應用程式或廠商解除安裝工具處理。",
+            "%@ 應用程式已解除安裝，部分殘留尚未清理。"
         ],
         .ja: [
             "%@ を削除しますか？",
@@ -710,7 +716,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "%@ のプロセスを終了中…",
             "一部のアプリプロセスを安全に終了できませんでした。項目は削除していません。プロセスを終了してから再試行してください。",
             "アプリはまだインストールされています。",
-            "使用中のプロセス：%@（PID %@）。"
+            "使用中のプロセス：%@（PID %@）。",
+            "管理者権限による削除は /Applications 直下のアプリのみ対応しています。システムサービスや管理対象のコンポーネントには、元のアプリまたは提供元のアンインストールツールを使用してください。",
+            "%@ は削除されましたが、一部の関連ファイルが残っています。"
         ],
         .ko: [
             "%@을(를) 제거할까요?",
@@ -720,7 +728,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "%@ 프로세스 종료 중…",
             "일부 앱 프로세스를 안전하게 종료하지 못했습니다. 제거된 항목은 없습니다. 프로세스를 종료한 후 다시 시도하세요.",
             "앱이 아직 설치되어 있습니다.",
-            "사용 중인 프로세스: %@ (PID %@)."
+            "사용 중인 프로세스: %@ (PID %@).",
+            "관리자 권한 제거는 /Applications 바로 아래의 앱만 지원합니다. 시스템 서비스나 관리되는 구성 요소는 해당 앱 또는 공급업체의 제거 도구를 사용하세요.",
+            "%@ 앱은 제거되었지만 일부 잔여 파일이 남아 있습니다."
         ],
         .de: [
             "%@ deinstallieren?",
@@ -730,7 +740,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "Prozesse von %@ werden beendet…",
             "Einige App-Prozesse konnten nicht sicher beendet werden. Es wurde nichts entfernt. Beende diese Prozesse und versuche es erneut.",
             "Die App ist weiterhin installiert.",
-            "Verwendet von %@ (PID %@)."
+            "Verwendet von %@ (PID %@).",
+            "Die Deinstallation mit Administratorrechten unterstützt nur Apps direkt in /Applications. Verwende für Systemdienste oder verwaltete Komponenten die zugehörige App oder das Deinstallationsprogramm des Anbieters.",
+            "%@ wurde deinstalliert; einige Reste sind noch vorhanden."
         ],
         .fr: [
             "Désinstaller %@ ?",
@@ -740,7 +752,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "Arrêt des processus de %@…",
             "Certains processus de l’app n’ont pas pu être arrêtés en toute sécurité. Rien n’a été supprimé. Fermez-les, puis réessayez.",
             "L’application est toujours installée.",
-            "Utilisé par %@ (PID %@)."
+            "Utilisé par %@ (PID %@).",
+            "La désinstallation avec les droits administrateur prend uniquement en charge les apps directement dans /Applications. Pour les services système ou les composants gérés, utilisez l’app concernée ou l’outil de désinstallation du fournisseur.",
+            "%@ a été désinstallé ; certains fichiers résiduels restent présents."
         ],
         .es: [
             "¿Desinstalar %@?",
@@ -750,7 +764,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "Cerrando procesos de %@…",
             "No se pudieron detener algunos procesos de la app de forma segura. No se eliminó nada. Ciérralos e inténtalo de nuevo.",
             "La aplicación sigue instalada.",
-            "En uso por %@ (PID %@)."
+            "En uso por %@ (PID %@).",
+            "La desinstalación con permisos de administrador solo admite apps directamente en /Applications. Para servicios del sistema o componentes administrados, usa la app correspondiente o la herramienta de desinstalación del proveedor.",
+            "%@ se ha desinstalado; quedan algunos archivos residuales."
         ],
         .pt: [
             "Desinstalar %@?",
@@ -760,7 +776,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "Encerrando processos de %@…",
             "Alguns processos do app não puderam ser encerrados com segurança. Nada foi removido. Encerre-os e tente novamente.",
             "O aplicativo continua instalado.",
-            "Em uso por %@ (PID %@)."
+            "Em uso por %@ (PID %@).",
+            "A desinstalação com privilégios de administrador aceita apenas apps diretamente em /Applications. Para serviços do sistema ou componentes gerenciados, use o app correspondente ou a ferramenta de desinstalação do fornecedor.",
+            "%@ foi desinstalado; alguns arquivos residuais permanecem."
         ],
         .it: [
             "Disinstallare %@?",
@@ -770,7 +788,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "Chiusura dei processi di %@…",
             "Alcuni processi dell’app non possono essere terminati in sicurezza. Nessun elemento è stato rimosso. Chiudili e riprova.",
             "L’app è ancora installata.",
-            "In uso da %@ (PID %@)."
+            "In uso da %@ (PID %@).",
+            "La disinstallazione con privilegi di amministratore supporta solo le app direttamente in /Applications. Per servizi di sistema o componenti gestiti, usa l’app associata o lo strumento di disinstallazione del produttore.",
+            "%@ è stato disinstallato; rimangono alcuni file residui."
         ],
         .ru: [
             "Удалить %@?",
@@ -780,7 +800,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "Завершение процессов %@…",
             "Некоторые процессы приложения нельзя безопасно завершить. Ничего не удалено. Завершите их и повторите попытку.",
             "Приложение по-прежнему установлено.",
-            "Используется процессом %@ (PID %@)."
+            "Используется процессом %@ (PID %@).",
+            "Удаление с правами администратора поддерживает только приложения непосредственно в /Applications. Для системных служб или управляемых компонентов используйте соответствующее приложение или средство удаления поставщика.",
+            "Приложение %@ удалено, но некоторые остаточные файлы сохранены."
         ],
         .tr: [
             "%@ kaldırılsın mı?",
@@ -790,7 +812,9 @@ private static let uninstallKeys = ["uninstall.confirm.title","uninstall.confirm
             "%@ işlemleri kapatılıyor…",
             "Bazı uygulama işlemleri güvenli şekilde durdurulamadı. Hiçbir şey kaldırılmadı. İşlemleri kapatıp tekrar deneyin.",
             "Uygulama hâlâ yüklü.",
-            "%@ tarafından kullanılıyor (PID %@)."
+            "%@ tarafından kullanılıyor (PID %@).",
+            "Yönetici olarak kaldırma yalnızca doğrudan /Applications içindeki uygulamaları destekler. Sistem hizmetleri veya yönetilen bileşenler için ilgili uygulamayı ya da üreticinin kaldırma aracını kullanın.",
+            "%@ kaldırıldı; bazı kalıntı dosyalar duruyor."
         ]
     ]
 

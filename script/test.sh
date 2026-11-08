@@ -78,8 +78,9 @@ test_native_core_ownership_contract() {
     local system_metrics="$ROOT_DIR/SimpleMole/Services/SystemMetrics.swift"
     local build_script="$ROOT_DIR/script/build.sh"
 
-    /usr/bin/grep -Fq 'NativeCore.shared.scanCleanup(progress:' "$app_state" || \
-        fail "clean does not use NativeCore progress scanner"
+    /usr/bin/grep -Fq 'CleanupScanProcess.scanCleanup' "$app_state" && \
+        /usr/bin/grep -Fq 'NativeCore.shared.scanCleanup' "$ROOT_DIR/SimpleMole/Support/Workers/NoriCleanupScanWorker.swift" || \
+        fail "clean discovery does not use the isolated native read-only worker"
     /usr/bin/grep -Fq 'NativeCore.shared.applyCleanup' "$app_state" || \
         fail "clean apply does not use NativeCore"
     /usr/bin/grep -Fq 'NativeCore.shared.scanInstalledApps' "$app_state" || \
@@ -441,8 +442,10 @@ test_productivity_feature_contract() {
     bash "$ROOT_DIR/script/test_cleanup_manual_trigger.sh" || \
         fail "cleanup manual-trigger lifecycle contract"
     /usr/bin/grep -Fq 'ForEach(sortedPaths, id: \.self)' "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" && \
-        /usr/bin/grep -Fq 'sortedPaths = category.pathsByDescendingSize' "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" || \
-        fail "expanded cleanup children are not selectable and sorted by size"
+        /usr/bin/grep -Fq '.task(id: category.pathOrderToken)' "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" && \
+        /usr/bin/grep -Fq 'CleanupCategory.sortedPaths(paths, pathBytes: sizes)' "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" && \
+        /usr/bin/grep -Fq 'guard !Task.isCancelled, category.pathOrderToken == token else { return }' "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" || \
+        fail "expanded cleanup children lost versioned background sorting or selectable paths"
     /usr/bin/grep -Fq 'source.compactMap(\.selectedSubset)' "$app_state" || \
         fail "cleanup apply still submits whole categories instead of selected children"
     /usr/bin/grep -Fq '.sorted(by: CleanupCategory.sizeDescending)' "$app_state" || \
@@ -625,12 +628,14 @@ test_productivity_feature_contract() {
         fail "manual disk cleanup bypasses its category and runtime eligibility filters"
     /usr/bin/grep -Fq 'environment["SIMPLEMOLE_DELETE_MODE"] = "permanent"' "$app_state" || \
         fail "disk cleanup does not explicitly request permanent deletion"
-    # 2026-10 起清理不再弹确认：清单勾选即指令，执行层复核保持不变。
+    # 可再生缓存直接执行；需复核的应用数据由稳定窗口状态确认原始选择。
     if /usr/bin/grep -Fq 'confirm.cleanupPermanent.title' "$app_state"; then
         fail "manual cleanup still prompts for confirmation before applying"
     fi
-    /usr/bin/grep -Fq 'performApply(categories: selectedCategories,' \
-        "$app_state" || fail "manual cleanup no longer executes directly"
+    /usr/bin/grep -Fq 'performApply(categories: prepared.0,' "$app_state" \
+        && /usr/bin/grep -Fq 'state.requestCleanupFromPage()' "$ROOT_DIR/SimpleMole/Views/CleanupTabView.swift" \
+        && /usr/bin/grep -Fq 'func requestCleanupFromPage()' "$app_state" || \
+        fail "manual cleanup lost its traced selection and execution entry"
     if /usr/bin/grep -Fq 'private var quickRoots' "$analyze_view"; then
         fail "disk analysis still exposes confusing directory tabs"
     fi
@@ -2572,11 +2577,21 @@ if [[ "${SM_TEST_SKIP_SWIFT:-0}" != "1" ]]; then
     run_suite native-a bash "$ROOT_DIR/script/test_similar_images.sh" || fail "similar image grouping tests"
     run_suite native-b bash "$ROOT_DIR/script/test_duplicate_workspaces.sh" || fail "duplicate result reuse and persistence tests"
     run_suite native-c bash "$ROOT_DIR/script/test_cleanup_scan.sh" || fail "native cleanup scan tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_cleanup_discovery_performance.sh" || fail "large cleanup discovery and completed-root filtering tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_cleanup_scan_process.sh" || fail "read-only cleanup worker protocol, process isolation and cancellation tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_cleanup_presentation.sh" --projection-only || fail "large cleanup presentation reuse and generation tests"
     run_suite native-a bash "$ROOT_DIR/script/test_cache_cleanup.sh" --all || fail "cache cleanup unit and filesystem E2E tests"
-    run_suite native-b bash "$ROOT_DIR/script/test_cleanup_page_state.sh" || fail "cleanup modal results and pending retry tests"
+    run_suite native-a bash "$ROOT_DIR/script/test_cleanup_removal_memory.sh" || fail "bounded autorelease lifetimes during batched and recursive cleanup"
+    run_suite native-a bash "$ROOT_DIR/script/test_cleanup_execution.sh" || fail "cleanup result accounting and confirmed installer retry reports"
+    run_suite native-b bash "$ROOT_DIR/script/test_cleanup_page_state.sh" || fail "silent cleanup results and bounded retry controller tests"
+    run_suite native-b bash "$ROOT_DIR/script/test_cleanup_retry_policy.sh" || fail "three-attempt shared cleanup budget and result accounting"
+    run_suite native-c bash "$ROOT_DIR/script/test_administrator_cleanup_retry.sh" || fail "identity-bound administrator retries without renewed authorization"
+    run_suite native-b bash "$ROOT_DIR/script/test_cleanup_trace.sh" || fail "bounded persistent cleanup interaction diagnostics"
     run_suite native-c bash "$ROOT_DIR/script/test_auto_cleanup_workflow.sh" || fail "automatic cleanup scheduler lifecycle tests"
     run_suite native-a bash "$ROOT_DIR/script/test_administrator_cleanup.sh" || fail "administrator cleanup safety tests"
+    run_suite native-c bash "$ROOT_DIR/script/test_cleanup_non_removable.sh" || fail "non-removable cleanup roots, fresh elevation guards and retention evidence"
     run_suite native-b bash "$ROOT_DIR/script/test_administrator_cleanup_performance.sh" || fail "bounded cleanup batches, path indices and UI responsiveness"
+    run_suite native-b bash "$ROOT_DIR/script/test_administrator_retention_report.sh" || fail "identity-bound retained-root reports, counts and background validation"
     run_suite native-c bash "$ROOT_DIR/script/test_analysis_deletion.sh" || fail "analysis selection identity-bound Trash tests"
     run_suite native-a bash "$ROOT_DIR/script/test_analysis_inventory.sh" || fail "independent incremental analysis cache tests"
     run_suite native-b bash "$ROOT_DIR/script/test_analysis_selection.sh" || fail "per-category cleanup and compression selection tests"

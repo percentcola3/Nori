@@ -24,6 +24,58 @@ private final class ScanProgressRecorder: @unchecked Sendable {
 
 @main
 struct CleanupScanTests {
+    private static func testDiscoveryResumeFiltering(fixture: URL) async throws {
+        let fm = FileManager.default
+        let home = fixture.appendingPathComponent("discovery-resume-home")
+        let trash = home.appendingPathComponent(".Trash")
+        precondition(DeletionPlan.isLexicallySafePath(home.path) && home.path.hasPrefix(fixture.path + "/"))
+        try fm.createDirectory(at: trash, withIntermediateDirectories: true)
+        let names = ["complete[1]", "caf\u{e9}", "complete[1]-sibling", "pending", "glob-a.cache", "\u{301}pending"]
+        for name in names { try Data(repeating: 97, count: 4096).write(to: trash.appendingPathComponent(name)) }
+        let protectedRoot = trash.appendingPathComponent("literal-protected")
+        try fm.createDirectory(at: protectedRoot, withIntermediateDirectories: false)
+        try Data("keep owned fixture".utf8).write(to: protectedRoot.appendingPathComponent("entry"))
+        let outside = fixture.appendingPathComponent("discovery-outside")
+        try fm.createDirectory(at: outside, withIntermediateDirectories: false)
+        try Data("keep outside fixture".utf8).write(to: outside.appendingPathComponent("entry"))
+        let redirected = trash.appendingPathComponent("redirect")
+        try fm.createSymbolicLink(at: redirected, withDestinationURL: outside)
+        let whitelist = home.appendingPathComponent(".config/mole/whitelist")
+        try fm.createDirectory(at: whitelist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data((protectedRoot.path + "\n" + trash.path + "/glob-?.cache\n").utf8).write(to: whitelist)
+        let core = NativeCore(cleanupOpenFileProbe: { [] })
+        let quick = await core.scanCleanup(homeDirectory: home.path)
+        let initial = Set(quick.categories.flatMap(\.paths))
+        let completed: Set<String> = [trash.appendingPathComponent("complete[1]").path, trash.appendingPathComponent("caf\u{e9}").path]
+        expect(quick.succeeded && completed.isSubset(of: initial), "Quick discovery missed owned completed fixtures")
+        let newPath = trash.appendingPathComponent("created-after-quick")
+        try Data(repeating: 98, count: 4096).write(to: newPath)
+        let recorder = ScanProgressRecorder()
+        let progress = CleanupScanProgressSink(minimumInterval: 0) { recorder.record($0) }
+        let deep = await core.scanCleanup(homeDirectory: home.path, progress: progress, mode: .deep,
+                                         excludingScannedRoots: completed)
+        let resumed = Set(deep.categories.flatMap(\.paths))
+        expect(deep.succeeded && resumed.isDisjoint(with: completed), "Deep scan offered already completed paths")
+        for name in ["complete[1]-sibling", "pending", "\u{301}pending", "created-after-quick"] {
+            expect(resumed.contains(trash.appendingPathComponent(name).path),
+                   "Early filtering hid an uncompleted, near-prefix or newly created path: " + name)
+        }
+        for paths in [initial, resumed] {
+            expect(!paths.contains(protectedRoot.path) && !paths.contains(trash.appendingPathComponent("glob-a.cache").path)
+                && !paths.contains(redirected.path), "Compiled matching weakened whitelist or physical-path guards")
+        }
+        expect(recorder.events.filter { $0.phase == "native" }.allSatisfy {
+            !NativeCore.isCoveredByScannedRoot($0.currentPath, roots: completed)
+        }, "Progress presented skipped completed paths as measured work")
+        let cancelled = CleanupScanControl(mode: .deep)
+        cancelled.cancel()
+        let stopped = await core.scanCleanup(homeDirectory: home.path, mode: .deep, control: cancelled,
+                                            excludingScannedRoots: completed)
+        expect(!stopped.succeeded && stopped.categories.isEmpty, "Cancellation became an apparently complete resumed scan")
+        expect(fm.fileExists(atPath: outside.appendingPathComponent("entry").path)
+            && fm.fileExists(atPath: protectedRoot.appendingPathComponent("entry").path), "Read-only discovery changed fixture data")
+    }
+
     static func main() async throws {
         let fm = FileManager.default
         // The production policy excludes /private and /var, including the
@@ -31,6 +83,7 @@ struct CleanupScanTests {
         let fixture = URL(fileURLWithPath: CommandLine.arguments[1]).standardizedFileURL
         try fm.createDirectory(at: fixture, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: fixture) }
+        try await testDiscoveryResumeFiltering(fixture: fixture)
         let home = fixture.appendingPathComponent("home")
         func write(_ path: String, bytes: Int = 4096) throws {
             let url = home.appendingPathComponent(path)
@@ -438,6 +491,18 @@ struct CleanupScanTests {
         let cachedApp = trashHome.appendingPathComponent("Library/Caches/com.example.bundled/Inner.app")
         try fm.createDirectory(at: cachedApp.appendingPathComponent("Contents"), withIntermediateDirectories: true)
         try Data(repeating: 4, count: 4096).write(to: cachedApp.appendingPathComponent("Contents/Info.plist"))
+        let suffixCache = trashHome.appendingPathComponent("Library/Caches/dev.preview.app")
+        let suffixPayload = suffixCache.appendingPathComponent("old.cache")
+        try fm.createDirectory(at: suffixCache, withIntermediateDirectories: true)
+        try Data(repeating: 97, count: 4096).write(to: suffixPayload)
+        let suffixOld = timeval(tv_sec: time_t(Date().timeIntervalSince1970 - 9 * 86400), tv_usec: 0)
+        var suffixTimes = [suffixOld, suffixOld]
+        expect(utimes(suffixPayload.path, &suffixTimes) == 0, "could not age the bundle-ID cache fixture")
+        let directCachedApp = trashHome.appendingPathComponent("Library/Caches/com.example.real.app")
+        try fm.createDirectory(at: directCachedApp.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "com.example.real",
+            "CFBundlePackageType": "APPL", "CFBundleName": "Owned cached application"], format: .xml, options: 0)
+            .write(to: directCachedApp.appendingPathComponent("Contents/Info.plist"))
         let trashScan = await NativeCore(cleanupOpenFileProbe: { [] }).scanCleanup(homeDirectory: trashHome.path)
         let trashPaths = trashScan.categories.flatMap(\.paths)
         let trashBytes = trashScan.categories.compactMap { $0.pathBytes[trashedApp.path] }.first ?? 0
@@ -447,6 +512,10 @@ struct CleanupScanTests {
                "a trashed app bundle must not be split into protected fragments")
         expect(!trashPaths.contains { $0.hasPrefix(cachedApp.path) },
                "app bundles outside the Trash keep content protection")
+        expect(trashPaths.contains { $0 == suffixCache.path || $0.hasPrefix(suffixCache.path + "/") },
+               "a plain bundle-ID cache ending in .app was hidden as an application")
+        expect(!trashPaths.contains { $0 == directCachedApp.path || $0.hasPrefix(directCachedApp.path + "/") },
+               "a real bundle named like a reverse-DNS cache lost application protection")
         let trashRemoval = NativeCore(cleanupOpenFileProbe: { [] }).applyCleanup(
             items: DeletionPlan(paths: [trashedApp.path]).items, permanent: true,
             homeDirectory: trashHome.path)

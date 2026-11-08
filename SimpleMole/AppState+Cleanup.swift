@@ -10,6 +10,18 @@ final class CleanupRuntimeState {
     fileprivate var scanControl: CleanupScanControl?
     fileprivate var progressGeneration = 0
     fileprivate var administratorRequiredPaths = Set<String>()
+    fileprivate var traceRequestID: UUID?
+    fileprivate var confirmationToken: UUID?
+    fileprivate var reviewedSelection: ReviewedSelection?
+
+    struct ReviewedSelection {
+        let categories: [CleanupCategory]
+        let installers: CleanupCategory?
+        let maintenanceIDs: [String]
+        let family: CleanupFamily
+        let generation: UUID
+        let selectedCount: Int
+    }
 }
 
 @MainActor
@@ -88,46 +100,6 @@ extension AppState {
         guard !isCleanupTaskBusy else { return }
         family = .clean
         installerCandidates = nil
-        if mode == .quick, !force, let cached = CleanupCache.restore() {
-            beginCleanupProgress()
-            isScanning = true
-            cleanupScanComplete = false
-            statusText = l10n.t("status.scanningCleanup")
-            let control = CleanupScanControl(mode: .deep)
-            cleanupRuntime.scanControl = control
-            Task {
-                defer { cleanupRuntime.scanControl = nil }
-                async let runtime = captureRunningApplicationSnapshot()
-                let preflight = await Task.detached(priority: .utility) {
-                    NativeCore.shared.preflightCleanupCategories(cached.categories, control: control,
-                        includingAdministratorRequired: true, usingScanInventoryCache: true)
-                }.value
-                let snapshot = await runtime
-                categories = finalizedCleanupCategories(
-                    await appendNoriManagedPaths(to: preflight.categories), running: snapshot)
-                cleanupDeferredPaths = preflight.deferredPaths
-                cleanupRuntime.administratorRequiredPaths = preflight.administratorRequiredPaths
-                cleanupScanComplete = preflight.succeeded && !control.isCancelled
-                if !cleanupScanComplete {
-                    for index in categories.indices { categories[index].selected = false }
-                    CleanupCache.invalidate()
-                }
-                if !preflight.diagnostics.isEmpty { log(preflight.diagnostics) }
-                finishCleanupProgress()
-                isScanning = false
-                noteHeaderReaction(cleanupScanComplete ? .success : .attention)
-                let minutes = max(1, Int(cached.age / 60))
-                statusText = cleanupScanComplete
-                    ? l10n.tf("status.cacheRestored", minutes)
-                    : l10n.t("log.scanPartial")
-                log(l10n.tf("log.cacheUsed", categories.reduce(0) { $0 + $1.paths.count },
-                            ByteFormat.format(totalBytes)))
-                if !cleanupScanComplete, !control.isCancelled {
-                    presentTaskFailure(message: statusText, details: [preflight.error ?? ""])
-                }
-            }
-            return
-        }
         categories = []
         if excludingScannedRoots.isEmpty { cleanupRuntime.administratorRequiredPaths = [] }
         beginCleanupProgress(mode: mode)
@@ -137,18 +109,40 @@ extension AppState {
         log(l10n.t("log.buildList"))
 
         Task {
+            if mode == .quick, !force,
+               let cached = await Task.detached(priority: .utility, operation: { CleanupCache.restore() }).value {
+                await restoreCachedCleanup(cached)
+                return
+            }
             let scan = await unifiedCleanupScan(mode: mode, excludingScannedRoots: excludingScannedRoots)
-            let combined = finalizedCleanupCategories(
-                await appendNoriManagedPaths(to: completedCategories + scan.categories),
-                running: scan.runningSnapshot)
+            let source = await Task.detached(priority: .utility) { completedCategories + scan.categories }.value
+            let managed = await appendNoriManagedPaths(to: source)
+            let priorAdministratorPaths = cleanupRuntime.administratorRequiredPaths
+            let prepared = await Task.detached(priority: .utility) {
+                var combined = CleanupRiskPolicy.presentationCategories(managed, running: scan.runningSnapshot)
+                if !scan.sourceScansSucceeded {
+                    combined = combined.map { $0.clearingSelection() }
+                }
+                let administratorPaths = priorAdministratorPaths.union(scan.administratorRequiredPaths)
+                    .intersection(Set(combined.flatMap(\.paths)))
+                let pathCount = combined.reduce(0) { $0 + $1.paths.count }
+                let completed = mode == .quick && deepFollowUp && !scan.cancelled && !scan.deferredPaths.isEmpty
+                    ? scan.categories.compactMap { category in
+                        category.retainingPaths(category.paths.filter { path in
+                            NativeCore.isCoveredByScannedRoot(path, roots: scan.completedRoots)
+                        })
+                    } : []
+                if mode == .quick && scan.cacheable { CleanupCache.save(scan.categories) }
+                let bytes = Self.uniqueAgentBytes(combined.filter(\.quickCleanEligible).flatMap { category in
+                    category.paths.map { ($0, category.pathBytes[$0] ?? 0) }
+                })
+                return (combined, administratorPaths, pathCount, completed, bytes)
+            }.value
+            let combined = prepared.0
             categories = combined
-            cleanupRuntime.administratorRequiredPaths.formUnion(scan.administratorRequiredPaths)
-            cleanupRuntime.administratorRequiredPaths.formIntersection(Set(combined.flatMap(\.paths)))
+            cleanupRuntime.administratorRequiredPaths = prepared.1
             cleanupDeferredPaths = scan.deferredPaths
             cleanupScanComplete = scan.sourceScansSucceeded
-            if !cleanupScanComplete {
-                for index in categories.indices { categories[index].selected = false }
-            }
             finishCleanupProgress()
             isScanning = false
             noteHeaderReaction(cleanupScanComplete ? .success : .attention)
@@ -170,28 +164,63 @@ extension AppState {
                     ? l10n.tf("status.scanDone", combined.count)
                     : l10n.t("log.scanPartial")
                 log(scan.sourceScansSucceeded
-                    ? l10n.tf("log.scanDone", combined.reduce(0) { $0 + $1.paths.count },
-                              ByteFormat.format(totalBytes))
+                    ? l10n.tf("log.scanDone", prepared.2,
+                              ByteFormat.format(prepared.4))
                     : l10n.t("log.scanPartial"))
             }
             // Persist a successful empty result as well as a non-empty one.
             // A manual request may reuse a valid snapshot, including an
             // empty one. The cache stores only static scanner output; runtime
             // protection is still reapplied on every restore/use.
-            if mode == .quick && scan.cacheable { CleanupCache.save(scan.categories) }
+            // Cache encoding and persistence finished on the utility executor
+            // before releasing this scan's busy state.
             // 合并入口的自动升级：快速扫描有 45s/8s 限时，被截断的目录
             // 直接续跑深度补扫，用户只感知一次“扫描”。
             if deepFollowUp, mode == .quick, !scan.cancelled, !scan.deferredPaths.isEmpty {
                 log(l10n.t("cleanup.scan.deepFollowUp"))
                 statusText = l10n.t("cleanup.scan.deepFollowUp")
-                let completedCategories = scan.categories.compactMap { category in
-                    category.retainingPaths(category.paths.filter { path in
-                        NativeCore.isCoveredByScannedRoot(path, roots: scan.completedRoots)
-                    })
-                }
                 scanCleanup(force: true, mode: .deep, excludingScannedRoots: scan.completedRoots,
-                            completedCategories: completedCategories)
+                            completedCategories: prepared.3)
             }
+        }
+    }
+
+    /// Disk cache decode, recursive preflight and final presentation are all
+    /// prepared away from MainActor. A cache never bypasses the worker boundary.
+    private func restoreCachedCleanup(_ cached: (categories: [CleanupCategory], age: TimeInterval)) async {
+        let control = CleanupScanControl(mode: .deep)
+        cleanupRuntime.scanControl = control
+        defer { cleanupRuntime.scanControl = nil }
+        async let runtime = captureRunningApplicationSnapshot()
+        let preflight = await CleanupScanProcess.scanCleanup(progress: cleanupProgressSink(), mode: .deep,
+            control: control, includingAdministratorRequired: true, cachedCategories: cached.categories)
+        let snapshot = await runtime
+        let managed = await appendNoriManagedPaths(to: preflight.categories)
+        let succeeded = preflight.succeeded && !control.isCancelled
+        let prepared = await Task.detached(priority: .utility) {
+            var combined = CleanupRiskPolicy.presentationCategories(managed, running: snapshot)
+            if !succeeded {
+                combined = combined.map { $0.clearingSelection() }
+                CleanupCache.invalidate()
+            }
+            let bytes = Self.uniqueAgentBytes(combined.filter(\.quickCleanEligible).flatMap { category in
+                category.paths.map { ($0, category.pathBytes[$0] ?? 0) }
+            })
+            return (combined, combined.reduce(0) { $0 + $1.paths.count }, bytes)
+        }.value
+        categories = prepared.0
+        cleanupDeferredPaths = preflight.deferredPaths
+        cleanupRuntime.administratorRequiredPaths = preflight.administratorRequiredPaths
+        cleanupScanComplete = succeeded
+        if !preflight.diagnostics.isEmpty { log(preflight.diagnostics) }
+        finishCleanupProgress()
+        isScanning = false
+        noteHeaderReaction(succeeded ? .success : .attention)
+        let minutes = max(1, Int(cached.age / 60))
+        statusText = succeeded ? l10n.tf("status.cacheRestored", minutes) : l10n.t("log.scanPartial")
+        log(l10n.tf("log.cacheUsed", prepared.1, ByteFormat.format(prepared.2)))
+        if !succeeded, !control.isCancelled {
+            presentTaskFailure(message: statusText, details: [preflight.error ?? ""])
         }
     }
 
@@ -325,7 +354,7 @@ extension AppState {
         cleanupRuntime.scanControl = control
         defer { cleanupRuntime.scanControl = nil }
         let progress = isCleanupScanning ? cleanupProgressSink() : nil
-        async let core = NativeCore.shared.scanCleanup(progress: progress, mode: mode, control: control,
+        async let core = CleanupScanProcess.scanCleanup(progress: progress, mode: mode, control: control,
             includingAdministratorRequired: true, excludingScannedRoots: excludingScannedRoots)
         async let runtimeText = Task.detached(priority: .utility) {
             SystemMetrics.processSnapshotText()
@@ -344,8 +373,10 @@ extension AppState {
 
         // 普通清理只发布已经确认为垃圾的 Safe 单元。安装包可能是唯一
         // 副本，卸载 Agent 整根也可能含历史和凭据，不能借这次扫描推荐。
-        let combined = CleanupCategory.safeCleanupCandidates(from: coreScan.categories)
-            + coreScan.categories.filter(\.isAppDataReview).map { $0.clearingSelection() }
+        let combined = await Task.detached(priority: .utility) {
+            CleanupCategory.safeCleanupCandidates(from: coreScan.categories)
+                + coreScan.categories.filter(\.isAppDataReview).map { $0.clearingSelection() }
+        }.value
         if control.isCancelled {
             let cancelledResult = RunResult(output: "", errorOutput: "Scan cancelled.", exitCode: 1, timedOut: false)
             return UnifiedCleanupScan(categories: [], sourceResults: [cancelledResult],
@@ -354,8 +385,10 @@ extension AppState {
         }
 
 
-        let snapshot = RuntimeStore.runningApplicationSnapshot(
-            fromProcessText: runtimeResult.output, isComplete: runtimeResult.succeeded)
+        let snapshot = await Task.detached(priority: .utility) {
+            RuntimeStore.runningApplicationSnapshot(
+                fromProcessText: runtimeResult.output, isComplete: runtimeResult.succeeded)
+        }.value
         return UnifiedCleanupScan(
             categories: combined,
             sourceResults: [coreResult],
@@ -376,18 +409,12 @@ extension AppState {
             exitCode: output == nil ? 1 : 0,
             timedOut: false)
         if !result.succeeded { logFailure(result, notifyingUser: false) }
-        return RuntimeStore.runningApplicationSnapshot(
-            fromProcessText: result.output, isComplete: result.succeeded)
+        return await Task.detached(priority: .utility) {
+            RuntimeStore.runningApplicationSnapshot(
+                fromProcessText: result.output, isComplete: result.succeeded)
+        }.value
     }
 
-
-    /// 原生扫描和缓存预检先产出当前可删除的文件单元，再按最新运行态
-    /// 实际裁剪垃圾路径；应用数据复核项保留展示与默认不选的状态。
-    /// 执行前仍使用新的文件占用、身份与权限检查复核。
-    private func finalizedCleanupCategories(_ source: [CleanupCategory],
-                                             running snapshot: RunningApplicationSnapshot) -> [CleanupCategory] {
-        CleanupRiskPolicy.presentationCategories(source, running: snapshot)
-    }
 
     /// 开发工具扫描：包管理器卸载命令，Warning 项留给人工判断。
     func scanDeveloperTools() {
@@ -449,23 +476,143 @@ extension AppState {
 
     // MARK: - 清理执行
 
-    func applyCleanup() {
-        guard !isCleanupTaskBusy, !isCleanupSubmissionBlocked,
-              cleanupScanComplete else {
-            if !cleanupScanComplete { statusText = l10n.t("log.scanPartial") }
+    var cleanupTraceRequestID: UUID? { cleanupRuntime.traceRequestID }
+
+    /// The view and the submission boundary share the same inexpensive gates.
+    /// This reads scalar state and category counts, never file metadata or paths.
+    var cleanupButtonBlockReason: String? {
+        if isApplying { return "applying" }
+        if isScanning { return "scanning" }
+        if cleanupQueued { return "queued" }
+        if isAutoCleanupScanning { return "automatic_scan" }
+        if isSystemMaintenanceRunning { return "maintenance" }
+        if isCleanupSubmissionBlocked { return "shared_mutation" }
+        if !cleanupScanComplete { return "scan_incomplete" }
+        if !hasCleanupSelection { return "no_selection" }
+        if confirmation != nil || taskNotice != nil || uninstallDataReview != nil
+            || showPermissionCenter || showAutoCleanupSheet || showWhitelistSheet { return "modal_active" }
+        return nil
+    }
+
+    var cleanupGateSignature: String {
+        [cleanupButtonBlockReason ?? "ready", String(selectedCount), String(categories.count),
+         String(cleanupScanComplete), String(isCleanupTaskBusy), String(cleanupQueued),
+         String(isCleanupSubmissionBlocked), String(isSystemMaintenanceRunning),
+         String(confirmation != nil), String(taskNotice != nil), String(uninstallDataReview != nil),
+         String(showPermissionCenter), String(showAutoCleanupSheet), String(showWhitelistSheet)]
+            .joined(separator: "|")
+    }
+
+    func traceCleanupInteraction(_ event: String, requestID: UUID? = nil,
+                                 fields: [String: String] = [:]) {
+        var values = fields
+        values["gate"] = cleanupButtonBlockReason ?? "ready"
+        values["selectedCount"] = String(selectedCount)
+        values["categoryCount"] = String(categories.count)
+        values["scanComplete"] = String(cleanupScanComplete)
+        values["applying"] = String(isApplying)
+        values["queued"] = String(cleanupQueued)
+        values["mutationBlocked"] = String(isCleanupSubmissionBlocked)
+        values["maintenanceRunning"] = String(isSystemMaintenanceRunning)
+        values["confirmationActive"] = String(confirmation != nil)
+        values["taskNoticeActive"] = String(taskNotice != nil)
+        values["scanning"] = String(isScanning)
+        values["automaticScan"] = String(isAutoCleanupScanning)
+        values["agentMutation"] = String(isAgentMutationBusy)
+        values["commandLineMutation"] = String(commandLineToolBusyID != nil)
+        values["softwareUpdateMutation"] = String(softwareUpdatingID != nil)
+        CleanupTrace.record(event, requestID: requestID ?? cleanupRuntime.traceRequestID, fields: values)
+    }
+
+    /// Confirmation belongs to the stable window state. Freeze the reviewed
+    /// selection now; a later selection or scan cannot widen the accepted work.
+    func requestCleanupFromPage() {
+        let requestID = UUID()
+        traceCleanupInteraction("button.clicked", requestID: requestID)
+        if let reason = cleanupButtonBlockReason {
+            traceCleanupInteraction("submission.rejected", requestID: requestID, fields: ["reason": reason])
+            statusText = l10n.t(reason == "scan_incomplete" ? "log.scanPartial"
+                : reason == "no_selection" ? "cleanup.selectNone" : "island.clean.busy")
             return
         }
-        let installerSelection = installerCandidates?.selectedSubset
-        let maintenanceIDs = systemMaintenanceRows
+        cleanupRuntime.traceRequestID = requestID
+        let reviewed = CleanupRuntimeState.ReviewedSelection(categories: categories,
+            installers: installerCandidates,
+            maintenanceIDs: systemMaintenanceRows.filter { systemMaintenanceSelection.contains($0.id) }.map(\.id),
+            family: family, generation: cleanupRuntime.taskGeneration, selectedCount: selectedCount)
+        // Selecting uninstall leftovers and pressing Clean is the submission.
+        // Preserve their owner/identity metadata for the execution-time review.
+        let warnings = reviewed.categories.filter {
+            $0.isAppDataReview && $0.source != .appLeftover
+                && CleanupSelectionPresentation.selectedCount($0) > 0
+        }
+        guard !warnings.isEmpty else {
+            cleanupRuntime.reviewedSelection = reviewed
+            traceCleanupInteraction("confirmation.not_required")
+            applyCleanup()
+            return
+        }
+        let token = UUID()
+        cleanupRuntime.confirmationToken = token
+        let names = warnings.prefix(6).map {
+            L10nLocalizationAuditTables.categoryName($0.name, isAppLeftover: $0.source == .appLeftover)
+        }.joined(separator: "、")
+        confirmation = Confirmation(title: l10n.tf("cleanup.appData.confirm.title", warnings.count),
+            message: l10n.tf("cleanup.appData.confirm.message", names),
+            confirmLabel: l10n.t("cleanup.appData.confirm.action"), onConfirm: { [weak self] in
+                guard let self else { return }
+                guard self.cleanupRuntime.confirmationToken == token else {
+                    self.traceCleanupInteraction("confirmation.stale_callback", requestID: requestID)
+                    return
+                }
+                self.cleanupRuntime.confirmationToken = nil
+                self.traceCleanupInteraction("confirmation.accepted", requestID: requestID)
+                self.cleanupRuntime.reviewedSelection = reviewed
+                self.applyCleanup()
+            })
+        traceCleanupInteraction("confirmation.requested", fields: ["warningCategories": String(warnings.count)])
+    }
+
+    func cancelCleanupConfirmation() {
+        traceCleanupInteraction("confirmation.cancelled")
+        cleanupRuntime.confirmationToken = nil
+        cleanupRuntime.reviewedSelection = nil
+        confirmation = nil
+    }
+
+    func applyCleanup() {
+        if cleanupRuntime.traceRequestID == nil { cleanupRuntime.traceRequestID = UUID() }
+        traceCleanupInteraction("submission.entered")
+        let reviewed = cleanupRuntime.reviewedSelection
+        cleanupRuntime.reviewedSelection = nil
+        guard !isCleanupTaskBusy, !isCleanupSubmissionBlocked,
+              cleanupScanComplete else {
+            statusText = l10n.t(!cleanupScanComplete ? "log.scanPartial" : "island.clean.busy")
+            traceCleanupInteraction("submission.rejected", fields: ["reason": cleanupButtonBlockReason ?? "busy"])
+            return
+        }
+        guard reviewed == nil || reviewed?.generation == cleanupRuntime.taskGeneration else {
+            statusText = l10n.t("log.scanPartial")
+            traceCleanupInteraction("submission.rejected", fields: ["reason": "review_generation_changed"])
+            return
+        }
+        let installerSource: CleanupCategory?
+        if let reviewed { installerSource = reviewed.installers }
+        else { installerSource = installerCandidates }
+        let maintenanceIDs = reviewed?.maintenanceIDs ?? systemMaintenanceRows
             .filter { systemMaintenanceSelection.contains($0.id) }.map(\.id)
-        guard selectedCount > 0 || installerSelection != nil || !maintenanceIDs.isEmpty else {
+        let count = reviewed?.selectedCount ?? selectedCount
+        guard count > 0 || CleanupSelectionPresentation.selectedCount(installerSource) > 0 || !maintenanceIDs.isEmpty else {
             statusText = l10n.t("cleanup.selectNone")
+            traceCleanupInteraction("submission.rejected", fields: ["reason": "no_selection"])
             return
         }
         // Task {} inherits MainActor. Snapshot the selection and move the
         // potentially large filtering/sorting pass off the UI executor.
-        let source = categories
-        let applyFamily = family
+        let source = reviewed?.categories ?? categories
+        let applyFamily = reviewed?.family ?? family
+        let requestID = cleanupRuntime.traceRequestID
+        let sourceGeneration = cleanupRuntime.taskGeneration
         cleanupOutcomeMood = nil
         cleanupOutcomeDetails = []
         cleanupReclaimedBytes = 0
@@ -473,17 +620,82 @@ extension AppState {
         cleanupTaskProgress = .init()
         isApplying = true
         statusText = l10n.tf("status.processing",
-                             selectedCount + (installerSelection?.paths.count ?? 0) + maintenanceIDs.count)
+                             count + CleanupSelectionPresentation.selectedCount(installerSource) + maintenanceIDs.count)
+        traceCleanupInteraction("submission.preparing")
         Task {
-            let selectedCategories = await Task.detached(priority: .utility) {
+            let prepared = await Task.detached(priority: .utility) {
+                let started = ProcessInfo.processInfo.systemUptime
+                CleanupTrace.record("selection.prepare.started", requestID: requestID)
                 let subsets = source.compactMap(\.selectedSubset)
-                return applyFamily == .clean
+                let selected = applyFamily == .clean
                     ? CleanupCategory.manualCleanupCandidates(from: subsets) : subsets
+                let installers = installerSource?.selectedSubset
+                CleanupTrace.record("selection.prepare.finished", requestID: requestID, fields: [
+                    "categories": String(selected.count),
+                    "paths": String(selected.reduce(0) { $0 + $1.paths.count }),
+                    "elapsedMS": String(Int((ProcessInfo.processInfo.systemUptime - started) * 1000))])
+                return (selected, installers)
             }.value
-            performApply(categories: selectedCategories,
+            guard cleanupRuntime.taskGeneration == sourceGeneration, isApplying, !Task.isCancelled else {
+                traceCleanupInteraction("selection.prepare.abandoned", requestID: requestID,
+                    fields: ["reason": "generation_or_cancellation"])
+                if cleanupRuntime.taskGeneration == sourceGeneration, Task.isCancelled {
+                    cleanupTaskProgress = nil
+                    isApplying = false
+                }
+                return
+            }
+            traceCleanupInteraction("submission.prepared")
+            performApply(categories: prepared.0,
                          family: applyFamily, mode: .manual,
-                         installers: installerSelection, maintenanceIDs: maintenanceIDs)
+                         installers: prepared.1, maintenanceIDs: maintenanceIDs)
         }
+    }
+
+    /// Recheck only selected, exact administrator candidates in the read-only
+    /// worker before asking for consent. cachedCategories is a preflight input,
+    /// not an inventory-cache lookup; no filesystem fallback runs on MainActor.
+    private func freshAdministratorCleanupItems(_ requested: [CleanupCategory],
+                                               administratorRequiredPaths: Set<String>,
+                                               family: CleanupFamily,
+                                               mode: CleanupExecutionMode) async -> [DeletionPlan.Item] {
+        traceCleanupInteraction("administrator.preflight.started")
+        let preview = await Task.detached(priority: .utility) {
+            guard family == .clean else { return ([DeletionPlan.Item](), [CleanupCategory]()) }
+            if case .automatic = mode { return ([DeletionPlan.Item](), [CleanupCategory]()) }
+            let items = AdministratorCleanupPlan.confirmationItems(requested,
+                administratorRequiredPaths: administratorRequiredPaths)
+            let paths = Set(items.map(\.record))
+            let selected = requested.compactMap { category in
+                category.retainingPaths(category.paths.filter(paths.contains))
+            }
+            return (items, selected)
+        }.value
+        guard !preview.0.isEmpty, !Task.isCancelled else {
+            traceCleanupInteraction("administrator.preflight.not_required", fields: ["cancelled": String(Task.isCancelled)])
+            return []
+        }
+        traceCleanupInteraction("administrator.worker.started", fields: ["proposedItems": String(preview.0.count)])
+        let fresh = await CleanupScanProcess.scanCleanup(mode: .deep,
+            includingAdministratorRequired: true, cachedCategories: preview.1)
+        traceCleanupInteraction("administrator.worker.finished", fields: [
+            "succeeded": String(fresh.succeeded), "categories": String(fresh.categories.count)])
+        if !fresh.diagnostics.isEmpty { log(fresh.diagnostics) }
+        let cancelled = Task.isCancelled
+        return await Task.detached(priority: .utility) {
+            let identities = fresh.categories.reduce(into: [String: String]()) { result, category in
+                guard category.risk == .safe, category.disposal == .permanentDelete,
+                      [.genericTrash, .developerCacheTrash, .aiTrash, .xcodeTrash].contains(category.applyRoute) else { return }
+                for path in category.paths {
+                    let identity = category.pathIdentities[path] ?? ""
+                    if let existing = result[path], existing != identity { result[path] = "" }
+                    else { result[path] = identity }
+                }
+            }
+            return CleanupExecutionResult.freshlyEligibleAdministratorItems(preview.0,
+                freshIdentities: identities, administratorPaths: fresh.administratorRequiredPaths,
+                succeeded: fresh.succeeded && !cancelled)
+        }.value
     }
 
     /// 执行阶段再次读取进程表，并按每个类别自己的 route 分流。扫描来源不会再
@@ -497,8 +709,13 @@ extension AppState {
                               priorResult: CleanupExecutionResult = .init(),
                               retryScope: [CleanupCategory]? = nil,
                               pendingMaintenanceIDs: [String] = []) {
+        traceCleanupInteraction("execution.entered", fields: ["categories": String(requested.count)])
         if uninstallQueue.activeJob != nil {
-            guard pendingCleanup == nil else { return }
+            guard pendingCleanup == nil else {
+                traceCleanupInteraction("execution.rejected", fields: ["reason": "already_queued"])
+                return
+            }
+            traceCleanupInteraction("execution.queued", fields: ["reason": "uninstall_active"])
             cleanupQueued = true
             isApplying = false
             statusText = l10n.t("cleanup.queued")
@@ -512,6 +729,7 @@ extension AppState {
             return
         }
         guard !isCleanupSubmissionBlocked else {
+            traceCleanupInteraction("execution.blocked", fields: ["reason": "shared_mutation"])
             // Selection preparation yields to other pages. Keep the original
             // request intact if another shared mutation claimed the boundary.
             cleanupRuntime.retryAction = { [weak self] in
@@ -541,20 +759,21 @@ extension AppState {
         isApplying = true
         statusText = l10n.tf("status.processing", requestedCount)
         let administratorRequiredPaths = cleanupRuntime.administratorRequiredPaths
+        traceCleanupInteraction("execution.scheduled", fields: ["paths": String(requestedCount), "generation": generation.uuidString])
         Task {
+            traceCleanupInteraction("execution.started")
+            let retryBudget = CleanupRetryPolicy.Budget()
             let originalRequest = retryScope ?? requested
-            // Ask while the scan's permission evidence is available, before
-            // any full-tree freshness review or deletion. New descendant ACLs
-            // still fail closed in ordinary execution and require a new scan.
-            let proposedAdministratorItems = await Task.detached(priority: .utility) {
-                guard applyFamily == .clean else { return [DeletionPlan.Item]() }
-                if case .automatic = mode { return [DeletionPlan.Item]() }
-                return AdministratorCleanupPlan.confirmationItems(requested,
-                    administratorRequiredPaths: administratorRequiredPaths)
-            }.value
+            let proposedAdministratorItems = await freshAdministratorCleanupItems(requested,
+                administratorRequiredPaths: administratorRequiredPaths, family: applyFamily, mode: mode)
+            guard cleanupRuntime.taskGeneration == generation, isApplying, !Task.isCancelled else {
+                traceCleanupInteraction("execution.abandoned", fields: ["reason": "generation_or_cancellation"])
+                return
+            }
             var includeAdministrator = false
             if !proposedAdministratorItems.isEmpty {
                 guard let decision = await confirmAdministratorCleanup(proposedAdministratorItems) else {
+                    traceCleanupInteraction("execution.cancelled", fields: ["reason": "administrator_confirmation"])
                     cleanupTaskProgress = nil
                     isApplying = false
                     return
@@ -562,7 +781,9 @@ extension AppState {
                 includeAdministrator = decision
             }
             let reviewStarted = Date()
+            traceCleanupInteraction("runtime.snapshot.started")
             let snapshot = await captureRunningApplicationSnapshot()
+            traceCleanupInteraction("runtime.snapshot.finished", fields: ["complete": String(snapshot.isComplete)])
             let blocked = await Task.detached(priority: .utility) {
                 var waiting: [CleanupCategory] = []
                 var ready: [CleanupCategory] = []
@@ -649,6 +870,9 @@ extension AppState {
             }
 
             let eligibleCount = eligible.reduce(0) { $0 + $1.paths.count }
+            traceCleanupInteraction("runtime.review.finished", fields: [
+                "eligible": String(eligibleCount), "requested": String(requestedCount),
+                "elapsedMS": String(Int(Date().timeIntervalSince(reviewStarted) * 1000))])
             var executionResult = priorResult
             executionResult.merge(CleanupExecutionResult(
                 skipped: max(0, actionableCount - eligibleCount),
@@ -659,12 +883,12 @@ extension AppState {
                                  eligibleCount + (installers?.paths.count ?? 0) + maintenanceIDs.count)
             guard !eligible.isEmpty || installers != nil || !maintenanceIDs.isEmpty else {
                 cleanupTaskProgress = .init(phase: .verifying)
-                let verified = await refreshCleanupInventory(after: applyFamily)
-                configureCleanupRetry(originalRequest, family: applyFamily, mode: mode,
+                let verified = await refreshCleanupInventory(after: applyFamily, result: executionResult)
+                await configureCleanupRetry(originalRequest, family: applyFamily, mode: mode,
                                       installers: installers,
                                       maintenanceIDs: Array(Set(maintenanceIDs + pendingMaintenanceIDs)),
                                       result: executionResult, verified: verified)
-                reportCleanupResult(executionResult,
+                await reportCleanupResult(executionResult,
                                     permanently: applyFamily == .clean, verified: verified,
                                     waitingApplications: Array(Set(Self.blockingApplicationNames(blocked.2)
                                         + busyCleanupApplications(executionResult, categories: originalRequest,
@@ -676,28 +900,34 @@ extension AppState {
 
             // Consent may only shrink to the freshly eligible plan. Preserve
             // the identity/metadata captured before the user answered it.
-            let eligibleIdentities = eligible.reduce(into: [String: String]()) { result, category in
-                for path in category.paths { result[path] = category.pathIdentities[path] }
-            }
-            let administratorItems = proposedAdministratorItems.filter {
-                eligibleIdentities[$0.record] == $0.identity
-            }
-            let administratorPaths = Set(administratorItems.map(\.record))
-            let directCategories = eligible.compactMap { category in
-                category.retainingPaths(category.paths.filter { !administratorPaths.contains($0) })
-            }
+            let routePlan = await Task.detached(priority: .utility) {
+                // Preparing a large selected inventory is also background work;
+                // publishing the working stage must not wait for path sorting.
+                let eligibleIdentities = eligible.reduce(into: [String: String]()) { result, category in
+                    for path in category.paths { result[path] = category.pathIdentities[path] }
+                }
+                let administratorItems = proposedAdministratorItems.filter {
+                    eligibleIdentities[$0.record] == $0.identity
+                }
+                let administratorPaths = Set(administratorItems.map(\.record))
+                let directCategories = eligible.compactMap { category in
+                    category.retainingPaths(category.paths.filter { !administratorPaths.contains($0) })
+                }
+                let grouped = Dictionary(grouping: directCategories, by: \.applyRoute)
+                let routeCounts = grouped.mapValues { routeCategories in
+                    let paths = routeCategories.flatMap(\.paths)
+                    return routeCategories.first?.applyRoute == .toolCommand
+                        ? paths.count : DeletionPlan.nonOverlappingPaths(paths).count
+                }
+                let total = routeCounts.values.reduce(0, +)
+                    + DeletionPlan.nonOverlappingPaths(installers?.paths ?? []).count + maintenanceIDs.count
+                    + (includeAdministrator ? administratorItems.count : 0)
+                return (administratorItems, grouped, routeCounts, total)
+            }.value
+            let (administratorItems, grouped, routeCounts, total) = routePlan
             if !includeAdministrator {
                 executionResult.merge(.init(skipped: administratorItems.count))
             }
-            let grouped = Dictionary(grouping: directCategories, by: \.applyRoute)
-            let routeCounts = grouped.mapValues { routeCategories in
-                let paths = routeCategories.flatMap(\.paths)
-                return routeCategories.first?.applyRoute == .toolCommand
-                    ? paths.count : DeletionPlan.nonOverlappingPaths(paths).count
-            }
-            let total = routeCounts.values.reduce(0, +)
-                + DeletionPlan.nonOverlappingPaths(installers?.paths ?? []).count + maintenanceIDs.count
-                + (includeAdministrator ? administratorItems.count : 0)
             var completed = 0
             cleanupTaskProgress = .init(phase: .cleaning, completed: 0, total: total)
             // Request system authorization before running normal routes, so
@@ -707,7 +937,9 @@ extension AppState {
                 let administratorStarted = Date()
                 let administrator = await AdministratorCleanupService.apply(items: administratorItems,
                     onProgress: cleanupProgressCallback(generation: generation, offset: completed,
-                        weight: administratorItems.count, total: total, categories: eligible))
+                        weight: administratorItems.count, total: total, categories: eligible),
+                    retryBudget: retryBudget, requestID: cleanupRuntime.traceRequestID)
+                guard cleanupRuntime.taskGeneration == generation, isApplying, !Task.isCancelled else { return }
                 log(String(format: "cleanup administrator completed %.2fs; paths=%d",
                            Date().timeIntervalSince(administratorStarted), administratorItems.count))
                 executionResult.merge(administrator)
@@ -721,7 +953,9 @@ extension AppState {
                     route, categories: routeCategories, mode: mode,
                     permanently: applyFamily == .clean,
                     onProgress: cleanupProgressCallback(generation: generation, offset: completed,
-                        weight: routeCounts[route] ?? 0, total: total, categories: routeCategories))
+                        weight: routeCounts[route] ?? 0, total: total, categories: routeCategories),
+                    retryBudget: retryBudget)
+                guard cleanupRuntime.taskGeneration == generation, isApplying, !Task.isCancelled else { return }
                 log(String(format: "cleanup route=%@ completed %.2fs", route.rawValue, Date().timeIntervalSince(started)))
                 executionResult.merge(routeResult)
                 completed += routeCounts[route] ?? 0
@@ -735,13 +969,19 @@ extension AppState {
                     permanently: false,
                     onProgress: cleanupProgressCallback(generation: generation, offset: completed,
                         weight: DeletionPlan.nonOverlappingPaths(installers.paths).count,
-                        total: total, categories: [installers]))
+                        total: total, categories: [installers]),
+                    retryBudget: retryBudget)
+                guard cleanupRuntime.taskGeneration == generation, isApplying, !Task.isCancelled else { return }
                 executionResult.merge(routeResult)
                 completed += DeletionPlan.nonOverlappingPaths(installers.paths).count
-                self.installerCandidates = self.installerCandidates?.retainingPaths(
-                    self.installerCandidates?.paths.filter {
+                let displayedInstallers = self.installerCandidates
+                let refreshedInstallers = await Task.detached(priority: .utility) {
+                    displayedInstallers?.retainingPaths(displayedInstallers?.paths.filter {
                         FileManager.default.fileExists(atPath: $0)
                     } ?? [])
+                }.value
+                guard cleanupRuntime.taskGeneration == generation else { return }
+                self.installerCandidates = refreshedInstallers
             }
             // 系统数据维护：逐项执行并刷新体检结果。
             var maintenanceResult = CleanupExecutionResult()
@@ -755,12 +995,12 @@ extension AppState {
             }
 
             cleanupTaskProgress = .init(phase: .verifying, completed: completed, total: total)
-            let verified = await refreshCleanupInventory(after: applyFamily)
-            configureCleanupRetry(originalRequest, family: applyFamily, mode: mode,
+            let verified = await refreshCleanupInventory(after: applyFamily, result: executionResult)
+            await configureCleanupRetry(originalRequest, family: applyFamily, mode: mode,
                                   installers: self.installerCandidates?.selectedSubset,
                                   maintenanceIDs: remainingMaintenance,
                                   result: executionResult, verified: verified)
-            reportCleanupResult(executionResult,
+            await reportCleanupResult(executionResult,
                                 permanently: applyFamily == .clean,
                                 maintenance: maintenanceResult, verified: verified,
                                 waitingApplications: Array(Set(Self.blockingApplicationNames(blocked.2)
@@ -817,17 +1057,38 @@ extension AppState {
     private func configureCleanupRetry(_ requested: [CleanupCategory], family: CleanupFamily,
                                        mode: CleanupExecutionMode, installers: CleanupCategory?,
                                        maintenanceIDs: [String], result: CleanupExecutionResult,
-                                       verified: Bool) {
-        let listed = Set(categories.flatMap(\.paths))
-        let remaining = requested.compactMap { category in
-            category.selectingPaths(result.remainingPaths(in: category.paths).filter {
-                family != .clean || !verified || listed.contains($0)
-            }).selectedSubset
-        }
-        cleanupRetryAvailable = !remaining.isEmpty || installers != nil || !maintenanceIDs.isEmpty
+                                       verified: Bool) async {
+        let displayed = categories
+        let generation = cleanupRuntime.taskGeneration
+        let prepared = await Task.detached(priority: .utility) {
+            let listed = Set(displayed.flatMap(\.paths))
+            var submitted: [String: String] = [:]
+            for category in requested + (installers.map { [$0] } ?? []) {
+                for path in category.paths {
+                    let identity = category.pathIdentities[path] ?? ""
+                    if let old = submitted[path], old != identity { submitted[path] = "" }
+                    else { submitted[path] = identity }
+                }
+            }
+            let retained = result.retainedPathIdentities(in: submitted)
+            let remaining = requested.compactMap { category in
+                category.selectingPaths(result.remainingPaths(in: category.paths).filter { path in
+                    (family != .clean || !verified || listed.contains(path))
+                        && (retained[path] == nil || retained[path] != category.pathIdentities[path])
+                }).selectedSubset
+            }
+            let remainingInstallers = installers.flatMap { category in
+                category.retainingPaths(result.remainingPaths(in: category.paths).filter { path in
+                    retained[path] == nil || retained[path] != category.pathIdentities[path]
+                })?.selectedSubset
+            }
+            return (remaining, remainingInstallers)
+        }.value
+        guard cleanupRuntime.taskGeneration == generation else { return }
+        cleanupRetryAvailable = !prepared.0.isEmpty || prepared.1 != nil || !maintenanceIDs.isEmpty
         cleanupRuntime.retryAction = cleanupRetryAvailable ? { [weak self] in
-            self?.performApply(categories: remaining, family: family, mode: mode,
-                               installers: installers, maintenanceIDs: maintenanceIDs)
+            self?.performApply(categories: prepared.0, family: family, mode: mode,
+                               installers: prepared.1, maintenanceIDs: maintenanceIDs)
         } : nil
     }
 
@@ -847,46 +1108,80 @@ extension AppState {
 
     private func recordRemainingCleanup(_ categories: [CleanupCategory], owners: [String]) {
         guard !categories.isEmpty else { return }
-        cleanupFailureApplications = Array(Set(cleanupFailureApplications + Self.blockingApplicationNames(owners))).sorted()
-        // The captured retry remains available in the task-result dialog.
+        traceCleanupInteraction("execution.retained_silently", fields: [
+            "categories": String(categories.count), "owners": String(owners.count)])
     }
 
-    private func refreshCleanupInventory(after family: CleanupFamily) async -> Bool {
-        CleanupCache.invalidate()
-        guard family == .clean else { return true }
-        statusText = l10n.t("cleanup.refreshing")
+    private func refreshCleanupInventory(after family: CleanupFamily,
+                                         result: CleanupExecutionResult = .init()) async -> Bool {
+        traceCleanupInteraction("verification.started")
+        defer { traceCleanupInteraction("verification.returned") }
         let displayed = categories
+        let deferred = cleanupDeferredPaths
+        let generation = cleanupRuntime.taskGeneration
+        if family == .clean { statusText = l10n.t("cleanup.refreshing") }
         let refreshed = await Task.detached(priority: .utility) {
-            CleanupInventoryRefresh.refresh(displayed)
+            CleanupCache.invalidate()
+            guard family == .clean else { return (displayed, Set<String>(), deferred, true) }
+            var identities: [String: String] = [:]
+            for category in displayed {
+                for path in category.paths {
+                    let identity = category.pathIdentities[path] ?? ""
+                    if let old = identities[path], old != identity { identities[path] = "" }
+                    else { identities[path] = identity }
+                }
+            }
+            var bound = result
+            bound.retainedTargets = result.quietRetainedTargets.filter {
+                identities[$0.record] == $0.identity && DeletionPlan.identity(at: $0.record) == $0.identity
+            }
+            let retained = bound.retainedPathIdentities(in: identities)
+            let inventory = displayed.compactMap { category in
+                category.retainingPaths(category.paths.filter { path in
+                    retained[path] == nil || retained[path] != category.pathIdentities[path]
+                })
+            }
+            let report = CleanupInventoryRefresh.refresh(inventory)
+            return (report.categories, Set(report.categories.flatMap(\.paths)),
+                    Array(Set(deferred + report.deferredPaths)).sorted(), report.deferredPaths.isEmpty)
         }.value
-        categories = refreshed.categories
-        cleanupRuntime.administratorRequiredPaths.formIntersection(Set(refreshed.categories.flatMap(\.paths)))
-        cleanupDeferredPaths = Array(Set(cleanupDeferredPaths + refreshed.deferredPaths)).sorted()
-        return refreshed.deferredPaths.isEmpty
+        guard cleanupRuntime.taskGeneration == generation else { return false }
+        if family == .clean {
+            categories = refreshed.0
+            cleanupRuntime.administratorRequiredPaths.formIntersection(refreshed.1)
+            cleanupDeferredPaths = refreshed.2
+        }
+        return refreshed.3
     }
 
     private func reportCleanupResult(_ result: CleanupExecutionResult,
                                      permanently: Bool,
                                      maintenance: CleanupExecutionResult = .init(),
                                      verified: Bool = true,
-                                     waitingApplications: [String] = []) {
-        var combined = result
-        combined.merge(maintenance)
-        cleanupOutcomeMood = combined.removed > 0 ? .success : .attention
+                                     waitingApplications: [String] = []) async {
+        let generation = cleanupRuntime.taskGeneration
+        let prepared = await Task.detached(priority: .utility) {
+            var combined = result
+            combined.merge(maintenance)
+            return (combined, combined.quietSkipped, CleanupExecutionResult.boundedFeedback(combined.messages))
+        }.value
+        guard cleanupRuntime.taskGeneration == generation else { return }
+        let combined = prepared.0
+        traceCleanupInteraction("execution.finished", fields: ["removed": String(combined.removed),
+            "skipped": String(combined.skipped), "failed": String(combined.failed),
+            "executionFailed": String(combined.executionFailed), "verified": String(verified),
+            "reclaimedBytes": String(combined.reclaimedBytes)])
+        // Recoverable work has already exhausted its bounded automatic retries.
+        // Remaining protected, occupied or failed items are diagnostic-only.
+        cleanupOutcomeMood = combined.removed > 0 ? .success : nil
         noteHeaderReaction(cleanupOutcomeMood)
-        cleanupOutcomeDetails = combined.removed > 0 ? [] : combined.messages
-            .filter { !$0.hasPrefix("Open-file check ") }.map(localizedCleanupDetail)
-        if combined.removed == 0 {
-            if !verified { cleanupOutcomeDetails.append(l10n.t("cleanup.execution.verificationIncomplete")) }
-            if !waitingApplications.isEmpty {
-                cleanupOutcomeDetails.append(l10n.t("task.closeApps.remaining"))
-                cleanupOutcomeDetails.append(waitingApplications.joined(separator: ", "))
-            }
-        }
+        cleanupOutcomeDetails = []
+        cleanupRuntime.retryAction = nil
+        cleanupRetryAvailable = false
         cleanupTaskProgress = nil
         cleanupCompletedCount = combined.removed
         cleanupReclaimedBytes = combined.reclaimedBytes
-        cleanupFailureApplications = waitingApplications
+        cleanupFailureApplications = []
         cleanupCelebrating = cleanupOutcomeMood == .success
         cleanupFeedbackID += 1
         analyzeCache.clear()
@@ -908,17 +1203,14 @@ extension AppState {
         let summary = summaries.joined(separator: "\n")
         statusText = combined.removed > 0
             ? l10n.tf("cleanup.task.reclaimed", ByteFormat.format(combined.reclaimedBytes))
-            : l10n.t("task.failure.message")
-        log(summary)
-        if combined.skipped > 0 || combined.failed > 0 || combined.executionFailed
-            || !verified || !waitingApplications.isEmpty {
-            var details = combined.messages.filter { !$0.hasPrefix("Open-file check ") }
-            if !verified { details.append(l10n.t("cleanup.execution.verificationIncomplete")) }
-            var notice = TaskFeedbackNotice(message: summary.isEmpty ? statusText : summary,
-                details: details, applicationNames: waitingApplications)
-            notice.onRetry = cleanupRuntime.retryAction
-            presentTaskNotice(notice)
+            : l10n.t("status.ready")
+        if !prepared.2.logTail.isEmpty {
+            logLines = Array((logLines + prepared.2.logTail).suffix(400))
         }
+        log(summary)
+        traceCleanupInteraction("execution.settled_silently", fields: [
+            "verified": String(verified), "waitingApplications": String(waitingApplications.count),
+            "maximumAttempts": String(CleanupRetryPolicy.maximumAttempts)])
     }
 
     private func localizedCleanupDetail(_ detail: String) -> String {
@@ -935,12 +1227,113 @@ extension AppState {
         }
     }
 
+    /// A logical request shares one per-target budget across all routes. Retry
+    /// only the captured objects; a path recreated by another app is never rebound.
     private func executeCleanupRoute(_ route: CleanupApplyRoute,
+                                     categories routeCategories: [CleanupCategory],
+                                     mode: CleanupExecutionMode,
+                                     permanently: Bool = false,
+                                     onProgress: ((Int, Int, String) -> Void)? = nil,
+                                     retryBudget: CleanupRetryPolicy.Budget? = nil) async
+        -> CleanupExecutionResult {
+        guard route != .toolCommand, route != .none else {
+            // Tool commands may have unreported side effects; never replay them.
+            return await executeCleanupRouteAttempt(route, categories: routeCategories,
+                mode: mode, permanently: permanently, onProgress: onProgress)
+        }
+        let generation = cleanupRuntime.taskGeneration
+        let budget = retryBudget ?? CleanupRetryPolicy.Budget()
+        let requestID = cleanupRuntime.traceRequestID
+        var pending = routeCategories
+        var combined = CleanupExecutionResult()
+        var attempts = 0
+        var terminalSkipped = 0
+        for attempt in 1...CleanupRetryPolicy.maximumAttempts {
+            guard cleanupRuntime.taskGeneration == generation, isApplying,
+                  !isCleanupSubmissionBlocked, !Task.isCancelled else { break }
+            let snapshot = pending
+            let claim = await Task.detached(priority: .utility) {
+                let expected = Set(snapshot.flatMap { category in
+                    category.paths.filter { category.isPathSelected($0) }
+                }).count
+                let selected = budget.claim(categories: snapshot)
+                let selectedCount = selected.reduce(0) { $0 + $1.paths.count }
+                return (selected, expected, selectedCount)
+            }.value
+            guard cleanupRuntime.taskGeneration == generation, isApplying,
+                  !isCleanupSubmissionBlocked, !Task.isCancelled else { break }
+            let claimed = claim.0
+            if attempt == 1 { terminalSkipped = max(0, claim.1 - claim.2) }
+            // Last-pass counters cover every remaining target. Do not replace
+            // them with a partial pass after another route consumed a budget.
+            if attempt > 1, claim.2 != claim.1 {
+                traceCleanupInteraction("route.retry.stopped", requestID: requestID,
+                    fields: ["route": route.rawValue, "reason": "partial_budget_exhausted"])
+                break
+            }
+            guard !claimed.isEmpty else { break }
+            attempts = attempt
+            traceCleanupInteraction("route.attempt.started", requestID: requestID,
+                fields: ["route": route.rawValue, "attempt": String(attempt)])
+            let result = await executeCleanupRouteAttempt(route, categories: claimed,
+                mode: mode, permanently: permanently, onProgress: onProgress)
+            let previous = combined
+            let prepared = await Task.detached(priority: .utility) {
+                let updated = CleanupRetryPolicy.combiningAttempts(previous, result)
+                return (updated, CleanupRetryPolicy.remainingCategories(claimed, after: updated))
+            }.value
+            combined = prepared.0
+            traceCleanupInteraction("route.attempt.finished", requestID: requestID, fields: [
+                "route": route.rawValue, "attempt": String(attempt),
+                "removed": String(result.removed), "skipped": String(result.skipped),
+                "failed": String(result.failed), "executionFailed": String(result.executionFailed)])
+            // An unknown subprocess outcome is not a safe retry signal. Native
+            // item failures have a known result and retain their original identity.
+            guard !result.executionFailed, !prepared.1.isEmpty,
+                  result.failed > 0 || result.skipped > 0,
+                  attempt < CleanupRetryPolicy.maximumAttempts else { break }
+            let remaining = prepared.1
+            let mayReplayAgeReview = await Task.detached(priority: .utility) {
+                remaining.allSatisfy { category in
+                    if category.retention <= 0 { return true }
+                    if case .manual = mode { return CleanupRiskPolicy.usesFileActivityGuard(category) }
+                    return false
+                }
+            }.value
+            guard mayReplayAgeReview else {
+                // A prior age review cannot authorize a later attempt after new
+                // activity. Stop quietly rather than reuse stale retention proof.
+                traceCleanupInteraction("route.retry.stopped", requestID: requestID,
+                    fields: ["route": route.rawValue, "reason": "fresh_age_review_required"])
+                break
+            }
+            pending = remaining
+            traceCleanupInteraction("route.retry.scheduled", requestID: requestID,
+                fields: ["route": route.rawValue, "nextAttempt": String(attempt + 1)])
+            do { try await Task.sleep(nanoseconds: attempt == 1 ? 300_000_000 : 750_000_000) }
+            catch { break }
+        }
+        combined.skipped += terminalSkipped
+        traceCleanupInteraction("route.settled_silently", requestID: requestID, fields: [
+            "route": route.rawValue, "attempts": String(attempts),
+            "removed": String(combined.removed), "skipped": String(combined.skipped),
+            "failed": String(combined.failed)])
+        return combined
+    }
+
+    private func executeCleanupRouteAttempt(_ route: CleanupApplyRoute,
                                      categories routeCategories: [CleanupCategory],
                                      mode: CleanupExecutionMode,
                                      permanently: Bool = false,
                                      onProgress: ((Int, Int, String) -> Void)? = nil) async
         -> CleanupExecutionResult {
+        let routeStarted = ProcessInfo.processInfo.systemUptime
+        let requestID = cleanupRuntime.traceRequestID
+        traceCleanupInteraction("route.started", fields: ["route": route.rawValue, "categories": String(routeCategories.count)])
+        defer {
+            CleanupTrace.record("route.returned", requestID: requestID, fields: ["route": route.rawValue,
+                "elapsedMS": String(Int((ProcessInfo.processInfo.systemUptime - routeStarted) * 1000))])
+        }
         let preparedRecords = await Task.detached(priority: .utility) {
             let raw = routeCategories.flatMap(\.paths)
             switch route {
@@ -986,15 +1379,33 @@ extension AppState {
                 let nativePaths = genericCategories.flatMap(\.paths)
                     .filter { !NoriOwnedStorage.isManagedPath($0, home: home) }
                 let genericUnits = DeletionPlan.nonOverlappingPaths(nativePaths).count
+                let appDataPaths = DeletionPlan.nonOverlappingPaths(appDataCategories.flatMap(\.paths))
+                let residuePaths = DeletionPlan.nonOverlappingPaths(residueCategories.flatMap(\.paths))
+                let dataUnits = appDataPaths.count + residuePaths.count
+                let routeUnits = dataUnits + agentUnits + genericUnits + administratorUnits + managedUnits
+                // Reviewed data is dispatched before ordinary caches. Include
+                // those targets in progress even when this is a data-only plan.
+                if let path = appDataPaths.first ?? residuePaths.first {
+                    onProgress?(0, routeUnits, path)
+                }
+                CleanupTrace.record("route.app_data.started", requestID: requestID, fields: ["targets": String(appDataPaths.count)])
                 let appData = NativeCore.shared.applyAppDataReview(appDataCategories, homeDirectory: home)
+                CleanupTrace.record("route.app_data.finished", requestID: requestID, fields: [
+                    "removed": String(appData.removed), "skipped": String(appData.skipped), "failed": String(appData.failed)])
+                if !appDataPaths.isEmpty {
+                    onProgress?(appDataPaths.count, routeUnits, residuePaths.first ?? "")
+                }
+                CleanupTrace.record("route.residues.started", requestID: requestID, fields: ["targets": String(residuePaths.count)])
                 let residues = NativeCore.shared.applyUninstallResidues(residueCategories, homeDirectory: home)
-                let routeUnits = agentUnits + genericUnits + administratorUnits + managedUnits
+                CleanupTrace.record("route.residues.finished", requestID: requestID, fields: [
+                    "removed": String(residues.removed), "skipped": String(residues.skipped), "failed": String(residues.failed)])
+                if !residuePaths.isEmpty { onProgress?(dataUnits, routeUnits, "") }
                 let agentOutcome = agentLeftovers.isEmpty
                     ? AgentCleanupExecutor.Outcome(summary: .init(removed: 0, skipped: 0, failed: 0, messages: []), refused: 0)
                     : AgentCleanupExecutor.execute(agentLeftovers, running: agentSnapshot,
                                                    home: home,
                                                    onProgress: { done, _, path in
-                                                       onProgress?(done, routeUnits, path)
+                                                       onProgress?(dataUnits + done, routeUnits, path)
                                                    })
                 let native = Set(nativePaths)
                 let items = genericCategories.flatMap { category in
@@ -1014,18 +1425,19 @@ extension AppState {
                                     homeDirectory: home).risk == .safe
                         }), onProgress: { done, _, path in
                             genericHandled = done
-                            onProgress?(agentUnits + done, routeUnits, path)
+                            onProgress?(dataUnits + agentUnits + done, routeUnits, path)
                         }, onCurrentFile: { path in
-                            onProgress?(agentUnits + genericHandled, routeUnits, path)
+                            onProgress?(dataUnits + agentUnits + genericHandled, routeUnits, path)
                         })
                 let agent = agentOutcome.summary
-                return (agentUnits + genericUnits, NativeCore.ApplySummary(
+                return (dataUnits + agentUnits + genericUnits, NativeCore.ApplySummary(
                     removed: generic.removed + agent.removed + appData.removed + residues.removed,
                     skipped: generic.skipped + agent.skipped + agentOutcome.refused + appData.skipped + residues.skipped,
                     failed: generic.failed + agent.failed + appData.failed + residues.failed,
                     messages: generic.messages + agent.messages + appData.messages + residues.messages,
                     removedPaths: generic.removedPaths.union(agent.removedPaths).union(appData.removedPaths).union(residues.removedPaths),
-                    reclaimedBytes: generic.reclaimedBytes &+ agent.reclaimedBytes &+ appData.reclaimedBytes &+ residues.reclaimedBytes))
+                    reclaimedBytes: generic.reclaimedBytes &+ agent.reclaimedBytes &+ appData.reclaimedBytes &+ residues.reclaimedBytes,
+                    retainedTargets: generic.retainedTargets + agent.retainedTargets + appData.retainedTargets + residues.retainedTargets))
             }.value
             let nativeHandled = applied.0
             let routeUnits = nativeHandled + managedUnits
@@ -1039,15 +1451,21 @@ extension AppState {
                 failed: applied.1.failed + managed.failed,
                 messages: applied.1.messages + managed.messages,
                 removedPaths: applied.1.removedPaths.union(managed.removedPaths),
-                reclaimedBytes: applied.1.reclaimedBytes &+ managed.reclaimedBytes)
-            if !summary.messages.isEmpty { log(summary.messages.joined(separator: "\n")) }
+                reclaimedBytes: applied.1.reclaimedBytes &+ managed.reclaimedBytes,
+                retainedTargets: applied.1.retainedTargets + managed.retainedTargets)
+            let rawDiagnostics = summary.messages
+            let logTail = await Task.detached(priority: .utility) {
+                CleanupExecutionResult.boundedFeedback(rawDiagnostics).logTail
+            }.value
+            if !logTail.isEmpty { logLines = Array((logLines + logTail).suffix(400)) }
             let execution = CleanupExecutionResult(
                 removed: summary.removed,
                 skipped: summary.skipped,
                 failed: summary.failed,
                 messages: summary.messages,
                 removedPaths: summary.removedPaths,
-                reclaimedBytes: summary.reclaimedBytes)
+                reclaimedBytes: summary.reclaimedBytes,
+                retainedTargets: summary.retainedTargets)
             return execution
         case .installerTrash:
             bridgeName = "bin/app_installer_apply.sh"
@@ -1091,8 +1509,17 @@ extension AppState {
             bridgeName, stdinData: stdinData, extraEnvironment: environment, timeout: 900)
         if !result.output.isEmpty { log(result.output) }
         logFailure(result, stdoutAlreadyLogged: true, notifyingUser: false)
-        var summary = CleanupExecutionResult.reconciled(
-            bridgeOutput: result.output, expectedCount: records.count)
+        var summary: CleanupExecutionResult
+        if route == .installerTrash {
+            summary = await Task.detached(priority: .utility) {
+                CleanupExecutionResult.reconciledInstallerReport(bridgeOutput: result.output,
+                    expectedCount: records.count, exitCode: result.exitCode,
+                    timedOut: result.timedOut, outputTruncated: result.outputTruncated)
+            }.value
+        } else {
+            summary = CleanupExecutionResult.reconciled(bridgeOutput: result.output, expectedCount: records.count)
+            summary.executionFailed = !result.succeeded
+        }
         if summary.removed == records.count {
             summary.removedPaths = Set(records)
             summary.removed += coalescedCount
@@ -1100,7 +1527,6 @@ extension AppState {
             summary.skipped += coalescedCount
         }
         if !result.succeeded {
-            summary.executionFailed = true
             summary.messages.append(result.errorOutput.isEmpty ? result.output : result.errorOutput)
         }
         return summary

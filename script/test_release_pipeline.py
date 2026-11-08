@@ -56,12 +56,18 @@ class RegressionCoverageTests(unittest.TestCase):
         self.assertEqual(self.trace(), expected, "default regression changed or omitted a check")
         groups = {group: self.trace(group) for group in ("preflight", "native-a", "native-b", "native-c", "contracts")}
         self.assertEqual(groups["preflight"], expected[:2])
-        for group in ("native-a", "native-b", "native-c"):
-            self.assertEqual(sum(item.startswith("shell:") for item in groups[group]), 17)
+        shell_counts = {"native-a": 19, "native-b": 21, "native-c": 21}
+        for group, count in shell_counts.items():
+            self.assertEqual(sum(item.startswith("shell:") for item in groups[group]), count, group)
         self.assertEqual(collections.Counter(item for items in groups.values() for item in items),
                          collections.Counter(expected), "shards omit or repeat regression checks")
         self.assertIn("function:test_agent_cleanup_selection_contract", groups["native-b"])
         self.assertIn("function:test_media_cleanup_selection_contract", groups["native-c"])
+        self.assertIn("shell:test_cleanup_execution.sh", groups["native-a"])
+        for suite in ("test_cleanup_retry_policy.sh", "test_cleanup_trace.sh", "test_administrator_retention_report.sh"):
+            self.assertIn("shell:" + suite, groups["native-b"])
+        for suite in ("test_cleanup_scan_process.sh", "test_administrator_cleanup_retry.sh", "test_cleanup_non_removable.sh"):
+            self.assertIn("shell:" + suite, groups["native-c"])
 
     def test_invalid_arguments_fail_before_any_test_runs(self):
         for args in (["--group", "typo"], ["--group"], ["--other", "native-a"], ["--group", "all", "extra"]):

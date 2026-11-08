@@ -5,7 +5,12 @@ struct AutoCleanupRoot {
     var authorizedIdentity: String?
 }
 enum AutoCleanupPolicy { case sizeLimit, retentionDays }
-enum AutoCleanupPlannerError: Error { case rootAuthorizationChanged(String) }
+enum AutoCleanupPlannerError: LocalizedError {
+    case rootAuthorizationChanged(String)
+    var errorDescription: String? {
+        switch self { case .rootAuthorizationChanged(let path): return "Reconfirm folder identity: " + path }
+    }
+}
 enum AutoCleanupRuleStore {
     static var pausesConsolidatedTasks = false
     static func consolidatedTasks(from rules: [AutoCleanupRule]) -> [AutoCleanupRule] {
@@ -20,7 +25,11 @@ struct AutoCleanupRule: Equatable {
     static let safetyToken = "safe-trash-v4"
     var id = UUID()
     var isEnabled = true
-    var isSafetyAuthorized = true
+    private var authorizationRecorded = true
+    var isSafetyAuthorized: Bool {
+        get { isRegenerable && authorizationRecorded }
+        set { authorizationRecorded = newValue }
+    }
     var directory = "/fixture/cache"
     var sourceName: String?
     var policy = AutoCleanupPolicy.sizeLimit
@@ -97,6 +106,7 @@ enum FixtureError: Error { case unavailable }
     static var calls = 0
     static var fail = false
     static var empty = false
+    static var authorizationChanged = false
     static var paused = false
     static var continuation: CheckedContinuation<Void, Never>?
     static func validatedRoot(_ url: URL) throws -> String { url.path }
@@ -107,17 +117,20 @@ enum FixtureError: Error { case unavailable }
     static func plan(for rule: AutoCleanupRule, protecting: [String]) async throws -> AutoCleanupPlan {
         calls += 1
         if paused { await withCheckedContinuation { continuation = $0 } }
+        if authorizationChanged { throw AutoCleanupPlannerError.rootAuthorizationChanged(rule.directory) }
         if fail { throw FixtureError.unavailable }
         return AutoCleanupPlan(candidates: empty ? [] : [AutoCleanupCandidate()])
     }
-    static func reset() { calls = 0; fail = false; empty = false; paused = false; continuation = nil }
+    static func reset() { calls = 0; fail = false; empty = false; authorizationChanged = false; paused = false; continuation = nil }
 }
 final class FixturePermissions {
     var fullDiskAccessGranted = true
     func refresh() {}
 }
+enum AppLanguage { case auto, zhHans, zhHant, en, ja, ko, de, fr, es, pt, it, ru, tr }
+enum L10n { static let shared = FixtureL10n() }
 struct FixtureL10n {
-    func t(_ key: String) -> String { key }
+    func t(_ key: String) -> String { L10nTaskFeedbackTables.table(for: .en)[key] ?? key }
     func tf(_ key: String, _ args: CVarArg...) -> String { key }
 }
 enum ByteFormat { static func format(_ bytes: UInt64) -> String { String(bytes) } }
@@ -176,11 +189,17 @@ enum ProtectedOperation { case previewAutoCleanup(ruleID: UUID), runAutoCleanup(
     var autoCleanupPreviewRuleID: UUID?
     var autoCleanupPreview: AutoCleanupPlan?
     var notifications = 0
+    var lastFailureDetails: [String] = []
+    var lastFailureDetailsAreLocalized = false
     var logs = 0
     var persistCalls = 0
     let l10n = FixtureL10n()
     func log(_ value: String) { logs += 1 }
-    func presentTaskFailure(message: String, details: [String]) { notifications += 1 }
+    func presentTaskFailure(message: String, details: [String], detailsAreLocalized: Bool = false) {
+        notifications += 1
+        lastFailureDetails = details
+        lastFailureDetailsAreLocalized = detailsAreLocalized
+    }
     func presentTaskFailure(message: String) { notifications += 1 }
     func presentTaskFailure(details: [String]) { notifications += 1 }
     func protectedAutoCleanupDirectories(excluding id: UUID) -> [String] {
@@ -446,6 +465,57 @@ enum ProtectedOperation { case previewAutoCleanup(ruleID: UUID), runAutoCleanup(
             AutoCleanupPlanner.continuation?.resume(); AutoCleanupPlanner.continuation = nil
             await settle(s)
             expect(s.applied == 0, "stale plan applied after " + mutation + " during scan")
+        }
+        // Invalid root consent pauses once; transient failures remain retryable.
+        s = fixture(); AutoCleanupPlanner.authorizationChanged = true
+        let identityBeforeFailure = s.autoCleanupRules[0].authorizedRootIdentity
+        s.autoCleanupRules[0].executionCount = 53
+        s.autoCleanupRules[0].totalReclaimedBytes = 8192
+        s.runScheduledAutoCleanup(force: true); await settle(s)
+        expect(!s.autoCleanupRules[0].isEnabled && !s.autoCleanupRules[0].isRegenerable
+               && !s.autoCleanupRules[0].isSafetyAuthorized && s.persistCalls > 0,
+               "changed root authorization was not paused and persisted")
+        expect(s.autoCleanupRules[0].executionCount == 53
+               && s.autoCleanupRules[0].totalReclaimedBytes == 8192
+               && s.autoCleanupRules[0].authorizedRootIdentity == identityBeforeFailure,
+               "pausing changed authorization lost history or silently rebound its identity")
+        expect(s.applied == 0 && s.notifications == 1 && s.lastFailureDetailsAreLocalized
+               && s.lastFailureDetails.first?.contains("Reconfirm folder identity") == true
+               && s.lastFailureDetails.allSatisfy { !$0.contains(s.l10n.t("task.reason.config")) },
+               "localized authorization refusal was mislabeled as a config error")
+        let failedPlanningCalls = AutoCleanupPlanner.calls
+        s.runScheduledAutoCleanup(force: true); await settle(s)
+        expect(AutoCleanupPlanner.calls == failedPlanningCalls && s.notifications == 1,
+               "paused authorization repeated its scheduled failure")
+        for manualAction in ["preview", "run"] {
+            s = fixture(); AutoCleanupPlanner.authorizationChanged = true
+            if manualAction == "preview" { s.previewAutoCleanup(s.autoCleanupRules[0].id) }
+            else { s.runAutoCleanupNow(s.autoCleanupRules[0].id) }
+            await settle(s)
+            expect(!s.autoCleanupRules[0].isEnabled && !s.autoCleanupRules[0].isRegenerable
+                   && s.applied == 0 && NSAlert.runs == 0,
+                   "manual " + manualAction + " retained invalid authorization")
+        }
+        s = fixture(); s.applyFails = true
+        s.runScheduledAutoCleanup(force: true); await settle(s)
+        expect(s.lastFailureDetailsAreLocalized
+               && s.lastFailureDetails == TaskFeedbackDiagnostic.localized(["Fixture cleanup failed"])
+               && s.autoCleanupRules[0].isEnabled,
+               "executor diagnostics were not localized or transient failure revoked consent")
+        for mutation in ["edit", "remove", "reauthorize"] {
+            s = fixture(); AutoCleanupPlanner.paused = true; AutoCleanupPlanner.authorizationChanged = true
+            s.runScheduledAutoCleanup(force: true)
+            for _ in 0..<1000 { if AutoCleanupPlanner.calls == 1 { break }; try? await Task.sleep(nanoseconds: 1_000_000) }
+            switch mutation {
+            case "edit": s.autoCleanupRules[0].retentionDays = 30
+            case "remove": s.autoCleanupRules.removeAll()
+            default: s.autoCleanupRules[0].authorizedRootIdentity = "new-reviewed-root"
+            }
+            AutoCleanupPlanner.continuation?.resume(); AutoCleanupPlanner.continuation = nil
+            await settle(s)
+            expect(s.notifications == 0 && s.autoCleanupRuleIssues.isEmpty && s.applied == 0
+                   && (s.autoCleanupRules.isEmpty || s.autoCleanupRules[0].isEnabled),
+                   "stale failure overwrote " + mutation + " during planning")
         }
         print("PASS: production scheduler disabled/unauthorized rules, FDA, retry coalescing, pending notice, throttle, force, empty/failed scans, quiet failures, concurrent calls and scan-time rule mutations")
     }

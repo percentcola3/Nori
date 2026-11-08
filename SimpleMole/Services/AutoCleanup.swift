@@ -8,6 +8,60 @@ enum AutoCleanupPolicy: String, Codable, CaseIterable, Identifiable, Sendable {
     var id: String { rawValue }
 }
 
+/// Persistent consent uses a volume UUID; st_dev is only a live mount identity.
+/// Keeping the live device here also lets old consent migrate only when all of
+/// its original fields still match the current object.
+struct AutoCleanupRootIdentitySnapshot: Equatable, Sendable {
+    let device: Int64
+    let inode: UInt64
+    let birthSeconds: Int64
+    let volumeUUID: String?
+
+    var persistentIdentity: String? {
+        guard let volumeUUID, let uuid = UUID(uuidString: volumeUUID),
+              uuid.uuidString != "00000000-0000-0000-0000-000000000000", birthSeconds > 0 else { return nil }
+        return "volume-v1:\(uuid.uuidString):\(inode):\(birthSeconds)"
+    }
+
+    func matchesLegacy(_ identity: String) -> Bool {
+        let fields = identity.split(separator: ":", omittingEmptySubsequences: false)
+        guard fields.count == 3, let oldDevice = UInt64(fields[0]),
+              let oldInode = UInt64(fields[1]), let oldBirth = UInt64(fields[2]),
+              let currentDevice = UInt64(exactly: device),
+              let currentBirth = UInt64(exactly: birthSeconds) else { return false }
+        return oldDevice == currentDevice && oldInode == inode && oldBirth == currentBirth
+    }
+
+    static func isPersistentIdentity(_ identity: String?) -> Bool {
+        guard let identity else { return false }
+        let fields = identity.split(separator: ":", omittingEmptySubsequences: false)
+        guard fields.count == 4, fields[0] == "volume-v1",
+              let uuid = UUID(uuidString: String(fields[1])),
+              uuid.uuidString != "00000000-0000-0000-0000-000000000000", let inode = UInt64(fields[2]),
+              let birth = Int64(fields[3]), birth > 0 else { return false }
+        return identity == "volume-v1:\(uuid.uuidString):\(inode):\(birth)"
+    }
+
+    static func capture(at path: String,
+                        volumeUUID: (URL) -> String? = { url in
+                            try? url.resourceValues(forKeys: [.volumeUUIDStringKey]).volumeUUIDString
+                        }) -> Self? {
+        guard let root = try? AutoCleanupPlanner.validateRoot(URL(fileURLWithPath: path, isDirectory: true)) else { return nil }
+        var before = stat(), after = stat()
+        guard lstat(root.path, &before) == 0, before.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { return nil }
+        let uuid = volumeUUID(root)
+        // Volume metadata is path based. Refuse an object swap while obtaining
+        // it, and recheck the no-symlink path before binding first consent.
+        guard lstat(root.path, &after) == 0, after.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+              before.st_dev == after.st_dev, before.st_ino == after.st_ino,
+              before.st_birthtimespec.tv_sec == after.st_birthtimespec.tv_sec,
+              before.st_birthtimespec.tv_nsec == after.st_birthtimespec.tv_nsec,
+              (try? AutoCleanupPlanner.validateRoot(root)) != nil else { return nil }
+        return Self(device: Int64(after.st_dev), inode: UInt64(after.st_ino),
+                    birthSeconds: Int64(after.st_birthtimespec.tv_sec), volumeUUID: uuid)
+    }
+}
+
 struct AutoCleanupRoot: Codable, Equatable, Sendable {
     let directory: String
     var authorizedIdentity: String?
@@ -31,7 +85,8 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
     /// 用户明确确认该目录只保存可再生内容；旧版本规则迁移时一律为 false。
     var isRegenerable: Bool
     var safetyVersion: Int
-    /// Device/inode/birth time of the directory when the user authorizes it.
+    /// Volume UUID/inode/birth time of the directory when the user authorizes it.
+    /// Legacy device-based values remain stored when they cannot be proven current.
     /// Recreating a directory at the same pathname never inherits consent.
     var authorizedRootIdentity: String?
     var lastCheckedAt: Date?
@@ -113,17 +168,30 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
             Int.self, forKey: .safetyVersion) ?? 0
         let decodedRootIdentity = try values.decodeIfPresent(
             String.self, forKey: .authorizedRootIdentity)
-        let identityFormatValid = Self.isCurrentRootIdentity(decodedRootIdentity)
+        func migratedIdentity(_ identity: String?, at path: String) -> String? {
+            guard requestedRegenerable, decodedSafetyVersion == Self.currentSafetyVersion,
+                  let identity, !Self.isCurrentRootIdentity(identity) else { return identity }
+            let fields = identity.split(separator: ":", omittingEmptySubsequences: false)
+            guard fields.count == 3, fields.allSatisfy({ UInt64($0) != nil }),
+                  let current = AutoCleanupRootIdentitySnapshot.capture(at: path),
+                  current.matchesLegacy(identity), let stable = current.persistentIdentity else { return identity }
+            return stable
+        }
+        let rootIdentity = migratedIdentity(decodedRootIdentity, at: directory)
+        additionalRoots = additionalRoots.map { root in
+            AutoCleanupRoot(directory: root.directory,
+                authorizedIdentity: migratedIdentity(root.authorizedIdentity, at: root.directory))
+        }
         let hasCurrentAuthorization = requestedRegenerable
             && decodedSafetyVersion == Self.currentSafetyVersion
-            && identityFormatValid
+            && Self.isCurrentRootIdentity(rootIdentity)
             && additionalRoots.allSatisfy { Self.isCurrentRootIdentity($0.authorizedIdentity) }
-        // 运行时授权保持保守：安全版本或身份过期时规则一律视为未确认。
-        // 但存储中的授权数据按原样保留——升级（或回滚）后重新勾选
-        // “仅可再生内容”即可恢复规则，不需要重建，也不因中途保存而销毁。
+        // Only a fully matching legacy object may migrate without new consent.
+        // Unverifiable, old-policy and future-policy authorizations remain stored
+        // for review, but cannot enable automation or be silently reauthorized.
         isRegenerable = hasCurrentAuthorization
         safetyVersion = decodedSafetyVersion
-        authorizedRootIdentity = identityFormatValid ? decodedRootIdentity : nil
+        authorizedRootIdentity = rootIdentity
         let requestedEnabled = try values.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
         let validSizeLimit = policy != .sizeLimit
             || (Self.minimumSizeLimitBytes...Self.maximumSizeLimitBytes).contains(sizeLimitBytes)
@@ -137,15 +205,11 @@ struct AutoCleanupRule: Identifiable, Codable, Equatable, Sendable {
     }
 
     static func rootIdentity(at path: String) -> String? {
-        var metadata = stat()
-        guard Darwin.lstat(path, &metadata) == 0,
-              metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) else { return nil }
-        return "\(metadata.st_dev):\(metadata.st_ino):\(metadata.st_birthtimespec.tv_sec)"
+        AutoCleanupRootIdentitySnapshot.capture(at: path)?.persistentIdentity
     }
 
     private static func isCurrentRootIdentity(_ identity: String?) -> Bool {
-        let fields = identity?.split(separator: ":") ?? []
-        return fields.count == 3 && fields.allSatisfy { UInt64($0) != nil }
+        AutoCleanupRootIdentitySnapshot.isPersistentIdentity(identity)
     }
 }
 
@@ -275,9 +339,19 @@ enum AutoCleanupRuleStore {
     private static func migrate(_ rules: [AutoCleanupRule], originalData: Data,
                                 defaults: UserDefaults) -> [AutoCleanupRule] {
         let tasks = consolidatedTasks(from: rules)
-        if tasks != rules {
+        guard let normalized = try? JSONEncoder().encode(tasks) else { return tasks }
+        let unchanged: Bool
+        if let originalJSON = (try? JSONSerialization.jsonObject(with: originalData)) as? NSArray,
+           let normalizedJSON = (try? JSONSerialization.jsonObject(with: normalized)) as? NSArray {
+            unchanged = originalJSON.isEqual(normalizedJSON)
+        } else {
+            unchanged = originalData == normalized
+        }
+        // Decoding can normalize consent even when consolidation changes no
+        // task objects. Compare JSON values, not key order or the decoded array.
+        if !unchanged {
             defaults.set(originalData, forKey: backupKey)
-            save(tasks, to: defaults)
+            defaults.set(normalized, forKey: storageKey)
         }
         return tasks
     }

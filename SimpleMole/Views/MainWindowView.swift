@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 主窗口：标题与指标卡 → 胶囊导航 → 功能页。
@@ -7,6 +8,8 @@ struct MainWindowView: View {
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var dialogNamespace
+    @State private var lastConfirmationID: UUID?
+    @State private var lastActiveDialog: String?
 
     private var activeDialog: String? {
         if let notice = state.taskNotice { return "task-" + notice.id.uuidString }
@@ -71,7 +74,12 @@ struct MainWindowView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .ignoresSafeArea(.container, edges: .top)
         .animation(reduceMotion ? nil : MoleMotion.panel, value: activeDialog)
-        .onExitCommand { dismissDialog() }
+        .onExitCommand {
+            if state.confirmation != nil {
+                traceConfirmation("ui.confirmation.escape", id: state.confirmation?.id)
+                state.cancelCleanupConfirmation()
+            } else { dismissDialog() }
+        }
         .alert(l10n.t("cleanup.admin.title"), isPresented: Binding(
             get: { state.administratorCleanupPrompt != nil },
             set: { visible in
@@ -87,11 +95,51 @@ struct MainWindowView: View {
             }
         .alert(confirmationTitle,
                isPresented: confirmationBinding, presenting: state.confirmation) { accepted in
-            Button(accepted.confirmLabel, role: .destructive) { state.runConfirmation(accepted) }
-            Button(l10n.t("common.cancel"), role: .cancel) { state.confirmation = nil }
+            Button(accepted.confirmLabel, role: .destructive) {
+                traceConfirmation("ui.confirmation.accepted", id: accepted.id)
+                state.runConfirmation(accepted)
+            }
+            Button(l10n.t("common.cancel"), role: .cancel) {
+                traceConfirmation("ui.confirmation.cancelled", id: state.confirmation?.id)
+                state.cancelCleanupConfirmation()
+            }
         } message: { accepted in
             Text(accepted.message)
         }
+        .background {
+            CleanupNativeSheetProbe(confirmationID: state.confirmation?.id,
+                requestID: state.cleanupTraceRequestID) { event, requestID, fields in
+                    state.traceCleanupInteraction(event, requestID: requestID, fields: fields)
+                }
+                .frame(width: 0, height: 0)
+                .allowsHitTesting(false)
+        }
+        .onAppear {
+            lastActiveDialog = activeDialog
+            state.traceCleanupInteraction("ui.main_window.appear", fields: ["active_dialog": activeDialog ?? "none"])
+            if let id = state.confirmation?.id { confirmationChanged(id) }
+        }
+        .onChange(of: state.confirmation?.id) { confirmationChanged($0) }
+        .onChange(of: activeDialog) { next in
+            state.traceCleanupInteraction("ui.active_dialog.changed", fields: [
+                "previous": lastActiveDialog ?? "none", "current": next ?? "none"
+            ])
+            lastActiveDialog = next
+        }
+    }
+
+    private func confirmationChanged(_ id: UUID?) {
+        if let id {
+            lastConfirmationID = id
+            traceConfirmation("ui.confirmation.requested", id: id)
+        } else { traceConfirmation("ui.confirmation.cleared", id: lastConfirmationID) }
+    }
+
+    private func traceConfirmation(_ event: String, id: UUID?) {
+        state.traceCleanupInteraction(event, fields: [
+            "confirmation_id": (id ?? lastConfirmationID)?.uuidString ?? "none",
+            "active_dialog": activeDialog ?? "none"
+        ])
     }
 
     private var titleBarRow: some View {
@@ -152,8 +200,91 @@ struct MainWindowView: View {
 
     private var confirmationTitle: String { state.confirmation?.title ?? "" }
     private var confirmationBinding: Binding<Bool> {
-        Binding(get: { state.confirmation != nil },
-                set: { if !$0 { state.confirmation = nil } })
+        let presentedID = state.confirmation?.id
+        return Binding(get: { state.confirmation != nil },
+                       set: { visible in
+                           if !visible {
+                               traceConfirmation("ui.confirmation.binding_hidden", id: presentedID)
+                               DispatchQueue.main.async {
+                                   guard let presentedID, state.confirmation?.id == presentedID else { return }
+                                   state.cancelCleanupConfirmation()
+                               }
+                           }
+                       })
+    }
+}
+
+/// Observe only this hosting window. The zero-sized view never participates in
+/// hit testing; all probes read scalar AppKit presentation state without IO.
+private struct CleanupNativeSheetProbe: NSViewRepresentable {
+    let confirmationID: UUID?
+    let requestID: UUID?
+    let trace: (String, UUID?, [String: String]) -> Void
+
+    func makeNSView(context: Context) -> ProbeView { ProbeView() }
+    func updateNSView(_ view: ProbeView, context: Context) {
+        view.update(confirmationID: confirmationID, requestID: requestID, trace: trace)
+    }
+
+    final class ProbeView: NSView {
+        private var confirmationID: UUID?
+        private var lastConfirmationID: UUID?
+        private var requestID: UUID?
+        private var trace: ((String, UUID?, [String: String]) -> Void)?
+        private weak var observedWindow: NSWindow?
+        private var observers: [NSObjectProtocol] = []
+        private var probeTask: Task<Void, Never>?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard observedWindow !== window else { return }
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            observedWindow = window
+            guard let window else { return }
+            for (name, event) in [(NSWindow.willBeginSheetNotification, "ui.sheet.will_begin"),
+                                  (NSWindow.didEndSheetNotification, "ui.sheet.did_end")] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    DispatchQueue.main.async { self?.snapshot(event) }
+                })
+            }
+        }
+
+        func update(confirmationID: UUID?, requestID: UUID?,
+                    trace: @escaping (String, UUID?, [String: String]) -> Void) {
+            self.trace = trace
+            self.requestID = requestID
+            guard self.confirmationID != confirmationID else { return }
+            self.confirmationID = confirmationID
+            if let confirmationID { lastConfirmationID = confirmationID }
+            probeTask?.cancel()
+            guard let confirmationID else { return }
+            probeTask = Task { @MainActor [weak self] in
+                do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
+                guard let self, self.confirmationID == confirmationID else { return }
+                self.snapshot("ui.confirmation.sheet_probe")
+            }
+        }
+
+        private func snapshot(_ event: String) {
+            let sheet = window?.attachedSheet
+            trace?(event, requestID, [
+                "confirmation_id": (confirmationID ?? lastConfirmationID)?.uuidString ?? "none",
+                "window_attached": String(window != nil),
+                "parent_visible": String(window?.isVisible ?? false),
+                "parent_key": String(window?.isKeyWindow ?? false),
+                "sheet_attached": String(sheet != nil),
+                "sheet_visible": String(sheet?.isVisible ?? false),
+                "sheet_key": String(sheet?.isKeyWindow ?? false),
+                "window_number": String(window?.windowNumber ?? -1)
+            ])
+        }
+
+        deinit {
+            probeTask?.cancel()
+            observers.forEach(NotificationCenter.default.removeObserver)
+        }
     }
 }
 

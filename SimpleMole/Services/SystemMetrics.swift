@@ -183,6 +183,10 @@ enum SystemMetrics {
     }
 
     static func commandOutput(_ executable: String, arguments: [String], timeoutSeconds: TimeInterval = 8) -> String? {
+        #if NORI_CLEANUP_SCAN_WORKER
+        let result = CleanupScanChildCommand.run(executable, arguments: arguments, timeout: timeoutSeconds)
+        return result.succeeded ? result.output : nil
+        #else
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -205,6 +209,7 @@ enum SystemMetrics {
         process.waitUntilExit()
         guard process.terminationStatus == 0, let data else { return nil }
         return String(data: data, encoding: .utf8)
+        #endif
     }
 
     private static func cpuUsage() -> Double {

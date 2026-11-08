@@ -32,6 +32,10 @@ SimpleMole/Services/CleanupCache.swift|SimpleMole/Services/MediaSlimmer.swift) r
                 'unlinkat(directory, name, 0)'|\
                 'defer { try? FileManager.default.removeItem(at: temporary) }') return 0 ;;
             esac ;;
+        # Only the oldest bounded diagnostic log, relative to its pinned,
+        # owned directory; all entries must pass safeEntry before rotation.
+        SimpleMole/Services/CleanupTrace.swift)
+            [[ "$2" == 'if unlinkat(directory, names[fileCount - 1], 0) != 0, errno != ENOENT { return false }' ]] && return 0 ;;
         SimpleMole/Services/AgentHistoryGemini.swift)
             [[ "$2" == 'defer { try? FileManager.default.removeItem(at: invocation) }' ]] && return 0 ;;
         SimpleMole/Services/AgentHistoryOpenCode.swift)
@@ -46,8 +50,9 @@ SimpleMole/Services/CleanupCache.swift|SimpleMole/Services/MediaSlimmer.swift) r
             [[ "$2" == 'defer { close(listener); unlink(socketPath) }' ]] && return 0 ;;
         SimpleMole/Services/AgentRemovalService.swift)
             [[ "$2" == 'try FileManager.default.trashItem(at: url, resultingItemURL: &destination)' ]] && return 0 ;;
-        SimpleMole/Services/AdministratorCleanupService.swift|\
-SimpleMole/Services/AdministratorUninstallService.swift|\
+        SimpleMole/Services/AdministratorCleanupService.swift)
+            [[ "$2" == 'try? FileManager.default.removeItem(at: files.directory)' ]] && return 0 ;;
+        SimpleMole/Services/AdministratorUninstallService.swift|\
 SimpleMole/Services/DeveloperShellProfiler.swift)
             [[ "$2" == 'defer { try? FileManager.default.removeItem(at: directory) }' ]] && return 0 ;;
         SimpleMole/Services/DeveloperSSHGitService.swift)
@@ -187,10 +192,32 @@ admin_service="$ROOT_DIR/SimpleMole/Services/AdministratorCleanupService.swift"
 for contract in \
     '.appendingPathComponent("nori-admin-cleanup-" + UUID().uuidString, isDirectory: true)' \
     'guard mkdir(directory.path, 0o700) == 0 else {' \
-    'try data.write(to: manifest, options: .withoutOverwriting)' \
-    'try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: manifest.path)'; do
+    'try data.write(to: files.manifest, options: .withoutOverwriting)' \
+    'try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: files.manifest.path)' \
+    'files.directory.deletingLastPathComponent() == parent,' \
+    'files.directory.resolvingSymlinksInPath() == files.directory,' \
+    'lstat(files.directory.path, &info) == 0, info.st_dev == files.device, info.st_ino == files.inode,' \
+    'info.st_mode & S_IFMT == S_IFDIR, info.st_uid == getuid() else { return }'; do
     grep -Fq "$contract" "$admin_service" || fail 'Administrator manifest cleanup is not bound to its own private directory'
 done
+
+# The trace exception permits only bounded rotation of Nori's private log.
+# It never turns the logger into a user-path deletion service.
+trace_service="$ROOT_DIR/SimpleMole/Services/CleanupTrace.swift"
+for contract in \
+    '.appendingPathComponent("Library/Logs/Nori/cleanup-events.jsonl")' \
+    'self.fileCount = min(3, max(2, fileCount))' \
+    'metadata.st_mode & S_IFMT == S_IFREG && metadata.st_uid == geteuid() && metadata.st_nlink == 1' \
+    'O_RDONLY | O_NOFOLLOW | O_DIRECTORY | O_CLOEXEC | O_NONBLOCK' \
+    'guard fstat(current, &metadata) == 0, metadata.st_uid == geteuid(),' \
+    'fchmod(current, 0o700) == 0 else { Darwin.close(current); return false }' \
+    'let names = (0..<fileCount).map { $0 == 0 ? url.lastPathComponent : url.lastPathComponent + ".\($0)" }' \
+    'guard names.allSatisfy(safeEntry) else { return false }' \
+    'return valid(metadata) && metadata.st_mode & 0o077 == 0'; do
+    grep -Fq "$contract" "$trace_service" || fail 'Cleanup trace rotation lost its private bounded log boundary'
+done
+[[ "$(grep -Fc 'unlinkat(' "$trace_service")" -eq 1 ]] || \
+    fail 'Cleanup trace must have exactly one audited oldest-log rotation call'
 
 # ---- bridge 侧 ----
 # mole_delete <path> <needs_sudo> <identity>：三个参数都必须显式存在，

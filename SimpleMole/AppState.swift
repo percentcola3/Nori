@@ -44,6 +44,9 @@ final class AppState: ObservableObject {
     private var administratorCleanupDecision: CheckedContinuation<Bool?, Never>?
 
     func resolveAdministratorCleanup(_ include: Bool?) {
+        traceCleanupInteraction("administrator.confirmation.resolved", fields: [
+            "decision": include.map { $0 ? "include" : "skip" } ?? "cancelled",
+            "hadContinuation": String(administratorCleanupDecision != nil)])
         let decision = administratorCleanupDecision
         administratorCleanupDecision = nil
         administratorCleanupPrompt = nil
@@ -51,7 +54,8 @@ final class AppState: ObservableObject {
     }
 
     func confirmAdministratorCleanup(_ items: [DeletionPlan.Item]) async -> Bool? {
-        await withCheckedContinuation { continuation in
+        traceCleanupInteraction("administrator.confirmation.requested", fields: ["items": String(items.count)])
+        return await withCheckedContinuation { continuation in
             administratorCleanupDecision = continuation
             let paths = items.prefix(6).map(\.record).joined(separator: "\n")
             administratorCleanupPrompt = l10n.tf("cleanup.admin.message", items.count) + "\n\n" + paths
@@ -358,7 +362,16 @@ final class AppState: ObservableObject {
 
     // MARK: 清理
 
-    @Published var categories: [CleanupCategory] = []
+    @Published var categories: [CleanupCategory] = [] {
+        didSet { cleanupInventoryDidChange(from: oldValue) }
+    }
+    @Published var cleanupPresentation = CleanupPresentation.empty
+    var cleanupPresentationCache = CleanupPresentationCache()
+    var cleanupCoverageIndex = CleanupCoverageIndex()
+    var cleanupPresentationTask: Task<CleanupPresentation?, Never>?
+    @Published var cleanupSelectionPresentation: CleanupSelectionPresentation? = .empty
+    var cleanupSelectionCache = CleanupSelectionCache()
+    var cleanupSelectionTask: Task<CleanupSelectionPresentation?, Never>?
     @Published var family: CleanupFamily = .clean
     @Published var isScanning = false
     @Published var cleanupOutcomeMood: NoriMood?
@@ -402,7 +415,9 @@ final class AppState: ObservableObject {
 
     /// 系统数据页的独立清单：root 拥有的日志、报告与缓存。
     /// 与通用清理页的 categories/family 完全解耦，避免互相覆盖状态。
-    @Published var installerCandidates: CleanupCategory?
+    @Published var installerCandidates: CleanupCategory? {
+        didSet { rebuildCleanupSelectionPresentation() }
+    }
     @Published var processActionStatus = ""
     enum ProcessQuitFeedback {
         case waiting, refused, stillRunning, stale
@@ -521,7 +536,9 @@ final class AppState: ObservableObject {
 
     // MARK: 自动目录清理
 
-    @Published var autoCleanupRules: [AutoCleanupRule] = AutoCleanupRuleStore.load()
+    @Published var autoCleanupRules: [AutoCleanupRule] = AutoCleanupRuleStore.load() {
+        didSet { cleanupRuleCatalogDidChange(from: oldValue) }
+    }
     @Published var autoCleanupPreview: AutoCleanupPlan?
     @Published var autoCleanupPreviewRuleID: UUID?
     @Published var isAutoCleanupScanning = false
@@ -668,6 +685,7 @@ final class AppState: ObservableObject {
     /// Keep the disk worker gated while the alert closes and its accepted
     /// action is dispatched. Otherwise it can race a cleanup confirmation.
     func runConfirmation(_ accepted: Confirmation) {
+        traceCleanupInteraction("window.confirmation.action", fields: ["confirmationID": accepted.id.uuidString])
         isDispatchingConfirmation = true
         confirmation = nil
         DispatchQueue.main.async { [weak self] in
@@ -934,18 +952,20 @@ final class AppState: ObservableObject {
     /// 磁盘分析与重复文件比对是只读遍历，在后台持续执行，不阻塞其他操作
     /// （各自入口有独立的重入保护：`isAnalyzing`/`isScanningDuplicates`）。
 
-    var selectedCount: Int {
-        categories.reduce(0) { $0 + $1.selectedPathCount }
-    }
+    var selectedCount: Int { categories.reduce(0) { $0 + CleanupSelectionPresentation.selectedCount($1) } }
 
     /// 统一“清理”可分发的勾选：文件系统类目、安装包或系统维护任一存在即可。
     var hasCleanupSelection: Bool {
-        selectedCount > 0 || installerCandidates?.selectedSubset != nil
+        selectedCount > 0 || CleanupSelectionPresentation.selectedCount(installerCandidates) > 0
             || systemMaintenanceRows.contains { systemMaintenanceSelection.contains($0.id) }
     }
 
-    var selectedBytes: UInt64 {
-        categories.reduce(0) { $0 &+ $1.selectedPathBytes }
+    /// Display total includes installer selection; nil means a partial-selection
+    /// sum is still being computed. Never sum paths from a display getter.
+    var selectedBytes: UInt64? { cleanupSelectionPresentation?.totalBytes }
+
+    func cleanupSelectedBytes(for categoryID: UUID) -> UInt64? {
+        cleanupSelectionPresentation?.bytesByCategory[categoryID]
     }
 
     var totalBytes: UInt64 {
@@ -988,6 +1008,13 @@ final class AppState: ObservableObject {
         devEnvStatus = L10n.shared.t("devenv.status.empty")
         // 未扫描时不需要任何状态文案：空态由吉祥物动图与入口按钮表达。
         analyzeStatus = ""
+        CleanupTrace.record("app.started", fields: [
+            "diagnostics": "cleanup-trigger-v1",
+            "leftoversSubmission": "direct",
+            "cleanupRetryLimit": String(CleanupRetryPolicy.maximumAttempts),
+            "cleanupFailureFeedback": "silent",
+            "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"])
         Task { [weak self] in
             guard let self else { return }
             let cache = self.analysisInventoryCache
@@ -999,6 +1026,7 @@ final class AppState: ObservableObject {
             self.runScheduledAnalysisScans()
         }
         autoCleanupStatus = L10n.shared.t("auto.status.ready")
+        initializeCleanupPresentation()
         restorePersistedDuplicateResults()
         if !islandEnabled && !menuBarIconVisible { setMenuBarIconVisible(true) }
 
@@ -1664,22 +1692,29 @@ final class AppState: ObservableObject {
             if !result.remainingPaths.isEmpty {
                 detail += "\n" + l10n.tf("uninstall.remaining", result.remainingPaths.count)
             }
+            let applicationRemoved = result.removedPaths.contains(target.path)
+                && !result.remainingPaths.contains(target.path)
+            let statusKey = applicationRemoved ? "uninstall.status.residuesRemain" : "status.uninstallPartial"
             finishUninstall(job, succeeded: false,
-                            message: l10n.tf("status.uninstallPartial", target.name) + "\n" + detail,
-                            details: reasons + result.remainingPaths, recoveryPlan: recoveryPlan)
+                            message: l10n.tf(statusKey, target.name) + "\n" + detail,
+                            details: TaskFeedbackDiagnostic.uninstallDetails(reasons,
+                                remainingPaths: result.remainingPaths),
+                            detailsAreLocalized: true, recoveryPlan: recoveryPlan)
         }
     }
 
     private func finishUninstall(_ job: UninstallJob, succeeded: Bool, message: String,
-                                 details: [String] = [], recoveryPlan: UninstallPlan? = nil) {
+                                 details: [String] = [], detailsAreLocalized: Bool = false,
+                                 recoveryPlan: UninstallPlan? = nil) {
         uninstallQueue.finish(job.id, succeeded: succeeded, message: message)
         noteHeaderReaction(succeeded ? .success : .attention)
         resampleAfterMutation()
         appListStatus = ""
         log(message)
         if !succeeded {
-            var notice = TaskFeedbackNotice(message: message, details: details)
-            if let recoveryPlan {
+            var notice = TaskFeedbackNotice(message: message, details: details,
+                                            detailsAreLocalized: detailsAreLocalized)
+            if let recoveryPlan, UninstallWorkflow.canRecover(job.app, plan: recoveryPlan) {
                 notice.recoveryLabel = l10n.t("uninstall.recovery.action")
                 notice.recoveryMessage = l10n.t("uninstall.recovery.message")
                 notice.recoveryIsDestructive = true

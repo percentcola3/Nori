@@ -54,10 +54,40 @@ struct UninstallWorkflow: UninstallExecuting {
         self.dependencies = dependencies ?? .live
     }
 
+    static func canRecover(_ app: UninstallApp, plan: UninstallPlan,
+                           isAbsent: (UninstallApp) -> Bool = { app in
+                               var metadata = stat()
+                               return lstat(app.path, &metadata) != 0 && errno == ENOENT
+                           }) -> Bool {
+        !plan.needsAdmin || AdministratorUninstallPlan.allows(app) || isAbsent(app)
+    }
+
+    private static func unsupportedLocation(_ app: UninstallApp) -> UninstallExecutionOutcome {
+        .applied(.init(removed: 0, skipped: 0, failed: 1,
+                       messages: [AdministratorUninstallPlan.unsupportedLocationMessage],
+                       remainingPaths: [app.path]), plan: nil)
+    }
+
     func execute(_ job: UninstallJob,
                  progress: (UninstallExecutionPhase) -> Void) async -> UninstallExecutionOutcome {
         let app = job.app
         let wasAlreadyAbsent = job.forceCleanup && dependencies.isAbsent(app)
+        if !wasAlreadyAbsent && !AdministratorUninstallPlan.allows(app) {
+            // Cached permissions/package ownership cannot reject a newly valid
+            // route. Check a current plan before stopping an unsupported target;
+            // recovery keeps its captured scope and never scans into new data.
+            progress(.planning)
+            let preflight = job.forceCleanup ? job.plan : await dependencies.plan(app)
+            guard let preflight, !preflight.files.isEmpty, preflight.includesProtectedAppData,
+                  !app.appIdentity.isEmpty, !app.infoIdentity.isEmpty,
+                  preflight.fileIdentities[app.path] == app.appIdentity,
+                  preflight.files.contains(where: { $0.path == app.path && $0.label == "app" && !$0.informational }) else {
+                return .planUnavailable
+            }
+            if preflight.needsAdmin && (job.forceCleanup || !preflight.isBrewCask) {
+                return Self.unsupportedLocation(app)
+            }
+        }
         progress(.closing)
         if wasAlreadyAbsent {
             // A missing bundle cannot authorize terminating processes. Only
@@ -97,6 +127,10 @@ struct UninstallWorkflow: UninstallExecuting {
             plan = UninstallPlan(files: bodies, fileIdentities: [app.path: app.appIdentity],
                 needsAdmin: freshPlan.needsAdmin, isBrewCask: freshPlan.isBrewCask, caskToken: freshPlan.caskToken,
                 includesProtectedAppData: freshPlan.includesProtectedAppData, scannedAt: freshPlan.scannedAt)
+        }
+        if !wasAlreadyAbsent, plan.needsAdmin, (job.forceCleanup || !plan.isBrewCask),
+           !AdministratorUninstallPlan.allows(app) {
+            return Self.unsupportedLocation(app)
         }
         if wasAlreadyAbsent {
             guard dependencies.isAbsent(app) else { return .planUnavailable }

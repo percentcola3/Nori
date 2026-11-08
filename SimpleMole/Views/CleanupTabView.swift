@@ -9,12 +9,7 @@ struct CleanupTabView: View {
     @State private var userCollapsed: Set<CleanupGroupBucket>?
     /// 从可再生缓存行发起的自动清理规则创建。
     @State private var autoCleanIntent: AutoCleanupIntent?
-    @State private var confirmingAppData = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var selectedAppData: [CleanupCategory] {
-        state.categories.filter { $0.isAppDataReview && $0.selected }
-    }
 
     private func toggleCollapsed(_ kind: CleanupGroupBucket,
                                  in collapsedGroups: Set<CleanupGroupBucket>) {
@@ -40,9 +35,7 @@ struct CleanupTabView: View {
     /// 类目下已被自动清理规则管理的路径：类目行显示“已定时”徽标，
     /// 展开列表逐路径打标。
     private func coveredAutoCleanPaths(for category: CleanupCategory) -> Set<String> {
-        Set(category.paths.filter {
-            state.autoCleanupRuleCovering(directory: $0) != nil
-        })
+        state.cleanupPresentation.coveredPaths[category.id] ?? []
     }
 
     /// 系统数据库只展示体检确认有可执行维护任务的项目。
@@ -110,10 +103,9 @@ struct CleanupTabView: View {
                     scanButton
                 }
             } else {
-                // Classify the inventory once per render. Each header and
-                // lazy row must share this result instead of rewalking all
-                // paths to derive the initial collapse state.
-                let groups = groupedCategories
+                // Classification and scheduled-path membership are produced
+                // off the main actor only when inventory or rule roots change.
+                let groups = state.cleanupPresentation.groups
                 let collapsedGroups = userCollapsed ?? Set(groups.dropFirst().map(\.kind))
                 ScrollView {
                     LazyVStack(spacing: 12) {
@@ -123,15 +115,17 @@ struct CleanupTabView: View {
                                 if !collapsedGroups.contains(group.kind) {
                                     LazyVStack(spacing: 8) {
                                         ForEach(group.categoryIDs, id: \.self) { categoryID in
-                                            if let index = state.categories.firstIndex(where: {
-                                                $0.id == categoryID
-                                            }) {
+                                            if let index = state.cleanupPresentation.categoryIndices[categoryID],
+                                               state.categories.indices.contains(index),
+                                               state.categories[index].id == categoryID {
                                                 CategoryRowView(
                                                     category: $state.categories[index],
                                                     selectionEnabled: state.cleanupScanComplete
                                                         && !state.isApplying,
                                                     coveredPaths: coveredAutoCleanPaths(
                                                         for: state.categories[index]),
+                                                    usesSelectionSnapshot: true,
+                                                    selectedBytes: state.cleanupSelectedBytes(for: categoryID),
                                                     onAutoClean: autoCleanAction(
                                                         for: state.categories[index]))
                                             }
@@ -151,7 +145,7 @@ struct CleanupTabView: View {
                     .padding(.vertical, 4)
                     // 扫描结果入场/移除的液态流动：按 id 变化触发，勾选操作不参与。
                     .animation(reduceMotion ? nil : MoleMotion.panel,
-                               value: state.categories.map(\.id))
+                               value: state.cleanupPresentation.categoryIDs)
                 }
             }
 
@@ -261,58 +255,38 @@ struct CleanupTabView: View {
             // 全选/取消全选由各分组头的开关承担：底部只保留唯一的执行入口，
             // 系统维护项的勾选也由它统一分发。
             Spacer()
-            Button {
-                if selectedAppData.isEmpty { state.applyCleanup() } else { confirmingAppData = true }
-            } label: {
+            Button { state.requestCleanupFromPage() } label: {
                 Label(applyLabel, systemImage: "trash.fill")
+                    .padding(.horizontal, 20)
+                    .frame(minHeight: 36)
+                    .contentShape(Capsule())
             }
-            .buttonStyle(PrimaryButtonStyle())
-            .disabled(!state.hasCleanupSelection || state.isCleanupTaskBusy || state.cleanupQueued
-                      || state.isCleanupSubmissionBlocked || state.isSystemMaintenanceRunning || !state.cleanupScanComplete)
-            .alert(l10n.tf("cleanup.appData.confirm.title", selectedAppData.count),
-                   isPresented: $confirmingAppData) {
-                Button(l10n.t("common.cancel"), role: .cancel) {}
-                Button(l10n.t("cleanup.appData.confirm.action"), role: .destructive) { state.applyCleanup() }
-            } message: {
-                Text(l10n.tf("cleanup.appData.confirm.message",
-                             selectedAppData.prefix(6).map {
-                                 L10nLocalizationAuditTables.categoryName($0.name, isAppLeftover: $0.source == .appLeftover)
-                             }.joined(separator: "、")))
-            }
+            .buttonStyle(CleanupApplyButtonStyle())
+            .accessibilityIdentifier("cleanup-apply")
+            .disabled(state.cleanupButtonBlockReason != nil)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+        .onAppear { traceCleanupGate("ui.footer.appear") }
+        .onChange(of: state.cleanupGateSignature) { _ in traceCleanupGate("ui.footer.gate_changed") }
+        .onDisappear { traceCleanupGate("ui.footer.disappear") }
+    }
+
+    private func traceCleanupGate(_ event: String) {
+        state.traceCleanupInteraction(event, fields: [
+            "gate": state.cleanupButtonBlockReason ?? "enabled",
+            "signature": state.cleanupGateSignature,
+            "phase": String(presentationPhase)
+        ])
     }
 
     private var applyLabel: String {
         if state.cleanupQueued { return l10n.t("cleanup.queued") }
         if state.isApplying { return l10n.t("cleanup.apply.busy") }
-        if state.hasCleanupSelection {
-            let installerBytes = state.installerCandidates?.selectedSubset?.bytes ?? 0
-            return l10n.tf("cleanup.delete.withCount",
-                           ByteFormat.format(state.selectedBytes + installerBytes))
+        if state.hasCleanupSelection, let selectedBytes = state.selectedBytes {
+            return l10n.tf("cleanup.delete.withCount", ByteFormat.format(selectedBytes))
         }
         return l10n.t("cleanup.delete")
-    }
-
-    private var groupedCategories: [CleanupPresentationGroup] {
-        let buckets = Dictionary(grouping: state.categories) {
-            CleanupGroupBucket(category: $0)
-        }
-        return buckets.map { kind, categories in
-            CleanupPresentationGroup(
-                kind: kind,
-                categoryIDs: categories.sorted(by: CleanupCategory.sizeDescending).map(\.id),
-                bytes: categories.reduce(0) { $0 &+ $1.bytes })
-        }
-        .sorted {
-            // 系统数据始终排在用户内容之后，其余分组仍按容量排序。
-            if ($0.kind == .system) != ($1.kind == .system) {
-                return $0.kind != .system
-            }
-            if $0.bytes != $1.bytes { return $0.bytes > $1.bytes }
-            return $0.kind.sortOrder < $1.kind.sortOrder
-        }
     }
 
     @ViewBuilder
@@ -397,13 +371,6 @@ private struct CleanupScanProgressView: View {
     }
 }
 
-private struct CleanupPresentationGroup: Identifiable {
-    let kind: CleanupGroupBucket
-    let categoryIDs: [UUID]
-    let bytes: UInt64
-    var id: String { kind.rawValue }
-}
-
 extension CleanupGroupBucket {
     var titleKey: String { "cleanup.group.\(rawValue)" }
     var symbol: String {
@@ -417,16 +384,20 @@ extension CleanupGroupBucket {
         case .appData: return "externaldrive.badge.questionmark"
         }
     }
-    var sortOrder: Int {
-        switch self {
-        case .cache: return 0
-        case .messenger: return 1
-        case .system: return 2
-        case .leftovers: return 3
-        case .appData: return 4
-        case .trash: return 5
-        case .developer: return 6
-        }
+}
+
+/// The page's label owns its complete padded hit shape. Keep the shared glass
+/// and pressed feedback without adding PrimaryButtonStyle's padding twice.
+private struct CleanupApplyButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(isEnabled ? Color.textPrimary : Color.textSecondary)
+            .modifier(ActionGlassChrome())
+            .opacity(isEnabled ? 1 : 0.5)
+            .modifier(MoleButtonFeedbackModifier(isPressed: configuration.isPressed))
     }
 }
 
@@ -435,11 +406,24 @@ struct CategoryRowView: View {
     let selectionEnabled: Bool
     var highlightsSensitiveData = false
     var coveredPaths: Set<String> = []
+    var usesSelectionSnapshot = false
+    var selectedBytes: UInt64? = nil
     var onAutoClean: (() -> Void)? = nil
     @ObservedObject private var l10n = L10n.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 展开时的路径顺序只在路径集合变化时重排，滚动和勾选不再触发全量排序。
     @State private var sortedPaths: [String] = []
+    @State private var localSelectionBytes: UInt64?
+    @State private var localSelectionVersion: CleanupSelectionKey?
+
+    private var selectionKey: CleanupSelectionKey { CleanupSelectionKey(category) }
+
+    private var categorySizeText: String {
+        guard category.partiallySelected else { return ByteFormat.format(category.bytes) }
+        let bytes = usesSelectionSnapshot ? selectedBytes
+            : (localSelectionVersion == selectionKey ? localSelectionBytes : nil)
+        return bytes.map { ByteFormat.format($0) } ?? "…"
+    }
 
     /// 类目下的路径是否全部已设置定时清理（决定徽标文案）。
     private var fullyScheduled: Bool {
@@ -524,13 +508,42 @@ struct CategoryRowView: View {
                 .padding(.trailing, 12)
                 .padding(.bottom, 10)
                 .transition(.molePanelReveal)
-                .task(id: pathOrderKey) { sortedPaths = category.pathsByDescendingSize }
+                .task(id: category.pathOrderToken) {
+                    let token = category.pathOrderToken
+                    let paths = category.paths
+                    let sizes = category.pathBytes
+                    sortedPaths = []
+                    let work = Task.detached(priority: .userInitiated) {
+                        CleanupCategory.sortedPaths(paths, pathBytes: sizes)
+                    }
+                    let ordered = await withTaskCancellationHandler {
+                        await work.value
+                    } onCancel: { work.cancel() }
+                    guard !Task.isCancelled, category.pathOrderToken == token else { return }
+                    sortedPaths = ordered
+                }
             }
         }
         .clipped()
         .modifier(ListRowSurface(selected: category.selected))
         .animation(reduceMotion ? nil : MoleMotion.selection, value: category.selected)
         .opacity(category.risk == .protected ? 0.72 : 1)
+        .task(id: usesSelectionSnapshot ? nil : selectionKey) {
+            // CleanupTab supplies its shared projection. Other row consumers
+            // use the same detached computation, with no synchronous fallback.
+            guard !usesSelectionSnapshot, category.partiallySelected else { return }
+            let version = selectionKey
+            let input = CleanupSelectionPresentation.Input(category)
+            let work = Task.detached(priority: .userInitiated) {
+                CleanupSelectionPresentation.build([input], isCancelled: { Task.isCancelled })
+            }
+            let result = await withTaskCancellationHandler {
+                await work.value
+            } onCancel: { work.cancel() }
+            guard !Task.isCancelled, selectionKey == version, let result else { return }
+            localSelectionBytes = result.bytesByCategory[category.id]
+            localSelectionVersion = version
+        }
     }
 
     private var categoryLabel: some View {
@@ -608,9 +621,6 @@ struct CategoryRowView: View {
         .padding(.horizontal, horizontalPadding)
         .contentShape(Rectangle())
     }
-
-    /// 路径数与总字节一起变化才重排；只勾选不会改变这两个值。
-    private var pathOrderKey: String { "\(category.paths.count):\(category.bytes)" }
 
     private var sensitive: Bool {
         highlightsSensitiveData && (category.reasonKey == "agents.reason.showOnly"

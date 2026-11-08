@@ -30,6 +30,7 @@ struct CleanupRiskPolicyTests {
         try testDevEnvRelatedPackages()
         try testAutomationProtection(home: policyHome)
         try testSharedCleanupContentProtection(home: policyHome)
+        try testBundleIdentifierCacheDirectories(fixture: fixture)
         try testCleanupFilenameBoundaries(home: policyHome)
         try testCacheRoundTrip(fixture: fixture)
         try testNetmonParsing()
@@ -38,6 +39,79 @@ struct CleanupRiskPolicyTests {
         try testExpandedAuditedCoverage(home: policyHome)
         try testNoriOwnedStorage(home: policyHome, fixture: fixture)
         try testDeveloperCatalog(home: policyHome)
+    }
+
+    private static func testBundleIdentifierCacheDirectories(fixture: URL) throws {
+        // The policy runner may live under /var. Keep C's physical spelling;
+        // Foundation standardization can shorten it back to a symlink alias.
+        guard let resolved = realpath(fixture.path, nil) else {
+            throw RiskTestFailure(description: "could not resolve owned cache-policy fixture")
+        }
+        let physical = String(cString: resolved)
+        free(resolved)
+        let fm = FileManager.default
+        let home = URL(fileURLWithPath: physical).appendingPathComponent("bundle-suffix-home")
+        func directory(_ relative: String) throws -> URL {
+            let url = home.appendingPathComponent(relative)
+            try fm.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+        func protected(_ url: URL, allowBundle: Bool = false) -> Bool {
+            CleanupRiskPolicy.isProtectedCleanupPath(url.path, homeDirectory: home.path,
+                                                     allowApplicationBundle: allowBundle)
+        }
+        let plain = try directory("Library/Caches/dev.zcode.app")
+        try expect(!protected(plain), "an empty bundle-ID cache was mistaken for an application")
+        try Data("cache fixture".utf8).write(to: plain.appendingPathComponent("entry"))
+        try expect(!protected(plain), "ordinary bundle-ID cache contents changed its directory role")
+        for relative in ["Cache.db", "Cache.db-wal", "Cache.db-shm", "weights.gguf", "credentials/token"] {
+            try expect(protected(plain.appendingPathComponent(relative)),
+                       "cache suffix exception bypassed protected child: " + relative)
+        }
+        for relative in ["Library/Application Support/dev.outside.app", "Documents/dev.outside.app",
+                         "Library/Caches/parent/dev.nested.app", "Library/Caches/dev..invalid.app"] {
+            let outside = try directory(relative)
+            try expect(protected(outside), "application suffix lost protection outside its exact cache role")
+        }
+        let file = home.appendingPathComponent("Library/Caches/dev.file.app")
+        try Data("not a directory".utf8).write(to: file)
+        try expect(protected(file), "a regular file acquired the directory exception")
+        try expect(protected(home.appendingPathComponent("Library/Caches/dev.missing.app")),
+                   "an uninspectable cache path was assumed to be a plain container")
+        for marker in ["Contents", "Info.plist", "PkgInfo"] {
+            let root = try directory("Library/Caches/dev.marker-\(marker.lowercased()).app")
+            if marker == "Contents" {
+                try fm.createDirectory(at: root.appendingPathComponent(marker), withIntermediateDirectories: false)
+            } else {
+                try Data("bundle marker".utf8).write(to: root.appendingPathComponent(marker))
+            }
+            try expect(protected(root), "a cache-root bundle marker was ignored: " + marker)
+            try expect(!protected(root, allowBundle: true), "explicit real-application uninstall semantics changed")
+        }
+        let nested = try directory("Library/Caches/dev.zcode.app/Inner.app/Contents")
+        try expect(protected(nested.deletingLastPathComponent()), "a nested application became a cache container")
+        let rootLink = home.appendingPathComponent("Library/Caches/dev.root-link.app")
+        try fm.createSymbolicLink(at: rootLink, withDestinationURL: plain)
+        try expect(protected(rootLink), "a symbolic cache root acquired the directory exception")
+        let homeLink = URL(fileURLWithPath: physical).appendingPathComponent("bundle-home-link")
+        try fm.createSymbolicLink(at: homeLink, withDestinationURL: home)
+        try expect(CleanupRiskPolicy.isProtectedCleanupPath(homeLink.appendingPathComponent("Library/Caches/dev.zcode.app").path,
+            homeDirectory: homeLink.path), "a symbolic ancestor acquired the cache exception")
+        let markedLink = try directory("Library/Caches/dev.marker-link.app")
+        try fm.createSymbolicLink(atPath: markedLink.appendingPathComponent("Contents").path,
+                                  withDestinationPath: "missing-target")
+        try expect(protected(markedLink), "a dangling bundle marker was treated as absent")
+        if geteuid() != 0 {
+            let denied = try directory("Library/Caches/dev.unsearchable.app")
+            try fm.setAttributes([.posixPermissions: 0o400], ofItemAtPath: denied.path)
+            defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: denied.path) }
+            try expect(protected(denied), "unknown marker lookup was treated as ENOENT")
+        }
+        let replacement = try directory("Library/Caches/dev.replaced.app")
+        try expect(!protected(replacement), "initial plain cache was protected")
+        try fm.moveItem(at: replacement, to: home.appendingPathComponent("original-cache"))
+        try fm.createDirectory(at: replacement.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+        try expect(protected(replacement), "a replacement application inherited a cached role decision")
     }
 
     private static func testDeveloperCatalog(home: String) throws {

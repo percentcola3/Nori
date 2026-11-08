@@ -24,6 +24,8 @@ enum AdministratorCleanupPlan {
                 guard category.isPathSelected(path), seen.insert(path).inserted,
                       let identity = category.pathIdentities[path], !identity.isEmpty,
                       DeletionPlan.identity(at: path) == identity,
+                      NativeCore.shared.administratorDeletionRootIsAdmissible(path,
+                          expectedIdentity: identity, homeDirectory: homeDirectory),
                       administratorRequiredPaths.contains(path)
                         || NativeCore.shared.requiresAdministratorDeletion(path,
                             homeDirectory: homeDirectory, inspectDescendants: false),
@@ -135,6 +137,7 @@ enum AdministratorCleanupPlan {
         let messages: [String]
         let removedPaths: [String]
         let reclaimedBytes: UInt64
+        let retainedTargets: [DeletionPlan.RetainedTarget]?
 
         init(_ summary: NativeCore.ApplySummary) {
             removed = summary.removed
@@ -143,6 +146,7 @@ enum AdministratorCleanupPlan {
             messages = summary.messages
             removedPaths = summary.removedPaths.sorted()
             reclaimedBytes = summary.reclaimedBytes
+            retainedTargets = summary.retainedTargets
         }
     }
 
@@ -196,6 +200,18 @@ enum AdministratorCleanupPlan {
         var candidates: [CleanupCategory] = []
         var refused: [String] = []
         var seen = Set<String>()
+        // Hard refusal is exact: a protected parent does not prove that an
+        // explicitly submitted descendant is also non-removable.
+        let recordsByPath = Dictionary(records.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        let retainedTargets: [DeletionPlan.RetainedTarget] = recordsByPath.values.compactMap { record in
+            guard DeletionPlan.isLexicallySafePath(record.path),
+                  CleanupRiskPolicy.normalizedPathLiteral(record.path) == record.path,
+                  record.path.hasPrefix(home + "/")
+                    || CleanupRiskPolicy.systemCleanupKind(for: record.path, homeDirectory: home) != nil,
+                  let reason = core.knownNonRemovableRoot(record.path, expectedIdentity: record.identity) else { return nil }
+            return .init(record: record.path, identity: record.identity, reason: reason, count: 1)
+        }
+        let retainedRecords = Set(retainedTargets.map(\.record))
         for record in records {
             let path = record.path
             guard DeletionPlan.isLexicallySafePath(path),
@@ -205,6 +221,10 @@ enum AdministratorCleanupPlan {
                   seen.insert(path).inserted,
                   !record.identity.isEmpty else {
                 refused.append("Skipped changed or unavailable path: " + path)
+                continue
+            }
+            if retainedRecords.contains(path) {
+                refused.append("Kept content protected by filesystem flags or a read-only volume: " + path)
                 continue
             }
             var policy = CleanupRiskPolicy.core(section: "Cache", path: path,
@@ -243,7 +263,7 @@ enum AdministratorCleanupPlan {
             progress.report(completed: 0, total: 0, path: "")
             progress.finish()
             return NativeCore.ApplySummary(removed: 0, skipped: refused.count, failed: 0,
-                messages: refused, remainingPaths: records.map(\.path))
+                messages: refused, remainingPaths: records.map(\.path), retainedTargets: retainedTargets)
         }
 
         progress.report(completed: 0, total: candidates.count, path: candidates.first?.paths.first ?? "")
@@ -283,7 +303,7 @@ enum AdministratorCleanupPlan {
             removedPaths: applied.removedPaths,
             remainingPaths: records.map(\.path).filter { path in
                 !DeletionPlan.isPathCovered(path, by: applied.removedPaths)
-            }, reclaimedBytes: applied.reclaimedBytes)
+            }, reclaimedBytes: applied.reclaimedBytes, retainedTargets: retainedTargets + applied.retainedTargets)
     }
 
     /// The caller validates ownership and file mode before retaining this FD.

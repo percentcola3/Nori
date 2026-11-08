@@ -67,6 +67,18 @@ struct AdministratorUninstallTests {
         let outside = UninstallApp(name: "Fixture", bundleID: identifier, source: "Fixture",
                                    path: home.path + "/Other.app", size: "", appIdentity: "1:2:3", infoIdentity: "1:2:3")
         try expect(!AdministratorUninstallPlan.allows(outside), "Administrator route accepts arbitrary paths")
+        let beforeUnsupported = MoleEngine.shared.calls
+        for path in [outside.path, "/Library/Application Support/FixtureVendor/Service.app",
+                     "/Applications/FixtureFolder/Nested.app", "/Volumes/Fixture/Other.app"] {
+            let unsupported = UninstallApp(name: "Unsupported fixture", bundleID: identifier, source: "Fixture",
+                path: path, size: "", appIdentity: "captured-app", infoIdentity: "captured-info")
+            try expect(!AdministratorUninstallPlan.allows(unsupported), "Administrator scope expanded: " + path)
+            let refusal = await AdministratorUninstallService.apply(unsupported)
+            try expect(refusal.removed == 0 && refusal.failed == 1
+                && refusal.messages == [AdministratorUninstallPlan.unsupportedLocationMessage]
+                && refusal.remainingPaths == [path] && MoleEngine.shared.calls == beforeUnsupported,
+                       "Unsupported location lost its reason or requested administrator authorization")
+        }
         let occupied = AdministratorUninstallPlan.execute(freshRequest, home: home.path, uid: getuid(),
             core: NativeCore(cleanupOpenFileProbe: { [info.path] }))
         try expect(!occupied.succeeded && occupied.removed == 0 && occupied.skipped == 1,
@@ -164,6 +176,13 @@ struct AdministratorUninstallTests {
             .filter { $0 != collision && $0.pathExtension == "app" }
         try expect(trashedApps.count == 1 && fm.fileExists(atPath: trashedApps[0].appendingPathComponent("Contents/Info.plist").path),
                    "Moved bundle is not recoverable")
+
+        let beforeMissing = MoleEngine.shared.calls
+        let missingBundle = await AdministratorUninstallService.apply(fresh)
+        try expect(missingBundle.removed == 0 && missingBundle.failed == 1
+            && missingBundle.messages == ["Application changed since it was scanned."]
+            && missingBundle.remainingPaths == [fresh.path] && MoleEngine.shared.calls == beforeMissing,
+                   "A missing supported bundle was mislabeled as an unsupported location or elevated")
 
         // Normal follow-up counts the already moved app once, without scanning it again.
         let residue = home.appendingPathComponent("Library/Caches/\(identifier)/entry")

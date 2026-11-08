@@ -66,6 +66,62 @@ struct TaskFeedbackLocalizationTests {
             expect(uninstall == [String(format: table["uninstall.reason.openProcess"]!, "chrome_crashpad_handler", "4044"),
                                  table["uninstall.reason.bundle"]!, table["uninstall.reason.stop"]!],
                    "Uninstall feedback explains the blocker without raw English or framework paths in \(language.rawValue)")
+            let cachePath = "/Users/fixture/Library/Caches/dev.zcode.app"
+            let mixedOutcome = [
+                "Open-file check 0.01s; available=yes",
+                "Moved to Trash: /Applications/ZCode.app -> /Users/fixture/.Trash/ZCode.app",
+                "Moved to Trash: /Users/fixture/Library/Logs/dev.zcode.app -> /Users/fixture/.Trash/logs",
+                "Skipped protected content: " + cachePath
+            ]
+            expect(TaskFeedbackDiagnostic.localized(mixedOutcome, using: localize)
+                   == [table["task.reason.protected"]! + "\n" + cachePath],
+                   "Successful Trash records never become unknown failures in \(language.rawValue)")
+            expect(TaskFeedbackDiagnostic.uninstallDetails(mixedOutcome,
+                remainingPaths: [cachePath], using: localize)
+                   == [table["task.reason.protected"]! + "\n" + cachePath],
+                   "Mixed uninstall results show only the actual blocker and one path in \(language.rawValue)")
+            let partialTitle = table["uninstall.status.residuesRemain"]!
+            expect(partialTitle.components(separatedBy: "%@").count == 2
+                   && String(format: partialTitle, "ZCode").contains("ZCode"),
+                   "Verified body removal has a translated name-preserving residue title in \(language.rawValue)")
+            expect(TaskFeedbackDiagnostic.localized([
+                "Some uninstall paths had no confirmed identity or physical path.",
+                "Uninstall data selection is not in the reviewed plan.",
+                "Uninstall data has no confirmed file identity.",
+                "Select the complete database family before removing app data.",
+                "Application reappeared after administrator removal.",
+                "Kept app data that is shared or no longer belongs to this uninstall: " + cachePath,
+                "Kept app data whose ownership changed: " + cachePath
+            ], using: localize) == [table["task.reason.validation"]!, table["task.reason.changed"]!,
+                table["task.reason.protected"]! + "\n" + cachePath,
+                table["task.reason.changed"]! + "\n" + cachePath],
+                   "Known recovery refusals retain their localized reason instead of unknown in \(language.rawValue)")
+            let servicePath = "/Library/Application Support/FixtureVendor/FixtureService.app"
+            let unsupported = "Administrator uninstall only supports reviewed apps in /Applications."
+            let serviceDetails = TaskFeedbackDiagnostic.uninstallDetails([unsupported],
+                remainingPaths: [servicePath, servicePath], using: localize)
+            expect(serviceDetails == [table["uninstall.reason.adminLocation"]!, servicePath],
+                   "Unsupported administrator uninstall has an actionable reason and one path in \(language.rawValue)")
+            expect(!serviceDetails.joined().contains(table["task.reason.config"]!)
+                   && !serviceDetails.joined().contains(table["task.failure.unknown"]!),
+                   "Uninstall targets are not mislabeled as config or unknown errors in \(language.rawValue)")
+            expect(TaskFeedbackDiagnostic.localized([servicePath], using: localize)
+                   == [table["task.reason.config"]! + "\n" + servicePath],
+                   "Existing config-editor path feedback remains intact in \(language.rawValue)")
+            let repeatedPath = TaskFeedbackDiagnostic.uninstallDetails([
+                "Failed to remove " + servicePath + ": Permission denied"
+            ], remainingPaths: [servicePath], using: localize)
+            expect(repeatedPath == [table["task.reason.remove"]! + "\n" + servicePath],
+                   "A path already attached to a removal reason is not repeated in \(language.rawValue)")
+            let sanitized = TaskFeedbackDiagnostic.uninstallDetails([
+                "Unknown error AUTH_TOKEN=do-not-display"
+            ], remainingPaths: [servicePath, "/fixture\nAUTH_TOKEN=do-not-display"], using: localize)
+            expect(sanitized == [table["task.failure.unknown"]!, servicePath],
+                   "Uninstall context does not expose raw errors or multiline path payloads in \(language.rawValue)")
+            expect(TaskFeedbackDiagnostic.localized([
+                "Application changed or is outside the authorized uninstall location."
+            ], using: localize) == [table["task.reason.validation"]!],
+                   "Administrator validation refusal keeps a localized reason in \(language.rawValue)")
             let path = "/Users/fixture/a folder/技能: source"
             let messages = TaskFeedbackDiagnostic.localized([
                 "Open-file check 0.03s; available=yes",
@@ -95,7 +151,8 @@ struct TaskFeedbackLocalizationTests {
                    && !messages.joined().contains("Permission denied"),
                    "Technical English does not leak into primary feedback in \(language.rawValue)")
         }
-        expect(TaskFeedbackDiagnostic.localized(["", "Open-file check 0.01s; available=no"]).isEmpty,
+        expect(TaskFeedbackDiagnostic.localized(["", "Open-file check 0.01s; available=no",
+            "Moved to Trash: /fixture -> /fixture-trash"]).isEmpty,
                "Informational logs alone do not produce a failure reason")
         expect(TaskFeedbackDiagnostic.localized(["Skipped because open-file state was unavailable: /fixture"])
             .first?.hasPrefix(english["task.reason.runtimeUnknown"]!) == true,

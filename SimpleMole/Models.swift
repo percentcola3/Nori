@@ -138,29 +138,35 @@ enum CleanupActivityGuard: String, Codable, CaseIterable, Hashable, Sendable {
 
 /// 清理页的五个展示分桶。分组头渲染与长尾合并共用这一映射，避免两处
 /// 各自维护一套 source → 分组规则。
-enum CleanupGroupBucket: String, Hashable, CaseIterable {
+enum CleanupGroupBucket: String, Hashable, CaseIterable, Sendable {
     case cache, messenger, system, leftovers, appData, trash, developer
 
     init(category: CleanupCategory, homeDirectory: String = NSHomeDirectory()) {
-        if Self.isTrash(category, homeDirectory: homeDirectory) {
+        self.init(paths: category.paths, source: category.source, activityGuard: category.activityGuard,
+                  isMessengerData: category.isMessengerData, homeDirectory: homeDirectory)
+    }
+
+    init(paths: [String], source: CleanupSource, activityGuard: CleanupActivityGuard,
+         isMessengerData: Bool, homeDirectory: String = NSHomeDirectory()) {
+        if Self.isTrash(paths, homeDirectory: homeDirectory) {
             self = .trash
             return
         }
-        if category.isMessengerData, category.source == .core {
+        if isMessengerData, source == .core {
             self = .messenger
             return
         }
-        if category.activityGuard == .appData, category.source != .appLeftover,
-           category.source != .developerCache {
+        if activityGuard == .appData, source != .appLeftover,
+           source != .developerCache {
             self = .appData
             return
         }
         let home = homeDirectory.hasSuffix("/") ? homeDirectory : homeDirectory + "/"
-        if !category.paths.isEmpty, category.paths.allSatisfy({ !$0.hasPrefix(home) }) {
+        if !paths.isEmpty, paths.allSatisfy({ !$0.hasPrefix(home) }) {
             self = .system
             return
         }
-        switch category.source {
+        switch source {
         case .developerCache, .xcodeCache, .xcodeArchive, .tool:
             self = .developer
         case .appLeftover:
@@ -176,13 +182,24 @@ enum CleanupGroupBucket: String, Hashable, CaseIterable {
         }
     }
 
-    private static func isTrash(_ category: CleanupCategory,
-                                homeDirectory: String) -> Bool {
+    var sortOrder: Int {
+        switch self {
+        case .cache: return 0
+        case .messenger: return 1
+        case .system: return 2
+        case .leftovers: return 3
+        case .appData: return 4
+        case .trash: return 5
+        case .developer: return 6
+        }
+    }
+
+    private static func isTrash(_ paths: [String], homeDirectory: String) -> Bool {
         // Display grouping must never stat every Trash item on the main
         // thread. Scanner paths are absolute; only lexical normalization is
         // needed here, while deletion performs its own filesystem checks.
         let root = DeletionPlan.normalizedPathLiteral(homeDirectory + "/.Trash") + "/"
-        return !category.paths.isEmpty && category.paths.allSatisfy { path in
+        return !paths.isEmpty && paths.allSatisfy { path in
             path.hasPrefix("/") && DeletionPlan.normalizedPathLiteral(path).hasPrefix(root)
         }
     }
@@ -214,11 +231,18 @@ struct UninstallDataOwner: Codable, Equatable, Sendable {
 struct CleanupCategory: Identifiable, Equatable {
     let id: UUID
     var name: String
-    var paths: [String]
+    /// A stable row-sort identity survives selection/expansion copies, but
+    /// changes for a replacement inventory even with identical count/bytes.
+    private(set) var pathOrderToken = UUID()
+    var paths: [String] {
+        didSet { if paths != oldValue { pathOrderToken = UUID() } }
+    }
     var bytes: UInt64
     /// Per-path sizes are preserved from scanner output so partial selection
     /// reports an accurate reclaimable total.
-    var pathBytes: [String: UInt64]
+    var pathBytes: [String: UInt64] {
+        didSet { if pathBytes != oldValue { pathOrderToken = UUID() } }
+    }
     /// Identity captured when the scan produced the path. Apply must recheck
     /// this value before deleting so a replaced path cannot be removed.
     var pathIdentities: [String: String]
@@ -228,7 +252,12 @@ struct CleanupCategory: Identifiable, Equatable {
     /// Scan-time guards that a retention change must not override, such as
     /// uncommitted or unmerged worktrees. Apply still rechecks current state.
     var pathRetentionBlocked: Set<String>
-    private(set) var selectedPaths: Set<String>
+    /// Selection identity is cheap to compare; display tasks must never hash
+    /// the full selected Set merely to decide whether a task should run.
+    private(set) var selectionToken = UUID()
+    private(set) var selectedPaths: Set<String> {
+        didSet { selectionToken = UUID() }
+    }
     var expanded: Bool
     var source: CleanupSource
     var risk: CleanupRisk
@@ -405,6 +434,10 @@ struct CleanupCategory: Identifiable, Equatable {
     }
 
     var pathsByDescendingSize: [String] {
+        Self.sortedPaths(paths, pathBytes: pathBytes)
+    }
+
+    static func sortedPaths(_ paths: [String], pathBytes: [String: UInt64]) -> [String] {
         paths.sorted { lhs, rhs in
             let lhsBytes = pathBytes[lhs] ?? 0
             let rhsBytes = pathBytes[rhs] ?? 0

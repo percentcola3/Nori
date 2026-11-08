@@ -120,7 +120,7 @@ done
 SOURCES=()
 while IFS= read -r source; do
     case "$source" in
-        */main.swift|*/AppState.swift|*/PermissionCenter.swift|*/FloatingIslandView.swift) ;;
+        */main.swift|*/AppState.swift|*/PermissionCenter.swift|*/FloatingIslandView.swift|*/Support/Workers/*) ;;
         *) SOURCES+=("$source") ;;
     esac
 done < <(find "$CAPTURE_SOURCE/SimpleMole" -name '*.swift' -type f | sort)

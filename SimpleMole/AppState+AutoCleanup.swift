@@ -210,12 +210,15 @@ extension AppState {
                     : l10n.tf("auto.status.preview", plan.candidates.count,
                               ByteFormat.format(plan.reclaimableBytes))
             } catch {
-                autoCleanupPreview = nil
-                autoCleanupPreviewRuleID = nil
-                autoCleanupRuleIssues[id] = error.localizedDescription
-                autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
-                log(autoCleanupStatus)
-                presentTaskFailure(message: autoCleanupStatus)
+                if autoCleanupRules.first(where: { $0.id == id }) == rule {
+                    pauseAutoCleanupAuthorization(after: error, rule: rule)
+                    autoCleanupPreview = nil
+                    autoCleanupPreviewRuleID = nil
+                    autoCleanupRuleIssues[id] = error.localizedDescription
+                    autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
+                    log(autoCleanupStatus)
+                    presentTaskFailure(message: autoCleanupStatus)
+                }
             }
             isAutoCleanupScanning = false
         }
@@ -269,10 +272,13 @@ extension AppState {
                     presentTaskFailure(message: autoCleanupStatus, details: result.messages)
                 }
             } catch {
-                autoCleanupRuleIssues[id] = error.localizedDescription
-                autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
-                log(autoCleanupStatus)
-                presentTaskFailure(message: autoCleanupStatus)
+                if autoCleanupRules.first(where: { $0.id == id }) == rule {
+                    pauseAutoCleanupAuthorization(after: error, rule: rule)
+                    autoCleanupRuleIssues[id] = error.localizedDescription
+                    autoCleanupStatus = l10n.tf("auto.status.invalid", error.localizedDescription)
+                    log(autoCleanupStatus)
+                    presentTaskFailure(message: autoCleanupStatus)
+                }
             }
         }
     }
@@ -355,11 +361,20 @@ extension AppState {
                     removed += result.removed
                     reclaimed &+= result.reclaimedBytes
                     failures += result.failed
-                    if result.failed > 0 { failureDetails += result.messages }
+                    if result.failed > 0 {
+                        failureDetails += TaskFeedbackDiagnostic.localized(result.messages)
+                    }
                     autoCleanupRuleIssues[current.id] = result.failed == 0 ? nil
                         : l10n.tf("auto.status.partial", result.removed, result.failed)
                 } catch {
+                    // Planning suspends. An old failure must not revoke a rule
+                    // that the user has since edited or authorized again.
+                    guard autoCleanupRules.first(where: { $0.id == current.id }) == current else {
+                        defaults.removeObject(forKey: Self.autoCleanupLastCheckKey)
+                        continue
+                    }
                     failures += 1
+                    pauseAutoCleanupAuthorization(after: error, rule: current)
                     noteAutoCleanupCheck(current.id)
                     autoCleanupRuleIssues[current.id] = error.localizedDescription
                     log(l10n.tf("auto.log.ruleFailed", current.directory, error.localizedDescription))
@@ -374,9 +389,26 @@ extension AppState {
                 ? l10n.tf("auto.status.done", removed, ByteFormat.format(reclaimed))
                 : l10n.tf("auto.status.partial", removed, failures)
             if notifyingUser && failures > 0 {
-                presentTaskFailure(message: autoCleanupStatus, details: failureDetails)
+                // Planning errors are already localized; path-first details
+                // must not be reclassified as configuration-editor failures.
+                presentTaskFailure(message: autoCleanupStatus, details: failureDetails,
+                                   detailsAreLocalized: true)
             }
         }
+    }
+
+    private func pauseAutoCleanupAuthorization(after error: Error, rule: AutoCleanupRule) {
+        guard let plannerError = error as? AutoCleanupPlannerError,
+              case .rootAuthorizationChanged = plannerError,
+              let index = autoCleanupRules.firstIndex(where: { $0.id == rule.id }),
+              autoCleanupRules[index] == rule else { return }
+        autoCleanupRules[index].isEnabled = false
+        autoCleanupRules[index].isRegenerable = false
+        if autoCleanupPreviewRuleID == rule.id {
+            autoCleanupPreview = nil
+            autoCleanupPreviewRuleID = nil
+        }
+        persistAutoCleanupRules()
     }
 
     private func noteAutoCleanupCheck(_ id: UUID) {
@@ -476,19 +508,79 @@ extension AppState {
         Array(autoCleanupRules.lazy.filter { $0.id != id }.flatMap(\.directories))
     }
 
-    /// 目录是否已被自动清理规则管理：规则目录为该目录自身或其祖先。
-    /// 清理页与磁盘分析用它给已设置定时的条目打“已定时”标记。
-    func autoCleanupRuleCovering(directory: String) -> AutoCleanupRule? {
-        let path = URL(fileURLWithPath: directory, isDirectory: true).standardizedFileURL.path
-        for rule in autoCleanupRules {
-            for directory in rule.directories {
-                let root = URL(fileURLWithPath: directory, isDirectory: true)
-                    .standardizedFileURL.path
-                if path == root || path.hasPrefix(root + "/") {
-                    return rule
-                }
-            }
+    func initializeCleanupPresentation() {
+        cleanupCoverageIndex = CleanupCoverageIndex(rules: CleanupPresentation.ruleCatalog(autoCleanupRules))
+        cleanupPresentationCache.invalidate(inventory: true, rules: true)
+        rebuildCleanupPresentation()
+        rebuildCleanupSelectionPresentation()
+    }
+
+    func cleanupInventoryDidChange(from old: [CleanupCategory]) {
+        let inventoryChanged = cleanupPresentationCache.updateInventory(from: old, to: categories)
+        rebuildCleanupSelectionPresentation()
+        if inventoryChanged { rebuildCleanupPresentation() }
+    }
+
+    func rebuildCleanupSelectionPresentation() {
+        var keys = categories.map(CleanupSelectionKey.init)
+        if let installerCandidates { keys.append(CleanupSelectionKey(installerCandidates)) }
+        guard cleanupSelectionCache.update(keys) else { return }
+        let generation = cleanupSelectionCache.generation
+        cleanupSelectionTask?.cancel()
+        cleanupSelectionTask = nil
+        cleanupSelectionPresentation = nil
+        var input = categories.map(CleanupSelectionPresentation.Input.init)
+        if let installerCandidates { input.append(.init(installerCandidates)) }
+        if let immediate = CleanupSelectionPresentation.immediate(input) {
+            cleanupSelectionCache.accept(immediate, generation: generation)
+            cleanupSelectionPresentation = immediate
+            return
         }
-        return nil
+        let work = Task.detached(priority: .userInitiated) { [input] in
+            CleanupSelectionPresentation.build(input, isCancelled: { Task.isCancelled })
+        }
+        cleanupSelectionTask = work
+        Task { [weak self] in
+            guard let result = await work.value, let self,
+                  self.cleanupSelectionCache.accept(result, generation: generation) else { return }
+            self.cleanupSelectionPresentation = result
+            self.cleanupSelectionTask = nil
+        }
+    }
+
+    func cleanupRuleCatalogDidChange(from old: [AutoCleanupRule]) {
+        let catalog = CleanupPresentation.ruleCatalog(autoCleanupRules)
+        guard cleanupPresentationCache.updateRules(from: CleanupPresentation.ruleCatalog(old), to: catalog) else { return }
+        // Interactions need current ownership immediately, before the larger
+        // inventory projection finishes. This index contains only rule IDs.
+        cleanupCoverageIndex = CleanupCoverageIndex(rules: catalog)
+        rebuildCleanupPresentation()
+    }
+
+    private func rebuildCleanupPresentation() {
+        let version = cleanupPresentationCache.version
+        cleanupPresentationTask?.cancel()
+        cleanupPresentation = .empty
+        let input = categories.map(CleanupPresentation.CategoryInput.init)
+        let index = cleanupCoverageIndex
+        let home = NSHomeDirectory()
+        let work = Task.detached(priority: .userInitiated) {
+            CleanupPresentation.build(categories: input, index: index, home: home,
+                                      isCancelled: { Task.isCancelled })
+        }
+        cleanupPresentationTask = work
+        Task { [weak self] in
+            guard let result = await work.value, let self,
+                  self.cleanupPresentationCache.accept(result, version: version) else { return }
+            self.cleanupPresentation = result
+            self.cleanupPresentationTask = nil
+        }
+    }
+
+    /// First configured rule wins, including disabled rules. Return the current
+    /// instance, so counters/authorization edits never come from a stale cache.
+    func autoCleanupRuleCovering(directory: String) -> AutoCleanupRule? {
+        guard let id = cleanupCoverageIndex.ruleID(covering: directory) else { return nil }
+        return autoCleanupRules.first { $0.id == id }
     }
 }

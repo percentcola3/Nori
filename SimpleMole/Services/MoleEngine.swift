@@ -135,18 +135,43 @@ final class MoleEngine {
     @discardableResult
     func runPrivilegedBridge(_ relativePath: String, arguments: [String],
                              timeout: TimeInterval = 600) async -> RunResult {
-        guard Self.isSafeRelativeResourcePath(relativePath),
-              let script = resourceURL(relativePath),
-              Self.isRegularResource(script, inside: resourcesURL) else {
-            return RunResult(output: L10n.shared.t("engine.privilegedPathInvalid"), exitCode: 78, timedOut: false)
+        await runPrivilegedBridgeWithSession(relativePath, arguments: arguments, timeout: timeout).result
+    }
+
+    func runPrivilegedBridgeWithSession(_ relativePath: String, arguments: [String],
+                                        timeout: TimeInterval = 600) async -> PrivilegedSessionClient.Execution {
+        guard await validPrivilegedResource(relativePath) else {
+            return .init(result: .init(output: L10n.shared.t("engine.privilegedPathInvalid"), exitCode: 78, timedOut: false), sessionID: nil)
         }
-        guard !Task.isCancelled else { return RunResult(output: "", exitCode: 130, timedOut: false) }
+        guard !Task.isCancelled else { return .init(result: .init(output: "", exitCode: 130, timedOut: false), sessionID: nil) }
         let owner = ObjectIdentifier(self)
         let generation = PrivilegedSessionClient.cancellationGeneration(for: owner)
         let authorization = await authorizeAdministratorSession()
-        guard authorization.succeeded else { return authorization }
+        guard authorization.succeeded else { return .init(result: authorization, sessionID: nil) }
+        return await PrivilegedSessionClient.shared.runWithSession(relativePath: relativePath, arguments: arguments,
+            resources: resourcesURL, timeout: timeout, owner: owner, generation: generation)
+    }
+
+    /// Reuse only the already-authorized session. Never calls authorization,
+    /// bootstrap, or retries transport after an unknown mutation outcome.
+    func runPrivilegedBridgeIfAuthorized(_ relativePath: String, arguments: [String],
+                                         timeout: TimeInterval = 600, sessionID: UUID? = nil) async -> RunResult {
+        guard await validPrivilegedResource(relativePath) else {
+            return .init(output: L10n.shared.t("engine.privilegedPathInvalid"), exitCode: 78, timedOut: false)
+        }
+        guard !Task.isCancelled else { return .init(output: "", exitCode: 130, timedOut: false) }
+        let owner = ObjectIdentifier(self)
         return await PrivilegedSessionClient.shared.run(relativePath: relativePath, arguments: arguments,
-                                                        resources: resourcesURL, timeout: timeout, owner: owner, generation: generation)
+            resources: resourcesURL, timeout: timeout, owner: owner,
+            generation: PrivilegedSessionClient.cancellationGeneration(for: owner), sessionID: sessionID)
+    }
+
+    private func validPrivilegedResource(_ relativePath: String) async -> Bool {
+        let resources = resourcesURL
+        return await Task.detached(priority: .utility) {
+            Self.isSafeRelativeResourcePath(relativePath)
+                && Self.isRegularResource(resources.appendingPathComponent(relativePath), inside: resources)
+        }.value
     }
 
     /// 进程 / 端口桥接（只读观察 + 明确选中后的终止信号）。

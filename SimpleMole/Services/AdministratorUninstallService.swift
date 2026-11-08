@@ -6,6 +6,7 @@ import Foundation
 enum AdministratorUninstallPlan {
     static let workerArgument = "--nori-uninstall-administrator"
     static let reportPrefix = "NORI_UNINSTALL_ADMIN\t"
+    static let unsupportedLocationMessage = "Administrator uninstall only supports reviewed apps in /Applications."
 
     struct Request: Codable {
         let app: UninstallApp
@@ -137,9 +138,14 @@ enum AdministratorUninstallPlan {
 
 enum AdministratorUninstallService {
     static func apply(_ app: UninstallApp) async -> NativeCore.ApplySummary {
-        guard AdministratorUninstallPlan.allows(app), let metadata = DeletionPlan.Metadata.read(app.path) else {
+        guard AdministratorUninstallPlan.allows(app) else {
             return .init(removed: 0, skipped: 0, failed: 1,
-                         messages: ["Administrator uninstall only supports reviewed apps in /Applications."],
+                         messages: [AdministratorUninstallPlan.unsupportedLocationMessage],
+                         remainingPaths: [app.path])
+        }
+        guard let metadata = DeletionPlan.Metadata.read(app.path) else {
+            return .init(removed: 0, skipped: 0, failed: 1,
+                         messages: ["Application changed since it was scanned."],
                          remainingPaths: [app.path])
         }
         let directory = FileManager.default.temporaryDirectory

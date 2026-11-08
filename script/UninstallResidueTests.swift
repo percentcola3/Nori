@@ -19,6 +19,24 @@ private struct GroupApplicationInventory: ApplicationInventoryReading {
     func applicationGroups(at url: URL) -> Set<String> { groups[url.path] ?? [] }
 }
 
+private struct OwnedCacheResidueInventory: ApplicationInventoryReading {
+    let home: URL
+    private let base = NativeApplicationInventory(discoveredApplications: { [] })
+    func roots(home: URL) -> [(URL, String)] { [(self.home.appendingPathComponent("Applications"), "Owned fixture")] }
+    func children(of directory: URL) -> [URL] {
+        directory.path.hasPrefix(home.path + "/") ? base.children(of: directory) : []
+    }
+    func metadata(at url: URL) -> ApplicationBundleMetadata? {
+        url.path.hasPrefix(home.path + "/") ? base.metadata(at: url) : nil
+    }
+    func directoryIdentity(_ url: URL) -> String? {
+        url.path.hasPrefix(home.path + "/") ? base.directoryIdentity(url) : nil
+    }
+    func installedApps(in roots: [(URL, String)]) -> [UninstallApp] {
+        base.installedApps(in: roots.filter { $0.0.path.hasPrefix(home.path + "/") })
+    }
+}
+
 @main
 struct UninstallResidueTests {
     static func main() async throws {
@@ -407,9 +425,115 @@ struct UninstallResidueTests {
         let dangling = core.verifyUninstallResult(.init(removed: 0, skipped: 0, failed: 0, messages: []),
             files: [.init(bytes: 0, label: "related", path: link.path)])
         expect(!dangling.succeeded && dangling.remainingPaths == [link.path], "Dangling residue was ignored")
+        try testBundleIdentifierCacheResidues(fixture: fixture)
         try testWholeAppDataConsent(fixture: fixture)
         try await testUninstalledDataScan(fixture: fixture)
         print("Uninstall residues: cache coverage, fresh scan, shared owners, symlinks and verified results passed")
+    }
+
+    static func testBundleIdentifierCacheResidues(fixture: URL) throws {
+        let fm = FileManager.default
+        let base = fixture.appendingPathComponent("bundle-id-cache-residues")
+        let payloads = ["Cache.db", "Cache.db-wal", "Cache.db-shm"]
+        // Use a separate owner so a real running ZCode cannot affect fixture occupancy.
+        for (index, identifier) in ["dev.nori-zcode-fixture.app", "com.example.plain-cache", "dev.empty.app"].enumerated() {
+            let scope = base.appendingPathComponent(String(index))
+            let home = scope.appendingPathComponent("home")
+            let cache = home.appendingPathComponent("Library/Caches/" + identifier)
+            let body = home.appendingPathComponent("Applications/OwnedCacheFixture.app")
+            try fm.createDirectory(at: body.appendingPathComponent("Contents"), withIntermediateDirectories: true)
+            let info = ["CFBundleIdentifier": identifier, "CFBundleName": "OwnedCacheFixture",
+                        "CFBundlePackageType": "APPL", "CFBundleExecutable": "OwnedCacheFixture"]
+            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+                .write(to: body.appendingPathComponent("Contents/Info.plist"))
+            let app = UninstallApp(name: "OwnedCacheFixture", bundleID: identifier, source: "Owned fixture",
+                                   path: body.path, size: "1 KB")
+            func createCache() throws {
+                try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+                if index != 2 {
+                    for name in payloads {
+                        // Deliberately fake bytes; never inspect an actual cache database.
+                        try Data(("owned fake " + name).utf8).write(to: cache.appendingPathComponent(name))
+                    }
+                }
+            }
+            try createCache()
+            let planner = UninstallPlanningService(dependencies: .init(inventory: OwnedCacheResidueInventory(home: home),
+                allocatedBytes: { FixedApplicationSizer().allocatedBytes(at: $0) },
+                isPhysicalPath: { url, home in url.path.hasPrefix(home.path + "/") && DeletionPlan.isLexicallySafePath(url.path) },
+                requiresAdministrator: { _ in false }, commandOutput: { _, _ in nil }, brewExecutables: []))
+            let plan = planner.plan(for: app, homeDirectory: home.path)!
+            expect(plan.files.contains { $0.path == cache.path && !$0.informational },
+                   "The cache plan did not include the automatic exact bundle-ID root")
+            let item = DeletionPlan.Item(record: cache.path, identity: plan.fileIdentities[cache.path]!)
+            let core = NativeCore(cleanupOpenFileProbe: { [] })
+            let whitelist = home.appendingPathComponent(".config/mole/whitelist")
+            try fm.createDirectory(at: whitelist.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data((cache.path + "\n").utf8).write(to: whitelist)
+            let kept = core.applyCleanup(items: [item], permanent: false, homeDirectory: home.path,
+                trashHandler: { _ in preconditionFailure("A whitelisted bundle-ID cache was moved") })
+            expect(kept.removed == 0 && kept.skipped > 0, "The cache exception bypassed the whitelist")
+            expect(whitelist.path.hasPrefix(home.path + "/.config/mole/"), "Unsafe fixture whitelist target")
+            try fm.removeItem(at: whitelist)
+            let observer = NativeCore.OpenFileRecord(pid: 12345, process: "UserEventAgent", descriptor: "12", access: "r", path: cache.path)
+            let occupied = NativeCore(cleanupOpenFileRecordsProbe: { [observer] })
+                .applyCleanup(items: [item], permanent: false, homeDirectory: home.path,
+                    trashHandler: { _ in preconditionFailure("A cache inherited application metadata-observer exceptions") })
+            expect(occupied.removed == 0 && occupied.skipped > 0, "An occupied cache was treated as an application bundle move")
+            let unknown = NativeCore(cleanupOpenFileProbe: { nil }).applyCleanup(items: [item], permanent: false,
+                homeDirectory: home.path, trashHandler: { _ in preconditionFailure("Unknown occupancy moved a cache") })
+            expect(unknown.removed == 0 && unknown.skipped > 0, "Unknown cache occupancy was allowed")
+            if index != 2 {
+                for name in payloads {
+                    let file = cache.appendingPathComponent(name)
+                    let protectedFile = core.applyCleanup(items: DeletionPlan(paths: [file.path]).items,
+                        permanent: false, homeDirectory: home.path,
+                        trashHandler: { _ in preconditionFailure("A database child inherited the container-only exception") })
+                    expect(protectedFile.removed == 0 && protectedFile.skipped > 0,
+                           "Database child protection changed: " + name)
+                }
+            }
+            let saved = scope.appendingPathComponent("original-cache")
+            expect(cache.path.hasPrefix(scope.path + "/") && saved.path.hasPrefix(scope.path + "/"),
+                   "Identity replacement escaped the owned fixture")
+            try fm.moveItem(at: cache, to: saved)
+            try createCache()
+            let changed = core.applyCleanup(items: [item], permanent: false, homeDirectory: home.path,
+                trashHandler: { _ in preconditionFailure("A replacement cache inherited old removal identity") })
+            expect(changed.removed == 0 && changed.skipped > 0, "The suffix exception bypassed captured identity")
+            let fresh = planner.plan(for: app, homeDirectory: home.path)!
+            let freshItem = DeletionPlan.Item(record: cache.path, identity: fresh.fileIdentities[cache.path]!)
+            let trash = scope.appendingPathComponent("Trash")
+            try fm.createDirectory(at: trash, withIntermediateDirectories: false)
+            let destination = trash.appendingPathComponent(identifier)
+            expect(DeletionPlan.isLexicallySafePath(fixture.path) && scope.path.hasPrefix(fixture.path + "/")
+                && body.path.hasPrefix(home.path + "/") && DeletionPlan.identity(at: body.path) == app.appIdentity,
+                   "The owned application snapshot changed")
+            // Match recovery after the body disappeared: only the captured cache
+            // is passed to ordinary residue cleanup, with its defaults intact.
+            try fm.moveItem(at: body, to: trash.appendingPathComponent("OwnedCacheFixture.app"))
+            let removed = core.applyCleanup(items: [freshItem], permanent: false, homeDirectory: home.path,
+                trashHandler: { source in
+                    expect(source.path == cache.path && source.path.hasPrefix(home.path + "/")
+                        && destination.path.hasPrefix(scope.path + "/Trash/")
+                        && destination.deletingLastPathComponent().path == trash.path,
+                           "The residue Trash handler escaped its nonce fixture")
+                    try fm.moveItem(at: source, to: destination)
+                })
+            let verified = core.verifyUninstallResult(removed, files: fresh.files)
+            expect(verified.succeeded && verified.removedPaths == [cache.path]
+                && verified.remainingPaths.isEmpty && !fm.fileExists(atPath: cache.path),
+                   "Plan/default residue apply/verification failed: \(verified.messages)")
+            if index != 2 {
+                for name in payloads {
+                    let data = try Data(contentsOf: destination.appendingPathComponent(name))
+                    expect(data == Data(("owned fake " + name).utf8), "Fixture Trash did not preserve the complete cache family")
+                }
+            } else {
+                expect(fm.fileExists(atPath: destination.path), "The empty cache was not recoverable in fixture Trash")
+            }
+        }
+        print("Bundle-ID caches: .app/plain/empty plan-to-Trash verification, database children, identity, whitelist and occupancy passed")
     }
 
     static func testUninstalledDataScan(fixture: URL) async throws {

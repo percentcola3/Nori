@@ -98,6 +98,15 @@ enum AgentWorktreeInspector {
 
     private static func run(_ executable: String, _ arguments: [String], home: String,
                             timeout: TimeInterval) -> (succeeded: Bool, output: String) {
+        #if NORI_CLEANUP_SCAN_WORKER
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        environment["GIT_OPTIONAL_LOCKS"] = "0"
+        let result = CleanupScanChildCommand.run(executable, arguments: arguments,
+            environment: environment, timeout: timeout, maximumOutputBytes: outputLimit)
+        return (result.succeeded, result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        #else
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -139,6 +148,7 @@ enum AgentWorktreeInspector {
         _ = reachedEOF.wait(timeout: .now() + 0.1)
         return (!timedOut && !process.isRunning && process.terminationStatus == 0,
                 collector.output.trimmingCharacters(in: .whitespacesAndNewlines))
+        #endif
     }
 
     private final class OutputCollector: @unchecked Sendable {

@@ -9,6 +9,19 @@ struct DeletionPlan {
         var metadata: Metadata? = nil
     }
 
+    /// A completed attempt retained this exact submitted target for a confirmed
+    /// hard filesystem restriction. It is evidence for feedback, not authority.
+    struct RetainedTarget: Codable, Equatable, Sendable {
+        enum Reason: String, Codable, Equatable, Sendable {
+            case protectedFlags
+            case readOnlyVolume
+        }
+        let record: String
+        let identity: String
+        let reason: Reason
+        let count: Int
+    }
+
     /// Preserve the reviewed file object across administrator authentication.
     /// Directory contents may change during partial cache cleanup, while its
     /// ownership and permissions must remain bound to the reviewed object.

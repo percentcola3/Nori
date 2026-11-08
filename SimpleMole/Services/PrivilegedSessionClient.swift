@@ -19,7 +19,13 @@ actor PrivilegedSessionClient {
         SessionRequestRegistry.shared.cancel(owner: owner)
     }
 
+    struct Execution {
+        let result: RunResult
+        let sessionID: UUID?
+    }
+
     private struct Session {
+        let id = UUID()
         let socketURL: URL
         let lifetime: SessionLifetime
         let transport: Task<RunResult, Never>
@@ -60,8 +66,23 @@ actor PrivilegedSessionClient {
         return outcome.result
     }
 
-    func run(relativePath: String, arguments: [String], resources: URL, timeout: TimeInterval, owner: ObjectIdentifier, generation: UInt64) async -> RunResult {
-        guard let session, session.lifetime.isActive else { return Self.failure("Administrator session is not available.") }
+    /// Capture the exact live session used by the first confirmed operation.
+    /// This method never starts or authorizes a replacement session.
+    func runWithSession(relativePath: String, arguments: [String], resources: URL, timeout: TimeInterval,
+                        owner: ObjectIdentifier, generation: UInt64) async -> Execution {
+        guard let session, session.lifetime.isActive else {
+            return .init(result: Self.failure("Administrator session is not available."), sessionID: nil)
+        }
+        let result = await run(relativePath: relativePath, arguments: arguments, resources: resources,
+                               timeout: timeout, owner: owner, generation: generation, sessionID: session.id)
+        return .init(result: result, sessionID: session.id)
+    }
+
+    func run(relativePath: String, arguments: [String], resources: URL, timeout: TimeInterval,
+             owner: ObjectIdentifier, generation: UInt64, sessionID: UUID? = nil) async -> RunResult {
+        guard let session, session.lifetime.isActive, sessionID == nil || sessionID == session.id else {
+            return Self.failure("Administrator session is not available.")
+        }
         let mapped = arguments.map { $0 == resources.path ? PrivilegedSessionProtocol.stagedResourcesToken : $0 }
         let request = PrivilegedSessionProtocol.Request(id: UUID().uuidString, operation: "run",
             relativePath: relativePath, arguments: mapped, timeout: min(600, max(1, timeout)))

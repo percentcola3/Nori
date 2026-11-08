@@ -9,42 +9,44 @@ extension AppState {
     /// 该类目不存在时新建。已被扫描结果覆盖的路径不重复计量。
     func appendNoriManagedPaths(to categories: [CleanupCategory]) async -> [CleanupCategory] {
         let home = NSHomeDirectory()
-        let offered = Set(categories.flatMap(\.paths))
-        let pending = NoriOwnedStorage.managedPaths(home: home).filter { !offered.contains($0) }
-        guard !pending.isEmpty else { return categories }
-        let measured = await Task.detached(priority: .utility) {
+        // This includes the inventory-sized Set, directory discovery and final
+        // merge, not just measurement. None belongs on the UI actor.
+        return await Task.detached(priority: .utility) {
+            let offered = Set(categories.flatMap(\.paths))
+            let pending = NoriOwnedStorage.managedPaths(home: home).filter { !offered.contains($0) }
+            guard !pending.isEmpty else { return categories }
             let control = CleanupScanControl(mode: .deep)
-            return pending.map { (path: $0, measurement: CleanupScanWorker.measure($0, control: control)) }
-        }.value
-        let additions = measured.compactMap { entry -> (path: String, bytes: UInt64)? in
-            entry.measurement.complete && entry.measurement.bytes > 0
-                ? (entry.path, entry.measurement.bytes) : nil
-        }
-        guard !additions.isEmpty else { return categories }
-        var result = categories
-        if let index = result.firstIndex(where: {
-            $0.name == NoriOwnedStorage.displayName && $0.source == .core
-                && $0.applyRoute == .genericTrash
-        }) {
-            var category = result[index]
-            let wasSelected = category.selected
-            for addition in additions {
-                category.appendPath(addition.path, bytes: addition.bytes)
-                if !wasSelected { category.setPathSelected(addition.path, selected: false) }
+            let measured = pending.map { (path: $0, measurement: CleanupScanWorker.measure($0, control: control)) }
+            let additions = measured.compactMap { entry -> (path: String, bytes: UInt64)? in
+                entry.measurement.complete && entry.measurement.bytes > 0
+                    ? (entry.path, entry.measurement.bytes) : nil
             }
-            result[index] = category
-        } else {
-            result.append(CleanupCategory(
-                name: NoriOwnedStorage.displayName,
-                paths: additions.map(\.path),
-                bytes: additions.reduce(0) { $0 &+ $1.bytes },
-                pathBytes: Dictionary(uniqueKeysWithValues: additions),
-                selected: true,
-                source: .core, risk: .safe, disposal: .permanentDelete,
-                applyRoute: .genericTrash, activityGuard: .openFile,
-                reasonKey: NoriOwnedStorage.reasonKey))
-        }
-        return result
+            guard !additions.isEmpty else { return categories }
+            var result = categories
+            if let index = result.firstIndex(where: {
+                $0.name == NoriOwnedStorage.displayName && $0.source == .core
+                    && $0.applyRoute == .genericTrash
+            }) {
+                var category = result[index]
+                let wasSelected = category.selected
+                for addition in additions {
+                    category.appendPath(addition.path, bytes: addition.bytes)
+                    if !wasSelected { category.setPathSelected(addition.path, selected: false) }
+                }
+                result[index] = category
+            } else {
+                result.append(CleanupCategory(
+                    name: NoriOwnedStorage.displayName,
+                    paths: additions.map(\.path),
+                    bytes: additions.reduce(0) { $0 &+ $1.bytes },
+                    pathBytes: Dictionary(uniqueKeysWithValues: additions),
+                    selected: true,
+                    source: .core, risk: .safe, disposal: .permanentDelete,
+                    applyRoute: .genericTrash, activityGuard: .openFile,
+                    reasonKey: NoriOwnedStorage.reasonKey))
+            }
+            return result
+        }.value
     }
 
     /// 原生删除开始前复位进程内缓存：它们各自持有内存快照并在每次

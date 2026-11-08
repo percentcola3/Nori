@@ -157,11 +157,11 @@ enum ReadmeFixture {
         state.autoCleanupRules = [
             AutoCleanupRule(directory: "/Users/demo/Library/Developer/Xcode/DerivedData", policy: .sizeLimit,
                 sizeLimitBytes: 15_000_000_000, retentionDays: 14, isRegenerable: true,
-                authorizedRootIdentity: "1:2:3", lastRunAt: sampleDate, lastReclaimedBytes: 6_400_000_000,
+                authorizedRootIdentity: "volume-v1:11111111-1111-1111-1111-111111111111:2:3", lastRunAt: sampleDate, lastReclaimedBytes: 6_400_000_000,
                 executionCount: 8, totalReclaimedBytes: 42_700_000_000),
             AutoCleanupRule(directory: "/Users/demo/Library/Caches/pip", policy: .retentionDays,
                 sizeLimitBytes: 2_000_000_000, retentionDays: 30, isRegenerable: true,
-                authorizedRootIdentity: "1:2:4", lastRunAt: sampleDate, lastReclaimedBytes: 830_000_000,
+                authorizedRootIdentity: "volume-v1:11111111-1111-1111-1111-111111111111:2:4", lastRunAt: sampleDate, lastReclaimedBytes: 830_000_000,
                 executionCount: 4, totalReclaimedBytes: 3_200_000_000),
         ]
         state.autoCleanupStatus = ""

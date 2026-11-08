@@ -12,9 +12,23 @@ enum TaskFeedbackDiagnostic {
         }
     }
 
+    /// Remaining uninstall targets are paths, not configuration-editor errors.
+    /// Localize backend reasons first, then retain each verified path once.
+    static func uninstallDetails(_ messages: [String], remainingPaths: [String],
+                                 using localize: (String) -> String = { L10n.shared.t($0) }) -> [String] {
+        var details = localized(messages, using: localize)
+        var seen = Set(details.flatMap { $0.components(separatedBy: .newlines) })
+        for path in remainingPaths where path.hasPrefix("/")
+            && path.rangeOfCharacter(from: .controlCharacters) == nil {
+            if seen.insert(path).inserted { details.append(path) }
+        }
+        return details
+    }
+
     private static func localizedMessage(_ raw: String, using localize: (String) -> String) -> String? {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !text.hasPrefix("Open-file check ") else { return nil }
+        guard !text.isEmpty, !text.hasPrefix("Open-file check "),
+              !text.hasPrefix("Moved to Trash: ") else { return nil }
         // Some UI-owned refusals are already localized at their source. Keep
         // those reasons and their paths when mixed with raw executor output.
         for key in reasonKeys {
@@ -72,6 +86,15 @@ enum TaskFeedbackDiagnostic {
 
     private static let rules: [Rule] = [
         .init(prefix: "Uninstall processes could not be stopped.", key: "uninstall.reason.stop"),
+        .init(prefix: "Administrator uninstall only supports reviewed apps in /Applications.", key: "uninstall.reason.adminLocation"),
+        .init(prefix: "Application changed or is outside the authorized uninstall location.", key: "task.reason.validation"),
+        .init(prefix: "Some uninstall paths had no confirmed identity or physical path.", key: "task.reason.validation"),
+        .init(prefix: "Uninstall data selection is not in the reviewed plan.", key: "task.reason.validation"),
+        .init(prefix: "Uninstall data has no confirmed file identity.", key: "task.reason.changed"),
+        .init(prefix: "Select the complete database family before removing app data.", key: "task.reason.validation"),
+        .init(prefix: "Application reappeared after administrator removal.", key: "task.reason.changed"),
+        .init(prefix: "Kept app data that is shared or no longer belongs to this uninstall: ", key: "task.reason.protected"),
+        .init(prefix: "Kept app data whose ownership changed: ", key: "task.reason.changed"),
         .init(prefix: "The application bundle was not removed.", key: "uninstall.reason.bundle"),
         .init(prefix: "Quit running Agent owners before uninstalling CLI: ", key: "task.reason.runningApps"),
         .init(prefix: "Kept Agent resource while its owner is running (", key: "task.reason.runningApps"),
@@ -88,6 +111,7 @@ enum TaskFeedbackDiagnostic {
         .init(prefix: "Skipped symbolic link: ", key: "task.reason.path"),
         .init(prefix: "Skipped path that is already absent: ", key: "task.reason.absent"),
         .init(prefix: "Skipped protected content: ", key: "task.reason.protected"),
+        .init(prefix: "Kept content protected by filesystem flags or a read-only volume: ", key: "task.reason.protected"),
         .init(prefix: "Skipped path protected by whitelist: ", key: "task.reason.protected"),
         .init(prefix: "Skipped content that requires administrator access or cannot be deleted: ", key: "task.reason.remove"),
         .init(prefix: "Kept Agent resource because its cleanup policy does not allow the operation: ", key: "task.reason.protected"),

@@ -36,6 +36,7 @@ enum AutoCleanupPlannerTests {
         let outsideRoot = fixtureRoot.appendingPathComponent("outside", isDirectory: true)
         try fileManager.createDirectory(at: managedRoot, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: outsideRoot, withIntermediateDirectories: true)
+        try testStableRootAuthorization(fixtureRoot: fixtureRoot)
 
         let now = Date()
         let oldest = managedRoot.appendingPathComponent("oldest.cache")
@@ -466,6 +467,151 @@ enum AutoCleanupPlannerTests {
                    "overwriting an undecodable store kept no backup snapshot")
         try expect(AutoCleanupRuleStore.load(from: defaults) == [retentionRule],
                    "save after corruption did not restore a readable store")
+    }
+
+    private static func testStableRootAuthorization(fixtureRoot: URL) throws {
+        let volume = "11111111-1111-1111-1111-111111111111"
+        let otherVolume = "22222222-2222-2222-2222-222222222222"
+        let first = AutoCleanupRootIdentitySnapshot(device: 11, inode: 22, birthSeconds: 33, volumeUUID: volume)
+        let remounted = AutoCleanupRootIdentitySnapshot(device: 44, inode: 22, birthSeconds: 33, volumeUUID: volume)
+        try expect(first.persistentIdentity == remounted.persistentIdentity,
+                   "mount device renumbering changed persistent consent")
+        try expect(first.matchesLegacy("11:22:33") && !remounted.matchesLegacy("11:22:33"),
+                   "legacy authorization ignored its original mount device")
+        for changed in [
+            AutoCleanupRootIdentitySnapshot(device: 11, inode: 22, birthSeconds: 33, volumeUUID: otherVolume),
+            AutoCleanupRootIdentitySnapshot(device: 11, inode: 23, birthSeconds: 33, volumeUUID: volume),
+            AutoCleanupRootIdentitySnapshot(device: 11, inode: 22, birthSeconds: 34, volumeUUID: volume)
+        ] {
+            try expect(changed.persistentIdentity != first.persistentIdentity,
+                       "a different volume or object inherited stable consent")
+        }
+        try expect(AutoCleanupRootIdentitySnapshot.isPersistentIdentity(first.persistentIdentity),
+                   "stable root identity format was rejected")
+        for invalid in ["11:22:33", "volume-v1:not-a-uuid:22:33", "volume-v1:\(volume):22:33:44",
+                        "volume-v1:\(volume):22:0", "volume-v1:\(volume):22:33:",
+                        "volume-v1:00000000-0000-0000-0000-000000000000:22:33"] {
+            try expect(!AutoCleanupRootIdentitySnapshot.isPersistentIdentity(invalid),
+                       "invalid or legacy identity was treated as current: " + invalid)
+        }
+        try expect(AutoCleanupRootIdentitySnapshot(device: 11, inode: 22, birthSeconds: 33,
+            volumeUUID: nil).persistentIdentity == nil, "missing volume UUID fell back to st_dev")
+        try expect(AutoCleanupRule.currentSafetyVersion == 4 && AutoCleanupRule.safetyToken == "safe-trash-v4",
+                   "identity representation changed the consent policy version")
+
+        let fm = FileManager.default
+        let root = fixtureRoot.appendingPathComponent("stable-authorization/cache")
+        let secondary = fixtureRoot.appendingPathComponent("stable-secondary/cache")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try fm.createDirectory(at: secondary, withIntermediateDirectories: true)
+        guard let snapshot = AutoCleanupRootIdentitySnapshot.capture(at: root.path),
+              let stable = snapshot.persistentIdentity,
+              let secondarySnapshot = AutoCleanupRootIdentitySnapshot.capture(at: secondary.path) else {
+            throw PlannerTestFailure(message: "owned fixture volume did not expose a stable UUID")
+        }
+        try expect(AutoCleanupRule.rootIdentity(at: root.path) == stable,
+                   "first authorization did not use the volume identity")
+        try Data("child".utf8).write(to: root.appendingPathComponent("recent.cache"))
+        try expect(AutoCleanupRule.rootIdentity(at: root.path) == stable,
+                   "ordinary directory mtime changes invalidated consent")
+        try expect(AutoCleanupRootIdentitySnapshot.capture(at: root.path, volumeUUID: { _ in nil })?
+            .persistentIdentity == nil, "UUID lookup failure fabricated persistent consent")
+        let link = fixtureRoot.appendingPathComponent("stable-root-link")
+        try fm.createSymbolicLink(at: link, withDestinationURL: root)
+        try expect(AutoCleanupRule.rootIdentity(at: link.path) == nil,
+                   "stable authorization followed a root symlink")
+        let parentLink = fixtureRoot.appendingPathComponent("stable-parent-link")
+        try fm.createSymbolicLink(at: parentLink, withDestinationURL: root.deletingLastPathComponent())
+        try expect(AutoCleanupRule.rootIdentity(at: parentLink.appendingPathComponent("cache").path) == nil,
+                   "stable authorization followed an ancestor symlink")
+
+        let suite = "SimpleMole.AutoCleanupStableIdentityTests." + UUID().uuidString
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            throw PlannerTestFailure(message: "could not create identity test preferences")
+        }
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var rule = AutoCleanupRule(directory: root.path, sourceName: "Identity fixture",
+            policy: .sizeLimit, sizeLimitBytes: 300_000_000, retentionDays: 30, isRegenerable: true,
+            lastRunAt: Date(timeIntervalSince1970: 1_700_000_000), lastReclaimedBytes: 1234,
+            executionCount: 53, totalReclaimedBytes: 987654)
+        rule.lastCheckedAt = Date(timeIntervalSince1970: 1_700_000_100)
+        func entry(_ value: AutoCleanupRule) throws -> [String: Any] {
+            let data = try JSONEncoder().encode([value])
+            return (try JSONSerialization.jsonObject(with: data) as! [[String: Any]])[0]
+        }
+        let legacy = "\(snapshot.device):\(snapshot.inode):\(snapshot.birthSeconds)"
+        var old = try entry(rule)
+        old["authorizedRootIdentity"] = legacy
+        let original = try JSONSerialization.data(withJSONObject: [old], options: [.sortedKeys, .prettyPrinted])
+        defaults.set(original, forKey: AutoCleanupRuleStore.storageKey)
+        let migrated = AutoCleanupRuleStore.load(from: defaults)
+        try expect(migrated == [rule] && migrated[0].isSafetyAuthorized,
+                   "exactly matching old consent did not upgrade without losing settings or statistics")
+        let normalized = defaults.data(forKey: AutoCleanupRuleStore.storageKey)
+        try expect(normalized != original && defaults.data(forKey: AutoCleanupRuleStore.backupKey) == original,
+                   "identity migration was not saved with the original backup")
+        try expect(AutoCleanupRuleStore.load(from: defaults) == migrated
+            && defaults.data(forKey: AutoCleanupRuleStore.storageKey) == normalized
+            && defaults.data(forKey: AutoCleanupRuleStore.backupKey) == original,
+                   "reloading normalized consent rewrote data or replaced its backup")
+
+        var paused = old
+        paused["isEnabled"] = false
+        defaults.set(try JSONSerialization.data(withJSONObject: [paused]), forKey: AutoCleanupRuleStore.storageKey)
+        let migratedPaused = AutoCleanupRuleStore.load(from: defaults)
+        try expect(migratedPaused[0].isSafetyAuthorized && !migratedPaused[0].isEnabled,
+                   "safe identity migration enabled a deliberately disabled task")
+
+        let wrongDevice = "\(snapshot.device + 1):\(snapshot.inode):\(snapshot.birthSeconds)"
+        var mismatch = old
+        mismatch["authorizedRootIdentity"] = wrongDevice
+        let mismatchData = try JSONSerialization.data(withJSONObject: [mismatch])
+        defaults.set(mismatchData, forKey: AutoCleanupRuleStore.storageKey)
+        let unproven = AutoCleanupRuleStore.load(from: defaults)
+        var expectedPaused = rule
+        expectedPaused.isEnabled = false
+        expectedPaused.isRegenerable = false
+        expectedPaused.authorizedRootIdentity = wrongDevice
+        try expect(unproven == [expectedPaused] && !unproven[0].isSafetyAuthorized,
+                   "a legacy device mismatch was guessed current or lost policy/history")
+        let pausedData = defaults.data(forKey: AutoCleanupRuleStore.storageKey)
+        try expect(defaults.data(forKey: AutoCleanupRuleStore.backupKey) == mismatchData
+            && AutoCleanupRuleStore.load(from: defaults) == unproven
+            && defaults.data(forKey: AutoCleanupRuleStore.storageKey) == pausedData
+            && defaults.data(forKey: AutoCleanupRuleStore.backupKey) == mismatchData,
+                   "paused legacy state did not persist once and remain idempotent")
+
+        for version in [3, AutoCleanupRule.currentSafetyVersion + 1] {
+            var unknownPolicy = old
+            unknownPolicy["safetyVersion"] = version
+            defaults.set(try JSONSerialization.data(withJSONObject: [unknownPolicy]), forKey: AutoCleanupRuleStore.storageKey)
+            let decoded = AutoCleanupRuleStore.load(from: defaults)[0]
+            try expect(decoded.safetyVersion == version && decoded.authorizedRootIdentity == legacy
+                && !decoded.isRegenerable && !decoded.isEnabled && !decoded.isSafetyAuthorized,
+                       "an old or future policy version was silently upgraded")
+        }
+        var multi = old
+        let secondaryLegacy = "\(secondarySnapshot.device + 1):\(secondarySnapshot.inode):\(secondarySnapshot.birthSeconds)"
+        multi["additionalRoots"] = [["directory": secondary.path, "authorizedIdentity": secondaryLegacy]]
+        defaults.set(try JSONSerialization.data(withJSONObject: [multi]), forKey: AutoCleanupRuleStore.storageKey)
+        let mixed = AutoCleanupRuleStore.load(from: defaults)[0]
+        try expect(!mixed.isEnabled && !mixed.isRegenerable && !mixed.isSafetyAuthorized
+            && mixed.additionalRoots[0].authorizedIdentity == secondaryLegacy,
+                   "one unproven secondary root inherited another root's consent")
+
+        let saved = root.deletingLastPathComponent().appendingPathComponent("original-cache")
+        var replacementError: Error?
+        let raced = AutoCleanupRootIdentitySnapshot.capture(at: root.path, volumeUUID: { _ in
+            do {
+                try fm.moveItem(at: root, to: saved)
+                try fm.createDirectory(at: root, withIntermediateDirectories: false)
+            } catch { replacementError = error }
+            return snapshot.volumeUUID
+        })
+        try expect(replacementError == nil && raced == nil,
+                   "first authorization combined volume metadata with a replaced root")
+        print("Stable root authorization: volume/device, legacy migration, pause/history, idempotent backup, symlinks and capture race")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool,

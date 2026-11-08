@@ -11,7 +11,7 @@ import re, sys
 root, dest = map(Path, sys.argv[1:])
 lines = (root / 'SimpleMole/AppState+AutoCleanup.swift').read_text().splitlines()
 methods = []
-for name in ['addAutoCleanupRules', 'previewAutoCleanup', 'runAutoCleanupNow', 'runScheduledAutoCleanup', 'noteAutoCleanupCheck', 'scheduleAutomationRetry', 'cancelAutomationRetry', 'applyAutoCleanup']:
+for name in ['addAutoCleanupRules', 'previewAutoCleanup', 'runAutoCleanupNow', 'runScheduledAutoCleanup', 'pauseAutoCleanupAuthorization', 'noteAutoCleanupCheck', 'scheduleAutomationRetry', 'cancelAutomationRetry', 'applyAutoCleanup']:
     matches = [i for i, line in enumerate(lines) if re.match(r'^    (?:private )?func ' + name + r'\(', line)]
     if len(matches) != 1:
         raise SystemExit('Expected exactly one production method: ' + name)
@@ -39,5 +39,7 @@ cp "$ROOT_DIR/SimpleMole/Services/DeletionPlan.swift" \
     "$ROOT_DIR/SimpleMole/Services/CleanupExecutionResult.swift" "$WORK/sources/"
 swiftc -parse-as-library -target "$(uname -m)-apple-macos13.0" -sdk "$SDKROOT" \
     -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$WORK/cache}" "$WORK/tests.swift" \
-    "$WORK/sources/"*.swift -o "$WORK/tests"
+    "$WORK/sources/"*.swift \
+    "$ROOT_DIR/SimpleMole/Services/TaskFeedbackDiagnostic.swift" \
+    "$ROOT_DIR/SimpleMole/L10n/TablesTaskFeedback.swift" -o "$WORK/tests"
 "$WORK/tests"

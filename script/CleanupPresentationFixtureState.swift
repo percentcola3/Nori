@@ -5,12 +5,124 @@ enum AgentCodexFeatureEditor {
     enum State: Equatable, Sendable { case enabled, disabled, unknown }
 }
 
+final class CleanupPresentationRuntime {
+    var taskGeneration = UUID()
+    var retryAction: (() -> Void)?
+}
+final class CleanupPresentationResultCacheStub { func clear() {} }
+
 /// Fixture state only: the production cleanup view is compiled unchanged, but
 /// button actions never start inventory watchers, scans, or deletion workers.
 @MainActor
 final class AppState: ObservableObject {
     enum ScanAccess { case quickOptimize, aiScan }
-    @Published var categories: [CleanupCategory] = []
+    struct Confirmation: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+        let confirmLabel: String
+        let onConfirm: () -> Void
+    }
+    struct HeaderTask { var tidying = false }
+    struct Shortcut { let displayLabel: String }
+    @Published var confirmation: Confirmation?
+    @Published var administratorCleanupPrompt: String?
+    @Published var taskNotice: TaskFeedbackNotice?
+    @Published var showPermissionCenter = false
+    @Published var showAutoCleanupSheet = false
+    @Published var showWhitelistSheet = false
+    @Published var selectedTab = 1
+    let visiblePages: [PageKey] = [.agents, .cleanup]
+    var headerReactionID = 0
+    var headerReactionMood: NoriMood = .idle
+    var headerTask: HeaderTask? { isApplying ? HeaderTask(tidying: true) : nil }
+    let directoryBrowser = ()
+    let clipboardManager = ()
+    let cleanupRuntime = CleanupPresentationRuntime()
+    let analyzeCache = CleanupPresentationResultCacheStub()
+    let l10n = L10n.shared
+    var logLines: [String] = []
+    func log(_ message: String) { logLines = Array((logLines + message.components(separatedBy: .newlines)).suffix(400)) }
+    func resampleAfterMutation() {}
+    func noteHeaderReaction(_ mood: NoriMood?) { headerReactionMood = mood ?? .idle; headerReactionID += 1 }
+    // APPSTATE_CLEANUP_REPORT_METHOD
+
+    var cleanupTraceRequestID: UUID?
+    var cleanupTraceEvents: [(String, [String: String])] = []
+    private var cleanupReviewToken: UUID?
+    var pageCleanupRequests = 0
+    var onCleanupSnapshotCaptured: (() -> Void)?
+
+    var cleanupButtonBlockReason: String? {
+        if !hasCleanupSelection { return "no_selection" }
+        if isCleanupTaskBusy { return "cleanup_busy" }
+        if isCleanupSubmissionBlocked { return "mutation_busy" }
+        if !cleanupScanComplete { return "scan_incomplete" }
+        if confirmation != nil || administratorCleanupPrompt != nil || taskNotice != nil
+            || uninstallDataReview != nil || showPermissionCenter || showAutoCleanupSheet || showWhitelistSheet { return "modal_active" }
+        return nil
+    }
+    var cleanupGateSignature: String {
+        [cleanupButtonBlockReason ?? "enabled", String(categories.reduce(0) { $0 + $1.selectedPathCount }),
+         String(isApplying), String(cleanupScanComplete), String(selectedTab)].joined(separator: "|")
+    }
+    func traceCleanupInteraction(_ event: String, requestID: UUID? = nil, fields: [String: String] = [:]) {
+        cleanupTraceEvents.append((event, fields))
+    }
+    func requestCleanupFromPage() {
+        pageCleanupRequests += 1
+        cleanupTraceRequestID = UUID()
+        traceCleanupInteraction("button.clicked")
+        guard cleanupButtonBlockReason == nil else { return }
+        let snapshot = categories
+        onCleanupSnapshotCaptured?()
+        let reviewed = snapshot.filter { $0.isAppDataReview && $0.source != .appLeftover && $0.selected }
+        let token = UUID()
+        cleanupReviewToken = token
+        let dispatch = { [weak self] in
+            guard let self else { return }
+            guard self.cleanupReviewToken == token else {
+                self.traceCleanupInteraction("confirmation.stale_callback")
+                return
+            }
+            self.cleanupReviewToken = nil
+            self.recordCleanup(snapshot)
+        }
+        if reviewed.isEmpty { dispatch() }
+        else {
+            confirmation = .init(title: L10n.shared.tf("cleanup.appData.confirm.title", reviewed.count),
+                message: L10n.shared.tf("cleanup.appData.confirm.message", reviewed.map(\.name).joined(separator: "、")),
+                confirmLabel: L10n.shared.t("cleanup.appData.confirm.action"), onConfirm: dispatch)
+        }
+    }
+    func cancelCleanupConfirmation() {
+        if cleanupReviewToken != nil { traceCleanupInteraction("confirmation.cancelled") }
+        cleanupReviewToken = nil
+        confirmation = nil
+    }
+    func runConfirmation(_ accepted: Confirmation) {
+        guard confirmation?.id == accepted.id else {
+            traceCleanupInteraction("confirmation.stale_callback")
+            return
+        }
+        confirmation = nil
+        DispatchQueue.main.async { accepted.onConfirm() }
+    }
+    func resolveAdministratorCleanup(_ value: Bool?) { administratorCleanupPrompt = nil }
+    func pageShortcut(for page: PageKey) -> Shortcut? { nil }
+    func dismissTaskNotice() { taskNotice = nil }
+    func retryTaskNotice(_ notice: TaskFeedbackNotice) { taskNotice = nil; notice.onRetry?() }
+    func cancelPermissionCenter() { showPermissionCenter = false }
+    @Published var categories: [CleanupCategory] = [] {
+        didSet {
+            // Publish synthetic snapshots synchronously to keep these render
+            // states deterministic. Production's detached builder and thread
+            // budgets are exercised separately by the projection suite.
+            cleanupPresentation = CleanupPresentation.build(
+                categories: categories.map(CleanupPresentation.CategoryInput.init), index: .init()) ?? .empty
+        }
+    }
+    @Published var cleanupPresentation = CleanupPresentation.empty
     @Published var installerCandidates: CleanupCategory?
     @Published var systemMaintenanceRows: [SystemMaintenanceRow] = []
     @Published var systemMaintenanceSelection: Set<String> = []
@@ -73,6 +185,8 @@ final class AppState: ObservableObject {
     var cancelRequests = 0
     var rescanRequests = 0
     var cleanupRequests = 0
+    var cleanupDispatches: [[UUID: Set<String>]] = []
+    var cleanupDispatchIdentities: [[UUID: [String: String]]] = []
     var maintenanceRequests = 0
     var celebrationFinishes = 0
     var retryRequests = 0
@@ -110,11 +224,17 @@ final class AppState: ObservableObject {
     var isDeveloperConfigurationWriting = false
     var isNetworkToolRunning = false
     var hasCleanupSelection: Bool {
-        categories.contains { $0.selectedSubset != nil }
-            || installerCandidates?.selectedSubset != nil
+        categories.contains { $0.canSelect && $0.selectedPathCount > 0 }
+            || (installerCandidates.map { $0.canSelect && $0.selectedPathCount > 0 } ?? false)
             || !systemMaintenanceSelection.isEmpty
     }
-    var selectedBytes: UInt64 { categories.reduce(0) { $0 + $1.selectedPathBytes } }
+    var selectedBytes: UInt64? {
+        categories.reduce(0) { $0 + ($1.canSelect ? $1.selectedPathBytes : 0) }
+            + (installerCandidates.flatMap { $0.canSelect ? $0.selectedPathBytes : nil } ?? 0)
+    }
+    func cleanupSelectedBytes(for id: UUID) -> UInt64? {
+        categories.first { $0.id == id }?.selectedPathBytes
+    }
     var agentCLISelectedAgentIDs: Set<String> {
         Set(agentCLIInstallations.filter { agentSelectedCLIInstallations.contains($0.id) }.map(\.agentID))
     }
@@ -155,7 +275,10 @@ final class AppState: ObservableObject {
     func cancelAgentScan() { cancelRequests += 1 }
     var uninstallSegment = 0
     func jump(to key: PageKey) {}
-    enum PageKey { case uninstall, agents, cleanup }
+    enum PageKey {
+        case uninstall, agents, cleanup, analyze, directory, devenv, processes, ports, traffic, clipboard, settings
+        var titleKey: String { self == .cleanup ? "tab.cleanup" : "tab.agents" }
+    }
     func toggleAgentMCPInstallation(_ installation: AgentMCPInstallation) {}
     func toggleAgentSkill(_ skill: AgentSkill) {}
     func toggleAgentServer(_ server: AgentMCPServer) {}
@@ -172,7 +295,21 @@ final class AppState: ObservableObject {
     func requestScanAccess(_ access: ScanAccess) { scanRequests += 1 }
     func cancelCleanupScan() { cancelRequests += 1 }
     func startCleanupScan() { rescanRequests += 1 }
-    func applyCleanup() { cleanupRequests += 1 }
+    func applyCleanup() { recordCleanup(categories) }
+    private func recordCleanup(_ snapshot: [CleanupCategory]) {
+        traceCleanupInteraction("submission.accepted")
+        cleanupRequests += 1
+        cleanupDispatches.append(snapshot.reduce(into: [UUID: Set<String>]()) { result, category in
+            if category.canSelect, category.selectedPathCount > 0 { result[category.id] = category.selectedPaths }
+        })
+        cleanupDispatchIdentities.append(snapshot.reduce(into: [UUID: [String: String]]()) { result, category in
+            if category.canSelect, category.selectedPathCount > 0 {
+                result[category.id] = category.pathIdentities.filter { category.selectedPaths.contains($0.key) }
+            }
+        })
+        isApplying = true
+        cleanupTaskProgress = .init()
+    }
     func retryFailedCleanup() { retryRequests += 1 }
     func finishAgentCelebration(feedbackID: Int) {
         guard feedbackID == agentFeedbackID, !agentApplying,

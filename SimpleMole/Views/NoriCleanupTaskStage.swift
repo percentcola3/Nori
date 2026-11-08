@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The operation stays on one page from preparation through the result.
-/// While working, only the current file changes; result feedback appears after completion.
+/// Working feedback reads only the current phase/count snapshot; completion
+/// remains a separate result state.
 struct NoriCleanupTaskStage: View {
     enum Phase: Hashable { case working, success, attention }
     enum ScanSource {
@@ -32,11 +33,49 @@ struct NoriCleanupTaskStage: View {
         let reduceMotion: Bool
     }
 
+    struct WorkingFeedback: Equatable {
+        let phaseKey: String
+        let handled: Int
+        let total: Int
+        let detail: String
+
+        init(progress: CleanupTaskProgress?, statusText: String) {
+            switch progress?.phase ?? .preparing {
+            case .preparing: phaseKey = "cleanup.task.preparing"
+            case .cleaning: phaseKey = "cleanup.task.cleaning"
+            case .verifying: phaseKey = "cleanup.task.verifying"
+            }
+            total = max(0, progress?.total ?? 0)
+            handled = min(total, max(0, progress?.completed ?? 0))
+            let current = progress?.currentItem ?? ""
+            detail = current.isEmpty ? statusText : current
+        }
+    }
+
+    private var workingFeedback: some View {
+        let display = WorkingFeedback(progress: progress, statusText: statusText)
+        return VStack(spacing: 4) {
+            Text(l10n.t(display.phaseKey))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .accessibilityIdentifier("cleanup-working-phase")
+            Text(display.total > 0 ? l10n.tf("cleanup.task.progress", display.handled, display.total) : "")
+                .font(.system(size: 11).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(height: 16)
+                .accessibilityIdentifier("cleanup-working-count")
+            NoriCurrentFileView(path: display.detail)
+                .accessibilityIdentifier("cleanup-working-item")
+        }
+        .frame(maxWidth: 400)
+    }
+
     var body: some View {
         if phase == .working {
             NoriPlaceholderStage { size in
                 NoriStatusAnimation(mood: .tidying, size: size, assetName: "nori-tidying")
-                NoriCurrentFileView(path: progress?.phase == .cleaning ? progress?.currentItem ?? "" : "")
+                workingFeedback
             }
         } else {
         GeometryReader { geometry in
@@ -72,7 +111,7 @@ struct NoriCleanupTaskStage: View {
     private func feedback(maxDetailHeight: CGFloat) -> some View {
         switch phase {
         case .working:
-            NoriCurrentFileView(path: progress?.phase == .cleaning ? progress?.currentItem ?? "" : "")
+            workingFeedback
         case .success:
             resultSummary(icon: "checkmark.circle.fill", tint: .success) {
                 Text(l10n.tf("cleanup.task.reclaimed", ByteFormat.format(reclaimedBytes)))

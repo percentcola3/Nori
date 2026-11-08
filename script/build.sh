@@ -222,12 +222,15 @@ SWIFT_SOURCE_DIR="$BUILD_TMP/SimpleMole"
 /usr/bin/ditto "$ROOT_DIR/SimpleMole" "$SWIFT_SOURCE_DIR"
 
 sign_one() {
-    local target="$1" entitlements="${2:-}" preserve_entitlements="${3:-0}"
+    local target="$1" entitlements="${2:-}" preserve_entitlements="${3:-0}" identifier="${4:-}"
     local extra_args=()
     if [[ -n "$entitlements" ]]; then
         extra_args=(--entitlements "$entitlements")
     elif [[ "$preserve_entitlements" == "1" ]]; then
         extra_args=(--preserve-metadata=entitlements)
+    fi
+    if [[ -n "$identifier" ]]; then
+        extra_args+=(--identifier "$identifier")
     fi
     if [[ "$SIGN_IDENTITY_KIND" == "adhoc" ]]; then
         /usr/bin/codesign --force --options runtime \
@@ -265,6 +268,47 @@ for arch in $BUILD_ARCHS; do
         exit 2
     }
     /usr/bin/strip -x "$CONTENTS/Helpers/NoriPrivilegedSession"
+
+    # Read-only discovery runs in its own same-UID executable. Keep its @main
+    # outside Services so it cannot enter the GUI's source glob. It uses native
+    # scan APIs and built-in localization tables, never Bundle.main resources.
+    echo "==> Compiling read-only cleanup scan worker ($arch)"
+    SDKROOT="$SWIFT_SDKROOT" swiftc -O -whole-module-optimization -D NORI_CLEANUP_SCAN_WORKER -target "$arch-apple-macos13.0" \
+        -module-cache-path "${NORI_SWIFT_MODULE_CACHE:-$BUILD_TMP/module-cache-$arch}" \
+        -framework AppKit -framework SwiftUI -framework Security -framework IOKit -lsqlite3 \
+        "$SWIFT_SOURCE_DIR/Models.swift" \
+        "$SWIFT_SOURCE_DIR"/L10n/*.swift \
+        "$SWIFT_SOURCE_DIR/Services/AgentRetentionPolicy.swift" \
+        "$SWIFT_SOURCE_DIR/Services/DeletionPlan.swift" \
+        "$SWIFT_SOURCE_DIR/Services/FileScanService.swift" \
+        "$SWIFT_SOURCE_DIR/Services/AgentCatalog.swift" \
+        "$SWIFT_SOURCE_DIR/Services/AgentWorktreeInspector.swift" \
+        "$SWIFT_SOURCE_DIR/Services/AgentHostPresence.swift" \
+        "$SWIFT_SOURCE_DIR/Services/AgentProjectStorage.swift" \
+        "$SWIFT_SOURCE_DIR/Services/CleanupRiskPolicy.swift" \
+        "$SWIFT_SOURCE_DIR/Services/DeveloperCacheLocator.swift" \
+        "$SWIFT_SOURCE_DIR/Services/CleanupAgePolicy.swift" \
+        "$SWIFT_SOURCE_DIR/Services/DiskAnalysisWorker.swift" \
+        "$SWIFT_SOURCE_DIR/Services/MediaSlimmer.swift" \
+        "$SWIFT_SOURCE_DIR/Services/NativeCore.swift" \
+        "$SWIFT_SOURCE_DIR/Services/ApplicationSizeMeasurer.swift" \
+        "$SWIFT_SOURCE_DIR/Services/ApplicationInventoryService.swift" \
+        "$SWIFT_SOURCE_DIR/Services/UninstallPlanningService.swift" \
+        "$SWIFT_SOURCE_DIR/Services/CleanupScanWorker.swift" \
+        "$SWIFT_SOURCE_DIR/Services/CleanupScanProtocol.swift" \
+        "$SWIFT_SOURCE_DIR/Services/SystemMetrics.swift" \
+        "$SWIFT_SOURCE_DIR/Services/SensorMetrics.swift" \
+        "$SWIFT_SOURCE_DIR/Support/Workers/NoriCleanupScanWorker.swift" \
+        -o "$CONTENTS/Helpers/NoriCleanupScanWorker"
+    [[ "$(/usr/bin/lipo -archs "$CONTENTS/Helpers/NoriCleanupScanWorker")" == "$arch" ]] || {
+        echo "error: expected a single $arch cleanup scan worker executable" >&2
+        exit 2
+    }
+    if [[ -n "${SM_SYMBOL_OUTPUT_DIR:-}" ]]; then
+        mkdir -p "$SM_SYMBOL_OUTPUT_DIR/$arch"
+        cp "$CONTENTS/Helpers/NoriCleanupScanWorker" "$SM_SYMBOL_OUTPUT_DIR/$arch/NoriCleanupScanWorker.unstripped"
+    fi
+    /usr/bin/strip -x "$CONTENTS/Helpers/NoriCleanupScanWorker"
 
     echo "==> Compiling Swift app ($arch)"
     xcrun clang -fobjc-arc -isysroot "$SWIFT_SDKROOT" -target "$arch-apple-macos13.0" \
@@ -332,6 +376,8 @@ for arch in $BUILD_ARCHS; do
     sign_one "$SPARKLE_FRAMEWORK/Versions/B/Updater.app"
     sign_one "$SPARKLE_FRAMEWORK"
     sign_one "$CONTENTS/Helpers/NoriPrivilegedSession"
+    sign_one "$CONTENTS/Helpers/NoriCleanupScanWorker" "" 0 "com.nori.app.cleanup-scan-worker"
+    /usr/bin/codesign --verify --strict "$CONTENTS/Helpers/NoriCleanupScanWorker"
     sign_one "$CONTENTS/MacOS/Nori" "$HOST_ENTITLEMENTS"
     sign_one "$APP_DIR" "$HOST_ENTITLEMENTS"
     /usr/bin/codesign --verify --deep --strict "$APP_DIR"

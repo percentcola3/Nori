@@ -1,6 +1,15 @@
 import Darwin
 import Foundation
 
+// Only the result shape is needed by the production service. Linking the real
+// session client here would make this old native fixture capable of elevating.
+enum PrivilegedSessionClient {
+    struct Execution { let result: RunResult; let sessionID: UUID? }
+}
+enum CleanupTrace {
+    static func record(_ event: String, requestID: UUID? = nil, fields: [String: String] = [:]) {}
+}
+
 // Administrator UI is replaced in fixtures; these tests never elevate.
 final class MoleEngine {
     static let shared = MoleEngine()
@@ -9,6 +18,22 @@ final class MoleEngine {
     var manifestPath: String?
     var invocationCount = 0
     var responseDelay: UInt64 = 0
+    private let fixtureSessionID = UUID()
+    private(set) var reuseInvocationCount = 0
+
+    func runPrivilegedBridgeWithSession(_ path: String, arguments: [String],
+                                        timeout: TimeInterval) async -> PrivilegedSessionClient.Execution {
+        .init(result: await runPrivilegedBridge(path, arguments: arguments, timeout: timeout), sessionID: fixtureSessionID)
+    }
+
+    func runPrivilegedBridgeIfAuthorized(_ path: String, arguments: [String],
+                                         timeout: TimeInterval, sessionID: UUID? = nil) async -> RunResult {
+        guard sessionID == fixtureSessionID else {
+            return .init(output: "Inert fixture session is unavailable.", exitCode: 77, timedOut: false)
+        }
+        reuseInvocationCount += 1
+        return await runPrivilegedBridge(path, arguments: arguments, timeout: timeout)
+    }
 
     func runPrivilegedBridge(_ path: String, arguments: [String],
                              timeout: TimeInterval) async -> RunResult {
@@ -161,6 +186,55 @@ struct AdministratorCleanupTests {
         try expect(permissionChange.map(\.record) == [leaf.path]
                    && manager.fileExists(atPath: leaf.path),
                    "New root deletion permissions were missed or the preview deleted content")
+    }
+
+    static func testRetainedReportTransport(in home: URL) async throws {
+        let path = home.appendingPathComponent("Library/Caches/retained-report/payload.cache")
+        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("canned retained receipt".utf8).write(to: path)
+        let identity = DeletionPlan.identity(at: path.path) ?? ""
+        let receipt = DeletionPlan.RetainedTarget(record: path.path, identity: identity, reason: .protectedFlags, count: 1)
+        let native = NativeCore.ApplySummary(removed: 0, skipped: 1, failed: 0, messages: [], retainedTargets: [receipt])
+        let encoded = try JSONEncoder().encode(AdministratorCleanupPlan.Report(native))
+        guard let valid = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+            throw NSError(domain: "Cannot create canned report", code: 1)
+        }
+        let engine = MoleEngine.shared
+        engine.inspectRequest = nil
+        engine.responseDelay = 0
+        func apply(_ object: [String: Any]) async throws -> CleanupExecutionResult {
+            let data = try JSONSerialization.data(withJSONObject: object)
+            engine.response = RunResult(output: AdministratorCleanupPlan.reportPrefix + String(decoding: data, as: UTF8.self),
+                                        exitCode: 0, timedOut: false)
+            return await AdministratorCleanupService.apply(items: [.init(record: path.path, identity: identity)])
+        }
+        let accepted = try await apply(valid)
+        try expect(accepted.retainedTargets == [receipt] && accepted.skipped == 1 && !accepted.executionFailed,
+                   "Typed retained receipt was lost between worker report and client result")
+        var legacy = valid
+        legacy.removeValue(forKey: "retainedTargets")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        let decodedLegacy = try JSONDecoder().decode(AdministratorCleanupPlan.Report.self, from: legacyData)
+        try expect(decodedLegacy.retainedTargets == nil,
+                   "Legacy report invented retained evidence")
+        let oldResult = try await apply(legacy)
+        try expect(oldResult.retainedTargets.isEmpty && oldResult.skipped == 1 && !oldResult.executionFailed,
+                   "Legacy skipped results were quieted or rejected")
+        var wrongIdentity = valid
+        wrongIdentity["retainedTargets"] = [["record": path.path, "identity": "0:0:0", "reason": "protectedFlags", "count": 1]]
+        var wrongCount = valid
+        wrongCount["retainedTargets"] = [["record": path.path, "identity": identity, "reason": "protectedFlags", "count": 2]]
+        var removedConflict = valid
+        removedConflict["removed"] = 1
+        removedConflict["removedPaths"] = [path.path]
+        var invalidReason = valid
+        invalidReason["retainedTargets"] = [["record": path.path, "identity": identity, "reason": "arbitraryFailure", "count": 1]]
+        for malformed in [wrongIdentity, wrongCount, removedConflict, invalidReason] {
+            let refused = try await apply(malformed)
+            try expect(refused.executionFailed && refused.failed == 1 && refused.retainedTargets.isEmpty,
+                       "Canned malformed retained report obtained quiet feedback")
+        }
+        try expect(FileManager.default.fileExists(atPath: path.path), "Canned transport fixture performed real deletion")
     }
 
     static func main() async throws {
@@ -390,6 +464,7 @@ struct AdministratorCleanupTests {
             try expect(AdministratorCleanupPlan.runWorker(arguments: [String(getuid()), "/tmp/unused"]) == 64,
                        "Headless worker accepted an unprivileged process")
         }
+        try await testRetainedReportTransport(in: home)
         print("Administrator cleanup tests passed")
     }
 }
